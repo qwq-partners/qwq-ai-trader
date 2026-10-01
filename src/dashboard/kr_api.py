@@ -627,9 +627,9 @@ class KRAPIHandler:
             logger.info("[대시보드] KIS 거래이력 동기화 수동 트리거")
 
             async def _run():
-                await trade_journal.sync_from_kis(bot.broker, engine=getattr(bot, "engine", None))
+                from ..data.storage.trade_storage import sync_kis_journal
+                await sync_kis_journal(bot)
                 bot._last_kis_sync_date = None  # 오늘 장 마감 후 재동기화 허용
-                logger.info("[대시보드] KIS 거래이력 동기화 완료")
 
             asyncio.create_task(_run())
             return web.json_response({"success": True, "message": "KIS 거래이력 동기화 시작 (비동기)"})

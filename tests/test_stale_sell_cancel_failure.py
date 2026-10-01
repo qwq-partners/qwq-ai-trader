@@ -656,6 +656,7 @@ def test_engine_full_fill_clears_the_keep_ledger(monkeypatch):
     rm.engine.portfolio.effective_daily_pnl = Decimal("0")
 
     fill = Fill(order_id="ORD-1", symbol=SYM, side=OrderSide.SELL, quantity=10, price=PRICE)
+    rm._pending_order_ids[SYM] = fill.order_id
     asyncio.run(rm.on_fill(FillEvent.from_fill(fill, source="test")))
 
     assert SYM not in rm._pending_orders and SYM not in rm._pending_cancel_keep

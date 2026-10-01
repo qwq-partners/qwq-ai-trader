@@ -168,7 +168,7 @@ def _run(b, monkeypatch, output, session="regular"):
     rows = []
     monkeypatch.setattr(kis_kr.audit_log, "record", lambda event, **f: rows.append((event, f)))
 
-    async def post(url, tr_id, json_data, extra_headers=None, retry=True):
+    async def post(url, tr_id, json_data, extra_headers=None, retry=True, cancel_guard=None):
         return {"rt_cd": "0", "output": output}
     b._api_post = post
     result = asyncio.run(b.submit_order(_order()))
@@ -241,7 +241,7 @@ def test_t4_sell_side_gets_the_same_identity(broker, monkeypatch):  # noqa: F811
     rows = []
     monkeypatch.setattr(kis_kr.audit_log, "record", lambda event, **f: rows.append((event, f)))
 
-    async def post(url, tr_id, json_data, extra_headers=None, retry=True):
+    async def post(url, tr_id, json_data, extra_headers=None, retry=True, cancel_guard=None):
         return {"rt_cd": "0", "output": {"ODNO": "0009", "KRX_FWDG_ORD_ORGNO": "91252"}}
     broker._api_post = post
     assert asyncio.run(broker.submit_order(_order(OrderSide.SELL))) == (True, "0009")
@@ -259,7 +259,7 @@ def test_t4_empty_argv_keeps_the_success_path_and_never_becomes_unknown(broker, 
     rows = []
     monkeypatch.setattr(kis_kr.audit_log, "record", lambda event, **f: rows.append((event, f)))
 
-    async def post(url, tr_id, json_data, extra_headers=None, retry=True):
+    async def post(url, tr_id, json_data, extra_headers=None, retry=True, cancel_guard=None):
         return {"rt_cd": "0", "output": {"ODNO": "0001", "KRX_FWDG_ORD_ORGNO": "91252"}}
     broker._api_post = post
     assert asyncio.run(broker.submit_order(_order(side))) == (True, "0001")

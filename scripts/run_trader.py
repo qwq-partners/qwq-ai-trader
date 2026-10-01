@@ -698,11 +698,11 @@ class UnifiedTradingBot:
                 self.trade_journal = get_trade_journal()
                 if hasattr(self.trade_journal, 'connect'):
                     await self.trade_journal.connect()
-                    if self.broker and hasattr(self.trade_journal, 'sync_from_kis'):
-                        await self.trade_journal.sync_from_kis(self.broker, engine=self.engine)
                     if self.engine.portfolio.positions:
                         await self._restore_position_metadata(self.engine.portfolio.positions)
-                logger.info("[KR] DB 선-연결 + 포지션 전략 복원 완료 (ExitManager 등록 전)")
+                from src.data.storage.trade_storage import sync_kis_journal
+                await sync_kis_journal(self)
+                logger.info("[KR] 포지션 전략 복원 단계 종료 — KIS 장부 확인 결과는 별도 상태 참조")
             except Exception as e:
                 logger.warning(f"[KR] DB 선-연결 실패 (register_position은 strategy=None으로 진행): {e}")
 
@@ -865,6 +865,9 @@ class UnifiedTradingBot:
                     # 로컬 get_open_orders() 캐시는 재시작 후 비어 항상 False가 되어
                     # 이중 매도 방지가 무력화됐었다. 조회 실패는 None(pending 유지).
                     try:
+                        _cancel = getattr(_b, 'has_unresolved_cancel', None)
+                        if callable(_cancel) and _cancel(_sym) is True:
+                            return None
                         # 종목 지정 — 첫 페이지에 없고 다음 페이지가 남았으면 None(판단 불가)을 받는다 (2026-09-29)
                         _rows = await _b.get_exchange_open_orders(symbol=_sym)
                         if _rows is None:
@@ -879,7 +882,11 @@ class UnifiedTradingBot:
                 logger.info("[KR] ExitManager pending 검증자 배선 완료 (거래소 실 미체결 대사)")
                 # 오늘 SELL 접수 불명 종목은 분할 익절 신호를 만들지 않는다 (2026-09-29) — 브로커가 장부를 갖는다
                 if callable(getattr(self.broker, "has_unknown_sell", None)):
-                    self.exit_manager.set_partial_exit_block(self.broker.has_unknown_sell)
+                    def _partial_sell_unresolved(_sym, _b=self.broker):
+                        _cancel = getattr(_b, 'has_unresolved_cancel', None)
+                        return (_b.has_unknown_sell(_sym)
+                                or (callable(_cancel) and _cancel(_sym) is True))
+                    self.exit_manager.set_partial_exit_block(_partial_sell_unresolved)
                     logger.info("[KR] ExitManager 분할 익절 차단 훅 배선 완료 (주문 접수 불명)")
             logger.info(
                 f"[KR] 엔진 리스크 매니저 등록 완료 "

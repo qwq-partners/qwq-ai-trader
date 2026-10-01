@@ -8,6 +8,7 @@ DB 연결 실패 시 JSON 전용 모드로 자동 폴백.
 import asyncio
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional
@@ -93,6 +94,48 @@ CREATE TABLE IF NOT EXISTS execution_day_status (
     updated_at  TIMESTAMP NOT NULL
 );
 """
+
+
+@dataclass(frozen=True)
+class KISSyncResult:
+    """Journal comparison result, not a portfolio or persistence receipt."""
+
+    status: str
+    reason: str
+    recovered_count: int = 0
+
+    @property
+    def complete(self) -> bool:
+        return self.status in ("verified_empty", "reconciled")
+
+
+async def sync_kis_journal(owner, *, close_day: bool = False) -> KISSyncResult:
+    """Expose journal evidence separately from portfolio readiness.
+
+    A startup empty query must not suppress the end-of-day comparison.
+    Unsupported legacy adapters and failed comparisons remain retryable.
+    """
+    today = date.today()
+    method = getattr(getattr(owner, 'trade_journal', None), 'sync_from_kis', None)
+    try:
+        if not callable(method) or getattr(owner, 'broker', None) is None:
+            result = KISSyncResult("unsupported", "journal_sync_unavailable")
+        else:
+            result = await method(owner.broker, engine=getattr(owner, 'engine', None))
+            if not isinstance(result, KISSyncResult):
+                result = KISSyncResult("unsupported", "journal_sync_receipt_unavailable")
+        if date.today() != today:
+            result = KISSyncResult("incomplete", "comparison_date_changed")
+    except Exception as exc:
+        result = KISSyncResult("error", f"journal_sync_failed:{type(exc).__name__}")
+    owner._kis_journal_sync_result = result
+    if result.complete:
+        if close_day:
+            owner._last_kis_sync_date = today
+        logger.info(f"[KIS동기화] 확인 결과: {result.status} ({result.reason}) — Portfolio 재적용 없음")
+    else:
+        logger.warning(f"[KIS동기화] 미완료·재확인 필요: {result.status} ({result.reason})")
+    return result
 
 
 class TradeStorage:
@@ -898,347 +941,132 @@ class TradeStorage:
 
         return None
 
-    async def sync_from_kis(self, broker, engine=None):
-        """
-        완결 조회된 KIS 당일 체결 내역과 캐시/DB 동기화.
+    async def sync_from_kis(self, broker, engine=None) -> KISSyncResult:
+        """Compare checked KR fills against durable, explicitly identified events.
 
-        1) 누락 매수/매도 복구
-        2) 청산 거래 PnL 보정 (수수료+세금 포함 정확한 값으로)
-        절대 예외를 전파하지 않습니다.
+        Read-only comparison, not restart execution replay. Legacy symbol-only
+        attribution cannot distinguish manual/account trades from bot orders.
+        Missing identity requires operator reconciliation or a future durable
+        execution ledger. Neither journal nor Portfolio is modified here.
+        ``complete`` covers this comparison only, not portfolio health or a
+        persistence receipt for queued journal writes.
         """
         try:
             checked_query = getattr(broker, "get_fills_for_date_checked", None)
             if not callable(checked_query):
                 logger.warning("[TradeStorage] broker에 get_fills_for_date_checked 없음, 동기화 건너뜀")
-                return
+                return KISSyncResult("unsupported", "checked_query_unavailable")
 
             today = date.today()
             fills, complete, reason = await checked_query(today)
-            # 부분 목록으로 복구/PnL 보정을 시작하면 후속 완결 조회 전 장부가 오염된다.
-            # 기존 조회와 같은 한 번의 페이지 순회이며, 미확인 조회로 폴백하지 않는다.
             if complete is not True:
                 logger.warning(
                     f"[TradeStorage] KIS 당일 체결 조회 미완결, 동기화 건너뜀: "
                     f"{reason or '완결 여부 불명'}"
                 )
-                return
+                return KISSyncResult("incomplete", str(reason or "query_completeness_unknown"))
+            if not isinstance(fills, list):
+                return KISSyncResult("incomplete", "invalid_fill_list")
+            if date.today() != today:
+                return KISSyncResult("incomplete", "query_date_changed")
+
+            # Preflight the whole account response. Even identical repeated rows
+            # are not assumed to be harmless pagination duplicates.
+            expected = {}
+            symbol_sides = set()
+            order_numbers = set()
+            for fill in fills:
+                if not isinstance(fill, dict):
+                    return KISSyncResult("incomplete", "invalid_fill_row")
+                symbol = fill.get("symbol")
+                side = {"02": "BUY", "01": "SELL"}.get(fill.get("sll_buy_dvsn_cd"))
+                odno = fill.get("odno")
+                if not isinstance(symbol, str) or not symbol.strip() or side is None:
+                    return KISSyncResult("ambiguous", "fill_identity_missing")
+                if not isinstance(odno, str) or not odno.strip():
+                    return KISSyncResult("ambiguous", "fill_order_number_missing")
+                symbol, odno = symbol.strip(), odno.strip()
+                if (symbol, side) in symbol_sides or odno in order_numbers:
+                    return KISSyncResult("ambiguous", "multiple_or_duplicate_symbol_orders")
+                symbol_sides.add((symbol, side))
+                order_numbers.add(odno)
+                values = self._kis_sync_values(fill.get("tot_ccld_qty"), fill.get("avg_prvs"))
+                if values is None:
+                    return KISSyncResult("incomplete", "invalid_fill_quantity_or_price")
+                expected[(symbol, side, odno)] = values
+
+            if not self._db_available or self.pool is None:
+                return KISSyncResult("unsupported", "durable_order_identity_unavailable")
+            if self._write_queue is not None and self._write_queue._unfinished_tasks:
+                return KISSyncResult("incomplete", "journal_writes_pending")
+
+            # All persisted KR BUY/SELL events for the checked local date, in one
+            # SELECT snapshot. Filtering only matching ODNOs hides legacy NULLs
+            # and extra events. Existing queue status is not persistence proof.
+            rows = await self.pool.fetch(
+                """SELECT e.trade_id, e.symbol, e.event_type, e.kis_order_no,
+                          e.quantity, e.price
+                   FROM trade_events e
+                   JOIN trades t ON t.id = e.trade_id
+                   WHERE e.event_time::date = $1 AND t.market = 'KR'
+                     AND e.event_type IN ('BUY', 'SELL')""",
+                today,
+            )
+            recorded = {}
+            trade_by_symbol = {}
+            for row in rows:
+                symbol, side = row['symbol'], row['event_type']
+                odno, trade_id = row['kis_order_no'], row['trade_id']
+                if (not isinstance(symbol, str) or not symbol.strip()
+                        or side not in ("BUY", "SELL")
+                        or not isinstance(odno, str) or not odno.strip()
+                        or not isinstance(trade_id, str) or not trade_id.strip()):
+                    return KISSyncResult("ambiguous", "persisted_order_identity_missing")
+                symbol, odno = symbol.strip(), odno.strip()
+                key = (symbol, side, odno)
+                if key in recorded:
+                    return KISSyncResult("ambiguous", "multiple_persisted_order_events")
+                if symbol in trade_by_symbol and trade_by_symbol[symbol] != trade_id:
+                    return KISSyncResult("ambiguous", "multiple_symbol_trade_owners")
+                trade_by_symbol[symbol] = trade_id
+                values = self._kis_sync_values(row['quantity'], row['price'])
+                if values is None:
+                    return KISSyncResult("incomplete", "invalid_persisted_quantity_or_price")
+                recorded[key] = values
+
+            if expected.keys() - recorded.keys():
+                return KISSyncResult("ambiguous", "unattributed_account_fill")
+            if recorded.keys() - expected.keys():
+                return KISSyncResult("incomplete", "persisted_events_absent_from_query")
+            if recorded != expected:
+                return KISSyncResult("incomplete", "persisted_fill_values_differ")
+            if date.today() != today:
+                return KISSyncResult("incomplete", "query_date_changed")
+            if self._write_queue is not None and self._write_queue._unfinished_tasks:
+                return KISSyncResult("incomplete", "journal_writes_pending")
             if not fills:
-                logger.info("[TradeStorage] KIS 당일 체결 0건, 동기화 불필요")
-                return
+                logger.info("[TradeStorage] KIS 당일 체결 0건, DB 이벤트도 0건 확인")
+                return KISSyncResult("verified_empty", "checked_query_and_persisted_events_empty")
+            return KISSyncResult("reconciled", "persisted_order_events_match_no_replay")
+        except Exception as exc:
+            # No writes occur here: no hidden partial recovery and no fallback
+            # to symbol/quantity attribution or a guessed strategy.
+            logger.error(f"[TradeStorage] KIS 장부 비교 실패: {exc}")
+            return KISSyncResult("error", f"comparison_failed:{type(exc).__name__}")
 
-            # 캐시의 당일 거래
-            cache_trades = {t.symbol: t for t in self.get_today_trades()}
-
-            # KIS 체결을 종목별 매수/매도 그룹화
-            buys = {}   # symbol → list of fills
-            sells = {}  # symbol → list of fills
-            for f in fills:
-                side = f.get("sll_buy_dvsn_cd", "")
-                sym = f.get("symbol", "")
-                if not sym:
-                    continue
-                if side == "02":  # 매수
-                    buys.setdefault(sym, []).append(f)
-                elif side == "01":  # 매도
-                    sells.setdefault(sym, []).append(f)
-
-            synced = 0
-
-            # DB에서 당일 이미 기록된 이벤트 조회 (캐시 불일치 방지)
-            db_buy_symbols = set()
-            db_sell_qty_by_symbol = {}  # symbol → 총 매도 수량 (trade_id가 아닌 symbol 단위)
-            db_trades_map = {}  # trade_id → TradeRecord (캐시 손상 시 DB 폴백용)
-            if self._db_available and self.pool:
-                try:
-                    buy_rows = await self.pool.fetch(
-                        "SELECT DISTINCT symbol FROM trade_events WHERE event_type='BUY' AND event_time::date=$1",
-                        today,
-                    )
-                    db_buy_symbols = {r['symbol'] for r in buy_rows}
-
-                    sell_rows = await self.pool.fetch(
-                        "SELECT symbol, COALESCE(SUM(quantity), 0) as total_qty "
-                        "FROM trade_events WHERE event_type='SELL' AND event_time::date=$1 "
-                        "GROUP BY symbol",
-                        today,
-                    )
-                    db_sell_qty_by_symbol = {r['symbol']: int(r['total_qty']) for r in sell_rows}
-
-                    # DB trades 테이블에서 거래 로드:
-                    # 1) 오늘 진입한 거래
-                    # 2) 미청산 포지션(이전 날 진입)
-                    # 3) 2026-04-22 추가: 잔여 수량이 남은 부분청산 거래 (이전 날 진입, 오늘 1차 익절 등)
-                    #    — exit_time IS NOT NULL이지만 exit_quantity < entry_quantity인 경우 복구 대상
-                    trade_rows = await self.pool.fetch(
-                        "SELECT id, symbol, name, entry_time, entry_price, entry_quantity, "
-                        "exit_time, exit_price, exit_quantity, entry_strategy, entry_signal_score, "
-                        "entry_reason, exit_reason, exit_type, pnl, pnl_pct "
-                        "FROM trades "
-                        "WHERE entry_time::date = $1 "
-                        "   OR (exit_time IS NULL AND entry_time::date < $1) "
-                        "   OR (COALESCE(exit_quantity,0) < entry_quantity "
-                        "       AND entry_time::date >= ($1::date - INTERVAL '30 days'))",
-                        today,
-                    )
-                    for tr in trade_rows:
-                        rec = TradeRecord(
-                            id=tr['id'], symbol=tr['symbol'], name=tr['name'] or '',
-                            entry_time=tr['entry_time'], entry_price=Decimal(str(tr['entry_price'])),
-                            entry_quantity=tr['entry_quantity'],
-                            entry_reason='', entry_strategy=tr['entry_strategy'] or '',
-                            entry_signal_score=Decimal(str(tr['entry_signal_score'] or 0)),
-                        )
-                        if tr['exit_time']:
-                            rec.exit_time = tr['exit_time']
-                            rec.exit_price = Decimal(str(tr['exit_price'] or 0))
-                            rec.exit_quantity = tr['exit_quantity'] or 0
-                            rec.exit_reason = tr['exit_reason'] or ''
-                            rec.exit_type = tr['exit_type'] or ''
-                            rec.pnl = Decimal(str(tr['pnl'] or 0))
-                            rec.pnl_pct = Decimal(str(tr['pnl_pct'] or 0))
-                        db_trades_map[rec.id] = rec
-                    if db_trades_map:
-                        logger.debug(f"[TradeStorage] DB에서 당일 거래 {len(db_trades_map)}건 로드 (캐시 보완)")
-                except Exception as e:
-                    logger.warning(f"[TradeStorage] DB 이벤트 조회 실패, 캐시 폴백: {e}")
-
-            # 누락 매수 복구
-            for sym, buy_fills in buys.items():
-                if sym in cache_trades or sym in db_buy_symbols:
-                    continue
-                f = buy_fills[0]
-                qty = int(f.get("tot_ccld_qty", 0))
-                price = float(f.get("avg_prvs", 0))
-                if qty <= 0 or price <= 0:
-                    continue
-
-                trade_id = f"KIS_SYNC_{sym}_{today.strftime('%Y%m%d')}"
-                name = f.get("name", "") or f.get("prdt_name", "")
-                # 엔진 포지션에서 전략 정보 추출
-                strategy = "momentum_breakout"  # 장중 스크리닝 기본값
-                if engine:
-                    pos = engine.portfolio.positions.get(sym)
-                    _raw_strat = str(pos.strategy.value if hasattr(pos.strategy, 'value') else pos.strategy or "") if pos and hasattr(pos, 'strategy') else ""
-                    if _raw_strat and _raw_strat not in ("unknown", "unclassified", ""):
-                        strategy = _raw_strat
-
-                # core_holding_state.json에서 코어홀딩 전략 확인 (엔진 포지션 없을 때 폴백)
-                if strategy == "momentum_breakout":
-                    try:
-                        import json as _json
-                        from pathlib import Path as _Path
-                        _state_file = _Path.home() / ".cache" / "ai_trader" / "core_holding_state.json"
-                        if _state_file.exists():
-                            _state = _json.loads(_state_file.read_text())
-                            _bought = _state.get("bought", [])
-                            # 현재 코어 포지션 목록도 확인
-                            _core_positions = [
-                                p_sym for p_sym, p in (engine.portfolio.positions.items() if engine else {})
-                                if getattr(p, 'strategy', '') in ('core_holding', 'CORE_HOLDING')
-                            ]
-                            if sym in _bought or sym in _core_positions:
-                                strategy = "core_holding"
-                    except Exception:
-                        pass
-                self.record_entry(
-                    trade_id=trade_id,
-                    symbol=sym,
-                    name=name or sym,
-                    entry_price=price,
-                    entry_quantity=qty,
-                    entry_reason="KIS 동기화 복구",
-                    entry_strategy=strategy,
-                )
-                synced += 1
-                logger.info(f"[TradeStorage] KIS 동기화 매수 복구: {sym} {name} {qty}주 @ {price:,.0f}")
-
-            # 누락 매도 복구 — symbol 단위 aggregate 비교
-            for sym, sell_fills in sells.items():
-                kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
-
-                # symbol 수준 총 매도 수량 비교 (DB 우선, 캐시 폴백)
-                db_total = db_sell_qty_by_symbol.get(sym, 0)
-                # 캐시에서도 동일 symbol의 모든 exit_quantity 합산
-                cache_total = sum(
-                    t.exit_quantity or 0
-                    for t in self._journal._trades.values()
-                    if t.symbol == sym and t.entry_time and t.entry_time.date() == today
-                )
-                already_sold = max(db_total, cache_total)
-
-                if already_sold >= kis_total_sold:
-                    logger.debug(f"[TradeStorage] {sym} 매도 이미 기록됨 (KIS={kis_total_sold}, DB={db_total}, 캐시={cache_total})")
-                    continue
-
-                missing_qty = kis_total_sold - already_sold
-
-                # 복구 대상 trade 선택 (우선순위: 오늘 미청산 → 부분청산 → 최근 → 전체 미청산)
-                target_trade = self._find_recovery_target(sym, today, db_trades=db_trades_map)
-                if not target_trade:
-                    logger.warning(f"[TradeStorage] {sym} 매도 복구 대상 trade 없음 (누락 {missing_qty}주)")
-                    continue
-
-                # ── 진입 이전 매도 필터링 ──────────────────────────────────────────────
-                # 사용자 직접 거래 (봇 미주문): KIS 매도 체결 시각이 봇 진입 시각보다
-                # 이를 경우 해당 체결은 다른 포지션의 청산이므로 복구 대상에서 제외.
-                entry_dt = target_trade.entry_time  # datetime or None
-                if entry_dt:
-                    valid_fills = [
-                        f for f in sell_fills
-                        if self._parse_kis_time(f.get("ord_tmd", ""), today) is None
-                        or (self._parse_kis_time(f.get("ord_tmd", ""), today) >= entry_dt)
-                    ]
-                    if not valid_fills:
-                        logger.info(
-                            f"[TradeStorage] {sym} 매도 복구 건너뜀: "
-                            f"KIS 매도 {len(sell_fills)}건 모두 봇 진입({entry_dt.strftime('%H:%M:%S')}) 이전 "
-                            f"→ 사용자 직접 거래로 판단"
-                        )
-                        continue
-                    if len(valid_fills) < len(sell_fills):
-                        excluded = len(sell_fills) - len(valid_fills)
-                        logger.info(
-                            f"[TradeStorage] {sym} 매도 복구: 진입 이전 {excluded}건 제외, "
-                            f"진입 이후 {len(valid_fills)}건만 복구"
-                        )
-                        sell_fills = valid_fills
-                        kis_total_sold = sum(int(f.get("tot_ccld_qty", 0)) for f in sell_fills)
-                        missing_qty = max(kis_total_sold - already_sold, 0)
-                        if missing_qty <= 0:
-                            continue
-                # ────────────────────────────────────────────────────────────────────────
-
-                # 매도수량 클램핑: entry_quantity 초과 방지
-                remaining = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
-                if missing_qty > remaining:
-                    logger.warning(
-                        f"[동기화] {sym} 매도수량 초과 클램핑: "
-                        f"missing={missing_qty} > remaining={remaining} "
-                        f"(entry={target_trade.entry_quantity}, exit={target_trade.exit_quantity or 0})"
-                    )
-                    missing_qty = max(remaining, 0)
-                    if missing_qty <= 0:
-                        continue
-
-                # ── 2026-04-22 개선: 개별 fill 단위로 기록 ──────────────────────
-                # 기존: 마지막 체결가 + missing_qty 합계로 단일 이벤트 기록 (PnL/가격 부정확)
-                # 개선: KIS 체결을 chronological 정렬 후 이미 기록된 ODNO 스킵하고 개별 기록
-                #      idempotency는 kis_order_no 컬럼 기준.
-                # 이미 DB에 기록된 ODNO 집합 조회
-                recorded_odnos: set = set()
-                if self.pool:
-                    try:
-                        odno_rows = await self.pool.fetch(
-                            """SELECT kis_order_no FROM trade_events
-                               WHERE trade_id=$1 AND event_type='SELL'
-                                 AND kis_order_no IS NOT NULL""",
-                            target_trade.id,
-                        )
-                        recorded_odnos = {str(r['kis_order_no']) for r in odno_rows if r['kis_order_no']}
-                    except Exception:
-                        recorded_odnos = set()
-
-                # 시간순 정렬 (KIS는 reverse chrono로 반환되므로 ord_tmd 오름차순으로 재정렬)
-                fills_sorted = sorted(
-                    sell_fills,
-                    key=lambda f: str(f.get("ord_tmd", "000000"))
-                )
-
-                # 이미 기록된 수량(already_sold)만큼은 skip 처리
-                # ODNO 매칭이 있으면 우선 ODNO로 skip, 없으면 qty 기준 선행 skip
-                fills_to_record = []
-                qty_to_skip = already_sold
-                for f in fills_sorted:
-                    odno = str(f.get("odno", "")).strip()
-                    fqty = int(f.get("tot_ccld_qty", 0))
-                    if fqty <= 0:
-                        continue
-                    if odno and odno in recorded_odnos:
-                        # 이미 이 ODNO가 trade_events에 있음 → skip
-                        continue
-                    if qty_to_skip >= fqty:
-                        qty_to_skip -= fqty
-                        continue
-                    if qty_to_skip > 0:
-                        # 부분 skip — fill의 뒤쪽 수량만 복구
-                        fills_to_record.append((f, fqty - qty_to_skip))
-                        qty_to_skip = 0
-                    else:
-                        fills_to_record.append((f, fqty))
-
-                # entry_qty 초과 방지
-                _rem_cap = target_trade.entry_quantity - (target_trade.exit_quantity or 0)
-                _recovered_qty = 0
-                for f, rec_qty in fills_to_record:
-                    if _rem_cap <= 0:
-                        break
-                    this_qty = min(rec_qty, _rem_cap)
-                    price = float(f.get("avg_prvs", 0))
-                    if price <= 0:
-                        continue
-                    odno = str(f.get("odno", "")).strip() or None
-                    actual_time = self._parse_kis_time(f.get("ord_tmd", ""), today)
-                    result = self.record_exit(
-                        trade_id=target_trade.id,
-                        exit_price=price,
-                        exit_quantity=this_qty,
-                        exit_reason=f"KIS 동기화 복구 (ODNO={odno})" if odno else "KIS 동기화 복구",
-                        exit_type="kis_sync",
-                        exit_time=actual_time,
-                    )
-                    if result is None and self._db_available:
-                        exit_time = actual_time or datetime.now()
-                        entry_price = float(target_trade.entry_price)
-                        pnl, pnl_pct = self.calc_pnl(entry_price, price, this_qty)
-                        total_exit_qty = (target_trade.exit_quantity or 0) + _recovered_qty + this_qty
-                        is_fully_closed = total_exit_qty >= target_trade.entry_quantity
-                        self._enqueue(
-                            """UPDATE trades SET exit_time=$1, exit_price=$2, exit_quantity=$3,
-                               exit_reason=$4, exit_type=$5, pnl=COALESCE(pnl,0)+$6,
-                               pnl_pct=$7, updated_at=$8
-                               WHERE id=$9""",
-                            (exit_time, price, total_exit_qty, "KIS 동기화 복구",
-                             "kis_sync" if is_fully_closed else "partial",
-                             float(pnl), float(pnl_pct), datetime.now(), target_trade.id),
-                        )
-                        self._enqueue(
-                            """INSERT INTO trade_events
-                               (trade_id, symbol, name, event_type, event_time, price, quantity,
-                                exit_type, exit_reason, pnl, pnl_pct, strategy, signal_score,
-                                status, kis_order_no)
-                               VALUES ($1,$2,$3,'SELL',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)""",
-                            (target_trade.id, target_trade.symbol, target_trade.name,
-                             exit_time, price, this_qty, "kis_sync", "KIS 동기화 복구",
-                             float(pnl), float(pnl_pct), target_trade.entry_strategy,
-                             float(target_trade.entry_signal_score),
-                             "kis_sync" if is_fully_closed else "partial", odno),
-                        )
-                        logger.info(
-                            f"[TradeStorage] DB 직접 기록 (캐시 미보유): {sym} {this_qty}주 @ {price:,.0f} "
-                            f"pnl={int(pnl):+,}원 ODNO={odno}"
-                        )
-                    _recovered_qty += this_qty
-                    _rem_cap -= this_qty
-                    logger.info(
-                        f"[TradeStorage] KIS 동기화 매도 복구: {sym} {this_qty}주 @ {price:,.0f} "
-                        f"(ODNO={odno}, trade={target_trade.id})"
-                    )
-
-                if _recovered_qty > 0:
-                    synced += 1
-
-            if synced > 0:
-                logger.info(f"[TradeStorage] KIS 동기화 완료: {synced}건 복구")
-            else:
-                logger.info("[TradeStorage] KIS 동기화 완료: 누락 없음")
-
-            # PnL 보정 전 DB 큐 drain 대기 (미기록 데이터 반영)
-            if self._write_queue:
-                await asyncio.sleep(0.5)  # 큐 처리 여유 시간
-            await self._reconcile_pnl(today, sells)
-
-        except Exception as e:
-            logger.error(f"[TradeStorage] KIS 동기화 실패 (무시): {e}")
+    @staticmethod
+    def _kis_sync_values(quantity, price):
+        """Finite, positive comparison values; never round missing fills away."""
+        if isinstance(quantity, bool) or isinstance(price, bool):
+            return None
+        try:
+            qty, value = Decimal(str(quantity)), Decimal(str(price))
+            if (not qty.is_finite() or not value.is_finite()
+                    or qty <= 0 or qty != qty.to_integral_value() or value <= 0):
+                return None
+            return int(qty), value
+        except (ValueError, ArithmeticError):
+            return None
 
     async def _reconcile_pnl(self, target_date: date, kis_sells: Dict[str, list]):
         """

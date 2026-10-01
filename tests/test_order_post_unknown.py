@@ -462,7 +462,16 @@ def test_run_trader_wires_the_partial_exit_block_next_to_the_pending_verifier():
     assert len(blocks) == 1
     calls = [ast.unparse(c) for c in ast.walk(blocks[0]) if isinstance(c, ast.Call)
              and isinstance(c.func, ast.Attribute) and c.func.attr == "set_partial_exit_block"]
-    assert calls == ["self.exit_manager.set_partial_exit_block(self.broker.has_unknown_sell)"]
+    assert calls == ["self.exit_manager.set_partial_exit_block(_partial_sell_unresolved)"]
+    hook = next(n for n in ast.walk(blocks[0]) if isinstance(n, ast.FunctionDef)
+                and n.name == "_partial_sell_unresolved")
+    # Execute only the pure wiring closure, never the live startup function.
+    ns = {"self": SimpleNamespace(broker=SimpleNamespace())}
+    exec(compile(ast.Module(body=[hook], type_ignores=[]), "<synthetic-hook>", "exec"), ns)
+    for unknown, canceled in [(False, False), (True, False), (False, True)]:
+        fake = SimpleNamespace(has_unknown_sell=lambda s, v=unknown: v,
+                               has_unresolved_cancel=lambda s, v=canceled: v)
+        assert ns["_partial_sell_unresolved"]("005930", fake) is (unknown or canceled)
 
 
 def test_b6_default_path_follows_home(home):

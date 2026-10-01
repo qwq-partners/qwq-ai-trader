@@ -18,6 +18,7 @@ from decimal import Decimal
 from functools import wraps
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+from zoneinfo import ZoneInfo
 import aiohttp
 from loguru import logger
 
@@ -146,6 +147,23 @@ def _accept_identity(odno, orgno, session: str, source: str) -> dict:
     }
 
 
+@dataclass
+class _FillObservation:
+    """Same-process observation only; acknowledged means scheduler postprocessing succeeded."""
+    order: Order
+    odno: str
+    orgno: str
+    order_date: str
+    original_quantity: int
+    symbol: str
+    side: OrderSide
+    acknowledged_quantity: int = 0
+    canceled: bool = False
+    modified: bool = False
+    modifications_inflight: int = 0
+    terminal_quantity: Optional[int] = None
+
+
 class KISBroker(BaseBroker):
     """
     KIS (한국투자증권) 브로커
@@ -173,6 +191,9 @@ class KISBroker(BaseBroker):
         self._order_id_to_orgno: Dict[str, str] = {}
         self._reconciliation_generation = 0
         self._reconciliation_active = 0
+        self._fill_observations: Dict[str, _FillObservation] = {}
+        self._fill_observation_tombstones = collections.OrderedDict()
+        self._fill_observation_day_cursor = 0
 
         # NXT 거래 가능 종목 캐시
         self._nxt_symbols_cache: List[str] = []
@@ -212,17 +233,60 @@ class KISBroker(BaseBroker):
         """로컬 idle 세대 번호. 거래소 스냅샷 시각이나 체결 watermark가 아니다.
 
         호출측은 엔진에 전달된 체결도 별도로 추적해야 한다. 접수 불명,
-        취소 전에 관측하지 못한 부분체결, 재시작 이전 주문은 이 메모리
-        활동 추적으로 복구하거나 대사하지 않는다.
+        재시작 이전 주문은 이 메모리 활동 추적으로 복구하거나 대사하지 않는다.
         """
         generation = getattr(self, '_reconciliation_generation', None)
         active = getattr(self, '_reconciliation_active', None)
         pending = getattr(self, '_pending_orders', None)
         if (type(generation) is not int or generation < 0
                 or type(active) is not int or active != 0
-                or not isinstance(pending, dict) or pending):
+                or not isinstance(pending, dict) or pending
+                or self.has_pending_fill_observations()):
             return None
         return generation
+
+    def has_pending_fill_observations(self) -> bool:
+        """Canceled execution is not open, but its final cumulative fills may be unknown."""
+        return any(record.canceled for record in getattr(self, '_fill_observations', {}).values())
+
+    def get_fill_observation_order_ids(self) -> set[str]:
+        return {oid for oid, record in getattr(self, '_fill_observations', {}).items()
+                if record.canceled}
+
+    def has_unresolved_cancel(self, symbol: str) -> bool:
+        return any(record.canceled and record.symbol == symbol
+                   for record in getattr(self, '_fill_observations', {}).values())
+
+    def acknowledge_fill(self, order_id: str, quantity: int) -> None:
+        """Called once per delivered delta, only after portfolio AND handoff success.
+
+        This is an in-memory watermark, not restart replay permission. Invalid or
+        excess acknowledgements cannot release an unresolved observation.
+        """
+        record = getattr(self, '_fill_observations', {}).get(order_id)
+        if record is None:
+            return
+        if (type(quantity) is not int or quantity <= 0
+                or record.acknowledged_quantity + quantity > record.order.filled_quantity):
+            logger.error(f"[취소체결] invalid acknowledgement: {order_id}")
+            return
+        record.acknowledged_quantity += quantity
+        self._retire_fill_observation(order_id, record)
+
+    def _retire_fill_observation(self, order_id: str, record: _FillObservation) -> None:
+        if record.terminal_quantity is None or record.acknowledged_quantity != record.terminal_quantity:
+            return
+        if getattr(self, '_fill_observations', {}).get(order_id) is not record:
+            return
+        del self._fill_observations[order_id]
+        tombstones = getattr(self, '_fill_observation_tombstones', None)
+        if tombstones is None:
+            tombstones = self._fill_observation_tombstones = collections.OrderedDict()
+        tombstones[order_id] = (record.order_date, record.odno, record.terminal_quantity)
+        while len(tombstones) > 256:
+            tombstones.popitem(last=False)  # Only resolved records are bounded; never evict unresolved work.
+        if type(getattr(self, '_reconciliation_generation', None)) is int:
+            self._reconciliation_generation += 1
 
     async def _rate_limit(self, tr_id: str = ""):
         """API 호출 전 레이트 리미트 대기 — 프로세스 공용 슬라이딩 윈도우 + 원장 TR 간격"""
@@ -432,7 +496,8 @@ class KISBroker(BaseBroker):
         return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
 
     async def _api_post(self, url: str, tr_id: str, json_data: dict,
-                        extra_headers: Optional[dict] = None, retry: bool = True) -> dict:
+                        extra_headers: Optional[dict] = None, retry: bool = True,
+                        cancel_guard: Optional[Tuple[str, OrderSide, bool]] = None) -> dict:
         """API POST 요청 (토큰 만료 시 자동 갱신 + 재시도, 일시적 오류 재시도)
 
         retry=False: 주문 접수(order-cash)·정정처럼 비멱등 요청. 5xx/타임아웃/연결 끊김 시
@@ -456,6 +521,10 @@ class KISBroker(BaseBroker):
         for attempt in range(3):
             try:
                 await self._rate_limit()
+                if cancel_guard is not None:
+                    symbol, side, partial = cancel_guard
+                    if self.has_unresolved_cancel(symbol) and (side == OrderSide.BUY or partial):
+                        return {"rt_cd": "-1", "msg1": "취소 주문 최종 체결 미확인", "_blocked": True}
                 # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
                 # 기다리는 사이 킬스위치가 켜졌거나 다른 BUY 가 접수 불명이 됐으면 보내지 않는다. 401 재전송 직전에도
                 # 매번 확인한다. SELL 은 재검사하지 않는다(긴급 절차는 KILL_SWITCH 만 쓴다).
@@ -665,7 +734,10 @@ class KISBroker(BaseBroker):
             # API 호출
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-cash"
             posted = True
-            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
+            submission_date = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+            data = await self._api_post(
+                url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False,
+                cancel_guard=(order.symbol, order.side, order.partial_exit is True))
 
             if data.get("_blocked"):  # 전송 직전 재확인에서 보류 — 보내지 않았다
                 hold = data.get("msg1", "")
@@ -714,6 +786,12 @@ class KISBroker(BaseBroker):
             self._order_id_to_kis_no[order.id] = kis_ord_no
             if orgno:
                 self._order_id_to_orgno[order.id] = orgno
+            if not hasattr(self, '_fill_observations'):
+                self._fill_observations = {}
+            self._fill_observations[order.id] = _FillObservation(
+                order, str(kis_ord_no), str(orgno or ''), submission_date, order.quantity, order.symbol, order.side,
+                modified=not _is_clean_id(kis_ord_no) or str(kis_ord_no).startswith(("TEMP_", "local-")),
+            )
 
             logger.info(
                 f"주문 제출 성공: {order.symbol} {order.side.value} "
@@ -1153,7 +1231,23 @@ class KISBroker(BaseBroker):
                 logger.error(f"주문 취소 실패: {msg}")
                 return False
 
-            # 추적에서 제거
+            # Remove executable state, preserve the latest cumulative counters after
+            # the await. A concurrent full fill may already have removed this order;
+            # never resurrect it as a canceled observation in that case.
+            current = self._pending_orders.get(order_id)
+            if current is order:
+                if not hasattr(self, '_fill_observations'):
+                    self._fill_observations = {}
+                observation = self._fill_observations.get(order_id)
+                if observation is None:
+                    # No submit-time identity means automatic finalization is unsupported.
+                    observation = self._fill_observations[order_id] = _FillObservation(
+                        order, str(kis_ord_no), str(orgno or ''), "", order.quantity, order.symbol, order.side,
+                        modified=True,
+                    )
+                    logger.warning(f"[취소체결] {order_id} submission identity unavailable — unresolved")
+                observation.canceled = True
+                order.status = OrderStatus.CANCELLED
             self._pending_orders.pop(order_id, None)
             self._order_id_to_kis_no.pop(order_id, None)
             self._order_id_to_orgno.pop(order_id, None)
@@ -1243,9 +1337,25 @@ class KISBroker(BaseBroker):
                 return False
 
             url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
-            data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
+            # A POST can succeed despite a lost response; original/replacement
+            # lineage is not supported by canceled-order terminal inference.
+            observation = getattr(self, '_fill_observations', {}).get(order_id)
+            if observation is not None:
+                observation.modifications_inflight += 1
+            try:
+                data = await self._api_post(url, tr_id, params, extra_headers={"hashkey": hashkey}, retry=False)
+            except BaseException:
+                if observation is not None:
+                    observation.modified = True
+                raise
+            finally:
+                if observation is not None:
+                    observation.modifications_inflight -= 1
 
             rt_cd = data.get("rt_cd", "")
+            if observation is not None and (str(rt_cd) == "0" or data.get('_unknown')
+                    or (rt_cd in (None, '') and not data.get('msg_cd'))):
+                observation.modified = True
             if str(rt_cd) != "0":
                 msg = data.get("msg1", "")
                 logger.error(f"주문 수정 실패: {msg}")
@@ -2202,7 +2312,8 @@ class KISBroker(BaseBroker):
     # ============================================================
 
     @kis_request_metrics.observe_operation("daily_fills")
-    async def _query_daily_fills(self, target_date: str = None, status: Optional[dict] = None) -> list:
+    async def _query_daily_fills(self, target_date: str = None, status: Optional[dict] = None,
+                               *, all_orders: bool = False, preserve_duplicates: bool = False) -> list:
         """
         KIS 일일 체결 내역 원시 조회 (TTTC8001R / 신 TR TTTC0081R) — 페이지네이션 포함.
 
@@ -2250,7 +2361,7 @@ class KISBroker(BaseBroker):
                 "INQR_END_DT": target_date,
                 "SLL_BUY_DVSN_CD": "00",
                 "ORD_GNO_BRNO": "",
-                "CCLD_DVSN": "01",
+                "CCLD_DVSN": "00" if all_orders else "01",
                 "INQR_DVSN": "00",
                 "INQR_DVSN_1": "",
                 "INQR_DVSN_3": "00",
@@ -2303,6 +2414,10 @@ class KISBroker(BaseBroker):
             # 10페이지를 다 읽고도 종료 조건이 안 나왔다 — 상한 미완
             _judge(False, "page_cap")
 
+        # Cancellation finalization must inspect conflicting duplicates, including
+        # zero-fill canceled rows. Existing callers retain their original contract.
+        if preserve_duplicates:
+            return all_items
         # odno 기반 중복 제거 (페이지네이션 중복 방지)
         seen = set()
         deduped = []
@@ -2370,7 +2485,7 @@ class KISBroker(BaseBroker):
 
         status: dict = {}
         try:
-            output1 = await self._query_daily_fills(date_str, status=status)
+            output1 = await self._query_daily_fills(date_str, status=status, preserve_duplicates=True)
         except Exception as e:
             logger.error(f"[KIS] 체결 조회(완결 판정) 실패: {e}")
             return [], False, "exception"
@@ -2379,6 +2494,7 @@ class KISBroker(BaseBroker):
         reason = status.get("reason")
         results = []
         normalize_failed = False
+        seen_orders = {}
         for item in output1:
             raw_qty = item.get("TOT_CCLD_QTY") if item.get("TOT_CCLD_QTY") is not None else item.get("tot_ccld_qty")
             raw_px = item.get("AVG_PRVS") if item.get("AVG_PRVS") is not None else item.get("avg_prvs")
@@ -2398,7 +2514,7 @@ class KISBroker(BaseBroker):
                 normalize_failed = True
                 logger.warning(f"[KIS] 체결 행 정규화 실패 — 미완 처리: odno={item.get('ODNO') or item.get('odno')}")
                 continue
-            results.append({
+            normalized = {
                 "symbol": symbol,
                 "name": str(item.get("PRDT_NAME") or item.get("prdt_name", "")).strip(),
                 "sll_buy_dvsn_cd": side,
@@ -2406,11 +2522,137 @@ class KISBroker(BaseBroker):
                 "avg_prvs": avg_px,
                 "odno": str(item.get("ODNO") or item.get("odno", "")).strip(),
                 "ord_tmd": str(item.get("ORD_TMD") or item.get("ord_tmd", "")).strip(),
-            })
+            }
+            odno = normalized['odno']
+            signature = (symbol, side, ccld_qty, avg_px, normalized['ord_tmd'])
+            if odno and odno in seen_orders:
+                if seen_orders[odno] != signature:
+                    complete, reason = False, 'conflicting_order_rows'
+                continue
+            if odno:
+                seen_orders[odno] = signature
+            results.append(normalized)
 
         if complete and normalize_failed:
             complete, reason = False, "normalize_failed"
         return results, complete, reason
+
+    @staticmethod
+    def _observation_field(row: dict, name: str):
+        value = row.get(name.upper()) if name.upper() in row else row.get(name)
+        return value.strip() if isinstance(value, str) else value
+
+    @staticmethod
+    def _observation_quantity(value) -> int:
+        # int(float(...)), bool and missing values must never produce terminal evidence.
+        if type(value) is int and value >= 0:
+            return value
+        if isinstance(value, str) and value and value.isascii() and value.isdigit():
+            return int(value)
+        raise ValueError("missing/invalid nonnegative integer")
+
+    def _decode_cancel_observation(self, row: dict, record: _FillObservation):
+        value = lambda name: self._observation_field(row, name)
+        quantity = self._observation_quantity
+        if (value('odno') != record.odno or value('ord_dt') != record.order_date
+                or value('pdno') != record.symbol
+                or value('sll_buy_dvsn_cd') != ('01' if record.side == OrderSide.SELL else '02')
+                or quantity(value('ord_qty')) != record.original_quantity):
+            raise ValueError("order identity mismatch")
+        original = value('orgn_odno')
+        if original not in (None, '') and set(str(original)) != {'0'}:
+            raise ValueError("replacement/cancellation child lineage unsupported")
+        filled = quantity(value('tot_ccld_qty'))
+        if filled > record.original_quantity:
+            raise ValueError("cumulative overfill")
+        average = Decimal(str(value('avg_prvs')))
+        if not average.is_finite() or average < 0 or (filled > 0 and average <= 0):
+            raise ValueError("invalid cumulative price")
+        terminal = False
+        try:
+            terminal = (value('cncl_yn') == 'Y'
+                        and quantity(value('rmn_qty')) == 0
+                        and quantity(value('rjct_qty')) == 0
+                        and filled + quantity(value('cnc_cfrm_qty')) == record.original_quantity)
+        except ValueError:
+            pass  # Positive execution evidence is distinct from terminal evidence.
+        return filled, average, terminal
+
+    async def _check_canceled_fills(self) -> List[Fill]:
+        # Snapshot only identities canceled before query initiation. A pre-ACK
+        # request is never reused as terminal evidence for a later cancellation.
+        records = {oid: record for oid, record in getattr(self, '_fill_observations', {}).items()
+                   if record.canceled and record.terminal_quantity is None}
+        days = sorted({record.order_date for record in records.values() if record.order_date})
+        if not days:
+            return []
+        cursor = getattr(self, '_fill_observation_day_cursor', 0)
+        day = days[cursor % len(days)]
+        self._fill_observation_day_cursor = cursor + 1
+        # At most one historic day per poll; rollover never silently discards work.
+        records = {oid: record for oid, record in records.items() if record.order_date == day}
+        status = {}
+        rows = await self._query_daily_fills(day, status=status, all_orders=True, preserve_duplicates=True)
+        if status.get('complete') is not True:
+            logger.warning(f"[취소체결] {day} incomplete order query: {status.get('reason')}")
+            return []
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            logger.warning(f"[취소체결] {day} malformed order query")
+            return []
+        fills = []
+        for order_id, record in records.items():
+            if getattr(self, '_fill_observations', {}).get(order_id) is not record:
+                continue
+            if record.modified or record.modifications_inflight:
+                logger.warning(f"[취소체결] {order_id} unsupported order/modified lineage")
+                continue
+            matched = [row for row in rows if self._observation_field(row, 'odno') == record.odno]
+            if not matched:
+                logger.warning(f"[취소체결] {order_id} no matching order evidence")
+                continue
+            try:
+                # Compare every relevant field before consuming a delta. First-row
+                # deduplication would hide a contradictory terminal observation.
+                fields = ('ord_dt', 'odno', 'orgn_odno', 'pdno', 'sll_buy_dvsn_cd', 'ord_qty',
+                          'tot_ccld_qty', 'avg_prvs', 'cncl_yn', 'cnc_cfrm_qty', 'rmn_qty', 'rjct_qty')
+                signatures = [tuple(self._observation_field(row, key) for key in fields) for row in matched]
+                if any(signature != signatures[0] for signature in signatures[1:]):
+                    raise ValueError("conflicting duplicate cumulative rows")
+                filled, average, terminal = self._decode_cancel_observation(matched[0], record)
+                order = record.order
+                previous = order.filled_quantity
+                previous_average = order.filled_price or Decimal('0')
+                if filled < previous or (filled == previous and filled > 0 and average != previous_average):
+                    raise ValueError("cumulative quantity/price regressed or changed")
+                delta = filled - previous
+                if delta:
+                    incremental = (average * filled - previous_average * previous) / delta
+                    if not incremental.is_finite() or incremental <= 0:
+                        raise ValueError("nonpositive/invalid incremental price")
+                    # Preserve the existing two-decimal Fill price contract, but no
+                    # invented cumulative-price fallback on inconsistent evidence.
+                    fill_price = round(incremental, 2)
+                    if fill_price <= 0:
+                        raise ValueError("incremental price rounds to zero")
+                    fill = Fill(order_id=order_id, symbol=record.symbol, side=record.side,
+                                quantity=delta, price=fill_price,
+                                commission=self.calculate_commission(record.side, delta, fill_price),
+                                strategy=order.strategy, reason=order.reason, signal_score=order.signal_score)
+                    fills.append(fill)
+                    order.filled_quantity, order.filled_price = filled, average
+                    try:
+                        from ...analytics.tca import record_fill_tca
+                        record_fill_tca(order, fill, market='KR')
+                    except Exception as exc:
+                        logger.debug(f"[TCA] canceled fill measurement failed: {exc}")
+                if terminal:
+                    record.terminal_quantity = filled
+                    self._retire_fill_observation(order_id, record)
+                else:
+                    logger.warning(f"[취소체결] {order_id} terminal quantities unverified")
+            except Exception as exc:
+                logger.warning(f"[취소체결] {order_id} observation unresolved: {exc}")
+        return fills
 
     @_reconciliation_activity
     async def check_fills(self) -> List[Fill]:
@@ -2421,7 +2663,8 @@ class KISBroker(BaseBroker):
         fills = []
 
         try:
-            output1 = await self._query_daily_fills()
+            output1 = (await self._query_daily_fills()
+                       if self._pending_orders or not self.has_pending_fill_observations() else [])
 
             # KIS 주문번호 -> 내부 주문 ID 매핑
             kis_to_order_id = {v: k for k, v in self._order_id_to_kis_no.items()}
@@ -2495,6 +2738,9 @@ class KISBroker(BaseBroker):
                         if order.filled_quantity >= order.quantity:
                             order.status = OrderStatus.FILLED
                             completed_order_ids.add(order_id)
+                            observation = getattr(self, '_fill_observations', {}).get(order_id)
+                            if observation is not None:
+                                observation.terminal_quantity = order.filled_quantity
                         else:
                             order.status = OrderStatus.PARTIAL
                             logger.info(
@@ -2508,6 +2754,7 @@ class KISBroker(BaseBroker):
                 self._order_id_to_kis_no.pop(order_id, None)
                 self._order_id_to_orgno.pop(order_id, None)
 
+            fills.extend(await self._check_canceled_fills())
             return fills
 
         except Exception as e:

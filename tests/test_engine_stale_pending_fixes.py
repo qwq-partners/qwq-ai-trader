@@ -90,6 +90,7 @@ def _rm(monkeypatch, broker, now, *, positions=None):
     rm._last_signal_time, rm._SIGNAL_COOLDOWN_SECONDS = {}, 30
     rm._PENDING_TIMEOUT_SECONDS = 600
     rm._pending_orders, rm._pending_quantities = set(), {}
+    rm._pending_order_ids = {}
     rm._pending_timestamps, rm._pending_sides = {}, {}
     rm._pending_fallback_count, rm._reserved_by_order = {}, {}
     rm._pending_cancel_keep = {}
@@ -107,6 +108,7 @@ def _rm(monkeypatch, broker, now, *, positions=None):
 
 def _stale(rm, side, now, *, seconds, reserved=None):
     rm._pending_orders.add(SYM)
+    rm._pending_order_ids[SYM] = "stale-order"
     rm._pending_sides[SYM] = side
     rm._pending_quantities[SYM] = 10
     rm._pending_timestamps[SYM] = now - timedelta(seconds=seconds)
@@ -415,7 +417,7 @@ def test_partial_fill_of_a_kept_stale_buy_unblocks_exits(monkeypatch, keep_cnt, 
     if keep_cnt:
         rm._pending_fallback_count[SYM] = keep_cnt
 
-    asyncio.run(rm.on_fill(FillEvent(symbol=SYM, side=OrderSide.BUY, quantity=4, price=PRICE)))
+    asyncio.run(rm.on_fill(FillEvent(order_id="stale-order", symbol=SYM, side=OrderSide.BUY, quantity=4, price=PRICE)))
 
     assert (SYM not in rm._pending_orders) is released
     assert (SYM not in rm._reserved_by_order) is released

@@ -1249,6 +1249,7 @@ class RiskManager:
 
         # 중복 주문 방지: 주문 진행 중인 종목
         self._pending_orders: Set[str] = set()
+        self._pending_order_ids: Dict[str, str] = {}
 
         # 시그널 메타데이터 캐시: fill 시 record_entry 태그 구성에 사용
         # {symbol: {"reason": str, "metadata": dict, "strategy": str, "score": float}}
@@ -2101,6 +2102,10 @@ class RiskManager:
             )
             return None
 
+        if (event.side == OrderSide.BUY or _sell_partial_intent or _sell_partial_action) and self.has_unresolved_cancel(event.symbol):
+            logger.warning(f"[리스크] 취소 주문 최종 체결 미확인: {event.symbol} — 신규 매수/분할 매도 보류")
+            return None
+
         if position_size <= 0:
             equity = self.engine.portfolio.total_equity
             cash = self.engine.get_available_cash()
@@ -2153,6 +2158,8 @@ class RiskManager:
                 reason=event.reason,
                 signal_score=event.score
             )
+
+        order.partial_exit = _sell_partial_intent or _sell_partial_action
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)
         if order.side == OrderSide.BUY:
@@ -2227,6 +2234,7 @@ class RiskManager:
                 getattr(self, "_entry_observation_owner", None), self, event, order
             )
             self._pending_orders.add(order.symbol)
+            self.__dict__.setdefault('_pending_order_ids', {})[order.symbol] = order.id
             self._pending_fallback_count.pop(order.symbol, None)  # 새 pending 은 0회에서 시작 (잔존 값이 SELL 폴백 예산을 깎지 않게)
             self._pending_cancel_keep.pop(order.symbol, None)  # 잔존 값이 새 SELL 의 첫 회 대기를 건너뛰게 하지 않게
             self._pending_quantities[order.symbol] = order.quantity
@@ -2380,6 +2388,12 @@ class RiskManager:
         # KIS 가 주문가능수량 0 으로 거절하므로 과매도가 불가능하다 — 종전 경로 그대로 두어 손절 지연을 만들지 않는다.
         # 분할 여부는 등록 시점에 남긴 의도로 읽는다(현재 수량 비교는 잔고 스냅샷 지연에 흔들린다).
         _partial_intent = self._pending_signal_cache.get(s, {}).get("sell_partial_intent") is True
+        if (_partial_intent or s in self._partial_action_marks()) and self.has_unresolved_cancel(s):
+            # Cancel ACK is not the old order's final fill count. Keep the original
+            # intent quantity until the polling/receipt path applies its last delta.
+            self._pending_cancel_keep[s] = _SellKeep(1, now, False, False, now)
+            logger.warning(f"[리스크] 취소 주문 체결 확인 대기: {s} — 분할 재주문 보류")
+            return
         if cancelled is not None and _partial_intent and pos is not None and pos.quantity > 0:
             if await self._keep_stale_sell_after_failed_cancel(s, now, cancelled):
                 return
@@ -2402,6 +2416,7 @@ class RiskManager:
                 order_type=OrderType.MARKET,
                 quantity=_fb_qty,
                 reason="미체결 폴백: 시장가 전환",
+                partial_exit=_partial_intent or s in self._partial_action_marks(),
             )
             # 위 취소·생존 조회 await 중 면제가 등록됐으면 재주문하지 않는다 — 다음 주기에 이 함수 머리의 면제 분기가 정리
             if self._is_exit_exempt(s):
@@ -2419,6 +2434,7 @@ class RiskManager:
                 _fb_ok, _fb_msg = await self.engine.broker.submit_order(fallback_order)
                 if _fb_ok:
                     async with self._pending_lock:
+                        self.__dict__.setdefault('_pending_order_ids', {})[s] = fallback_order.id
                         self._pending_timestamps[s] = datetime.now()
                         self._pending_sides[s] = OrderSide.SELL
                         self._pending_fallback_count[s] = fallback_cnt + 1
@@ -2597,6 +2613,7 @@ class RiskManager:
         """주문 완료/실패 시 pending 해제 (외부에서 호출) - Lock 보호"""
         async with self._pending_lock:
             self._pending_orders.discard(symbol)
+            getattr(self, '_pending_order_ids', {}).pop(symbol, None)
             self._pending_quantities.pop(symbol, None)
             self._pending_timestamps.pop(symbol, None)
             self._pending_sides.pop(symbol, None)
@@ -2628,6 +2645,16 @@ class RiskManager:
             if order.side == OrderSide.SELL and self._is_exit_exempt(order.symbol):
                 logger.warning(f"[리스크] 자동매도 금지 종목 SELL 제출 차단: {order.symbol} ({order.reason})")
                 await self.clear_pending(event.symbol)
+                return None
+
+            # A cancel can become observable while the accepted signal waits in
+            # the event queue. Recheck before submitting its replacement.
+            partial = (self._pending_signal_cache.get(order.symbol, {}).get('sell_partial_intent') is True
+                       or order.symbol in self._partial_action_marks())
+            if self.has_unresolved_cancel(order.symbol) and (order.side == OrderSide.BUY or partial):
+                logger.warning(f"[리스크] 취소 체결 확인 전 제출 보류: {order.symbol}")
+                if self.fill_matches_pending(order):
+                    await self.clear_pending(order.symbol)
                 return None
 
             success, order_id = await self.engine.broker.submit_order(order)
@@ -2692,6 +2719,16 @@ class RiskManager:
 
         return None
 
+    def fill_matches_pending(self, fill) -> bool:
+        """A symbol match alone cannot consume another order's reservation."""
+        return (bool(fill.order_id)
+                and getattr(self, '_pending_order_ids', {}).get(fill.symbol) == fill.order_id
+                and self._pending_sides.get(fill.symbol) == fill.side)
+
+    def has_unresolved_cancel(self, symbol: str) -> bool:
+        check = getattr(getattr(self.engine, 'broker', None), 'has_unresolved_cancel', None)
+        return check(symbol) is True if callable(check) else False
+
     async def on_fill(self, event: FillEvent) -> Optional[List[Event]]:
         """체결 후 포트폴리오 업데이트 + 리스크 추적 (부분 체결 지원) - Lock 보호"""
         self.engine.track_fill(event)
@@ -2711,8 +2748,8 @@ class RiskManager:
             applied = self.engine.update_position(fill) is True
             event.position_owner = self.engine.portfolio.positions.get(fill.symbol)
             event.position_after = copy(event.position_owner)
-            self.engine._acknowledge_fill(event, applied)
             if not applied:
+                self.engine._acknowledge_fill(event, False)
                 logger.error(f"[리스크] 체결 적용 미확인: {event.symbol} — 잔고 동기화 보류")
                 return None
         except Exception as e:
@@ -2725,7 +2762,7 @@ class RiskManager:
         # 없어 "+5점 우위" 비교가 항상 0 기준으로 무력화됐다.
         # 한계: 재시작으로 복원된 포지션은 0으로 남음 (허용).
         try:
-            if event.side == OrderSide.BUY:
+            if event.side == OrderSide.BUY and self.fill_matches_pending(event):
                 _pos = self.engine.portfolio.positions.get(event.symbol)
                 _sig_cache = self._pending_signal_cache.get(event.symbol)
                 if _pos is not None and _sig_cache is not None:
@@ -2737,7 +2774,10 @@ class RiskManager:
 
         # 2) pending 추적 정리
         async with self._pending_lock:
-            if event.quantity is None:
+            event.pending_order_matched = self.fill_matches_pending(event)
+            if not event.pending_order_matched:
+                remaining = None
+            elif event.quantity is None:
                 logger.warning(f"[리스크] FillEvent quantity=None: {event.symbol} → pending 전체 해제")
                 remaining = 0
             else:
@@ -2748,8 +2788,11 @@ class RiskManager:
             _kept_stale_buy = (event.side == OrderSide.BUY
                                and self._pending_sides.get(event.symbol) == OrderSide.BUY
                                and self._pending_fallback_count.get(event.symbol, 0) > 0)
-            if remaining <= 0 or _kept_stale_buy:
+            if remaining is None:
+                pass  # Actual cash/holdings still applied; unrelated pending stays intact.
+            elif remaining <= 0 or _kept_stale_buy:
                 self._pending_orders.discard(event.symbol)
+                getattr(self, '_pending_order_ids', {}).pop(event.symbol, None)
                 self._pending_quantities.pop(event.symbol, None)
                 self._pending_timestamps.pop(event.symbol, None)
                 self._pending_sides.pop(event.symbol, None)
@@ -2773,6 +2816,9 @@ class RiskManager:
                             _rsv * Decimal(str(remaining)) / Decimal(str(_prev_qty))
                         )
                 logger.info(f"[리스크] 부분 체결: {event.symbol} 잔여 {remaining}주")
+
+        # The receipt also covers ownership-sensitive pending bookkeeping.
+        self.engine._acknowledge_fill(event, True)
 
         # 일일 손실 체크 (실현 + 미실현 손익 합산)
         _equity = self.engine.portfolio.total_equity

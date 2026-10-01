@@ -255,9 +255,12 @@ class PositionExitState:
     # pending_stage 설정 시각 — 5분 초과 시 만료 처리 대상 (2026-08-04 P2)
     # verifier 배선 시: 거래소 미체결 확인 후에만 해제 (maybe_expire_pending)
     pending_since: Optional[datetime] = None
+    pending_generation: int = 0  # Process-local stage identity; never a restart watermark.
     # 2026-08-08 P1: 부분 체결 누적 — 목표수량 도달 시에만 stage 승격
     pending_target_qty: int = 0
     pending_filled_qty: int = 0
+    retry_stage: Optional[ExitStage] = None
+    retry_quantity: Optional[int] = None
     # 포지션 최초 진입 수량 (부분 매도 후에도 유지 — 재시작 정합성 검증용)
     # 파일의 initial_qty에서 복원, 없으면 original_quantity로 초기화
     initial_quantity: int = 0
@@ -425,6 +428,9 @@ class ExitManager:
                     entry["pending_since"] = state.pending_since.isoformat()
                 entry["pending_target_qty"] = int(state.pending_target_qty)
                 entry["pending_filled_qty"] = int(state.pending_filled_qty)
+            if state.retry_stage is not None and state.retry_quantity is not None:
+                entry["retry_stage"] = state.retry_stage.value
+                entry["retry_quantity"] = state.retry_quantity
             data[sym] = entry
         try:
             # 파일명은 저장 시점 날짜로 재계산 (2026-08-04 P1 — 프로세스 시작일로
@@ -808,6 +814,18 @@ class ExitManager:
             _st.pending_since = _restored_pending_since
             _st.pending_target_qty = _restored_target
             _st.pending_filled_qty = _restored_filled
+
+        # A canceled stage keeps its remaining intent even after pending expiry.
+        _retry = self._persisted.get(position.symbol) or {}
+        if position.symbol not in self._integrity_reset_symbols:
+            try:
+                _retry_stage = ExitStage(_retry.get('retry_stage'))
+                _retry_qty = _retry.get('retry_quantity')
+                if type(_retry_qty) is int and _retry_qty > 0:
+                    self._states[position.symbol].retry_stage = _retry_stage
+                    self._states[position.symbol].retry_quantity = _retry_qty
+            except (ValueError, TypeError):
+                pass
 
         # ── 장중 급락 active 시: 신규 포지션에도 즉시 crash SL/TS 적용 ──
         # apply_intraday_crash_params()는 중복 레벨 시 스킵되므로, 신규 등록 포지션은
@@ -1330,6 +1348,8 @@ class ExitManager:
                 # remaining_quantity 기준 (sync 복원 시 original과 괴리 방지)
                 exit_qty = max(1, int(state.remaining_quantity * first_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
+                if state.retry_stage == ExitStage.FIRST and state.retry_quantity is not None:
+                    exit_qty = min(exit_qty, state.retry_quantity)
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 if action == "sell_partial" and not allow_partial:
                     return None
@@ -1337,6 +1357,7 @@ class ExitManager:
                 # ★ stage는 fill 확인 후(on_fill)에만 advance
                 # 2026-08-08 P0: pending은 영속화됨 — 재시작 시 미체결 확인 후에만 재발행
                 state.pending_stage = ExitStage.FIRST
+                state.pending_generation += 1
                 state.pending_since = datetime.now()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
@@ -1352,11 +1373,14 @@ class ExitManager:
             elif net_pnl_pct >= second_pct:
                 exit_qty = max(1, int(state.remaining_quantity * second_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
+                if state.retry_stage == ExitStage.SECOND and state.retry_quantity is not None:
+                    exit_qty = min(exit_qty, state.retry_quantity)
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 if action == "sell_partial" and not allow_partial:
                     return None
 
                 state.pending_stage = ExitStage.SECOND
+                state.pending_generation += 1
                 state.pending_since = datetime.now()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
@@ -1372,11 +1396,14 @@ class ExitManager:
             elif net_pnl_pct >= third_pct:
                 exit_qty = max(1, int(state.remaining_quantity * third_ratio))
                 exit_qty = min(exit_qty, state.remaining_quantity)
+                if state.retry_stage == ExitStage.THIRD and state.retry_quantity is not None:
+                    exit_qty = min(exit_qty, state.retry_quantity)
                 action = "sell_all" if exit_qty >= state.remaining_quantity else "sell_partial"
                 if action == "sell_partial" and not allow_partial:
                     return None
 
                 state.pending_stage = ExitStage.THIRD
+                state.pending_generation += 1
                 state.pending_since = datetime.now()
                 state.pending_target_qty = exit_qty
                 state.pending_filled_qty = 0
@@ -1669,7 +1696,7 @@ class ExitManager:
         self.apply_regime_params(self._current_regime, force=True)
         logger.info(f"[장중급락] {prev_level} → normal 해제: 레짐 {self._current_regime!r} 복원")
 
-    def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal):
+    def on_fill(self, symbol: str, sold_quantity: int, fill_price: Decimal, *, update_pending: bool = True):
         """체결 후 상태 업데이트"""
         if symbol not in self._states:
             return
@@ -1692,12 +1719,14 @@ class ExitManager:
         # ★ fill 확인 후 pending_stage → current_stage 승격
         # 2026-08-08 P1: 부분 체결 누적 — 목표수량 도달 시에만 승격 (기존엔 1주만
         # 체결돼도 승격돼 나머지 물량이 다음 단계 조건까지 방치됐다)
-        if state.pending_stage is not None:
+        if update_pending and state.pending_stage is not None:
             state.pending_filled_qty += sold_quantity
             if (
                 state.pending_target_qty > 0
                 and state.pending_filled_qty < state.pending_target_qty
             ):
+                state.retry_stage = state.pending_stage
+                state.retry_quantity = state.pending_target_qty - state.pending_filled_qty
                 # 부분 체결 진행 중 — 주문이 살아있다는 증거이므로 만료 타이머 연장
                 state.pending_since = datetime.now()
                 logger.info(
@@ -1708,6 +1737,8 @@ class ExitManager:
             else:
                 prev_stage = state.current_stage
                 state.current_stage = state.pending_stage
+                state.retry_stage = None
+                state.retry_quantity = None
                 state.pending_stage = None
                 state.pending_since = None
                 state.pending_target_qty = 0
