@@ -145,3 +145,44 @@ def test_two_market_kis_source_reports_partial_when_one_market_fails(monkeypatch
     assert (row["outcome"], row["payload_count"], row["failure_count"], row["failure_reason"]) == (
         "partial", 1, 1, "http"
     )
+
+
+def test_naver_linked_short_row_is_schema_failure_but_headers_remain_ignored(monkeypatch):
+    from bs4 import BeautifulSoup
+    from src.analytics.selection_source_status import SourceCapture
+
+    s = screener(monkeypatch, {})
+    s.max_change_pct = 15.0
+    soup = BeautifulSoup(
+        '<table class="type_2"><tr><th>헤더</th></tr><tr>'
+        '<td></td><td><a href="/item/main.naver?code=000001">합성</a></td>'
+        '<td>1000</td><td></td><td>1%</td><td>10</td><td></td><td></td><td></td>'
+        '</tr></table>', "html.parser"
+    )
+    capture = SourceCapture()
+    stocks = asyncio.run(capture.call("naver_volume_rank", s._parse_naver_table, soup, "합성"))
+    observed = capture.wrap(stocks)
+
+    assert stocks == []
+    assert _runs(observed)["naver_volume_rank"]["outcome"] == "failed"
+    assert _runs(observed)["naver_volume_rank"]["failure_reason"] == "schema"
+
+
+def test_naver_non_numeric_volume_keeps_existing_zero_and_marks_parse(monkeypatch):
+    from bs4 import BeautifulSoup
+    from src.analytics.selection_source_status import SourceCapture
+
+    s = screener(monkeypatch, {})
+    s.max_change_pct = 15.0
+    cells = ''.join('<td></td>' for _ in range(10))
+    soup = BeautifulSoup(f'<table class="type_2"><tr>{cells}</tr></table>', "html.parser")
+    row = soup.find("tr").find_all("td")
+    row[1].append(BeautifulSoup('<a href="/item/main.naver?code=000001">합성</a>', "html.parser"))
+    row[2].string, row[4].string, row[5].string = "1000", "1%", "unknown"
+    capture = SourceCapture()
+    stocks = asyncio.run(capture.call("naver_volume_rank", s._parse_naver_table, soup, "합성"))
+    observed = capture.wrap(stocks)
+
+    assert [(stock.symbol, stock.volume) for stock in stocks] == [("000001", 0)]
+    assert _runs(observed)["naver_volume_rank"]["outcome"] == "partial"
+    assert _runs(observed)["naver_volume_rank"]["failure_reason"] == "parse"

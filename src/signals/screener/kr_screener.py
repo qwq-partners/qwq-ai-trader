@@ -1533,6 +1533,9 @@ class StockScreener:
                 try:
                     cols = row.find_all("td")
                     if len(cols) < 10:
+                        if any(re.search(r"code=\d{6}", a.get("href", ""))
+                               for a in row.find_all("a")):
+                            _mark_selection_source("error", reason="schema")
                         continue
 
                     # 종목명/코드 추출
@@ -1567,7 +1570,11 @@ class StockScreener:
 
                     # 거래량
                     volume_text = cols[5].text.strip().replace(",", "")
-                    volume = int(volume_text) if volume_text.isdigit() else 0
+                    if volume_text.isdigit():
+                        volume = int(volume_text)
+                    else:
+                        _mark_selection_source("error", reason="parse")
+                        volume = 0
 
                     # 필터링
                     if change_pct < 0:  # 하락 종목 제외
