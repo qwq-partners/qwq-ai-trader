@@ -1,8 +1,8 @@
 """주문 의도·체결 관측·메모리 적용 영수증의 계좌 범위 영구 원장.
 
 원장은 과거 체결을 재생하지 않는다. handoff_returned는 호출부 반환의 증거이며
-거래 저널 DB의 영구 저장 증거가 아니다. 모든 공개 I/O는 async이고, 트랜잭션은
-직렬화된 작업 스레드에서 FULL synchronous로 커밋한다.
+거래 저널 DB의 영구 저장 증거가 아니다. 실행 중 I/O는 async이며 작업 스레드에서
+FULL synchronous로 커밋한다. 오프라인 내보내기는 별도 동기 읽기 전용 API다.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import hashlib
 import os
 import sqlite3
+import stat
 from datetime import datetime
 from decimal import Decimal, DecimalException, InvalidOperation, localcontext
 from pathlib import Path
@@ -469,3 +470,114 @@ def _observe(order: dict, key: str, payload: dict) -> str | None:
 def _decimal_string(value: Decimal) -> str:
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+_READ_MAX_BYTES = 128 * 1024 * 1024
+_READ_MAX_EVENTS = 100_000
+
+
+def read_execution_ledger(path: Path, expected_scope: str) -> dict:
+    """중지 상태의 독립 SQLite 복사본을 변경 없이 검증하여 내보낸다.
+
+    원본 파일 128MiB, 이벤트 100,000개 이내만 지원한다. 심볼릭 링크,
+    일반 파일 외 입력, WAL 헤더와 -wal/-shm/-journal 동반 파일은 거부한다.
+    unix-none VFS는 WAL 공유 메모리를 지원하지 않으므로 검사 직후 WAL로
+    바뀌어도 shm을 만들지 않는다. 잠금 없는 VFS인 만큼 실행 중 DB는 지원하지
+    않으며 바이트 지문과 파일 identity를 트랜잭션 전후에 다시 검사한다.
+    플랫폼에 이 VFS가 없으면 자동 대체하지 않고 실패한다. 시각은 추정하지 않는다.
+    """
+    connection = None
+    descriptor = None
+    try:
+        _text(expected_scope)
+        source = Path(path)
+        if not source.is_absolute():
+            source = Path.cwd() / source
+        initial = _readonly_source_stat(source)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        if _file_identity(os.fstat(descriptor)) != _file_identity(initial):
+            raise ExecutionLedgerError("원장 파일 identity 변경")
+        header = os.read(descriptor, 100)
+        if len(header) != 100 or header[:16] != b"SQLite format 3\x00" or header[18:20] != b"\x01\x01":
+            raise ExecutionLedgerError("독립 rollback SQLite 복사본만 지원합니다")
+        # as_uri가 #, ?, %, 비ASCII 파일명까지 URI 경계와 분리한다.
+        connection = sqlite3.connect(
+            source.as_uri() + "?mode=ro&vfs=unix-none", uri=True,
+            isolation_level=None, timeout=0,
+        )
+        connection.execute("PRAGMA query_only = ON")
+        connection.execute("PRAGMA trusted_schema = OFF")
+        connection.execute("BEGIN")
+        validator = ExecutionLedger(source, expected_scope)
+        validator._validate_header(connection, full=True)
+        event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        if not 1 <= event_count <= _READ_MAX_EVENTS:
+            raise ExecutionLedgerError("지원 범위를 벗어난 이벤트 개수")
+        source_sha256 = _readonly_source_hash(descriptor)
+        state = validator._load(connection)
+        metadata = dict(connection.execute("SELECT name, value FROM metadata"))
+        if source_sha256 != _readonly_source_hash(descriptor):
+            raise ExecutionLedgerError("읽는 중 원장 바이트 변경")
+        if _file_identity(os.fstat(descriptor)) != _file_identity(initial):
+            raise ExecutionLedgerError("읽는 중 원장 identity 변경")
+        if _file_identity(_readonly_source_stat(source)) != _file_identity(initial):
+            raise ExecutionLedgerError("읽는 중 원장 경로 변경")
+        result = {
+            "format": "execution-ledger-export-v1",
+            "account_scope": expected_scope,
+            "schema_version": 1,
+            "event_count": event_count,
+            "state_digest": metadata["state_digest"],
+            "source_sha256": source_sha256,
+            "sessions": state["sessions"],
+            "orders": state["orders"],
+        }
+        connection.rollback()
+        connection.close()
+        connection = None
+        # 연결 종료도 sidecar를 만들거나 바꾸지 않았는지 확인한다.
+        if _file_identity(_readonly_source_stat(source)) != _file_identity(initial):
+            raise ExecutionLedgerError("연결 종료 중 원장 변경")
+        return result
+    except (ExecutionLedgerError, sqlite3.Error, OSError, ValueError, TypeError,
+            KeyError, DecimalException, RecursionError):
+        # 파일명·계좌범위·원시 SQLite payload가 오류 경로로 노출되지 않는다.
+        raise ExecutionLedgerError("읽기 전용 실행 원장 검증 실패") from None
+    finally:
+        if connection is not None:
+            connection.close()
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _file_identity(value: os.stat_result) -> tuple:
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
+
+
+def _readonly_source_stat(path: Path) -> os.stat_result:
+    for candidate in (path, *path.parents):
+        if stat.S_ISLNK(candidate.lstat().st_mode):
+            raise ExecutionLedgerError("심볼릭 링크 원장은 지원하지 않습니다")
+    value = path.lstat()
+    if not stat.S_ISREG(value.st_mode) or not 100 <= value.st_size <= _READ_MAX_BYTES:
+        raise ExecutionLedgerError("원장 파일 형식/크기 범위 오류")
+    for suffix in ("-wal", "-shm", "-journal"):
+        try:
+            Path(str(path) + suffix).lstat()
+        except FileNotFoundError:
+            continue
+        raise ExecutionLedgerError("SQLite 동반 파일이 있는 자료는 지원하지 않습니다")
+    return value
+
+
+def _readonly_source_hash(descriptor: int) -> str:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    total = 0
+    while chunk := os.read(descriptor, 1024 * 1024):
+        total += len(chunk)
+        if total > _READ_MAX_BYTES:
+            raise ExecutionLedgerError("원장 파일 읽기 한도 초과")
+        digest.update(chunk)
+    return digest.hexdigest()

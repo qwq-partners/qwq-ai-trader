@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **36차(10-02):** 실행 중 경로와 분리된 `read_execution_ledger`가 완결된 오프라인 SQLite를 검증한다. `reconcile_execution_evidence`와 명시 파일 CLI는 증권사 원주문·거래 이벤트·양쪽 잔고의 차이만 보고하며 broker/Engine/Scheduler에 복구 결과를 적용하지 않는다. [입력·출력·복구 경계](../operations/execution-recovery-evidence.md). 기존 운영/예약에는 미적용이다.
+
 > **35차(10-02):** KR `KISBroker`가 계좌 범위 `ExecutionHistory/ExecutionLedger`를 기본 생성하고 connect/submit/check_fills 전에 session을 기록한다. POST 전 의도와 Fill 인계 전 누적 증분을 commit하고, Scheduler는 실제 적용 뒤 `portfolio_applied`, 후처리 반환 뒤 `handoff_returned`를 기록한다. `execution_id`는 Engine의 프로세스 내 중복도 막지만 과거 자동 replay 권한이 아니다. [통합 PDS와 흐름](../research/current-engine-integrated-pds-2026-10-02.md#35차-plan--영구-실행-원장과-재시작-경계) 참조. 운영 미배포.
 
 > **30차(10-02):** `selection-basis-v2`에서만 원천 호출의 상태를 스캔에 기록한다. ContextVar로 병렬 호출을 분리하고 원천 오류/캐시와 후보 점수 근거의 시각·순위를 검증한다. 기존 v1·반환 후보·가격 계산은 유지한다. [설계·검증](../research/current-engine-source-status-2026-10-02.md), 운영/예약 미적용.
