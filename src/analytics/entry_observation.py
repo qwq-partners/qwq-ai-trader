@@ -39,7 +39,8 @@ def _scalar(value: Any) -> Any:
 class EntryObservationBuffer:
     """한 이벤트 루프용 유한 메모리 버퍼. 가득 차면 새 기록을 버리고 결손을 보존한다."""
 
-    def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None):
+    def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None,
+                 selection_basis_settings=None):
         if not isinstance(evaluation_epoch, str) or not evaluation_epoch.strip():
             raise ValueError("evaluation_epoch 필요")
         if type(capacity) is not int or capacity <= 0:
@@ -52,6 +53,9 @@ class EntryObservationBuffer:
             raise ValueError("첫 스캔 범위에는 명시한 사전 규약 참조 필요")
         self.scan_scope = scan_scope
         self.scan_admission_ref = scan_admission_ref
+        from .selection_basis import validate_settings
+        self.selection_basis_settings = (validate_settings(selection_basis_settings)
+                                         if selection_basis_settings is not None else None)
         self._first_scan_id = None
         self._first_scan_recorded = False
         self._cohort_candidates: set[str] = set()
@@ -63,6 +67,11 @@ class EntryObservationBuffer:
         self._incomplete_reasons: set[str] = set()
         self._journal_sink = None
         self._capture_closed = False
+
+    @property
+    def selection_capture_enabled(self):
+        return (self.selection_basis_settings is not None and not self._capture_closed
+                and (self.scan_scope != 'first' or self._first_scan_id is None))
 
     def begin_scan(self):
         """복사 전에 첫 시도를 예약한다. 빈 결과/복사 실패 뒤 재선정하지 않는다."""
@@ -91,7 +100,7 @@ class EntryObservationBuffer:
                     return False
                 record = {**record, "population_scope": "first_returned_scan_candidates",
                           "scan_admission_ref": self.scan_admission_ref}
-            elif kind in ("rest_quote", "signal", "emit_result"):
+            elif kind in ("rest_quote", "signal", "emit_result", "selection_basis"):
                 if record.get("candidate_id") not in self._cohort_candidates:
                     return False
             elif kind == "order_ready" and not self.accepts_order_signal(record.get("signal_id")):
@@ -159,10 +168,38 @@ def capture_scan(observer, stocks, session: str) -> str | None:
         record = {"kind": "scan", "scan_id": scan_id, "observed_at": _now(),
                   "session": session, "route_origin": "live_screening",
                   "population_scope": "returned_screen_candidates", "candidates": candidates}
-        return scan_id if _publish(observer, record) else None
+        selection = observer.selection_basis_settings if isinstance(observer, EntryObservationBuffer) else None
+        if selection is not None:
+            record.update(selection_basis_expected=True, selection_basis_max_candidates=selection['max_candidates'],
+                          selection_basis_max_terms=selection['max_source_terms'])
+        if not _publish(observer, record):
+            return None
+        if selection is not None:
+            _capture_selection_basis(observer, scan_id, stocks, selection, record['observed_at'])
+        return scan_id
     except Exception:
         _capture_failed(observer)
         return None
+
+
+def _capture_selection_basis(observer, scan_id, stocks, settings, scan_at):
+    from .selection_basis import validate_basis
+    if len(stocks) > settings['max_candidates']:
+        observer.mark_incomplete('selection_candidate_limit')
+        return
+    for rank, stock in enumerate(stocks, 1):
+        try:
+            record = {'kind': 'selection_basis', 'candidate_id': f'{scan_id}:{stock.symbol}',
+                      'symbol': stock.symbol, 'observed_at': _now(), 'basis_status': 'unavailable'}
+            basis = getattr(stock, 'selection_basis', None)
+            if basis is not None:
+                record.update(validate_basis(basis, score=stock.score, rank=rank,
+                    observed_at=scan_at, max_terms=settings['max_source_terms']))
+                record['basis_status'] = 'observed'
+            if not _publish(observer, record):
+                observer.mark_incomplete('selection_basis_publish_failed')
+        except Exception:
+            _capture_failed(observer)
 
 
 def capture_rest_quote(observer, scan_id, symbol, quote, *, requested_at=None):

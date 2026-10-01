@@ -17,6 +17,7 @@ AI Trading Bot v2 - 종목 스크리너
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import os
 import re
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터
 from src.data.providers.kis_market_data import KISMarketData, get_kis_market_data
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
+from src.analytics.selection_basis import SelectionBasisBuilder
 
 
 # ============================================================
@@ -60,6 +62,7 @@ class ScreenedStock:
     atr_pct: Optional[float] = None  # ATR-14 % (동적 변동률 캡용)
     per: Optional[float] = None      # PER (R8 펀더멘탈 필터용)
     pbr: Optional[float] = None      # PBR (R8 펀더멘탈 필터용)
+    selection_basis: Optional[dict] = field(default=None, repr=False)  # 명시 관측 때만 생성
 
     def __hash__(self):
         return hash(self.symbol)
@@ -1809,6 +1812,7 @@ class StockScreener:
         theme_detector=None,
         overnight_sentiment: Optional[str] = None,
         overnight_volatility: Optional[float] = None,
+        capture_selection: bool = False,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -1827,15 +1831,35 @@ class StockScreener:
         all_stocks: Dict[str, ScreenedStock] = {}
         # 소스 카운트 추적 (정규화용)
         source_counts: Dict[str, int] = {}
+        basis = None
+        if capture_selection is True:
+            try:
+                basis = SelectionBasisBuilder()
+            except Exception:
+                logger.warning("[선정관측] 초기화 실패 — 선정 흐름 유지")
 
-        def merge_stock(stock: ScreenedStock, weight: float = 1.0):
+        def observe_basis(method, *args):
+            nonlocal basis
+            if basis is not None:
+                try:
+                    getattr(basis, method)(*args)
+                except Exception:
+                    basis = None
+                    logger.warning("[선정관측] 근거 복사 실패 — 선정 흐름 유지")
+
+        def merge_stock(stock: ScreenedStock, weight: float, source_id: str, input_rank: int):
             """
             종목 병합 헬퍼 (소스 카운트 기반 정규화)
 
             여러 스크리닝에서 나타난 종목은 신뢰도가 높으므로
             소스 수를 추적하여 최종 점수 정규화 시 반영합니다.
             """
+            if basis is not None:
+                observe_basis("record", stock, weight, source_id, input_rank)
             if stock.symbol not in all_stocks:
+                # 소스 캐시의 점수·사유·보조 지표를 후속 보정으로 오염시키지 않는다.
+                stock = deepcopy(stock)
+                stock.selection_basis = None
                 # 2026-08-08 P1: 첫 소스에도 가중치 적용 — 기존엔 첫 발견이면
                 # weight 무시로 전액 반영돼 호출 순서에 따라 점수가 달라졌다
                 stock.score = stock.score * weight
@@ -1859,8 +1883,8 @@ class StockScreener:
         if 8 <= now_hour <= 9:
             try:
                 gap_stocks = await self.screen_premarket_gap(limit=15, min_gap_pct=2.0)
-                for stock in gap_stocks:
-                    merge_stock(stock, 0.5)
+                for rank, stock in enumerate(gap_stocks, 1):
+                    merge_stock(stock, 0.5, "premarket_gap", rank)
             except Exception as e:
                 logger.warning(f"[Screener] 프리마켓 갭 스캔 오류 (무시): {e}")
 
@@ -1878,14 +1902,16 @@ class StockScreener:
 
         kis_weights = [0.5, 0.3, 0.4, 0.3, 0.4]
         kis_success = False
-        for res, weight in zip(kis_results, kis_weights):
+        kis_sources = ("kis_volume_surge", "kis_institutional_buying", "kis_new_highs",
+                       "kis_fluctuation_rank", "kis_foreign_buying")
+        for res, weight, source_id in zip(kis_results, kis_weights, kis_sources):
             if isinstance(res, Exception):
                 logger.error(f"KIS 스크리닝 예외: {res}")
                 continue
             if res:
                 kis_success = True
-                for stock in res:
-                    merge_stock(stock, weight)
+                for rank, stock in enumerate(res, 1):
+                    merge_stock(stock, weight, source_id, rank)
 
         # ── 수급 복합 보너스: 외국인+기관 동시 순매수 (플래그 기반) ──
         try:
@@ -1917,18 +1943,19 @@ class StockScreener:
             )
 
             naver_vr_weights = [0.4, 0.3]
-            for res, w in zip(naver_vr, naver_vr_weights):
+            for res, w, source_id in zip(naver_vr, naver_vr_weights,
+                                         ("naver_volume_rank", "naver_rise_rank")):
                 if isinstance(res, Exception):
                     logger.error(f"네이버 스크리닝 예외: {res}")
                     continue
-                for stock in res:
-                    merge_stock(stock, w * naver_weight)
+                for rank, stock in enumerate(res, 1):
+                    merge_stock(stock, w * naver_weight, source_id, rank)
 
             # 신고가 후보 (naver_rise 캐시 활용)
             try:
                 naver_high = await self.naver_new_high(limit=15)
-                for stock in naver_high:
-                    merge_stock(stock, 0.4 * naver_weight)
+                for rank, stock in enumerate(naver_high, 1):
+                    merge_stock(stock, 0.4 * naver_weight, "naver_new_high", rank)
             except Exception as e:
                 logger.error(f"네이버 신고가 스크리닝 예외: {e}")
 
@@ -1940,7 +1967,7 @@ class StockScreener:
             try:
                 sentiments = theme_detector.get_all_stock_sentiments()
                 news_added = 0
-                for symbol, data in sentiments.items():
+                for rank, (symbol, data) in enumerate(sentiments.items(), 1):
                     # impact: -10 ~ +10 스케일 (방향 + 강도 통합)
                     impact = data.get("impact", 0)
                     if data.get("direction") == "bullish" and impact >= 5:
@@ -1954,7 +1981,7 @@ class StockScreener:
                             score=score_bonus,
                             reasons=[f"뉴스 호재: {reason}"],
                         )
-                        merge_stock(stock, 0.6)
+                        merge_stock(stock, 0.6, "theme_news", rank)
                         # 뉴스 보너스
                         if symbol in all_stocks:
                             all_stocks[symbol].score += 15
@@ -1965,8 +1992,8 @@ class StockScreener:
                 logger.warning(f"[Screener] theme_detector 연동 오류: {e}")
         elif llm_manager and news_titles:
             news_stocks = await self.extract_stocks_from_news(news_titles, llm_manager)
-            for stock in news_stocks:
-                merge_stock(stock, 0.5)
+            for rank, stock in enumerate(news_stocks, 1):
+                merge_stock(stock, 0.5, "llm_news", rank)
                 # 뉴스 보너스
                 if stock.symbol in all_stocks:
                     all_stocks[stock.symbol].score += 15
@@ -2202,6 +2229,8 @@ class StockScreener:
         # 점수 정규화 (소스 수 기반)
         # ============================================================
         if result:
+            if basis is not None:
+                observe_basis("before_bonus", result, source_counts)
             # 1. 소스 수 기반 신뢰도 보너스 적용 (최대 +20점)
             for stock in result:
                 source_cnt = source_counts.get(stock.symbol, 1)
@@ -2217,6 +2246,8 @@ class StockScreener:
             scores = [s.score for s in result]
             min_score = min(scores)
             max_score = max(scores)
+            if basis is not None:
+                observe_basis("normalization", result, min_score, max_score)
 
             # 2026-08-08 P1: 상대 정규화는 오버플로(최고점 100 초과) 압축 목적일 때만.
             # 저품질 장(예: 최고 13점)에서도 1등을 100점으로 승격시켜 절대 품질
@@ -2241,15 +2272,24 @@ class StockScreener:
         source = "KIS+Naver" if kis_success and use_naver else ("Naver" if use_naver else "KIS")
         logger.info(f"[Screener] 통합 스크리닝 완료: {len(result)}개 종목 (소스: {source})")
 
-        # 결과가 있으면 캐시 저장
+        if basis is not None:
+            observe_basis("finish", result)
+
+        # 통합 캐시도 호출자와 소유권을 분리한다.
         if result:
-            self._update_cache("screen_all", result)
+            self._update_cache("screen_all", deepcopy(result))
         elif not result and self._is_cache_valid("screen_all"):
             # 결과가 없으면 이전 캐시 활용
             cached = self._cache.get("screen_all", [])
             if cached:
                 logger.info(f"[Screener] 스크리닝 결과 0건 → 이전 캐시 {len(cached)}건 활용")
-                return cached
+                fallback = deepcopy(cached)
+                for stock in fallback:
+                    if capture_selection is True and stock.selection_basis is not None:
+                        stock.selection_basis["cache_fallback"] = True
+                    elif capture_selection is not True:
+                        stock.selection_basis = None
+                return fallback
 
         return result
 
