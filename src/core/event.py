@@ -249,6 +249,7 @@ class FillEvent(Event):
     pending_order_matched: Optional[bool] = field(default=None, init=False)
     duplicate_execution: bool = field(default=False, init=False)
     position_before: Optional[Position] = field(default=None, init=False, repr=False)
+    position_before_owner: Optional[Position] = field(default=None, init=False, repr=False)
     position_after: Optional[Position] = field(default=None, init=False, repr=False)
     position_owner: Optional[Position] = field(default=None, init=False, repr=False)
 

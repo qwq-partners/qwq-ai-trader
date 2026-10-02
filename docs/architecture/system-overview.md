@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **37차(10-02):** 검증된 `Fill` identity → `TradeJournal`의 실행별 JSON → `TradeStorage`의 불변 transaction batch → DB commit receipt → Scheduler의 `handoff_returned`/broker ack 순서다. 청산 후처리는 메모리 적용 뒤 한 번 수행하고 DB 대기는 비차단 조회한다. 현재 session의 미완료 receipt를 신규 위험 보류에 반영하며, SELL 거래 ID는 해당 Fill의 매도 직전 보유 객체에서만 보강한다. [통합 흐름과 한계](../research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit). 이전 v1 원장의 receipt를 새 DB commit 근거로 소급 해석하지 않는다. 운영 미배포.
+
 > **36차(10-02):** 실행 중 경로와 분리된 `read_execution_ledger`가 완결된 오프라인 SQLite를 검증한다. `reconcile_execution_evidence`와 명시 파일 CLI는 증권사 원주문·거래 이벤트·양쪽 잔고의 차이만 보고하며 broker/Engine/Scheduler에 복구 결과를 적용하지 않는다. [입력·출력·복구 경계](../operations/execution-recovery-evidence.md). 기존 운영/예약에는 미적용이다.
 
 > **35차(10-02):** KR `KISBroker`가 계좌 범위 `ExecutionHistory/ExecutionLedger`를 기본 생성하고 connect/submit/check_fills 전에 session을 기록한다. POST 전 의도와 Fill 인계 전 누적 증분을 commit하고, Scheduler는 실제 적용 뒤 `portfolio_applied`, 후처리 반환 뒤 `handoff_returned`를 기록한다. `execution_id`는 Engine의 프로세스 내 중복도 막지만 과거 자동 replay 권한이 아니다. [통합 PDS와 흐름](../research/current-engine-integrated-pds-2026-10-02.md#35차-plan--영구-실행-원장과-재시작-경계) 참조. 운영 미배포.

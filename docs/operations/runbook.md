@@ -1,5 +1,7 @@
 # 운영 매뉴얼 (Runbook)
 
+> **37차(10-02, 운영 미배포):** 식별 KR 체결의 `pending`은 JSON/큐 수락 후 실제 DB 저장 대기, `committed`만 해당 transaction의 commit 확인이다. `unavailable|failed|unknown`은 복구 필요로 남긴다. `lookup_execution_receipt`는 DB 행의 근거를 재조회하지만 runtime 보류를 해제하거나 replay하지 않는다. 현재 session의 `journal_pending_count`는 신규 BUY와 같은 종목 분할 SELL을 보류하며 전량 보호 SELL은 기존 경계 안에서 유지한다. 옛 원장 receipt/DB commit만으로 잔고 포함 시각·실제 계좌 대사 완료를 확정하지 않는다. [검증과 인계](../research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit).
+
 > **36차(10-02, 운영 미배포):** [복구 증거 대사 절차](execution-recovery-evidence.md)는 명시한 독립 원장·원주문·거래 이벤트·잔고 파일만 읽는다. 제공 자료의 누락/중복/차이를 보고하며 주문·장부·잔고를 수정하지 않는다. 정상 보고서의 종료 코드0과 `consistent`는 계좌 복구 또는 보류 해제 승인이 아니다. 실제 운영 자료 확보/대사와 baseline 포함 근거는 아직 남아 있다.
 
 > **35차(10-02, 운영 미배포) 실행 원장:** 기본 경로는 기존 주문 불명 장부와 같은 디렉터리의 `executions-<계좌범위해시>.sqlite3`다. 원문 계좌번호·인증 자료는 쓰지 않는다. `broker.execution_recovery_status()`는 세션·주문·증분·적용/반환 상태와 별도 `baseline_inclusion=unverified`, `journal_persistence=unverified`를 반환한다. `ready`는 이 원장의 현재 기록 경계 상태이며 계좌 대사 완료가 아니다. 비정상 종료·손상/쓰기 오류·이전 미완료를 날짜/빈 조회/파일 삭제로 해제하지 않는다. 이번에는 과거 체결 자동 재생과 수동 해제 명령을 제공하지 않는다. 새 원장 이전의 주문, 원본 증권사 체결과 잔고 포함 경계, 기존 JSON/DB 장부의 반영 여부를 확인한 명시 복구 설계가 남아 있다. 아래 당일 `order_unknown.json`의 구 운영 절차를 이 SQLite 원장에 적용하지 않는다. 예약5468208에는 본 변경이 포함되지 않는다.

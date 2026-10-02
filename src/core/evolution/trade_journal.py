@@ -10,6 +10,12 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from copy import deepcopy
+import tempfile
+
+from src.data.storage.execution_journal import (ExecutionIdentity, ExecutionWriteReceipt,
+    execution_key, execution_datetime, execution_signature, execution_payload_digest,
+    validate_execution_record, validate_trade_execution_state, ExecutionPayloadError)
 from typing import Dict, List, Optional, Any
 
 import asyncio
@@ -58,6 +64,8 @@ class TradeRecord:
     lesson_learned: str = ""             # 교훈
     improvement_suggestion: str = ""     # 개선 제안
 
+    execution_records: Dict[str, Any] = field(default_factory=dict)
+
     # 메타데이터
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -103,6 +111,7 @@ class TradeRecord:
     @classmethod
     def from_dict(cls, data: Dict) -> "TradeRecord":
         """딕셔너리에서 생성"""
+        validate_trade_execution_state(data)
         # datetime 파싱 (개별 필드 실패 시 None 처리)
         for key in ["entry_time", "exit_time", "created_at", "updated_at"]:
             if data.get(key) and isinstance(data[key], str):
@@ -161,9 +170,13 @@ class TradeJournal:
 
                             if trade_date == today:
                                 self._today_trades.append(trade.id)
+                        except ExecutionPayloadError:
+                            raise
                         except Exception as te:
                             logger.warning(f"거래 레코드 파싱 실패 (건너뜀): {te}")
 
+                except ExecutionPayloadError:
+                    raise
                 except json.JSONDecodeError as e:
                     logger.error(f"거래 파일 손상 ({file_path}): {e}")
                 except Exception as e:
@@ -215,7 +228,9 @@ class TradeJournal:
                           entry_reason, entry_strategy, entry_signal_score,
                           exit_time, exit_price, exit_quantity, exit_reason, exit_type,
                           pnl, pnl_pct, holding_minutes
-                   FROM trades WHERE id = $1""",
+                   FROM trades WHERE id = $1
+                     AND (to_jsonb(trades)->>'execution_scope') IS NULL
+                     AND (to_jsonb(trades)->>'execution_head') IS NULL""",
                 trade_id,
             )
             if not row:
@@ -272,6 +287,8 @@ class TradeJournal:
                           pnl, pnl_pct, holding_minutes
                    FROM trades
                    WHERE entry_time >= $1 AND exit_time IS NOT NULL
+                     AND (to_jsonb(trades)->>'execution_scope') IS NULL
+                     AND (to_jsonb(trades)->>'execution_head') IS NULL
                    ORDER BY entry_time""",
                 cutoff,
             )
@@ -282,6 +299,9 @@ class TradeJournal:
 
                 if tid in self._trades:
                     existing = self._trades[tid]
+                    if existing.execution_records:
+                        # 별도 execution registry가 없는 옛 DB 보강으로 최신 누계를 되돌리지 않는다.
+                        continue
                     # exit 정보가 없는 레코드 보강 (부분 누락)
                     if not existing.is_closed and row["pnl"] is not None:
                         existing.exit_time = row["exit_time"]
@@ -328,12 +348,7 @@ class TradeJournal:
             "updated_at": datetime.now().isoformat(),
         }
 
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"[거래저널] 저장 실패: {file_path} — {e}")
-
+        self._write_daily_payload(trade_date, data)
         logger.debug(f"거래 저장: {file_path} ({len(trades)}건)")
 
     def record_entry(
@@ -353,6 +368,8 @@ class TradeJournal:
         market: str = "KR",
         entry_reasons: List[str] = None,
         score_breakdown: Dict[str, float] = None,
+        execution_identity: ExecutionIdentity = None,
+        execution_time: datetime = None,
     ) -> TradeRecord:
         """
         진입 기록
@@ -363,6 +380,11 @@ class TradeJournal:
         - entry_strategy: 반드시 실제 전략명 (unknown/empty 불가 → 경고 후 fallback)
         - entry_tags: 3개 이상 진입근거 (미달 시 경고 후 저장은 허용)
         """
+        if execution_identity is not None:
+            return self._record_identified("BUY", locals())
+        existing = self._trades.get(trade_id)
+        if existing and existing.execution_records:
+            raise ExecutionPayloadError("identified_trade_requires_execution_identity")
         now = datetime.now()
 
         # ── 전략 태그 의무 검증 ─────────────────────────────────
@@ -453,6 +475,8 @@ class TradeJournal:
         name: str = None,
         entry_price: float = None,
         entry_strategy: str = None,
+        execution_identity: ExecutionIdentity = None,
+        execution_time: datetime = None,
     ) -> Optional[TradeRecord]:
         """
         청산 기록
@@ -463,6 +487,8 @@ class TradeJournal:
         폴백: trade_id가 메모리에 없을 때, symbol 등 optional 파라미터가 있으면
         최소 TradeRecord를 생성하여 청산 기록을 보존합니다.
         """
+        if execution_identity is not None:
+            return self._record_identified("SELL", locals())
         trade = self._trades.get(trade_id)
         if not trade:
             # DB에서 복원 시도
@@ -492,6 +518,8 @@ class TradeJournal:
                 logger.warning(f"[저널] 거래 ID 없음: {trade_id} (복원 실패, symbol 미제공)")
                 return None
 
+        if trade.execution_records:
+            raise ExecutionPayloadError("identified_trade_requires_execution_identity")
         now = exit_time or datetime.now()
 
         # 청산 정보 업데이트
@@ -548,6 +576,154 @@ class TradeJournal:
 
         return trade
 
+    def get_execution_receipt(self, account_scope, execution_id):
+        """JSON 저장은 PostgreSQL commit 근거가 아니다."""
+        return ExecutionWriteReceipt("unavailable", execution_id, "database_unavailable")
+
+    async def lookup_execution_receipt(self, account_scope, execution_id):
+        return self.get_execution_receipt(account_scope, execution_id)
+
+    def _record_identified(self, side, values):
+        identity = values["execution_identity"]
+        trade_id = values["trade_id"]
+        previous = self._trades.get(trade_id)
+        if previous:
+            validate_trade_execution_state(previous.to_dict())
+        if side == "SELL" and previous is None:
+            raise ValueError("identified_sell_trade_missing")
+        if side == "SELL":
+            basis = values.get("avg_entry_price")
+            try:
+                parsed_basis = Decimal(str(basis))
+                if not parsed_basis.is_finite() or parsed_basis <= 0:
+                    raise ValueError("invalid_entry_basis")
+            except Exception:
+                raise ValueError("explicit_remaining_entry_basis_required") from None
+        if values.get("market", "KR") != "KR":
+            raise ValueError("identified_execution_requires_kr")
+        symbol = values["symbol"] if side == "BUY" else previous.symbol
+        if side == "SELL" and values.get("symbol") not in (None, symbol):
+            raise ValueError("execution_symbol_conflict")
+        quantity = values["entry_quantity" if side == "BUY" else "exit_quantity"]
+        price = values["entry_price" if side == "BUY" else "exit_price"]
+        reason = values["entry_reason" if side == "BUY" else "exit_reason"]
+        strategy = values["entry_strategy"] if side == "BUY" else previous.entry_strategy
+        timestamp = values.get("execution_time")
+        if timestamp is None and side == "SELL":
+            timestamp = values.get("exit_time")
+        signature, facts = execution_signature(identity, trade_id=trade_id, symbol=symbol,
+            side=side, quantity=quantity, price=price, reason=reason, strategy=strategy,
+            exit_type=values.get("exit_type", ""), execution_time=timestamp,
+            avg_entry_price=values.get("avg_entry_price"))
+        key = execution_key(identity.account_scope, identity.execution_id)
+        for known in self._trades.values():
+            record = known.execution_records.get(key)
+            if record is not None:
+                validate_trade_execution_state(known.to_dict())
+                if record["signature"] != signature:
+                    raise ValueError("execution_signature_conflict")
+                return known
+        if previous:
+            for record in previous.execution_records.values():
+                validate_execution_record(record)
+        if previous and (previous.symbol != symbol or any(
+            record["facts"]["account_scope"] != identity.account_scope
+            for record in previous.execution_records.values()
+        )):
+            raise ValueError("execution_trade_conflict")
+        now = execution_datetime(timestamp)
+        predecessor = next(reversed(previous.execution_records), None) if previous else None
+        prior_pnl = float(previous.pnl) if previous else 0
+        if side == "BUY":
+            if previous:
+                if previous.is_closed:
+                    raise ValueError("buy_into_closed_trade")
+                trade = deepcopy(previous)
+                total = previous.entry_quantity + quantity
+                trade.entry_price = float((Decimal(str(previous.entry_price)) * previous.entry_quantity
+                                           + Decimal(str(price)) * quantity) / total)
+                trade.entry_quantity = total
+                trade.updated_at = now
+            else:
+                trade = TradeRecord(id=trade_id, symbol=symbol, name=values["name"],
+                    entry_time=now, entry_price=float(price), entry_quantity=quantity,
+                    entry_reason=reason, entry_strategy=strategy or "unclassified",
+                    entry_signal_score=values.get("signal_score", 0),
+                    entry_reasons=list(values.get("entry_reasons") or [reason]),
+                    entry_tags=list(values.get("entry_tags") or []),
+                    score_breakdown=deepcopy(values.get("score_breakdown") or {}),
+                    indicators_at_entry=deepcopy(values.get("indicators") or {}),
+                    market_context=deepcopy(values.get("market_context") or {}),
+                    theme_info=deepcopy(values.get("theme_info") or {}), created_at=now, updated_at=now)
+        else:
+            if quantity > previous.entry_quantity - (previous.exit_quantity or 0):
+                raise ValueError("execution_sell_exceeds_trade")
+            trade = deepcopy(previous)
+            trade.exit_time, trade.exit_price = now, float(price)
+            trade.exit_quantity = (trade.exit_quantity or 0) + quantity
+            trade.exit_reason, trade.exit_type = reason, values["exit_type"]
+            trade.indicators_at_exit = deepcopy(values.get("indicators") or {})
+            from ...utils.fee_calculator import calculate_net_pnl
+            basis = values.get("avg_entry_price")
+            basis = trade.entry_price if basis is None else basis
+            if not Decimal(str(basis)).is_finite() or basis <= 0:
+                raise ValueError("invalid_entry_basis")
+            pnl, _ = calculate_net_pnl(basis, price, quantity)
+            trade.pnl = prior_pnl + pnl
+            trade.pnl_pct = trade.pnl / (float(basis) * trade.entry_quantity) * 100
+            trade.holding_minutes = int((now - trade.entry_time).total_seconds() / 60)
+            trade.updated_at = now
+        summary = trade.to_dict()
+        summary.pop("execution_records")
+        event = dict(facts, event_time=now.isoformat(), name=trade.name,
+                     signal_score=float(trade.entry_signal_score),
+                     pnl=float(trade.pnl) - prior_pnl if side == "SELL" else None,
+                     pnl_pct=((float(trade.pnl)-prior_pnl)/(float(values.get("avg_entry_price") or trade.entry_price)*quantity)*100)
+                              if side == "SELL" else None,
+                     status=(trade.exit_type if trade.is_closed else "partial") if side == "SELL" else "holding")
+        record = dict(signature=signature, facts=facts, summary=summary,
+                      event=event, predecessor=predecessor)
+        record["payload_digest"] = execution_payload_digest(record)
+        trade.execution_records[key] = record
+        self._persist_identified_trade(trade)
+        self._trades[trade_id] = trade
+        if now.date() == date.today() and trade_id not in self._today_trades:
+            self._today_trades.append(trade_id)
+        return trade
+
+    def _persist_identified_trade(self, trade):
+        """식별 경로는 JSON 교체 실패를 숨기지 않고 메모리 적용 전에 저장한다."""
+        day = trade.entry_time.date()
+        records = dict(self._trades)
+        records[trade.id] = trade
+        entries = [item.to_dict() for item in records.values()
+                   if item.entry_time and item.entry_time.date() == day]
+        payload = dict(date=day.isoformat(), count=len(entries), trades=entries,
+                       updated_at=datetime.now().isoformat())
+        self._write_daily_payload(day, payload)
+
+    def _write_daily_payload(self, day, payload):
+        """날짜 파일의 모든 쓰기는 임시 파일 동기화·원자 교체를 공유한다."""
+        for trade in payload["trades"]:
+            validate_trade_execution_state(trade)
+        name = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.storage_dir,
+                                             prefix=".execution-", delete=False) as stream:
+                name = stream.name
+                json.dump(payload, stream, ensure_ascii=False, allow_nan=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(name, self._get_file_path(day))
+            directory = os.open(self.storage_dir, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if name and os.path.exists(name):
+                os.unlink(name)
+
     def get_trade(self, trade_id: str) -> Optional[TradeRecord]:
         """거래 조회"""
         return self._trades.get(trade_id)
@@ -561,10 +737,15 @@ class TradeJournal:
         trade = self._trades.get(trade_id)
         if trade is None or not patch:
             return False
+        previous_context, previous_time = trade.market_context, trade.updated_at
         trade.market_context = {**(trade.market_context or {}), **patch}
         trade.updated_at = datetime.now()
-        if trade.entry_time:
-            self._save_trades(trade.entry_time.date())
+        try:
+            if trade.entry_time:
+                self._save_trades(trade.entry_time.date())
+        except Exception:
+            trade.market_context, trade.updated_at = previous_context, previous_time
+            return False
         return True
 
     def get_today_trades(self) -> List[TradeRecord]:

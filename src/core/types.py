@@ -216,6 +216,9 @@ class Fill:
     reason: Optional[str] = None           # 체결 사유
     signal_score: Optional[float] = None   # 신호 점수
     execution_id: str = ""                # 영구 원장의 증분 식별자 (과거 재생 허가 아님)
+    account_scope: str = ""               # 원문 계좌정보 없는 원장 범위
+    order_date: str = ""                  # 검증된 원주문 거래일 YYYYMMDD
+    kis_order_no: str = ""                # 검증된 증권사 원주문번호
 
     @property
     def total_value(self) -> Decimal:

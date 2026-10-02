@@ -241,7 +241,7 @@ def test_normal_same_cumulative_price_conflict_latches_recovery_hold(broker):
     asyncio.run(run())
 
 
-def test_real_scheduler_records_receipts_after_portfolio_and_handler(monkeypatch, tmp_path, broker):
+def test_real_scheduler_keeps_missing_journal_unconfirmed_after_protective_handler(monkeypatch, tmp_path, broker):
     from test_fill_reconciliation import case, process
     from test_cancel_fill_integration import pending
     from test_sync_portfolio_characterization import _fill_check_once
@@ -257,7 +257,9 @@ def test_real_scheduler_records_receipts_after_portfolio_and_handler(monkeypatch
     _fill_check_once(monkeypatch, sched, [])
     record, = broker.execution_recovery_status()['orders'].values()
     assert record['executions'][0]['portfolio_applied'] is True
-    assert record['executions'][0]['handoff_returned'] is True
+    assert record['executions'][0]['handoff_returned'] is False
+    assert broker.execution_recovery_status()['status'] == 'storage_fault'
+    assert broker.unknown_buy_hold()
     assert bot.engine.portfolio.positions['005930'].quantity == 90
     assert bot.exit_manager.get_state('005930').remaining_quantity == 90
 
