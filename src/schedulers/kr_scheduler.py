@@ -1370,17 +1370,35 @@ class KRScheduler:
         return (id(bot.engine), id(bot.broker), id(bot.engine.portfolio), id(risk),
                 engine_value, broker_value, getattr(self, '_fill_handoff_generation', 0))
 
+    SYNC_DEFER_ALERT_MINUTES = 15  # 보류가 이보다 길면 실패로 승격·경보 (2026-10-02 48차 P1-4)
+
     def _defer_portfolio_sync(self, reason):
         self._portfolio_sync_deferred_reason = reason
+        now = datetime.now()
+        since = getattr(self, '_portfolio_sync_deferred_since', None)
+        if since is None:
+            since = self._portfolio_sync_deferred_since = now
         failed = (any(item.portfolio_applied is False for item in
                       getattr(self.bot.engine, '_unapplied_fills', {}).values())
                   or any(item.get('failed') for item in
                          getattr(self, '_pending_fill_handoffs', {}).values()))
-        if failed:
+        stale = now - since >= timedelta(minutes=self.SYNC_DEFER_ALERT_MINUTES)
+        if failed or stale:
+            # 실패로 표시된 보류와 시한을 넘긴 보류는 둘 다 매수 건강성 검사·정체 경보로 올린다.
             if self.bot.risk_manager and hasattr(self.bot.risk_manager, 'set_sync_status'):
                 self.bot.risk_manager.set_sync_status(False)
-            _hb.record_failure("kr_portfolio_sync", "체결 적용/후처리 실패 대사 필요")
-            logger.warning("[동기화] 체결 적용/후처리 실패 — 자동 완료 처리 없이 상태 보존")
+            detail = "체결 적용/후처리 실패 대사 필요" if failed else f"보류 {self.SYNC_DEFER_ALERT_MINUTES}분 초과: {reason}"
+            _hb.record_failure("kr_portfolio_sync", detail)
+            if not getattr(self, '_portfolio_sync_defer_alerted', False):
+                self._portfolio_sync_defer_alerted = True
+                logger.error(f"[동기화] 잔고 동기화 정지 — {detail} (보류 시작 {since:%H:%M:%S})")
+                try:
+                    asyncio.create_task(send_alert(
+                        f"⚠️ 잔고 동기화 정지: {detail}\n보류 시작 {since:%m-%d %H:%M} — 수동 매매/외부 체결 미반영, 매수 건강성 차단"))
+                except RuntimeError:
+                    pass  # 이벤트 루프 밖(시험)에서는 로그만 남긴다
+            else:
+                logger.warning(f"[동기화] 잔고 동기화 정지 지속 — {detail}")
             return
         logger.info(f"[동기화] 상태 보존·다음 주기 대기: {reason}")
         _hb.record_idle("kr_portfolio_sync", reason)
@@ -1468,6 +1486,8 @@ class KRScheduler:
                     self._defer_portfolio_sync("잔고 조회 중 로컬 주문/체결 세대 변경")
                     return
                 self._portfolio_sync_deferred_reason = None
+                self._portfolio_sync_deferred_since = None
+                self._portfolio_sync_defer_alerted = False
                 portfolio = bot.engine.portfolio
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 bot_symbols = set(portfolio.positions.keys())
@@ -2987,6 +3007,58 @@ JSON:
             'execution_time': fill.timestamp.astimezone(ZoneInfo('Asia/Seoul')),
         }
 
+    @staticmethod
+    def unattributed_executions_path():
+        """장부에 귀속되지 못한 체결의 운영자 대사용 JSONL (호출 시점 Path.home — 시험 격리)."""
+        return Path.home() / ".cache" / "ai_trader" / "unattributed_executions.jsonl"
+
+    async def _record_unattributed_execution(self, handoff, reason):
+        """체결은 이미 포트폴리오에 반영됐고 장부만 못 남겼다. 사실을 내구 기록하고 그 종목만 보류한다.
+
+        기록 자체가 실패하면 예외를 올려 종전처럼 후처리 실패로 남긴다(사실 유실은 허용하지 않는다).
+        """
+        if handoff.get('unattributed'):
+            return
+        fill = handoff['fill']
+        snap = handoff.get('_sell_pos_snap')
+        record = {
+            'recorded_at': datetime.now().isoformat(timespec='seconds'),
+            'symbol': fill.symbol, 'side': fill.side.value, 'quantity': int(fill.quantity),
+            'price': str(fill.price), 'order_id': fill.order_id,
+            'execution_id': getattr(fill, 'execution_id', '') or '',
+            'account_scope': getattr(fill, 'account_scope', None),
+            'order_date': getattr(fill, 'order_date', None),
+            'kis_order_no': getattr(fill, 'kis_order_no', None),
+            'trade_id': getattr(snap, 'trade_id', None) if snap is not None else None,
+            'reason': reason,
+        }
+        path = self.unattributed_executions_path()
+
+        def _append():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, 'a', encoding='utf-8') as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + '\n')
+                handle.flush()
+                os.fsync(handle.fileno())
+
+        await asyncio.to_thread(_append)
+        handoff['unattributed'] = True
+        mark = getattr(self.bot.broker, 'mark_unattributed_execution', None)
+        if callable(mark):
+            mark(fill.symbol, reason)
+        logger.error(f"[체결] {fill.symbol} {fill.side.value} {fill.quantity}주 장부 귀속 미확정 — {reason} "
+                     f"→ unattributed_executions.jsonl 기록, 이 종목 신규 매수/분할 매도 보류")
+        alerted = self.__dict__.setdefault('_unattributed_alerted', set())
+        key = (fill.symbol, record['recorded_at'][:10])
+        if key not in alerted:
+            alerted.add(key)
+            try:
+                asyncio.create_task(send_alert(
+                    f"⚠️ 체결 장부 귀속 미확정: {fill.symbol} {fill.side.value} {fill.quantity}주 — {reason}\n"
+                    f"포트폴리오 반영 완료, 저널/DB 미기록 → ~/.cache/ai_trader/unattributed_executions.jsonl 대사 필요"))
+            except RuntimeError:
+                pass
+
     def _execution_journal_committed(self, fill):
         """메모리 receipt만 조회한다. DB 대기로 다른 체결의 보호 후처리를 막지 않는다."""
         from ..data.storage.execution_journal import ExecutionWriteReceipt
@@ -3033,13 +3105,21 @@ JSON:
                     handoff['journal_submitted'] = submitted is True
                     if receipt_failed:
                         raise ValueError('메모리 적용 영수증 저장 미확정')
-                if identified:
-                    if not handoff['journal_submitted']:
-                        raise ValueError('체결의 명시 장부 기록 미완료')
-                    if not self._execution_journal_committed(handoff['fill']):
-                        continue
+                if identified and not handoff['journal_submitted']:
+                    # 장부에 못 남긴 식별 체결(저널 부재 포함)은 세션 전체를 묶지 않고 종목 한정 '대사 필요'로 보존한다 (48차 P1-3).
+                    # 비식별 체결은 종전 레거시 경로(DB 직접 기록·warning)를 그대로 둔다.
+                    await self._record_unattributed_execution(handoff, '장부 기록 미제출')
+                if identified and handoff['journal_submitted']:
+                    try:
+                        committed = self._execution_journal_committed(handoff['fill'])
+                    except Exception as exc:
+                        await self._record_unattributed_execution(handoff, f'장부 DB commit 미확정: {exc}')
+                    else:
+                        if not committed:
+                            continue  # commit 대기 중 — 다음 주기에 다시 본다
                 if callable(receipt) and identified:
-                    # 새 식별 KR 경로는 commit 확인 뒤 반환한다. 과거 receipt 의미는 불변이다.
+                    # 식별 KR 경로: commit 확인 뒤, 또는 commit 실패/불명을 귀속 미확정으로 보존한 뒤 반환한다.
+                    # handoff_returned 는 원장 정의대로 호출부 반환의 증거이며 DB 저장 증거가 아니다.
                     await receipt(handoff['fill'], 'handoff_returned')
                 ack = getattr(self.bot.broker, 'acknowledge_fill', None)
                 if callable(ack):
@@ -3137,6 +3217,19 @@ JSON:
                         _match = [t for t in _open if t.symbol == fill.symbol]
                         if _match:
                             _tid = _match[-1].id
+                    if _tid and identified:
+                        # 30일 창 밖·재시작 전 거래는 메모리에 없다. 식별 경로는 종목 추정 대신 DB 복구만 쓴다 (48차 P1-3).
+                        _get = getattr(bot.trade_journal, 'get_trade', None)
+                        _recover = getattr(bot.trade_journal, 'recover_trade', None)
+                        if callable(_get) and _get(_tid) is None and callable(_recover):
+                            # 동기 DB 복구는 작업 스레드에서 5초 안에 — 루프를 막아 다른 종목 손절을 늦추지 않는다.
+                            try:
+                                _recovered = await asyncio.wait_for(asyncio.to_thread(_recover, _tid), 5)
+                            except Exception as _rexc:
+                                _recovered = False
+                                logger.warning(f"[체결] {fill.symbol} 식별 SELL 거래 {_tid} DB 복구 예외/시한: {_rexc}")
+                            if not _recovered:
+                                logger.warning(f"[체결] {fill.symbol} 식별 SELL 거래 {_tid} DB 복구 실패 → 귀속 미확정 기록")
                     if _tid:
                         # 일지·복기만 주문에 결합된 근거를 사용한다.
                         _etype = _journal_type

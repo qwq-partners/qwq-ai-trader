@@ -150,33 +150,98 @@ def test_pending_buy_journal_does_not_delay_protective_sell(monkeypatch, tmp_pat
     asyncio.run(run())
 
 
+def _unattributed(tmp_path):
+    import json
+    path = tmp_path / ".cache" / "ai_trader" / "unattributed_executions.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
 @pytest.mark.parametrize("status", ["unavailable", "failed", "unknown"])
-def test_unconfirmed_storage_preserves_handoff_and_latches_recovery(monkeypatch, tmp_path, status):
+def test_unconfirmed_storage_records_unattributed_and_returns_handoff(monkeypatch, tmp_path, status):
+    """48차 P1-3: 장부 commit 미확정은 세션 전체 fault 가 아니라 종목 한정 '대사 필요' 기록이다.
+
+    37차는 handoff 를 영구 보류해 잔고 동기화가 재시작까지 멈췄다. 이제 사실을 JSONL 로 남기고
+    후처리를 반환해 동기화 토큰이 풀리며, 그 종목만 신규 BUY/분할 SELL 이 막힌다.
+    """
     sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path)
     bot.trade_journal.status = status
+    marks = []
+    bot.broker.mark_unattributed_execution = lambda symbol, reason: marks.append((symbol, reason))
 
     async def run():
-        await enqueue(sched, bot, identified())
+        fill = identified()
+        await enqueue(sched, bot, fill)
         await sched._drain_fill_handoffs(wait=False)
-        await sched._drain_fill_handoffs(wait=False)
-        assert failures and not acks
-        assert sched._pending_fill_handoffs
+        assert not failures  # 세션 fault 로 올리지 않는다
+        assert acks == [(fill.order_id, 3)]
+        assert not sched._pending_fill_handoffs
         assert len(bot.trade_journal.entries) == 1
-        assert all(stage != "handoff_returned" for _, stage in receipts)
+        assert receipts[-1] == (fill.execution_id, "handoff_returned")
+        rows = _unattributed(tmp_path)
+        assert len(rows) == 1 and rows[0]["execution_id"] == fill.execution_id and "commit" in rows[0]["reason"]
+        assert marks and marks[0][0] == "005930"
         assert bot.exit_manager.get_state("005930").remaining_quantity == 3
     asyncio.run(run())
 
 
 def test_identified_sell_without_trade_id_never_guesses_by_symbol(monkeypatch, tmp_path):
+    """trade_id 없는 식별 SELL 은 여전히 종목으로 추정하지 않는다. 대신 귀속 미확정으로 기록하고 반환한다."""
     sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path, holdings=10)
     bot.trade_journal.status = "unavailable"
 
     async def run():
-        await enqueue(sched, bot, identified(OrderSide.SELL, 3))
+        fill = identified(OrderSide.SELL, 3)
+        await enqueue(sched, bot, fill)
         await sched._drain_fill_handoffs(wait=False)
         assert not bot.trade_journal.exits
-        assert failures and not acks
+        assert not failures and acks == [(fill.order_id, 3)]
+        assert not sched._pending_fill_handoffs
+        rows = _unattributed(tmp_path)
+        assert len(rows) == 1 and rows[0]["side"] == "sell" and rows[0]["trade_id"] is None
         assert bot.exit_manager.get_state("005930").remaining_quantity == 7
+    asyncio.run(run())
+
+
+def test_identified_sell_recovers_trade_from_db_before_recording(monkeypatch, tmp_path):
+    """trade_id 는 있는데 메모리에 없으면(30일 창 밖·재시작 전) DB 복구만 시도하고 종목 추정은 안 한다."""
+    sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path, holdings=10)
+    bot.trade_journal.status = "committed"
+    bot.engine.portfolio.positions["005930"].trade_id = "T-old"
+    recovered = []
+
+    def recover(trade_id):
+        recovered.append(trade_id)
+        bot.trade_journal._trades[trade_id] = SimpleNamespace(id=trade_id, market_context={})
+        return True
+    bot.trade_journal.recover_trade = recover
+
+    async def run():
+        fill = identified(OrderSide.SELL, 3)
+        await enqueue(sched, bot, fill)
+        await sched._drain_fill_handoffs(wait=False)
+        assert recovered == ["T-old"]
+        assert len(bot.trade_journal.exits) == 1 and bot.trade_journal.exits[0]["trade_id"] == "T-old"
+        assert acks == [(fill.order_id, 3)] and not failures
+        assert _unattributed(tmp_path) == []
+    asyncio.run(run())
+
+
+def test_unattributed_record_failure_keeps_handoff_failed(monkeypatch, tmp_path):
+    """사실을 내구 기록조차 못 하면 종전처럼 후처리 실패로 남긴다(유실 허용 안 함)."""
+    sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path)
+    bot.trade_journal.status = "failed"
+    monkeypatch.setattr(type(sched), "unattributed_executions_path",
+                        staticmethod(lambda: tmp_path / "ro" / "x.jsonl"))
+    (tmp_path / "ro").mkdir()
+    (tmp_path / "ro").chmod(0o500)
+
+    async def run():
+        try:
+            await enqueue(sched, bot, identified())
+            await sched._drain_fill_handoffs(wait=False)
+            assert failures and not acks and sched._pending_fill_handoffs
+        finally:
+            (tmp_path / "ro").chmod(0o700)
     asyncio.run(run())
 
 
@@ -353,3 +418,21 @@ async def test_actual_storage_preserves_buy_close_reentry_trade_lifetimes(pg_soc
         assert len(acks) == 3 and not failures and not sched._pending_fill_handoffs
     finally:
         await storage.disconnect()
+
+
+def test_unidentified_fill_journal_failure_stays_on_legacy_path(monkeypatch, tmp_path):
+    """비식별 체결(원장 fault 뒤 execution_id='')은 종전 레거시 경로 그대로 — 미귀속 기록·종목 표시를 만들지 않는다."""
+    sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path)
+    bot.trade_journal.status = "unavailable"
+    marks = []
+    bot.broker.mark_unattributed_execution = lambda symbol, reason: marks.append((symbol, reason))
+
+    async def run():
+        fill = identified(execution="")
+        await enqueue(sched, bot, fill)
+        await sched._drain_fill_handoffs(wait=False)
+        assert not sched._pending_fill_handoffs and not failures
+        assert _unattributed(tmp_path) == [] and marks == []
+        assert receipts == []  # 비식별은 원장 receipt 대상이 아니다
+    asyncio.run(run())
+

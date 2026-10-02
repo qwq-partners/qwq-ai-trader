@@ -344,6 +344,46 @@ cat ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 grep '"blocked"' ~/.cache/ai_trader/audit/audit_$(date +%Y%m).jsonl
 ```
 
+## 실행 원장 보류 해제 (2026-10-02~ 48차 PR #141, 운영 미배포 — 현재 운영 df1a5af 는 이 이벤트를 읽지 못하므로 배포 전 CLI 실행 금지)
+
+`executions-<계좌범위해시>.sqlite3` 원장은 **이전 실행이 정상 종료(clean close)되지 않았으면** 다음 기동부터
+`이전 실행 정상 종료 미확인` 보류를 건다. 보류 중에는 신규 BUY 전부와 **모든 종목의 분할 익절**이 멈추고 전량 SELL(손절·트레일링)만 나간다.
+날짜 변경·재시작으로는 풀리지 않는다. 파일을 지우거나 옮기면 새 원장이 만들어져 풀리지만 전체 이력이 유실되므로 **금지**다. 운영자 확인(acknowledge)으로만 푼다.
+
+> ⚠️ **버전 조건.** `acknowledge` 이벤트는 2026-10-02 48차(PR #141) 이후 코드만 읽을 수 있다. 실행 중이거나 기동 예정인 봇 코드가 그 이전 SHA(22:17 배포된 현재 운영 df1a5af 포함)면 이 CLI 를 **실행하지 않는다** — 이전 코드는 그 원장을 손상으로 판정해 열지 못하고, 그러면 손절 전량 SELL 까지 모든 주문이 거부된다. 같은 이유로 ack 이후에는 `local_deploy` 자동 롤백을 포함해 48차 이전 SHA 로 되돌리지 않는다.
+
+비정상 종료가 되는 경우: OOM kill, 미체결 주문이 남은 상태의 재시작, 당일 접수 불명 1건, 장부 commit 미확인 1건,
+`scripts/sell_specific.py`·`liquidate_all.py` 사용(체결 확인 없이 종료). 상태 확인: `broker.execution_recovery_status()`
+(`recovery_required` + `reason`), 로그 `journalctl -u qwq-ai-trader | grep '실행원장'`.
+
+대응 순서:
+
+1. 봇을 멈춘다(`KILL_SWITCH` → `sudo systemctl stop qwq-ai-trader`). CLI 는 봇이 떠 있으면 락 거부(exit 2).
+2. HTS 에서 **미체결이 0건임을 확인한다**(남아 있으면 HTS 에서 취소한 뒤 진행). 과거 세션 주문의 늦은 체결은 원장에 들어오지 못하고 잔고 동기화로만 반영되므로, 미체결이 남은 채 ack 하면 신규 BUY 가 그 체결 반영 전에 열린다. 필요하면 독립 복사본으로 `scripts/reconcile_execution_evidence.py` 대사를 돌린다. ack 이후에도 이 대사 보고서의 `unclean_session_window_unknown`(incomplete)은 사실 보존을 위해 계속 남는다.
+3. 확인 근거를 `--note` 에 적어 실행한다. 과거 기록은 지우지 않고 `acknowledged` 표시만 남는다.
+
+```bash
+cd /home/ubuntu/projects/qwq-ai-trader && source venv/bin/activate && set -a && source .env && set +a
+python scripts/ops/acknowledge_execution_ledger.py --note "HTS 10/06 15:40 미체결 0·체결 대사 완료, reconcile sha256 …"
+```
+
+4. 출력 `after.prior_unclean=false`·`unresolved_orders=0`·`ack_session_closed=true`(exit 0)를 확인하고 재시작한다.
+   exit 1 이면 확인 세션이 clean close 되지 않은 것(현재 세션 주문은 대상이 아니다) — 원장을 복사해 보존하고 보고한다.
+5. 원장을 열 수 없어 `open_failed` 이면(디스크·잠금·손상) 보류가 아니라 **기록 불가** 상태다. 이때도 전량 SELL 은 나가지만
+   BUY·분할 SELL 은 막힌다. 디스크/권한을 고치고 재시작하며, 손상이면 파일을 보존 이동한 뒤 새 원장으로 시작한다(이력 단절은 문서에 남긴다).
+
+## 체결 장부 귀속 미확정·잔고 동기화 정지 알림 대응 (2026-10-02~ 48차 PR #141)
+
+- `⚠️ 체결 장부 귀속 미확정: {종목} {buy|sell} {수량}주 — {사유}`: 체결은 포트폴리오에 반영됐지만 저널/DB에 남지 못했다
+  (trade_id 없는 보유분·DB 미연결/순단·commit 미확정·30일 창 밖 거래). 봇은 사실을 `~/.cache/ai_trader/unattributed_executions.jsonl`
+  에 기록하고 **그 종목만** 신규 BUY·분할 SELL 을 프로세스 수명 동안 보류한다(전량 SELL·다른 종목은 정상). 세션 전체 보류나 잔고 동기화 정지는 아니다.
+  - 대응: JSONL 행(종목·수량·가격·ODNO·execution_id·trade_id)을 HTS 체결 내역과 대조해 저널/DB 에 수동 반영하거나 20:30 원장 집계에서 제외 사유로 남긴다.
+    종목 보류는 재시작으로 풀린다(수동 반영 뒤에만 재시작). `broker.execution_recovery_status()` 의 `unattributed_symbols` 로 현재 목록을 본다.
+- `⚠️ 잔고 동기화 정지: {사유}` : 잔고 동기화(장중 30초·장외 300초 주기)가 15분 이상 보류됐거나(취소 주문 체결 미확인·적용 전 예외로 남은 체결 등) 체결 적용/후처리가 실패로 남았다.
+  그동안 수동 매매·외부 체결이 반영되지 않고 매수 건강성 검사가 차단된다(`[리스크] 포트폴리오 동기화 장애`).
+  - 대응: `journalctl -u qwq-ai-trader | grep '\[동기화\]'` 로 보류 사유를 읽는다. 취소 주문 체결 미확인이면 HTS 미체결·체결을 확인하고,
+    적용 실패 체결(`[리스크] 체결 적용 미확인`)이면 보유 수량을 HTS 와 대조한 뒤 **장 마감 후** 재시작한다. 재시작 전 원장 보류 조건은 위 절을 따른다.
+
 ## 주문 접수 불명 알림 대응 (2026-09-29~, 15:33 배포 `974a71f`)
 
 텔레그램 `⚠️ 주문 접수 불명: {종목} {매수|매도} {수량}주 — KIS 응답 유실(재전송 안 함)` 은 주문 POST 가

@@ -686,6 +686,9 @@ class TradeStorage:
     def get_open_trades(self) -> List[TradeRecord]:
         return self._journal.get_open_trades()
 
+    def recover_trade(self, trade_id: str) -> bool:
+        return self._journal.recover_trade(trade_id)
+
     def get_recent_trades(self, days: int = 7) -> List[TradeRecord]:
         return self._journal.get_recent_trades(days)
 

@@ -537,7 +537,8 @@ def test_sync_registration_uses_strategy_params_on_both_attempts(monkeypatch):
 
 # ── 10. fill_check 대기열: BUY 등록 예외·포지션 지연·반복 실패·삭제된 포지션 ─────────
 
-def test_buy_fill_registration_exception_is_queued_then_retried(monkeypatch):
+def test_buy_fill_registration_exception_is_queued_then_retried(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)  # 귀속 미확정 JSONL 이 실제 홈에 닿지 않게 (48차)
     sched, bot, sleeps = _make(
         monkeypatch, bot_positions=[_pos("005930", strategy="sepa_trend")],
         balance={}, kis_seq=[],
@@ -563,7 +564,8 @@ def test_buy_fill_registration_exception_is_queued_then_retried(monkeypatch):
     assert pos.symbol == "005930" and kw["stop_loss_pct"] == 5.0
 
 
-def test_buy_fill_with_delayed_position_is_registered_when_position_appears(monkeypatch):
+def test_buy_fill_with_delayed_position_is_registered_when_position_appears(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)  # 저널 없는 체결의 귀속 미확정 JSONL 이 실제 홈에 닿지 않게 (48차)
     sched, bot, sleeps = _make(
         monkeypatch, bot_positions=[], balance={}, kis_seq=[],
         exit_params={"_sync": dict(_SYNC_PARAMS)},

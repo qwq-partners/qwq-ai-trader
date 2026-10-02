@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import collections
-import hashlib
 import json
 import os
 import sys
@@ -26,7 +25,7 @@ from loguru import logger
 from ...utils import kis_rate_limit, kis_request_metrics
 
 from .base import BaseBroker
-from ..execution_history import ExecutionHistory
+from ..execution_history import ExecutionHistory, execution_ledger_location
 from ...core.types import (
     Order, Fill, Position, OrderSide, OrderStatus, OrderType, MarketSession
 )
@@ -212,11 +211,11 @@ class KISBroker(BaseBroker):
         # object.__new__ 로 만든 시험 브로커에는 없다: 조회는 보류 없음, 첫 불명 기록 때 만든다.
         self._unknown_book = order_unknown.UnknownOrderBook(order_unknown.default_path())
         # 계좌 원문/키는 원장에 저장하지 않는다. 시험은 기존 default_path를 임시 경로로 주입한다.
-        scope = hashlib.sha256(json.dumps([
-            self.config.env, self.config.account_no, self.config.account_product_cd
-        ], separators=(',', ':')).encode()).hexdigest()
-        self._execution_history = ExecutionHistory(
-            order_unknown.default_path().parent / f'executions-{scope}.sqlite3', scope)
+        _ledger_path, scope = execution_ledger_location(
+            self.config.env, self.config.account_no, self.config.account_product_cd)
+        self._execution_history = ExecutionHistory(_ledger_path, scope)
+        # 장부 귀속 미확정 체결의 종목 — 그 종목만 신규 BUY/분할 SELL 보류 (48차 P1-3, 프로세스 수명)
+        self._unattributed_symbols: Dict[str, str] = {}
         self._fill_check_lock = asyncio.Lock()
 
         # API 레이트 리미터 — 프로세스 공용 (src/utils/kis_rate_limit.py, 2026-09-03):
@@ -246,11 +245,17 @@ class KISBroker(BaseBroker):
     def execution_recovery_status(self):
         history = getattr(self, '_execution_history', None)
         if history is None:
-            return {'status': 'unsupported'}
+            return {'status': 'unsupported',
+                    'unattributed_symbols': sorted(getattr(self, '_unattributed_symbols', {}))}
         report = history.report()
         report['journal_pending_count'] = history.pending_handoffs()
         if report['journal_pending_count'] and report['status'] == 'ready':
             report.update(status='journal_pending', reason='현재 체결 장부 commit과 후처리 확인 대기')
+        unattributed = getattr(self, '_unattributed_symbols', {})
+        report['unattributed_symbols'] = sorted(unattributed)
+        if unattributed and report['status'] == 'ready':
+            report.update(status='journal_unattributed',
+                          reason='장부 귀속 미확정 체결: unattributed_executions.jsonl 대사 필요')
         return report
 
     async def _execution_outcome(self, order_id, status):
@@ -265,6 +270,10 @@ class KISBroker(BaseBroker):
         history = getattr(self, '_execution_history', None)
         if history is not None and fill.execution_id:
             await history.receipt(fill.execution_id, stage)
+
+    def mark_unattributed_execution(self, symbol: str, reason: str) -> None:
+        """포트폴리오에는 반영됐지만 장부에 귀속되지 못한 체결의 종목을 보류 대상으로 남긴다."""
+        self.__dict__.setdefault('_unattributed_symbols', {})[symbol] = reason
 
     def record_execution_journal_failure(self, reason):
         """현재 체결의 장부 미확정을 보존한다. 보호 전량 SELL 경로는 유지한다."""
@@ -579,11 +588,15 @@ class KISBroker(BaseBroker):
                     return {"rt_cd": "-1", "msg1": "브로커 종료 중", "_blocked": True}
                 history = getattr(self, '_execution_history', None)
                 if url.endswith('/order-cash') and history is not None and not history.session_recorded:
-                    return {"rt_cd": "-1", "msg1": "실행 시작 기록 미확인", "_blocked": True}
+                    # 원장을 못 열어도 보호 전량 SELL 은 보낸다 — KIS 매도가능수량이 이중 매도를 막는다.
+                    if cancel_guard is None or cancel_guard[1] == OrderSide.BUY or cancel_guard[2]:
+                        return {"rt_cd": "-1", "msg1": "실행 시작 기록 미확인", "_blocked": True}
                 if cancel_guard is not None:
                     symbol, side, partial = cancel_guard
                     if partial and self.has_unknown_sell(symbol):
                         return {"rt_cd": "-1", "msg1": "실행 이력/SELL 접수 미확인", "_blocked": True}
+                    if side == OrderSide.BUY and symbol in getattr(self, '_unattributed_symbols', {}):
+                        return {"rt_cd": "-1", "msg1": "장부 귀속 미확정 종목", "_blocked": True}
                     if self.has_unresolved_cancel(symbol) and (side == OrderSide.BUY or partial):
                         return {"rt_cd": "-1", "msg1": "취소 주문 최종 체결 미확인", "_blocked": True}
                 # 전송 직전 재확인 (2026-09-29) — submit_order 머리 게이트를 지난 BUY 가 hashkey·rate-limit 을
@@ -683,9 +696,22 @@ class KISBroker(BaseBroker):
         await self.initialize_execution_history()
         history = getattr(self, '_execution_history', None)
         if history is not None and not history.session_recorded:
-            return False, "실행 시작 기록 미확인: 주문 전송 보류"
+            # 원장 open 실패(디스크·잠금·손상)는 신규 위험만 막는다. 보호 전량 SELL 은 기록 없이 나가고
+            # 이 세션은 clean close 할 수 없다 (2026-10-02 리뷰 P1-2).
+            if order.side == OrderSide.BUY or order.partial_exit is True:
+                return False, "실행 시작 기록 미확인: 주문 전송 보류"
+            logger.error(f"[실행원장] 시작 기록 없이 보호 전량 SELL 전송: {order.symbol} — 명시 대사 필요")
         if order.side == OrderSide.SELL and order.partial_exit is True and self.has_unknown_sell(order.symbol):
             return False, "실행 이력/SELL 접수 미확인: 분할 매도 보류"
+        if order.side == OrderSide.BUY and order.symbol in getattr(self, '_unattributed_symbols', {}):
+            _hold = "장부 귀속 미확정 종목: 신규 매수 보류"
+            logger.warning(f"[주문차단] {order.symbol} {order.quantity}주 — {_hold}")
+            audit_log.record_blocked(
+                market="KR", symbol=order.symbol, side=order.side.value,
+                reason=_hold, qty=order.quantity,
+                price=order.price, strategy=order.strategy,
+            )
+            return False, _hold
         # 킬스위치 — 모든 KR 주문이 반드시 통과하는 지점 (봇 재시작 없이 즉시 발동)
         allowed, block_reason = kill_switch.check(order.side.value, market="KR")
         if not allowed:
@@ -946,6 +972,8 @@ class KISBroker(BaseBroker):
         if history is not None and history.hold(symbol):
             return True
         if history is not None and history.pending_handoffs(symbol):
+            return True
+        if symbol in getattr(self, '_unattributed_symbols', {}):
             return True
         book = getattr(self, "_unknown_book", None)
         return book is not None and book.has_unknown_sell(symbol, datetime.now())

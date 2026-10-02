@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from copy import deepcopy
 from decimal import Decimal
 from pathlib import Path
@@ -13,7 +15,20 @@ from uuid import uuid4
 
 from loguru import logger
 
-from .execution_ledger import ExecutionLedger
+from .execution_ledger import ExecutionLedger, order_unresolved
+
+
+def execution_ledger_location(env, account_no, account_product_cd, base_dir=None):
+    """계좌 범위 해시와 원장 경로 — 브로커와 운영 CLI가 같은 파일을 가리키게 한다.
+
+    원문 계좌번호는 파일명·원장에 쓰지 않는다. base_dir 기본은 주문 불명 장부와 같은 디렉터리다.
+    """
+    scope = hashlib.sha256(json.dumps(
+        [env, account_no, account_product_cd], separators=(',', ':')).encode()).hexdigest()
+    if base_dir is None:
+        from ..risk import order_unknown
+        base_dir = order_unknown.default_path().parent
+    return Path(base_dir) / f'executions-{scope}.sqlite3', scope
 
 
 class ExecutionHistory:
@@ -107,13 +122,7 @@ class ExecutionHistory:
 
     @staticmethod
     def _unresolved(record):
-        if record['status'] in ('not_sent', 'rejected'):
-            return False
-        if record['status'] in ('unknown', 'modified'):
-            return True
-        terminal = record['terminal_quantity']
-        return (terminal is None or terminal != record['observed_quantity']
-                or any(not e['handoff_returned'] for e in record['executions']))
+        return order_unresolved(record)
 
     def hold(self, symbol=None):
         if self.fault:
@@ -123,6 +132,8 @@ class ExecutionHistory:
         if self._snapshot['prior_unclean']:
             return '이전 실행 정상 종료 미확인: 과거 체결 자동 재생 금지'
         for record in self._snapshot['orders'].values():
+            if record['session_id'] != self.session_id and record.get('acknowledged') is True:
+                continue  # 운영자가 명시 대사를 마친 과거 주문
             uncertain = (record['session_id'] != self.session_id and self._unresolved(record)
                          or record['status'] in ('unknown', 'modified'))
             if uncertain and (symbol is None or record['facts']['symbol'] == symbol):
