@@ -197,3 +197,23 @@ def test_post_guard_without_cancel_guard_still_blocks_when_unrecorded(ub, tmp_pa
     asyncio.run(ub._execution_history.open())
     out = asyncio.run(ub._api_post("http://x/uapi/domestic-stock/v1/trading/order-cash", "TTTC0801U", {}, retry=False))
     assert out.get("_blocked") is True and ub._session.sent == []
+
+
+# ── P1-3 브로커: 귀속 미확정 종목 한정 보류 ─────────────────────────────────
+
+def test_unattributed_symbol_blocks_buy_and_partial_sell_for_that_symbol_only(ub):
+    ub.mark_unattributed_execution(SYM_A := "005930", "장부 DB commit 미확정")
+    status = ub.execution_recovery_status()
+    assert status["unattributed_symbols"] == [SYM_A]
+
+    ok, msg = _submit(ub, _order(OrderSide.BUY, symbol=SYM_A))
+    assert ok is False and "귀속 미확정" in msg and ub._session.sent == []
+
+    partial = _order(OrderSide.SELL, symbol=SYM_A, qty=3)
+    partial.partial_exit = True
+    ok, msg = _submit(ub, partial)
+    assert ok is False and ub._session.sent == []
+
+    assert _submit(ub, _order(OrderSide.SELL, symbol=SYM_A, qty=10))[0] is True  # 전량 보호 SELL
+    assert _submit(ub, _order(OrderSide.BUY, symbol="000660"))[0] is True       # 다른 종목 BUY
+    assert len(ub._session.sent) == 2

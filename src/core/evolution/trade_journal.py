@@ -779,6 +779,17 @@ class TradeJournal:
         """미청산 거래 목록"""
         return [t for t in self._trades.values() if not t.is_closed]
 
+    def recover_trade(self, trade_id: str) -> bool:
+        """메모리에 없는 거래를 DB에서 복원해 올린다(30일 창 밖·재시작 전 보유분). 추정은 하지 않는다."""
+        if trade_id in self._trades:
+            return True
+        trade = self._recover_trade_from_db_sync(trade_id)
+        if trade is None:
+            return False
+        self._trades[trade_id] = trade
+        logger.info(f"[저널] 거래 ID {trade_id} DB에서 복원 (식별 SELL 귀속)")
+        return True
+
     def get_recent_trades(self, days: int = 7) -> List[TradeRecord]:
         """최근 N일 거래 목록 (청산/미청산 모두)"""
         cutoff = datetime.now() - timedelta(days=days)

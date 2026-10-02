@@ -7,7 +7,9 @@
 - P1-2 수정: 원장 open 실패(`session_recorded=False`)에서 BUY·분할 SELL만 거부하고 보호 전량 SELL은 ERROR 로그 후 전송. 브로커·CLI가 같은 원장 경로를 쓰도록 `execution_ledger_location()` 공용화.
 - 35차 결정 번복 명시: 35차 테스트 `test_initial_open_failure_cannot_send_unmarked_emergency_sell`(시작 기록 실패 시 전량 SELL도 차단)을 새 계약(BUY·분할만 차단, 전량 SELL 전송·ERROR 로그·storage_fault 유지)으로 교체. 근거는 리뷰 정본.
 - 독립 리뷰(Claude Opus 요청/high) 조건부 승인 → 반영: **`acknowledge` 이벤트가 든 원장은 48차 이전 코드(현재 운영 df1a5af 포함)가 열지 못해 전 주문 거부가 된다.** runbook에 "봇 코드가 48차 이후일 때만 실행·ack 뒤 이전 SHA 롤백 금지·미체결 0 확인 후 실행" 조건을 명시했다. 파일 삭제 서술 정정, CLI sqlite 예외/연결 닫기, 테스트 락 fd 정리.
-- P1-3(식별 체결 저널 실패 → 세션 전체 보류)·P1-4(동기화 보류 무경보)·P2는 미수정으로 기록. 운영은 22:17 KST에 다른 세션이 일반 모드로 배포한 df1a5af(이 수정 **이전** 코드, PID 172854)이고 실행 원장 파일이 이미 생성됐다. 10월 6일 활성화 프로필은 old/new HEAD가 모두 df1a5af라 이 수정을 먼저 배포하면 HEAD 불일치로 활성화가 중단된다. **배포 시점(10월 6일 관측 뒤 vs 지금 배포 + 프로필 재무장)은 사용자 결정이며, 배포 전까지 `acknowledge` CLI 실행 금지**(운영 코드가 그 이벤트를 읽지 못해 전 주문 거부). 이 PR 자체는 운영·예약·매수 중지를 바꾸지 않는다.
+- P1-3 수정: 장부에 못 남긴 체결(trade_id 없음·DB 미연결/순단·commit 미확정·저널 부재)은 세션 전체 fault 대신 `~/.cache/ai_trader/unattributed_executions.jsonl`에 내구 기록하고 후처리를 반환한다(잔고 동기화 정지 해소). 그 종목만 신규 BUY·분할 SELL 보류(`broker.mark_unattributed_execution`, 상태 `journal_unattributed`). trade_id는 있는데 메모리에 없으면 `recover_trade`로 DB 복구만 시도하고 종목 추정은 계속 금지. 기록 자체가 실패하면 종전처럼 후처리 실패 유지. 37차 테스트 2건·35차 통합 테스트 1건을 새 계약으로 교체.
+- P1-4 수정: 잔고 동기화 보류가 15분을 넘기면(`SYNC_DEFER_ALERT_MINUTES`) `set_sync_status(False)`·heartbeat 실패·텔레그램 경보 1회로 승격. 실패 표시 보류도 경보 1회. 성공 동기화가 초기화.
+- P2는 미수정으로 기록. 운영은 22:17 KST에 다른 세션이 일반 모드로 배포한 df1a5af(이 수정 **이전** 코드, PID 172854)이고 실행 원장 파일이 이미 생성됐다. 10월 6일 활성화 프로필은 old/new HEAD가 모두 df1a5af라 이 수정을 먼저 배포하면 HEAD 불일치로 활성화가 중단된다. **배포 시점(10월 6일 관측 뒤 vs 지금 배포 + 프로필 재무장)은 사용자 결정이며, 배포 전까지 `acknowledge` CLI 실행 금지**(운영 코드가 그 이벤트를 읽지 못해 전 주문 거부). 이 PR 자체는 운영·예약·매수 중지를 바꾸지 않는다.
 ## 2026-10-02 — 엔진 즉시 배포·첫 기동 검증(47차 실행)
 
 - 사용자 현재 승인으로22:17 KST 기존 검토df1a5af를 일반 모드로 배포·재시작했다. 운영 전체4045검사/문법/비밀정보 통과 후 PID172854·자동 재시작0·매수 중지·운영 설정 보존을 확인했다.

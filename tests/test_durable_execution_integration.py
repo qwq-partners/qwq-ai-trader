@@ -254,7 +254,9 @@ def test_normal_same_cumulative_price_conflict_latches_recovery_hold(broker):
     asyncio.run(run())
 
 
-def test_real_scheduler_keeps_missing_journal_unconfirmed_after_protective_handler(monkeypatch, tmp_path, broker):
+def test_real_scheduler_records_missing_journal_as_unattributed_after_protective_handler(monkeypatch, tmp_path, broker):
+    """48차 P1-3: 장부 미기록 체결은 세션 fault 가 아니라 종목 한정 귀속 미확정으로 남고 후처리는 반환된다."""
+    import json
     from test_fill_reconciliation import case, process
     from test_cancel_fill_integration import pending
     from test_sync_portfolio_characterization import _fill_check_once
@@ -270,9 +272,13 @@ def test_real_scheduler_keeps_missing_journal_unconfirmed_after_protective_handl
     _fill_check_once(monkeypatch, sched, [])
     record, = broker.execution_recovery_status()['orders'].values()
     assert record['executions'][0]['portfolio_applied'] is True
-    assert record['executions'][0]['handoff_returned'] is False
-    assert broker.execution_recovery_status()['status'] == 'storage_fault'
-    assert broker.unknown_buy_hold()
+    assert record['executions'][0]['handoff_returned'] is True
+    status = broker.execution_recovery_status()
+    assert status['status'] == 'journal_unattributed' and status['unattributed_symbols'] == ['005930']
+    assert broker.unknown_buy_hold() is None          # 세션 전체 보류는 아니다
+    assert broker.has_unknown_sell('005930') is True  # 그 종목 분할 SELL 만 보류
+    rows = [json.loads(l) for l in (tmp_path / '.cache' / 'ai_trader' / 'unattributed_executions.jsonl').read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]['execution_id'] == record['executions'][0]['execution_id']
     assert bot.engine.portfolio.positions['005930'].quantity == 90
     assert bot.exit_manager.get_state('005930').remaining_quantity == 90
 
