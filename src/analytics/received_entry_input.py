@@ -117,6 +117,10 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
     candidate_signals = {}
     quote_ids = set()
     report_at = _timestamp(payload["as_of"], "보고 시각")
+    from .entry_gate_trace import SCAN_FIELDS as GATE_SCAN_FIELDS
+    if any(isinstance(r,dict) and (r.get('kind')=='entry_gate_trace' or GATE_SCAN_FIELDS & set(r)) for r in records):
+        from .entry_gate_report import build_gate_report
+        build_gate_report(observations,as_of=payload['as_of'])
     subscription_gap = not _subscription_stream_complete(records, report_at)
     # 정렬해서 자료를 복구하지 않는다. 원래 버퍼의 연속 순서가 없으면 연결 불가다.
     for seq, record in enumerate(records, 1):
@@ -159,6 +163,9 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         elif kind == "quote_subscription":
             # 상태 기록은 후보 승인이나 호가의 대체 자료가 아니다.
             subscription_gap |= record.get("status") == "connection_gap"
+        elif kind == 'entry_gate_trace':
+            # Validated above. Actual pre-signal checks do not establish order eligibility.
+            pass
         elif kind == 'selection_basis':
             if _timestamp(record.get('observed_at'), '선정 근거 관측 시각') > report_at:
                 raise ValueError('선정 근거 관측이 보고 시각보다 늦음')
