@@ -108,6 +108,8 @@
 | P2 오래된 주석("commit 확인 뒤 반환")·runbook "30분 동기화" 오기 | 원장 정의에 맞게 주석 갱신, 주기(장중 30초·장외 300초) 정정 |
 | 성공 동기화의 초기화를 테스트가 수동으로 수행 | 실제 `_sync_portfolio` 성공 경로 초기화 테스트 추가 |
 
+| (추가) CI 선재 플레이크 | PR CI(UTC 러너)가 KST 00:13에 `tests/test_execution_journal.py` 21건 실패. df1a5af 원본도 TZ=UTC에서 동일 실패 → 선재 결함. 저널의 `date.today()` 4곳을 KST 날짜 `_journal_today()`로 통일(운영 호스트 KST라 동작 동일). UTC/KST 전체 verify 각각 실행 |
+
 리뷰어 판단 중 수용한 것: 재시작 뒤 종목 보류가 사라지는 것은 장부 연속성 문제이고 돈 안전(KIS 원천)이 아니므로 수용, 다음 미귀속 체결이 표시를 되살린다. `trade_journal is None` 기동도 종전(전역 fault + 동기화 정지)보다 좁다. 후속 권고(미반영): 기동 시 JSONL 미대사 행 경고, `journal_unattributed` 상태의 대시보드/ops_check 소비자, BUY 머리 게이트의 종목별 미귀속 인지.
 
 ## 10월 6일 전 남은 결정
@@ -125,6 +127,7 @@
 | main 병합 뒤(#139/#140 포함, 85a7e44) | `scripts/dev/verify.sh` | **4078 passed / 2 xfailed**, 134.00초, 격리 위반 0, 비밀정보 검사 통과 |
 | P1-3·P1-4 수정 뒤(2차 커밋) | 관련 8파일 217 passed → `scripts/dev/verify.sh` | **4084 passed / 2 xfailed**, 143.72초, 격리 위반 0, 비밀정보 검사 통과 |
 | 2차 독립 리뷰 반영 뒤(최종) | `scripts/dev/verify.sh` | **4086 passed / 2 xfailed**, 132.31초, 격리 위반 0, 비밀정보 검사 통과 |
+| CI 플레이크 수정 뒤 | `TZ=UTC` / `TZ=Asia/Seoul` 각각 `scripts/dev/verify.sh` | UTC **4086 passed / 2 xfailed** 137.76초 · KST **4086 passed / 2 xfailed** 129.60초, 격리 위반 0 |
 | 신규 + 인접 7파일 | `test_execution_ledger_acknowledge.py` 외 ledger/readonly/cancel_fill/order_post_unknown/recovery_evidence(+cli) | 220 passed, 7.84초 |
 | 35차 테스트 교체 뒤 | `test_durable_execution_integration.py` + 신규 | 36 passed, 4.04초 |
 | 독립 리뷰(요청 Opus/high, 작성자 아님) | 수정 전 코드로 신규 테스트 재실행 | 9개 중 6개 실패(ack 4·CLI 1·open_failure 1) → 결함을 잡는 테스트임을 확인. 조건부 APPROVE, 지적 전부 반영 |

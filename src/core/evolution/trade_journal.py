@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path
 from copy import deepcopy
@@ -122,6 +123,15 @@ class TradeRecord:
         return cls(**data)
 
 
+def _journal_today() -> date:
+    """저널의 '오늘'은 KST 날짜다 — 식별 체결 시각이 KST 로 정규화되므로 일별 파일 재로드·오늘 판정을 같은 기준에 둔다.
+
+    운영 호스트(KST)에서는 date.today() 와 같다. UTC 러너(CI)에서는 KST 00:00~09:00 에 하루 어긋나
+    KST 날짜로 저장한 파일을 재로드 창이 놓쳤다(2026-10-03 CI 재현, 선재 결함).
+    """
+    return datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+
 class TradeJournal:
     """
     거래 저널
@@ -152,7 +162,7 @@ class TradeJournal:
 
     def _load_recent_trades(self, days: int = 30):
         """최근 거래 로드"""
-        today = date.today()
+        today = _journal_today()
 
         for i in range(days):
             trade_date = today - timedelta(days=i)
@@ -447,7 +457,7 @@ class TradeJournal:
 
         self._trades[trade_id] = trade
 
-        if now.date() == date.today() and trade_id not in self._today_trades:
+        if now.date() == _journal_today() and trade_id not in self._today_trades:
             self._today_trades.append(trade_id)
 
         # 저장
@@ -561,7 +571,7 @@ class TradeJournal:
         trade.updated_at = now
 
         # 오늘 청산된 거래를 _today_trades에 추가 (어제 진입→오늘 청산 케이스 포함)
-        if now.date() == date.today() and trade_id not in self._today_trades:
+        if now.date() == _journal_today() and trade_id not in self._today_trades:
             self._today_trades.append(trade_id)
 
         # 저장
@@ -687,7 +697,7 @@ class TradeJournal:
         trade.execution_records[key] = record
         self._persist_identified_trade(trade)
         self._trades[trade_id] = trade
-        if now.date() == date.today() and trade_id not in self._today_trades:
+        if now.date() == _journal_today() and trade_id not in self._today_trades:
             self._today_trades.append(trade_id)
         return trade
 

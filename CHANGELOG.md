@@ -9,6 +9,7 @@
 - 독립 리뷰(Claude Opus 요청/high) 조건부 승인 → 반영: **`acknowledge` 이벤트가 든 원장은 48차 이전 코드(현재 운영 df1a5af 포함)가 열지 못해 전 주문 거부가 된다.** runbook에 "봇 코드가 48차 이후일 때만 실행·ack 뒤 이전 SHA 롤백 금지·미체결 0 확인 후 실행" 조건을 명시했다. 파일 삭제 서술 정정, CLI sqlite 예외/연결 닫기, 테스트 락 fd 정리.
 - P1-3 수정: 장부에 못 남긴 체결(trade_id 없음·DB 미연결/순단·commit 미확정·저널 부재)은 세션 전체 fault 대신 `~/.cache/ai_trader/unattributed_executions.jsonl`에 내구 기록하고 후처리를 반환한다(잔고 동기화 정지 해소). 그 종목만 신규 BUY·분할 SELL 보류(`broker.mark_unattributed_execution`, 상태 `journal_unattributed`). trade_id는 있는데 메모리에 없으면 `recover_trade`로 DB 복구만 시도하고 종목 추정은 계속 금지. 기록 자체가 실패하면 종전처럼 후처리 실패 유지. 37차 테스트 2건·35차 통합 테스트 1건을 새 계약으로 교체.
 - P1-4 수정: 잔고 동기화 보류가 15분을 넘기면(`SYNC_DEFER_ALERT_MINUTES`) `set_sync_status(False)`·heartbeat 실패·텔레그램 경보 1회로 승격. 실패 표시 보류도 경보 1회. 성공 동기화가 초기화.
+- CI(UTC 러너) 선재 플레이크 수정: 저널 `_load_recent_trades`·오늘 판정이 호스트 로컬 `date.today()`를 써서 KST 00:00~09:00에 KST 날짜로 저장한 일별 파일을 놓쳤다(df1a5af에서도 TZ=UTC로 21실패 재현). `_journal_today()`(KST 날짜)로 통일 — 운영 호스트(KST)에서는 동작 변화 없음. UTC/KST 전체 verify 각각 통과.
 - P2는 미수정으로 기록. 운영은 22:17 KST에 다른 세션이 일반 모드로 배포한 df1a5af(이 수정 **이전** 코드, PID 172854)이고 실행 원장 파일이 이미 생성됐다. 10월 6일 활성화 프로필은 old/new HEAD가 모두 df1a5af라 이 수정을 먼저 배포하면 HEAD 불일치로 활성화가 중단된다. **배포 시점(10월 6일 관측 뒤 vs 지금 배포 + 프로필 재무장)은 사용자 결정이며, 배포 전까지 `acknowledge` CLI 실행 금지**(운영 코드가 그 이벤트를 읽지 못해 전 주문 거부). 이 PR 자체는 운영·예약·매수 중지를 바꾸지 않는다.
 ## 2026-10-02 — 엔진 즉시 배포·첫 기동 검증(47차 실행)
 
