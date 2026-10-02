@@ -1000,7 +1000,7 @@ class KISWebSocketFeed:
             parts = data.split("|")
             if len(parts) < 4:
                 if owner is not None:
-                    owner._gap("malformed_frame")
+                    owner.frame_gap("malformed_frame", parts=parts)
                 logger.debug(f"[WS] 파이프 구분 데이터 부족: {len(parts)}개 파트")
                 return
 
@@ -1011,14 +1011,14 @@ class KISWebSocketFeed:
                 count = int(parts[2])
             except ValueError:
                 if owner is not None:
-                    owner._gap("invalid_frame_count")
+                    owner.frame_gap("invalid_frame_count", parts=parts)
                 logger.warning(f"[WS] 데이터 건수 파싱 실패 (숫자 아님): parts[2]='{parts[2]}'")
                 return
             raw_data = parts[3]
             if owner is not None:
                 symbol = raw_data.split("^", 1)[0]
                 if encrypted != "0" or count != 1:
-                    owner._gap("unsupported_frame_shape")
+                    owner.frame_gap("unsupported_frame_shape", parts=parts)
                     return
                 if not owner.accepts((tr_id, symbol), generation):
                     return
@@ -1033,7 +1033,7 @@ class KISWebSocketFeed:
 
             elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
                 await self._handle_orderbook_data(raw_data, tr_id=tr_id, received_at=received_at,
-                                                count=count, generation=generation)
+                                                count=count, generation=generation, encrypted=encrypted)
 
         except Exception as e:
             if owner is not None:
@@ -1110,7 +1110,7 @@ class KISWebSocketFeed:
             logger.error(f"체결가 처리 오류: {e}")
 
     async def _handle_orderbook_data(self, data: str, *, tr_id: str = "", received_at: Optional[str] = None,
-                                   count: int = 1, generation=None):
+                                   count: int = 1, generation=None, encrypted=None):
         """실시간 호가 처리"""
         owner = getattr(self, "_quote_subscription_owner", None)
         try:
@@ -1118,7 +1118,8 @@ class KISWebSocketFeed:
 
             if len(fields) < 40:
                 if owner is not None:
-                    owner._gap("short_orderbook_frame")
+                    owner.frame_gap("short_orderbook_frame", tr_id=tr_id, count=count,
+                                    encrypted=encrypted, data=data)
                 return
 
             symbol = fields[0].zfill(6)
@@ -1162,7 +1163,8 @@ class KISWebSocketFeed:
 
         except Exception as e:
             if owner is not None:
-                owner._gap("orderbook_parse_failed")
+                owner.frame_gap("orderbook_parse_failed", tr_id=tr_id, count=count,
+                                    encrypted=encrypted, data=data)
             logger.error(f"호가 처리 오류: {e}")
 
     # ============================================================

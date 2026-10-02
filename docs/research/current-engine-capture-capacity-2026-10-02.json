@@ -1,0 +1,488 @@
+{
+  "schema_version": "toss-capacity-qualification-v1",
+  "suite": "full",
+  "synthetic": true,
+  "cases": [
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "pilot-default-cap",
+        "duration_seconds": 1800,
+        "frame_count": 41347,
+        "max_frames": 10000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "frame_limit",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 10000,
+      "quote_count": 9999,
+      "quote_counts_by_symbol": {
+        "111111": 7132,
+        "222222": 2298,
+        "333333": 569
+      },
+      "first_quote_offset_seconds": 0.043535,
+      "last_quote_offset_seconds": 435.306922,
+      "horizon_quote_by_symbol": {
+        "111111": false,
+        "222222": false,
+        "333333": false
+      },
+      "all_symbols_horizon_quote": false,
+      "stop_reason": "frame_limit",
+      "cleanup_failed": false,
+      "window_coverage_met": false,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 83964927,
+        "wall_seconds": 18.241985930129886,
+        "cpu_seconds": 18.10872549
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 3569087,
+      "artifact_bytes": 3569592,
+      "artifact_sha256": "e80c5fad3b95b88abfb3535459616d199b68102736d7957adde4e82a0105fcb7",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "markout-plus-margin",
+        "duration_seconds": 901,
+        "frame_count": 20697,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 20697,
+      "quote_count": 20696,
+      "quote_counts_by_symbol": {
+        "111111": 14763,
+        "222222": 4756,
+        "333333": 1177
+      },
+      "first_quote_offset_seconds": 0.043535,
+      "last_quote_offset_seconds": 900.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 101965120,
+        "wall_seconds": 38.82550903223455,
+        "cpu_seconds": 37.91859109800001
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 7398670,
+      "artifact_bytes": 7399175,
+      "artifact_sha256": "db2102d3e3bb18072836456920c57506dd1096f49a3e718407e63c2677a3307a",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "ack-to-planned-end",
+        "duration_seconds": 1659.665122,
+        "frame_count": 38124,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 38124,
+      "quote_count": 38123,
+      "quote_counts_by_symbol": {
+        "111111": 27195,
+        "222222": 8760,
+        "333333": 2168
+      },
+      "first_quote_offset_seconds": 0.043534,
+      "last_quote_offset_seconds": 1659.665121,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 160570581,
+        "wall_seconds": 72.14123982563615,
+        "cpu_seconds": 71.68757562100001
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 13637543,
+      "artifact_bytes": 13638048,
+      "artifact_sha256": "4187c96178e8ba6f6fc346da6c44a6a684d73a69a57ebb0903443346a45cf54a",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "whole-window-mean",
+        "duration_seconds": 1800,
+        "frame_count": 41347,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 41347,
+      "quote_count": 41346,
+      "quote_counts_by_symbol": {
+        "111111": 29494,
+        "222222": 9501,
+        "333333": 2351
+      },
+      "first_quote_offset_seconds": 0.043535,
+      "last_quote_offset_seconds": 1799.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 174477772,
+        "wall_seconds": 74.68980701919645,
+        "cpu_seconds": 74.597232373
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 14791258,
+      "artifact_bytes": 14791763,
+      "artifact_sha256": "4424e4faf330b034120e3ccbfa9900225cf5f34d73002ce6190467d934027f3b",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "whole-window-double",
+        "duration_seconds": 1800,
+        "frame_count": 82694,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "frame_limit",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 50000,
+      "quote_count": 49999,
+      "quote_counts_by_symbol": {
+        "111111": 35667,
+        "222222": 11489,
+        "333333": 2843
+      },
+      "first_quote_offset_seconds": 0.021767,
+      "last_quote_offset_seconds": 1088.341213,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "frame_limit",
+      "cleanup_failed": false,
+      "window_coverage_met": false,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 211238613,
+        "wall_seconds": 89.96674301754683,
+        "cpu_seconds": 89.25183091400001
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 17889143,
+      "artifact_bytes": 17889648,
+      "artifact_sha256": "098bcc91a34cadc344935c25306327a5ef570d8fa3c46f20f2bd1969e9ec2fd2",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "whole-window-one-symbol",
+        "duration_seconds": 1800,
+        "frame_count": 41347,
+        "max_frames": 50000,
+        "distribution": "one_symbol",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 41347,
+      "quote_count": 41346,
+      "quote_counts_by_symbol": {
+        "111111": 41346,
+        "222222": 0,
+        "333333": 0
+      },
+      "first_quote_offset_seconds": 0.043535,
+      "last_quote_offset_seconds": 1799.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": false,
+        "333333": false
+      },
+      "all_symbols_horizon_quote": false,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 175199494,
+        "wall_seconds": 78.69061285164207,
+        "cpu_seconds": 77.61250752399997
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 14791258,
+      "artifact_bytes": 14791763,
+      "artifact_sha256": "ca9e3bf4650e0e03995821bf2099717466dce459377e3967f9c382089d9e5051",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "whole-window-burst",
+        "duration_seconds": 1800,
+        "frame_count": 41347,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "burst",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 41347,
+      "quote_count": 41346,
+      "quote_counts_by_symbol": {
+        "111111": 29494,
+        "222222": 9501,
+        "333333": 2351
+      },
+      "first_quote_offset_seconds": 2.4e-05,
+      "last_quote_offset_seconds": 1.0,
+      "horizon_quote_by_symbol": {
+        "111111": false,
+        "222222": false,
+        "333333": false
+      },
+      "all_symbols_horizon_quote": false,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 175622740,
+        "wall_seconds": 73.0195819651708,
+        "cpu_seconds": 72.744513907
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 14791356,
+      "artifact_bytes": 14791861,
+      "artifact_sha256": "d20f9da839b70db9f9f9357c01e4a84b6e2ea9678cd89f5709d59781ce2e0029",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "exact-frame-cap",
+        "duration_seconds": 1800,
+        "frame_count": 50000,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "frame_limit",
+        "artifact_max_bytes": 67108864
+      },
+      "received_frames": 50000,
+      "quote_count": 49999,
+      "quote_counts_by_symbol": {
+        "111111": 35667,
+        "222222": 11489,
+        "333333": 2843
+      },
+      "first_quote_offset_seconds": 0.036001,
+      "last_quote_offset_seconds": 1799.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "frame_limit",
+      "cleanup_failed": false,
+      "window_coverage_met": false,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 212548447,
+        "wall_seconds": 85.9432364013046,
+        "cpu_seconds": 85.79120383399993
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 17889143,
+      "artifact_bytes": 17889648,
+      "artifact_sha256": "0b68d44437f4ee78f07e7c77d0a520b577c9dc097f9a6a855cf278e9ba3f2051",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ]
+    }
+  ],
+  "test_expectations_met": true,
+  "all_cases_window_coverage_met": false,
+  "all_cases_resource_budget_met": true,
+  "production_eligible": false,
+  "profit_comparison_available": false,
+  "source_base_commit": "1f3b10e59c56706b3c2f5270121fe0b4b7455c98",
+  "reference_rate_assumption": "10000 / 435.343147 frames per second; not a future bound",
+  "qualifier_sha256": "0d6d851cecd127293bcba7a0da93dc6314da4e3d9d998013ad70efe2131b18e4",
+  "validation": "full synthetic suite: 1 passed / 533.33s / isolation attempts 0"
+}

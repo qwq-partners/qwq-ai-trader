@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **40·41·42차:** 합성 socket/clock→기존 토스 수신/저장→엄격 재읽기로 자원을 검증한다. KIS 기존 오류5분기→선택 진단→기존 gap 한 번→v2 원장→strict report/가격입력 검증 순서이며 거래 분기는 바꾸지 않는다. 명시 계좌 JSON→시각/금액/완결 선언→입출금/비용 순손익→경계 NAV TWR→동일 기간/자본/흐름 비교는 별도 오프라인 경로다. [통합 코드/프로세스 흐름](../research/current-engine-capture-and-account-pds-2026-10-02.md). 운영 미적용, 경제값은 제공 자료에 조건부다.
+
 > **39차 실제 진입 관측:** 명시 v3 buffer→scan 후보/참조 고정→scheduler의 실제 조건 결과를 동기식 trace에 복사→후보별 한 행을 기존 유한 journal로 전달→strict 오프라인 보고 순서다. trace 반환값은 매매 분기를 제어하지 않고 실패/종료/상한은 불명으로 남긴다. 기존 가격 조립기는 trace를 검증만 하며 baseline 승인으로 사용하지 않는다. [흐름·검증](../research/current-engine-integrated-pds-2026-10-02.md#39차-plan--선정에서-진입까지-실제-평가-근거).
 
 > **38차 실제 관측 흐름:** 고정5468208 첫 scan9개→signal/order_ready0; KIS 상위3개 호가14,040개와 토스10,000프레임 조기 종료를 별도로 평가한다. 오프라인 보고는 예정 종료 뒤까지 기다린 것처럼 시각을 바꾸지 않고 알려진 조기 중단을 incomplete로 출력한다. 최종 엔진 봉인을 조기 토스 snapshot에 소급 삽입하지 않는다. [실제 흐름·검증·후속 설계](../research/current-engine-integrated-pds-2026-10-02.md#38차-plan--첫-실제-관측의-품질과-진입-병목).

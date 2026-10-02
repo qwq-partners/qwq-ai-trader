@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [40·41·42차 관측 용량·오류 진단·계좌 순손익 PDS](research/current-engine-capture-and-account-pds-2026-10-02.md): 합성 용량 검증, 명시v4 KIS 원문 없는 오류 범위, 읽기 전용 순손익/TWR과 코드·처리 흐름. [계좌 입력/실행 절차](operations/account-net-return-input.md). 실제 성과와 운영 적용은 별도다.
+
 > [39차 실제 진입 단계·원인 보고·PDS](research/current-engine-integrated-pds-2026-10-02.md#39차-plan--선정에서-진입까지-실제-평가-근거): 명시 v3에서 전체 후보의 실제 검사·탈락·미도달을 기록한다. [설계](superpowers/specs/2026-10-02-entry-gate-trace-design.md), [계획](superpowers/plans/2026-10-02-entry-gate-trace.md). 로컬 구현이며 실제 관측·계좌 수익 증거는 별도다.
 
 > [38차 실제 관측 품질·진입 병목·다음 PDS](research/current-engine-integrated-pds-2026-10-02.md#38차-plan--첫-실제-관측의-품질과-진입-병목) · [집계 근거](research/current-engine-capture-quality-2026-10-02.json): 후보9개·신호0, 토스 조기 종료와 KIS 완전성 실패를 확인했다. 조기 종료 보고를 수정했고 순수익은 미확정이다. 우선 진입 탈락 사유·관측 기간·오류 범위의 근거를 확보한다.
