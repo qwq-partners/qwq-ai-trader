@@ -378,7 +378,7 @@ python scripts/ops/acknowledge_execution_ledger.py --note "HTS 10/06 15:40 미�
   (trade_id 없는 보유분·DB 미연결/순단·commit 미확정·30일 창 밖 거래). 봇은 사실을 `~/.cache/ai_trader/unattributed_executions.jsonl`
   에 기록하고 **그 종목만** 신규 BUY·분할 SELL 을 프로세스 수명 동안 보류한다(전량 SELL·다른 종목은 정상). 세션 전체 보류나 잔고 동기화 정지는 아니다.
   - 대응: JSONL 행(종목·수량·가격·ODNO·execution_id·trade_id)을 HTS 체결 내역과 대조해 저널/DB 에 수동 반영하거나 20:30 원장 집계에서 제외 사유로 남긴다.
-    종목 보류는 재시작으로 풀린다(수동 반영 뒤에만 재시작). `broker.execution_recovery_status()` 의 `unattributed_symbols` 로 현재 목록을 본다.
+    종목 보류는 재시작으로 풀린다(수동 반영 뒤에만 재시작). `curl -s localhost:8080/api/health | python3 -c "import json,sys;print(json.load(sys.stdin)['execution_recovery'])"` 또는 `/ops-check` 의 `실행원장/장부:` 줄로 현재 상태(status·unattributed_symbols)를 본다(48차 P2, 운영 배포 뒤).
 - `⚠️ 잔고 동기화 정지: {사유}` : 잔고 동기화(장중 30초·장외 300초 주기)가 15분 이상 보류됐거나(취소 주문 체결 미확인·적용 전 예외로 남은 체결 등) 체결 적용/후처리가 실패로 남았다.
   그동안 수동 매매·외부 체결이 반영되지 않고 매수 건강성 검사가 차단된다(`[리스크] 포트폴리오 동기화 장애`).
   - 대응: `journalctl -u qwq-ai-trader | grep '\[동기화\]'` 로 보류 사유를 읽는다. 취소 주문 체결 미확인이면 HTS 미체결·체결을 확인하고,

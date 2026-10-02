@@ -1,5 +1,15 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-03 — 48차 P2 정리 (로컬 구현·main 머지, 운영 미배포 — 10월6일 관측 뒤 배포)
+
+- 매수가능조회 실패: 브로커가 `{}`로 잔고 전체를 버리던 것을 예수금 폴백 + `available_cash_verified=False`로 통일하고, 스케줄러는 현금만 보류한 채 포지션 대사(유령·누락·평단)를 계속한다. 미검증 동기화는 건강 복구로 세지 않는다. 33차 특성화 테스트 3건("잘못된 현금은 스냅샷 전체 보존")을 새 계약("현금만 보존, 포지션 대사")으로 교체. 독립 리뷰 지적 반영: 미검증 주기의 heartbeat 성공 기록 억제(정체 경보 유지), DB 장애 중 `database_lookup_failed`도 재시도 예산 안에서 계속, `predecessor_uncommitted` 거절은 앞 batch 복구 뒤 재큐, 경보 문구 "commit 여부 불명"으로 정정.
+- 장부 영수증: commit 불명(`unknown`)·DB 일시 장애(`unavailable`)·큐 거부는 귀속 미확정 기록 전에 `resolve_execution_receipt`(DB 행 확정 조회 → 행 없고 batch 보관 시 1회 재큐, 유일 인덱스·서명으로 멱등)를 최대 2주기 시도한다. 확정 거절(서명 충돌·payload 손상·저널 기록 실패)은 재시도하지 않는다.
+- 실행 원장 I/O를 공용 `to_thread` 풀 대신 전용 단일 스레드 executor로 돌려 손절 POST 전 기록이 다른 스레드 작업 뒤에서 기다리지 않게 했다.
+- 저널 지표·시장 맥락의 NaN/Inf를 None으로 정리해 `allow_nan=False` 저장이 같은 날짜 파일 전체를 막지 않게 했다.
+- `/api/health`에 `execution_recovery`(status·reason·journal_pending_count·unattributed_symbols·prior_unclean)를 노출하고 ops_check가 한 줄로 출력한다.
+- 죽은 코드 KR `_reconcile_pnl`(호출처 없음)과 그 특성화 테스트 제거, 미사용 변수 2개 제거.
+- 미수정으로 남긴 것: 취소 종료 판정의 KIS 응답 형태 의존(실계좌 8001R 원본 행 1건 확보 후), "미해결 주문" 상태 네 곳 중복(설계 정리 과제), 기록마다 전체 projection 재처리 CPU(관측 뒤). 운영은 10월6일 관측까지 `2645820` 고정이므로 이 변경은 머지만 하고 배포하지 않는다.
+
 ## 2026-10-03 — 48차 운영 배포·10월6일 관측 입력/토스 grant 재등록
 
 - 사용자 승인으로 01:13~01:15 KST `local_deploy.sh 2645820`(PR #141 머지) 배포·재시작. 운영 verify 4086 passed/2 xfailed, rollback 없음, PID 172854→249914, NRestarts 0, 새 PID 오류 0, 매수 중지·override 보존.

@@ -293,8 +293,10 @@ class TradeStorage:
                     except asyncio.CancelledError:
                         self._execution_receipts[key] = ExecutionWriteReceipt("unknown", item.identity.execution_id, "write_canceled")
                         raise
-                    except (ValueError, asyncpg.IntegrityConstraintViolationError):
-                        self._execution_receipts[key] = ExecutionWriteReceipt("failed", item.identity.execution_id, "transaction_rejected")
+                    except (ValueError, asyncpg.IntegrityConstraintViolationError) as exc:
+                        # 앞선 batch 미확정으로 거절된 것은 앞 batch 복구 뒤 재시도할 수 있게 사유를 분리한다 (48차 P2)
+                        reason = "predecessor_uncommitted" if str(exc) == "predecessor_uncommitted" else "transaction_rejected"
+                        self._execution_receipts[key] = ExecutionWriteReceipt("failed", item.identity.execution_id, reason)
                     except Exception:
                         self._execution_receipts[key] = ExecutionWriteReceipt("unknown", item.identity.execution_id, "commit_unconfirmed")
                     else:
@@ -566,6 +568,32 @@ class TradeStorage:
     def get_execution_receipt(self, account_scope, execution_id):
         return self._execution_receipts.get(execution_key(account_scope, execution_id),
             ExecutionWriteReceipt("unknown", execution_id, "not_observed"))
+
+    async def resolve_execution_receipt(self, account_scope, execution_id):
+        """불명/일시 장애 영수증을 DB 행으로 확정한다. 행이 없고 보관 batch 가 있으면 한 번 다시 큐에 넣는다.
+
+        확정 거절(서명 충돌·payload 손상·저널 기록 실패)은 다시 시도하지 않는다. 재삽입은 유일 인덱스·서명
+        검사로 멱등이라 중복 행을 만들지 않는다 (48차 P2).
+        """
+        key = execution_key(account_scope, execution_id)
+        receipt = self._execution_receipts.get(key)
+        if receipt is None or receipt.status in ("pending", "committed"):
+            return receipt
+        retryable = (receipt.status in ("unknown", "unavailable")
+                     or receipt.reason in ("queue_rejected", "predecessor_uncommitted"))
+        if not retryable:
+            return receipt
+        looked = await self.lookup_execution_receipt(account_scope, execution_id)
+        batch = self._execution_batches.get(key)
+        if (looked.status == "unknown" and looked.reason == "not_committed" and batch is not None
+                and not self._closing and self._db_available and self.pool is not None and self._write_queue is not None):
+            self._execution_receipts[key] = ExecutionWriteReceipt("pending", execution_id, "requeued")
+            try:
+                self._write_queue.put_nowait(batch)
+            except Exception:
+                self._execution_receipts[key] = ExecutionWriteReceipt("failed", execution_id, "queue_rejected")
+            return self._execution_receipts[key]
+        return looked
 
     async def lookup_execution_receipt(self, account_scope, execution_id):
         key = execution_key(account_scope, execution_id)
@@ -1220,102 +1248,6 @@ class TradeStorage:
             return int(qty), value
         except (ValueError, ArithmeticError):
             return None
-
-    async def _reconcile_pnl(self, target_date: date, kis_sells: Dict[str, list]):
-        """
-        당일 청산 거래의 PnL을 KIS 체결가 기준으로 보정.
-
-        엔진 PnL은 수수료/세금을 제외하거나 부정확할 수 있으므로,
-        KIS 실제 체결가와 DB 진입가를 기준으로 재계산합니다.
-        """
-        if not self._db_available or not self.pool:
-            return
-
-        try:
-            # DB에서 당일 청산 거래 조회
-            rows = await self.pool.fetch("""
-                SELECT id, symbol, entry_price, exit_price, entry_quantity,
-                       exit_quantity, pnl, pnl_pct
-                FROM trades
-                WHERE exit_time::date = $1 AND exit_time IS NOT NULL
-                  AND execution_scope IS NULL AND execution_head IS NULL
-            """, target_date)
-
-            if not rows:
-                return
-
-            corrected = 0
-            for row in rows:
-                cached = self._journal.get_trade(row['id'])
-                if cached and cached.execution_records:
-                    continue
-                sym = row['symbol']
-                entry_price = float(row['entry_price'])
-                exit_qty = row['exit_quantity'] or 0
-
-                if entry_price <= 0 or exit_qty <= 0:
-                    continue
-
-                # KIS 매도 체결가 사용 (있으면), 없으면 DB exit_price 그대로
-                kis_exit_price = float(row['exit_price'])
-                if sym in kis_sells:
-                    # KIS의 가중평균 매도가 계산
-                    total_qty = 0
-                    total_amt = 0
-                    for f in kis_sells[sym]:
-                        q = int(f.get("tot_ccld_qty", 0))
-                        p = float(f.get("avg_prvs", 0))
-                        total_qty += q
-                        total_amt += q * p
-                    if total_qty > 0:
-                        kis_exit_price = total_amt / total_qty
-
-                # 수수료+세금 포함 정확한 PnL 계산
-                correct_pnl, correct_pct = self.calc_pnl(entry_price, kis_exit_price, exit_qty)
-
-                # 기존 값과 차이가 있으면 보정 (1원 이상 차이)
-                old_pnl = float(row['pnl'] or 0)
-                if abs(correct_pnl - old_pnl) < 1:
-                    continue
-
-                # 분할매도(SELL 이벤트 2건 이상) 시 trades 테이블 PnL 보정 건너뜀
-                # — 개별 매도 이벤트의 PnL 합이 가중평균보다 정확함
-                sell_count = await self.pool.fetchval("""
-                    SELECT COUNT(*) FROM trade_events
-                    WHERE trade_id = $1 AND event_type = 'SELL'
-                """, row['id'])
-                if sell_count is not None and sell_count > 1:
-                    logger.debug(f"[PnL보정] {sym} 분할매도 {sell_count}건 — trades 테이블 보정 건너뜀")
-                    continue
-
-                # trades 테이블만 집계 보정 (trade_events 개별 price는 보정하지 않음)
-                # 2026-04-22 수정: 기존에는 trade_events의 price도 가중평균으로 overwrite했는데,
-                # 그러면 개별 매도 체결의 실제 가격이 소실됨. 대시보드가 KIS 앱과 일치하지 않게 됨.
-                # 개별 이벤트는 건드리지 않고, 집계 행만 KIS 가중평균/총PnL로 정리한다.
-                await self.pool.execute("""
-                    UPDATE trades SET pnl = $1, pnl_pct = $2, exit_price = $3,
-                                      updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $4 AND execution_scope IS NULL AND execution_head IS NULL
-                """, correct_pnl, correct_pct, kis_exit_price, row['id'])
-
-                # 캐시도 동기화
-                cached = self._journal.get_trade(row['id'])
-                if cached:
-                    cached.pnl = Decimal(str(correct_pnl))
-                    cached.pnl_pct = Decimal(str(correct_pct))
-
-                corrected += 1
-                logger.info(
-                    f"[KIS보정] {sym} PnL 보정: {old_pnl:+,.0f} → {correct_pnl:+,.0f}원 "
-                    f"(entry={entry_price:,.0f} exit={kis_exit_price:,.0f} qty={exit_qty})"
-                )
-
-            if corrected > 0:
-                logger.info(f"[KIS보정] 당일 PnL 보정 완료: {corrected}건")
-
-        except Exception as e:
-            logger.error(f"[KIS보정] PnL 보정 실패 (무시): {e}")
-
 
     async def sync_from_kis_us(self, broker, engine=None):
         """

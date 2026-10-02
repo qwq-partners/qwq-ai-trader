@@ -163,7 +163,9 @@ def test_missing_or_invalid_orderable_cash_is_not_verified_zero(broker, value):
         return {"rt_cd": "0", "_tr_cont": "D", "output1": [],
                 "output2": [{"dnca_tot_amt": "100000"}]}
     broker._api_get = get
-    assert asyncio.run(broker.get_account_balance()) == {}
+    balance = asyncio.run(broker.get_account_balance())
+    # 48차 P2: {} 로 잔고 전체를 버리지 않고 예수금 폴백 + 미검증 표기 — 스케줄러는 현금만 보류하고 포지션은 대사한다
+    assert balance["available_cash"] == 100000.0 and balance["available_cash_verified"] is False
 
 
 @pytest.mark.parametrize("value", ["0", 0, "100000"])

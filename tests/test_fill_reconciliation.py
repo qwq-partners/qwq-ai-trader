@@ -132,11 +132,12 @@ def test_popped_fill_still_prevents_snapshot(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("cash", [0, None, "NaN", "Infinity", -1])
-def test_cash_zero_is_valid_and_invalid_cash_preserves_snapshot(monkeypatch, tmp_path, cash):
+def test_cash_zero_is_valid_and_invalid_cash_preserves_cash_but_reconciles_positions(monkeypatch, tmp_path, cash):
+    """유효 현금 0 은 0 으로 반영. 누락/비유한/음수는 현금만 보존하고(0 으로 오인 금지) 포지션은 대사한다 (48차 P2)."""
     sched, bot = case(monkeypatch, tmp_path, reported=7, cash=cash)
     asyncio.run(sched._sync_portfolio())
     assert bot.engine.portfolio.cash == (D(0) if cash == 0 else D("100000"))
-    assert bot.engine.portfolio.positions[SYM].quantity == (7 if cash == 0 else 10)
+    assert bot.engine.portfolio.positions[SYM].quantity == 7
 
 
 def test_pending_order_deferral_preserves_exit_state_and_stop(monkeypatch, tmp_path):
@@ -345,8 +346,8 @@ def test_actual_cash_adapter_does_not_confuse_missing_with_zero(monkeypatch, tmp
     broker._api_get = get
     bot.broker.get_account_balance = broker.get_account_balance
     asyncio.run(sched._sync_portfolio())
-    assert bot.engine.portfolio.cash == (D(0) if value == "0" else D("100000"))
-    assert bot.engine.portfolio.positions[SYM].quantity == (7 if value == "0" else 10)
+    assert bot.engine.portfolio.cash == (D(0) if value == "0" else D("100000"))  # 누락은 0 이 아니라 보존
+    assert bot.engine.portfolio.positions[SYM].quantity == 7                      # 포지션 대사는 계속 (48차 P2)
 
 
 @pytest.mark.parametrize("failure", [ValueError, asyncio.CancelledError])

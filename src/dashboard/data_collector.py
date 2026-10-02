@@ -1576,6 +1576,14 @@ class DashboardDataCollector:
                 "reserved_cash": float(getattr(rm, '_reserved_cash', 0)),
             }
 
+        _recovery = None
+        _status_fn = getattr(bot.broker, 'execution_recovery_status', None) if bot.broker else None
+        if callable(_status_fn):
+            try:
+                _full = _status_fn()
+                _recovery = {k: _full.get(k) for k in ('status', 'reason', 'journal_pending_count', 'unattributed_symbols', 'prior_unclean')}
+            except Exception as _exc:  # 상태 조회 실패가 health 전체를 막지 않게
+                _recovery = {'status': 'error', 'reason': type(_exc).__name__}
         return _serialize({
             "cache": cache_stats,
             "broker": broker_stats,
@@ -1585,6 +1593,8 @@ class DashboardDataCollector:
             "stale_loops": _hb.check(),     # 운영 규칙 적용 정체 루프 (2026-09-13)
             "loop_status": _hb.loop_status(),  # 성공/실패/유휴 구분 상세 (2026-09-14 리뷰 T4)
             "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
+            # 실행 원장/장부 귀속 상태 — status·reason·unattributed_symbols 만 운영자 노출 (48차 P2)
+            "execution_recovery": _recovery,
             "timestamp": datetime.now(),
         })
 

@@ -33,6 +33,7 @@ echo "수확 커서 $(tr -d '\n ' < "$C/harvest_shadow/cursor.json" 2>/dev/null)
 echo "--- 포트폴리오 ---"
 curl -s -m 5 http://localhost:8080/api/portfolio | python3 -c "import json,sys; d=json.load(sys.stdin); print({k:d.get(k) for k in ('cash','cash_ratio','total_equity','unrealized_pnl','position_count','daily_trades')})" 2>/dev/null || echo "대시보드 API 응답 없음"
 echo "pending: $(curl -s -m 5 http://localhost:8080/api/orders/pending | head -c 200)"
+echo "실행원장/장부: $(curl -s -m 5 http://localhost:8080/api/health | python3 -c "import json,sys; d=json.load(sys.stdin).get('execution_recovery') or {}; print({k:d.get(k) for k in ('status','reason','journal_pending_count','unattributed_symbols')})" 2>/dev/null || echo "조회 실패")"
 
 echo "--- 루프 하트비트 (성공/실패/유휴 구분, 2026-09-14 리뷰 T4) ---"
 curl -s -m 5 http://localhost:8080/api/health | python3 -c "
