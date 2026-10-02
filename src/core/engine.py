@@ -562,7 +562,8 @@ class UnifiedEngine:
             if owners is None:
                 owners = self._execution_owners = {}
             signature = (fill.order_id, fill.symbol, fill.side, fill.quantity,
-                         fill.price, fill.commission)
+                         fill.price, fill.commission, fill.account_scope,
+                         fill.order_date, fill.kis_order_no)
             owner = owners.get(execution_id)
             if owner is None:
                 owners[execution_id] = (event.id, signature)
@@ -2765,7 +2766,8 @@ class RiskManager:
                 commission=getattr(event, 'commission', Decimal("0")),
                 strategy=getattr(event, 'strategy', None),
             )
-            event.position_before = copy(self.engine.portfolio.positions.get(fill.symbol))
+            event.position_before_owner = self.engine.portfolio.positions.get(fill.symbol)
+            event.position_before = copy(event.position_before_owner)
             applied = self.engine.update_position(fill) is True
             event.position_owner = self.engine.portfolio.positions.get(fill.symbol)
             event.position_after = copy(event.position_owner)

@@ -17,6 +17,17 @@ from test_kis_cancel_fill_recovery import broker, accepted, response, row
 from test_order_post_unknown import ub, _RecSession, _FakeResp, OK_BODY
 
 
+def confirmed_journal(bot):
+    """취소 테스트에서도 명시 trade ID와 실제 저장 완료 계약을 충족한다."""
+    from test_journal_commit_handoff import Journal
+    bot.trade_journal = Journal()
+    bot.trade_journal.status = "committed"
+    pos = bot.engine.portfolio.positions[SYM]
+    pos.trade_id = "synthetic-original-position"
+    bot.trade_journal._trades[pos.trade_id] = SimpleNamespace(
+        id=pos.trade_id, market_context={})
+
+
 def pending(risk, side, oid="replacement", qty=5):
     risk._pending_order_ids = {SYM: oid}
     risk._pending_orders.add(SYM)
@@ -162,6 +173,7 @@ def test_startup_result_never_suppresses_end_of_day_check(outcome):
 @pytest.mark.parametrize("applied", [True, False])
 def test_actual_broker_cancel_through_engine_and_exit_receipt(monkeypatch, tmp_path, broker, applied):
     sched, bot = case(monkeypatch, tmp_path, holdings=100)
+    confirmed_journal(bot)
     bot.broker = bot.engine.broker = broker
     async def submit_cancel():
         order = await accepted(broker, OrderSide.SELL)
@@ -189,6 +201,7 @@ def test_actual_broker_cancel_through_engine_and_exit_receipt(monkeypatch, tmp_p
 def test_late_fill_after_stale_cleanup_keeps_original_stage_and_remainder(
         monkeypatch, tmp_path, broker, quantity, new_generation):
     sched, bot = case(monkeypatch, tmp_path, holdings=100)
+    confirmed_journal(bot)
     bot.broker = bot.engine.broker = broker
     async def submit_cancel():
         order = await accepted(broker, OrderSide.SELL)

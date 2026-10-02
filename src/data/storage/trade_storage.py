@@ -18,6 +18,8 @@ from loguru import logger
 
 from src.core.evolution.trade_journal import TradeJournal, TradeRecord
 from src.utils.fee_calculator import FeeConfig
+from src.data.storage.execution_journal import (ExecutionIdentity, ExecutionWriteReceipt,
+    ExecutionBatch, execution_key, validate_batch, EXECUTION_SCHEMA_SQL)
 
 
 # ── SQL 스키마 ──────────────────────────────────────────────
@@ -162,6 +164,9 @@ class TradeStorage:
         # DB 비동기 쓰기 큐
         self._write_queue: Optional[asyncio.Queue] = None
         self._writer_task: Optional[asyncio.Task] = None
+        self._execution_receipts = {}
+        self._execution_batches = {}
+        self._closing = False
 
     # ── 라이프사이클 ──────────────────────────────────────
 
@@ -189,6 +194,7 @@ class TradeStorage:
 
     async def disconnect(self):
         """큐 drain + DB 연결 종료"""
+        self._closing = True
         # writer 중지 — 큐 크기 기반 동적 timeout (대량 청산 시 데이터 손실 방지)
         if self._writer_task and not self._writer_task.done():
             if self._write_queue:
@@ -206,6 +212,10 @@ class TradeStorage:
                         f"— 미처리 큐 {remaining}건 (데이터 손실 가능)"
                     )
 
+        for key, receipt in list(self._execution_receipts.items()):
+            if receipt.status == "pending":
+                self._execution_receipts[key] = ExecutionWriteReceipt("unknown", receipt.execution_id, "shutdown_unconfirmed")
+        self._db_available = False
         if self.pool:
             await self.pool.close()
             self.pool = None
@@ -214,19 +224,21 @@ class TradeStorage:
     async def _ensure_tables(self):
         """테이블 + 인덱스 생성 + 마이그레이션"""
         async with self.pool.acquire() as conn:
-            await conn.execute(SCHEMA_SQL)
-            # 마이그레이션: market 컬럼 추가 (기존 DB 호환)
-            await conn.execute(
-                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
-            )
-            await conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market)"
-            )
-            # 마이그레이션: trade_events.market (2026-08-05 — us_scheduler 직접 INSERT
-            # 2곳이 이 컬럼을 참조하는데 스키마에 없어 US SELL 이벤트 기록이 무음 실패)
-            await conn.execute(
-                "ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
-            )
+            async with conn.transaction():
+                await conn.execute(SCHEMA_SQL)
+                # 마이그레이션: market 컬럼 추가 (기존 DB 호환)
+                await conn.execute(
+                    "ALTER TABLE trades ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
+                )
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_trades_market ON trades(market)"
+                )
+                # 마이그레이션: trade_events.market (2026-08-05 — us_scheduler 직접 INSERT
+                # 2곳이 이 컬럼을 참조하는데 스키마에 없어 US SELL 이벤트 기록이 무음 실패)
+                await conn.execute(
+                    "ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS market VARCHAR(5) NOT NULL DEFAULT 'KR'"
+                )
+                await conn.execute(EXECUTION_SCHEMA_SQL)
         logger.info("[TradeStorage] 테이블 확인/생성 완료")
 
     @staticmethod
@@ -267,31 +279,44 @@ class TradeStorage:
     # ── DB 비동기 Writer ──────────────────────────────────
 
     async def _db_writer(self):
-        """큐에서 (sql, params) 꺼내 순차 실행"""
+        """한 batch의 재시도를 끝내기 전에 뒤 항목으로 진행하지 않는다."""
         while True:
             item = await self._write_queue.get()
-            if item is None:  # shutdown sentinel
+            if item is None:
                 self._write_queue.task_done()
-                break
-
-            sql, params, retries_left = item
+                return
             try:
-                async with self.pool.acquire() as conn:
-                    await conn.execute(sql, *params)
-            except Exception as e:
-                sql_preview = sql.strip()[:50]
-                if retries_left > 0:
-                    await asyncio.sleep(1 * (4 - retries_left))  # 백오프: 1초, 2초, 3초
-                    await self._write_queue.put((sql, params, retries_left - 1))
-                    logger.warning(f"[TradeStorage] DB 쓰기 재시도 ({retries_left}): {sql_preview}... → {e}")
+                if isinstance(item, ExecutionBatch):
+                    key = execution_key(item.identity.account_scope, item.identity.execution_id)
+                    try:
+                        await self._commit_execution_batch(item)
+                    except asyncio.CancelledError:
+                        self._execution_receipts[key] = ExecutionWriteReceipt("unknown", item.identity.execution_id, "write_canceled")
+                        raise
+                    except (ValueError, asyncpg.IntegrityConstraintViolationError):
+                        self._execution_receipts[key] = ExecutionWriteReceipt("failed", item.identity.execution_id, "transaction_rejected")
+                    except Exception:
+                        self._execution_receipts[key] = ExecutionWriteReceipt("unknown", item.identity.execution_id, "commit_unconfirmed")
+                    else:
+                        self._execution_receipts[key] = ExecutionWriteReceipt("committed", item.identity.execution_id, "transaction_committed")
                 else:
-                    logger.error(f"[TradeStorage] DB 쓰기 최종 실패: {sql_preview}... → {e}")
+                    sql, params, retries_left = item
+                    for attempt in range(retries_left + 1):
+                        try:
+                            async with self.pool.acquire() as conn:
+                                await conn.execute(sql, *params)
+                            break
+                        except Exception:
+                            if attempt == retries_left:
+                                logger.error("[TradeStorage] 기존 DB 쓰기 최종 실패")
+                            else:
+                                await asyncio.sleep(attempt + 1)
             finally:
                 self._write_queue.task_done()
 
     def _enqueue(self, sql: str, params: tuple):
         """DB 쓰기 큐에 추가 (동기 호출 가능)"""
-        if not self._db_available or not self._write_queue:
+        if self._closing or not self._db_available or self._write_queue is None:
             return
         try:
             self._write_queue.put_nowait((sql, params, 3))
@@ -317,8 +342,12 @@ class TradeStorage:
         entry_tags: list = None,
         entry_reasons: list = None,
         score_breakdown: Dict[str, float] = None,
+        execution_identity: ExecutionIdentity = None,
+        execution_time: datetime = None,
     ) -> TradeRecord:
         """진입 기록: 캐시 + JSON + DB큐"""
+        if execution_identity is not None:
+            return self._record_execution("BUY", locals())
         # 1) 캐시 + JSON (동기)
         _journal_kwargs = dict(
             trade_id=trade_id,
@@ -391,8 +420,12 @@ class TradeStorage:
         name: str = None,
         entry_price: float = None,
         entry_strategy: str = None,
+        execution_identity: ExecutionIdentity = None,
+        execution_time: datetime = None,
     ) -> Optional[TradeRecord]:
         """청산 기록: 캐시 + JSON + DB큐"""
+        if execution_identity is not None:
+            return self._record_execution("SELL", locals())
         # exit_type 세분화: reason에 구체적 정보가 있으면 재분류
         exit_type = self._refine_exit_type(exit_type, exit_reason)
 
@@ -492,6 +525,123 @@ class TradeStorage:
             )
 
         return trade
+
+    def _record_execution(self, side, values):
+        identity = values["execution_identity"]
+        if not isinstance(identity, ExecutionIdentity):
+            raise ValueError("invalid_execution_identity")
+        key = execution_key(identity.account_scope, identity.execution_id)
+        args = {name: value for name, value in values.items() if name != "self"}
+        try:
+            if side == "SELL":
+                args["exit_type"] = self._refine_exit_type(args["exit_type"], args["exit_reason"])
+                trade = self._journal.record_exit(**args)
+            else:
+                trade = self._journal.record_entry(**args)
+        except Exception:
+            self._execution_receipts[key] = ExecutionWriteReceipt("failed", identity.execution_id, "journal_record_failed")
+            raise
+        record = trade.execution_records[key]
+        batch = ExecutionBatch(identity, record["signature"],
+            json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False), record["predecessor"])
+        try:
+            validate_batch(batch)
+        except Exception:
+            self._execution_receipts[key] = ExecutionWriteReceipt("failed", identity.execution_id, "execution_payload_corrupt")
+            raise
+        existing = self._execution_receipts.get(key)
+        self._execution_batches[key] = batch
+        if existing and existing.status in {"pending", "committed"}:
+            return trade
+        if self._closing or not self._db_available or self.pool is None or self._write_queue is None:
+            self._execution_receipts[key] = ExecutionWriteReceipt("unavailable", identity.execution_id, "database_unavailable")
+            return trade
+        self._execution_receipts[key] = ExecutionWriteReceipt("pending", identity.execution_id, "queued")
+        try:
+            self._write_queue.put_nowait(batch)
+        except Exception:
+            self._execution_receipts[key] = ExecutionWriteReceipt("failed", identity.execution_id, "queue_rejected")
+        return trade
+
+    def get_execution_receipt(self, account_scope, execution_id):
+        return self._execution_receipts.get(execution_key(account_scope, execution_id),
+            ExecutionWriteReceipt("unknown", execution_id, "not_observed"))
+
+    async def lookup_execution_receipt(self, account_scope, execution_id):
+        key = execution_key(account_scope, execution_id)
+        if not self._db_available or self.pool is None:
+            return ExecutionWriteReceipt("unavailable", execution_id, "database_unavailable")
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT execution_signature, execution_payload_digest FROM trade_events WHERE account_scope=$1 AND execution_id=$2", account_scope, execution_id)
+            expected = self._execution_batches.get(key)
+            if row is None:
+                result = ExecutionWriteReceipt("unknown", execution_id, "not_committed")
+            elif expected is not None and (row["execution_signature"] != expected.signature
+                    or row["execution_payload_digest"] != validate_batch(expected)["payload_digest"]):
+                result = ExecutionWriteReceipt("failed", execution_id, "execution_signature_conflict")
+            else:
+                result = ExecutionWriteReceipt("committed", execution_id, "database_row_confirmed")
+        except Exception:
+            result = ExecutionWriteReceipt("unknown", execution_id, "database_lookup_failed")
+        self._execution_receipts[key] = result
+        return result
+
+    async def _commit_execution_batch(self, batch):
+        data = validate_batch(batch)
+        summary, event = data["summary"], data["event"]
+        identity = batch.identity
+        key = execution_key(identity.account_scope, identity.execution_id)
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL synchronous_commit = on")
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", summary["id"])
+                known = await conn.fetchrow("SELECT execution_signature, execution_payload_digest FROM trade_events WHERE account_scope=$1 AND execution_id=$2", identity.account_scope, identity.execution_id)
+                if known is not None:
+                    if known["execution_signature"] != batch.signature or known["execution_payload_digest"] != data["payload_digest"]:
+                        raise ValueError("execution_signature_conflict")
+                    return
+                parent = await conn.fetchrow("SELECT symbol, execution_scope, execution_head FROM trades WHERE id=$1 FOR UPDATE", summary["id"])
+                if parent and (parent["symbol"] != summary["symbol"] or parent["execution_scope"] not in (None, identity.account_scope)):
+                    raise ValueError("execution_trade_conflict")
+                if (parent["execution_head"] if parent else None) != batch.predecessor:
+                    raise ValueError("predecessor_uncommitted")
+                columns = ["id", "symbol", "name", "entry_time", "entry_price", "entry_quantity",
+                    "entry_reason", "entry_strategy", "entry_signal_score", "exit_time", "exit_price",
+                    "exit_quantity", "exit_reason", "exit_type", "pnl", "pnl_pct", "holding_minutes",
+                    "market_context", "indicators_at_entry", "indicators_at_exit", "theme_info", "created_at", "updated_at"]
+                numeric = {"entry_price", "entry_signal_score", "exit_price", "pnl", "pnl_pct"}
+                timestamps = {"entry_time", "exit_time", "created_at", "updated_at"}
+                json_fields = {"market_context", "indicators_at_entry", "indicators_at_exit", "theme_info"}
+                parameters = []
+                for name in columns:
+                    value = summary[name]
+                    if name in numeric:
+                        value = Decimal(str(value))
+                    elif name in timestamps:
+                        value = datetime.fromisoformat(value) if value is not None else None
+                    elif name in json_fields:
+                        value = json.dumps(value, ensure_ascii=False, allow_nan=False)
+                    parameters.append(value)
+                columns += ["market", "execution_scope", "execution_head"]
+                parameters += ["KR", identity.account_scope, key]
+                placeholders = ",".join(f"${i}" for i in range(1, len(columns)+1))
+                updates = ",".join(f"{column}=EXCLUDED.{column}" for column in columns if column != "id")
+                await conn.execute(f"INSERT INTO trades ({','.join(columns)}) VALUES ({placeholders}) ON CONFLICT(id) DO UPDATE SET {updates}", *parameters)
+                await conn.execute("""INSERT INTO trade_events
+                    (trade_id,symbol,name,market,event_type,event_time,price,quantity,
+                     exit_type,exit_reason,pnl,pnl_pct,strategy,status,kis_order_no,
+                     account_scope,order_date,execution_id,execution_signature,execution_payload_digest,signal_score)
+                    VALUES ($1,$2,$3,'KR',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)""",
+                    summary["id"], event["symbol"], event["name"], event["side"],
+                    datetime.fromisoformat(event["event_time"]), Decimal(event["price"]), event["quantity"],
+                    event["exit_type"] or None, event["reason"],
+                    Decimal(str(event["pnl"])) if event["pnl"] is not None else None,
+                    Decimal(str(event["pnl_pct"])) if event["pnl_pct"] is not None else None,
+                    event["strategy"], event["status"], identity.kis_order_no,
+                    identity.account_scope, identity.order_date, identity.execution_id, batch.signature, data["payload_digest"], Decimal(str(event["signal_score"])))
+                if event["side"] == "SELL" and summary["exit_quantity"] >= summary["entry_quantity"]:
+                    await conn.execute("UPDATE trade_events SET status=$1 WHERE trade_id=$2 AND event_type='BUY'", event["status"], summary["id"])
 
     def get_trade(self, trade_id: str) -> Optional[TradeRecord]:
         return self._journal.get_trade(trade_id)
@@ -1085,6 +1235,7 @@ class TradeStorage:
                        exit_quantity, pnl, pnl_pct
                 FROM trades
                 WHERE exit_time::date = $1 AND exit_time IS NOT NULL
+                  AND execution_scope IS NULL AND execution_head IS NULL
             """, target_date)
 
             if not rows:
@@ -1092,6 +1243,9 @@ class TradeStorage:
 
             corrected = 0
             for row in rows:
+                cached = self._journal.get_trade(row['id'])
+                if cached and cached.execution_records:
+                    continue
                 sym = row['symbol']
                 entry_price = float(row['entry_price'])
                 exit_qty = row['exit_quantity'] or 0
@@ -1138,7 +1292,7 @@ class TradeStorage:
                 await self.pool.execute("""
                     UPDATE trades SET pnl = $1, pnl_pct = $2, exit_price = $3,
                                       updated_at = CURRENT_TIMESTAMP
-                    WHERE id = $4
+                    WHERE id = $4 AND execution_scope IS NULL AND execution_head IS NULL
                 """, correct_pnl, correct_pct, kis_exit_price, row['id'])
 
                 # 캐시도 동기화

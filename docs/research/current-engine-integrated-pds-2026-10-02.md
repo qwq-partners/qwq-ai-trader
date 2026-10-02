@@ -1,6 +1,53 @@
-# 순수익 개선 우선순위와 코드·프로세스 통합 검토 — 32·33·34·35·36차
+# 순수익 개선 우선순위와 코드·프로세스 통합 검토 — 32·33·34·35·36·37차
 
 목적은 **좋은 종목을 유리한 시점에 진입해 거래비용·운영비 차감 후 계좌 이익을 남기는 것**이다. 다중 원천과 실시간 판단은 검증할 강점이다. 일봉 대조만으로 그 가치를 부정하지 않으며, 반대로 실시간·다중 원천이라는 이유만으로 비용 후 우위를 가정하지 않는다.
+
+## 37차 Plan — 체결 identity와 장부 commit
+
+기준 main `0552f7648c64de63d91fe93e508ccdc3bd42ce71`(PR #130 병합).36차의 첫 개발 과제였던 **미래 체결 기록의 누락·중복·거짓 완료 방지**를 구현한다. [설계](../superpowers/specs/2026-10-02-journal-durability-design.md)·[구현 계획](../superpowers/plans/2026-10-02-journal-durability.md)을 따른다. 비용 후 수익의 분해에 필요한 기록 기반이며 전략 수익성이 확인됐다는 뜻은 아니다.
+
+### 37차 Do — 코드·프로세스 흐름
+
+- 정상/취소 관측의 검증된 scope·주문 날짜·ODNO·실행 ID가 Fill→저널에 전달된다. 일자/주문번호를 현재 날짜나 종목으로 추정하지 않는다. Fill 시각은 로컬 체결 **관측** 시각이며 거래소 체결 시각을 새로 확보한 것이 아니다.
+- 식별된 모든 BUY 증분을 기록한다. 같은 execution의 호출 사실 signature는 중복/충돌을 구분하고 별도 batch digest는 요약·이벤트·이전 실행 연결까지 검사한다. JSON 저장은 임시 파일 fsync→교체→디렉터리 fsync를 거치며 후속 메타데이터 저장도 같은 경로를 사용한다.
+- 한 실행의 trades 요약·trade_events·필요 상태 갱신은 PostgreSQL transaction 하나다. 계좌 범위+실행 ID unique, 거래별 잠금과 predecessor를 사용해 이전 실패를 건너뛴 누적 요약, 중복 재시도의 과거 요약 회귀, 일부 SQL만의 성공을 막는다. 식별 SELL은 매도 직전의 실제 평단을 필수로 받는다.
+- 함수 반환/JSON/큐 수락과 DB commit을 구분한다. `pending`은 비차단 대기, DB 부재는 `unavailable`, 명확한 충돌은 `failed`, COMMIT 응답 유실은 `unknown`이다. 식별 batch의 실패/불명은 자동 큐 재삽입하지 않는다. 명시 재호출과 실제 DB `lookup_execution_receipt`를 제공하되 runtime 보류를 자동 해제하지 않는다.
+- Engine은 매도 전 보유 객체와 그 시점 snapshot을 함께 보존한다. BUY→전량 SELL→새 BUY가 같은 묶음으로 적용돼도 원래 보유 수명의 trade ID만 연결한다. 종목으로 열린 거래를 추정하는 우회는 식별 SELL에서 사용하지 않는다.
+- Scheduler는 포트폴리오 적용 후 보호 청산 상태·저널 제출·기존 후처리를 한 번 수행한다. 대기 중 재실행하지 않으며 다른 체결 처리는 계속한다. DB committed가 확인돼야 실행 원장의 `handoff_returned`와 broker ack를 기록한다. 현재 session의 미완료 체결은 신규 BUY와 같은 종목 분할 SELL을 보류하며 기존 전량 보호 SELL 경계를 유지한다.
+- nullable schema 이전은 transaction으로 처리하고 과거 NULL을 추정 보충하지 않는다. v1 실행 원장과 옛 `handoff_returned`의 의미는 유지하므로 과거 receipt를 새 DB 내구성 증거로 소급 사용하지 않는다. 종료 시 새 enqueue를 차단하고 앞선 큐를 처리하며 제한시간 초과/취소는 성공으로 표시하지 않는다.
+- 바깥 회계 누계와 최신 검증 summary, registry key·계좌·거래·이전 실행 순서를 로드/호출/저장 전에 대조한다. 기존 진입·청산·KR 보정이 식별 거래를 덮지 않게 하며 실행 registry 없는 DB 복원을 차단한다. 최근 JSON 로드 범위 밖의 식별 거래 자동 복구는 지원하지 않는다. `signal_score`는 새 DB 이벤트에도 보존한다.
+
+```mermaid
+flowchart TD
+    K[검증된 주문·체결 관측] --> E[Fill identity·포트폴리오 적용]
+    E --> P[청산 후처리 한 번·매도 당시 거래 연결]
+    P --> J[JSON 멱등 기록·불변 batch 검증]
+    J --> D[요약과 이벤트의 DB transaction]
+    D --> C{실제 commit 확인}
+    C -->|pending| H[신규 위험 보류·다른 보호 체결 계속]
+    H --> C
+    C -->|committed| A[handoff receipt·broker ack]
+    C -->|실패·불명·부재| R[복구 필요 보존·자동 replay 없음]
+```
+
+### 37차 See — 검증과 인계
+
+- RED→GREEN: 부분 BUY 누락·조기 ack·보호 처리 생략을 먼저 재현했다. 독립 검토에서 같은 묶음 BUY/전량 SELL의 거래 ID 누락, batch 요약/이벤트 손상, 바깥 누계 손상의 다음 실행 전파, 후속 JSON 덮어쓰기 실패, SELL 원가 생략 오산을 추가 재현하고 수정했다. JSON/DB의 계좌·거래·실행 연결과 원래 선정 점수 보존을 확인했다.
+- 실제 PostgreSQL은 전용 임시 data/socket, TCP 비활성, fsync ON, 합성 role/비밀번호와 제한된 자식 환경을 사용했다. 부분 BUY/SELL·중복·동시 쓰기·중간 rollback·COMMIT 응답 유실·이전 실패/재시도·schema 이전·재시작·손상 거부·종료를 검증했다. DB 바이너리 없는 환경의 skip은 실제 DB 검증으로 표시하지 않는다.
+- 독립 최종 중요 변경 리뷰 **APPROVE**, 이번 검토 범위의 미해결 P0/P1/P2 없음. 관련10파일 **261 passed**,12.71초·exit0·격리0. 별도 P1 재현의 GREEN1개에서 손상999주를 거부하고 DB 원본2주/이벤트1개를 보존했다. 중복 검증은 전체 결과와 합산하지 않는다.
+- 승인 제품9파일 결합 SHA-256은 `5eb3e48ff2a6f64f2c77853f1868bd717fda248f057be4ee0f5700cd8f58b3c8`이다. 저장 순서는 `core/engine.py`, `core/event.py`, `core/evolution/trade_journal.py`, `core/types.py`, `data/storage/execution_journal.py`, `data/storage/trade_storage.py`, `execution/broker/kis_kr.py`, `execution/execution_history.py`, `schedulers/kr_scheduler.py`의 `src/` 경로다. 각 `sha256sum` 출력에 다시 SHA-256을 적용했다.
+- 최종 로컬 전체 검증 **3,689 passed / 2 xfailed**, 기존 pykrx 경고1개,108.64초·exit0. 실제 임시 PostgreSQL23개와 Engine/Scheduler 연결2개를 포함하며 skip 없음. Python 문법·비밀정보 검사 통과, 운영 상태·외부 네트워크 접근 시도0. 문서 상대 링크162개 누락0과 diff 공백 검사를 확인했다. PR CI와 병합은 동일 head의 GitHub 결과를 별도 확인하며 운영 적용 결과로 해석하지 않는다.
+- 라우팅: 구조/저장 구현은 Astra/high, 구현 비참여 최종 reviewer는 Astra/xhigh 요청. 동일 base의 분리 worktree와 파일 소유권을 지켰고 조정자가 코드·문서를 통합했다. 실제 모델/유효 effort는 메타데이터 미노출로 미검증이며 교차 공급자 리뷰라고 부르지 않는다.
+
+| 우선순위 | 다음 작업 | 완료 기준 |
+|---|---|---|
+| P0, 실제 자료 확보 후 | 과거 주문·장부·잔고 대사와 복구 범위 결정 | 독립 체결29건·계좌 이동·수동/정정 거래를 설명하고 baseline 포함 근거 확인. 불명 상태 유지 |
+| 기존 예약 종료 후 | 예약5468208의 첫 관측 품질 확인 | 실제 시작·후보·봉인·종료·유실·장 상태 근거 확인. 이후 개발한 필드가 있다고 가정하지 않음 |
+| 자료 품질 확보 후 | 종목 선정·진입 시점·동일 진입 청산의 비용 후 기여 비교 | 버전/상승·하락 국면·결측 분모·놓친 이익과 거래/운영비를 구분 |
+| 비교 기준 | 계좌 총수익·전체 KODEX200·반도체 제외 보조 비교 | 같은 기간·현금흐름·분배금 기준. 전체 지수 기회비용과 집중도 영향을 함께 표시 |
+| 검증된 개선안만 | 사전등록한 가설 한 개의 미관측 기간 평가 | 표본·비용·손실 기준을 사전 고정하고 효과 확인 전 매수 재개/전략 승격하지 않음 |
+
+운영 계좌/API/자격증명/상태 파일·SSH·서비스·주문·배포·재시작을 사용하지 않는다. 운영 override·매수 중지·예약5468208과 설치 입력은 보존한다. 실제 계좌 대사·과거 자동 복구·baseline 채택·실수익은 완료 범위 밖이다. 아래36차 이력의 개발 P0는 이번37차로 이어졌다.
 
 ## 36차 Plan — 복구 증거의 읽기 전용 대사
 

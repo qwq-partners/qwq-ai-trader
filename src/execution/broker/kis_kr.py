@@ -245,7 +245,13 @@ class KISBroker(BaseBroker):
 
     def execution_recovery_status(self):
         history = getattr(self, '_execution_history', None)
-        return history.report() if history is not None else {'status': 'unsupported'}
+        if history is None:
+            return {'status': 'unsupported'}
+        report = history.report()
+        report['journal_pending_count'] = history.pending_handoffs()
+        if report['journal_pending_count'] and report['status'] == 'ready':
+            report.update(status='journal_pending', reason='현재 체결 장부 commit과 후처리 확인 대기')
+        return report
 
     async def _execution_outcome(self, order_id, status):
         history = getattr(self, '_execution_history', None)
@@ -259,6 +265,12 @@ class KISBroker(BaseBroker):
         history = getattr(self, '_execution_history', None)
         if history is not None and fill.execution_id:
             await history.receipt(fill.execution_id, stage)
+
+    def record_execution_journal_failure(self, reason):
+        """현재 체결의 장부 미확정을 보존한다. 보호 전량 SELL 경로는 유지한다."""
+        history = getattr(self, '_execution_history', None)
+        if history is not None:
+            history.fail('journal_commit_unconfirmed')
 
     def reconciliation_token(self) -> Optional[int]:
         """로컬 idle 세대 번호. 거래소 스냅샷 시각이나 체결 watermark가 아니다.
@@ -924,12 +936,16 @@ class KISBroker(BaseBroker):
         history = getattr(self, '_execution_history', None)
         if history is not None and history.hold():
             return history.hold()
+        if history is not None and history.pending_handoffs():
+            return '현재 체결 장부 commit과 후처리 확인 대기'
         return None
 
     def has_unknown_sell(self, symbol: str) -> bool:
         """오늘 이 종목의 SELL 접수 불명이 있는가 — 있으면 그 종목의 분할 매도 재발행을 막는다."""
         history = getattr(self, '_execution_history', None)
         if history is not None and history.hold(symbol):
+            return True
+        if history is not None and history.pending_handoffs(symbol):
             return True
         book = getattr(self, "_unknown_book", None)
         return book is not None and book.has_unknown_sell(symbol, datetime.now())
@@ -2744,6 +2760,10 @@ class KISBroker(BaseBroker):
                                 commission=self.calculate_commission(record.side, delta, fill_price),
                                 strategy=order.strategy, reason=order.reason, signal_score=order.signal_score)
                     fill.execution_id = execution_id or ''
+                    if history is not None:
+                        fill.account_scope = history.ledger.scope
+                        fill.order_date = record.order_date
+                        fill.kis_order_no = record.odno
                     fills.append(fill)
                     order.filled_quantity, order.filled_price = filled, average
                     try:
@@ -2879,6 +2899,10 @@ class KISBroker(BaseBroker):
                             signal_score=order.signal_score,
                             execution_id=execution_id or '',
                         )
+                        if history is not None:
+                            fill.account_scope = history.ledger.scope
+                            fill.order_date = observation.order_date
+                            fill.kis_order_no = observation.odno
                         fills.append(fill)
 
                         # TCA 슬리피지 계측 (2026-08-08 — 결정가 vs 체결가, 실패 무시)

@@ -138,3 +138,13 @@ class ExecutionHistory:
         result['journal_persistence'] = 'unverified'
         result['replay_allowed'] = False
         return result
+
+    def pending_handoffs(self, symbol=None):
+        """현재 실행의 관측 체결 중 후처리 반환이 아직 저장되지 않은 개수."""
+        return sum(
+            not execution['handoff_returned']
+            for record in self._snapshot['orders'].values()
+            if record['session_id'] == self.session_id
+            and (symbol is None or record['facts']['symbol'] == symbol)
+            for execution in record['executions']
+        )

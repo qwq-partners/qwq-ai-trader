@@ -2969,6 +2969,39 @@ JSON:
                     )
             self._entry_fill_lots.pop(key, None)
 
+    @staticmethod
+    def _execution_journal_kwargs(fill):
+        """알려진 원주문 근거만 전달한다. 체결 관측 시각과 거래소 체결 시각은 다르다."""
+        if not getattr(fill, 'execution_id', ''):
+            return {}
+        from ..data.storage.execution_journal import ExecutionIdentity
+        from zoneinfo import ZoneInfo
+        order_date = getattr(fill, 'order_date', '')
+        if not isinstance(order_date, str) or not re.fullmatch(r'[0-9]{8}', order_date):
+            raise ValueError('원주문 거래일 근거 부족')
+        return {
+            'execution_identity': ExecutionIdentity(
+                account_scope=fill.account_scope, order_date=date.fromisoformat(order_date),
+                kis_order_no=fill.kis_order_no, execution_id=fill.execution_id),
+            'execution_time': fill.timestamp.astimezone(ZoneInfo('Asia/Seoul')),
+        }
+
+    def _execution_journal_committed(self, fill):
+        """메모리 receipt만 조회한다. DB 대기로 다른 체결의 보호 후처리를 막지 않는다."""
+        from ..data.storage.execution_journal import ExecutionWriteReceipt
+        self._execution_journal_kwargs(fill)  # 불완전 identity는 이미 있던 receipt로도 통과 불가
+        reader = getattr(self.bot.trade_journal, 'get_execution_receipt', None)
+        if not callable(reader):
+            raise ValueError('장부 DB commit 확인 기능 없음')
+        receipt = reader(fill.account_scope, fill.execution_id)
+        if not isinstance(receipt, ExecutionWriteReceipt) or receipt.execution_id != fill.execution_id:
+            raise ValueError('장부 DB commit 근거 불명')
+        if receipt.status == 'pending':
+            return False
+        if receipt.status != 'committed':
+            raise ValueError('장부 DB commit 미확정')
+        return True
+
     async def _drain_fill_handoffs(self, *, wait):
         """적용 완료 뒤 후처리한다. 실패한 적용/후처리를 시간 경과로 해제하지 않는다."""
         pending = getattr(self, '_pending_fill_handoffs', {})
@@ -2985,11 +3018,27 @@ JSON:
                 continue
             try:
                 receipt = getattr(self.bot.broker, 'record_execution_receipt', None)
-                if callable(receipt) and getattr(handoff['fill'], 'execution_id', ''):
-                    await receipt(handoff['fill'], 'portfolio_applied')
-                await self._complete_fill_handoff(**handoff)
-                if callable(receipt) and getattr(handoff['fill'], 'execution_id', ''):
-                    # 함수 반환 영수증이며 trade_journal의 DB/JSON 내구성 증명이 아니다.
+                identified = bool(getattr(handoff['fill'], 'execution_id', ''))
+                if not handoff.get('postprocessing_done'):
+                    receipt_failed = False
+                    if callable(receipt) and identified:
+                        try:
+                            await receipt(handoff['fill'], 'portfolio_applied')
+                        except Exception:
+                            # 이미 적용된 보유분의 보호 처리는 원장 저장 실패로 생략하지 않는다.
+                            receipt_failed = True
+                    submitted = await self._complete_fill_handoff(**handoff)
+                    handoff['postprocessing_done'] = True
+                    handoff['journal_submitted'] = submitted is True
+                    if receipt_failed:
+                        raise ValueError('메모리 적용 영수증 저장 미확정')
+                if identified:
+                    if not handoff['journal_submitted']:
+                        raise ValueError('체결의 명시 장부 기록 미완료')
+                    if not self._execution_journal_committed(handoff['fill']):
+                        continue
+                if callable(receipt) and identified:
+                    # 새 식별 KR 경로는 commit 확인 뒤 반환한다. 과거 receipt 의미는 불변이다.
                     await receipt(handoff['fill'], 'handoff_returned')
                 ack = getattr(self.bot.broker, 'acknowledge_fill', None)
                 if callable(ack):
@@ -3006,6 +3055,9 @@ JSON:
             except Exception:
                 # 중간 부작용을 알 수 없으므로 다시 실행해 청산/PnL을 중복 반영하지 않는다.
                 handoff['failed'] = True
+                failed = getattr(self.bot.broker, 'record_execution_journal_failure', None)
+                if callable(failed) and getattr(handoff['fill'], 'execution_id', ''):
+                    failed('journal_commit_unconfirmed')
                 logger.exception(f"[체결] 후처리 대사 필요: {event.symbol} ({event_id})")
             else:
                 pending.pop(event_id, None)
@@ -3015,8 +3067,15 @@ JSON:
                                      _exit_pending_generation=None):
         """성공적으로 적용된 체결의 청산·저널·구독 후처리. 지연 경로도 같은 코드를 쓴다."""
         bot = self.bot
+        journal_submitted = False
+        identified = bool(getattr(fill, 'execution_id', ''))
         if event.position_before is not None:
             _sell_pos_snap = event.position_before
+            if (not getattr(_sell_pos_snap, 'trade_id', None)
+                    and event.position_before_owner is not None):
+                # 같은 배치의 앞선 BUY가 확정한 ID만 해당 보유 생애에 연결한다.
+                # 전량 SELL 뒤 새 BUY의 현재 포지션을 종목으로 찾지 않는다.
+                _sell_pos_snap.trade_id = event.position_before_owner.trade_id
         # 매도 체결 시 _exit_pending 즉시 해제 + ExitManager 상태 갱신 + trade journal 기록
         if fill.side == OrderSide.SELL:
             rm = getattr(bot.engine, 'risk_manager', None)
@@ -3072,7 +3131,7 @@ JSON:
                     _journal_reason, _journal_type = self._journal_exit_reason(fill)
                     # trade_id: position.trade_id 또는 journal open trades 탐색
                     _tid = getattr(_sell_pos_snap, 'trade_id', None)
-                    if not _tid:
+                    if not _tid and not identified:
                         _open = bot.trade_journal.get_open_trades()
                         _match = [t for t in _open if t.symbol == fill.symbol]
                         if _match:
@@ -3080,7 +3139,7 @@ JSON:
                     if _tid:
                         # 일지·복기만 주문에 결합된 근거를 사용한다.
                         _etype = _journal_type
-                        bot.trade_journal.record_exit(
+                        _exit_record = bot.trade_journal.record_exit(
                             trade_id=_tid,
                             exit_price=float(fill.price),
                             exit_quantity=fill.quantity,
@@ -3088,8 +3147,10 @@ JSON:
                             exit_type=_etype,
                             exit_time=datetime.now(),
                             avg_entry_price=float(_sell_pos_snap.avg_price),
+                            **self._execution_journal_kwargs(fill),
                         )
-                        logger.info(f"[체결] {fill.symbol} SELL journal 기록 완료 (type={_etype})")
+                        journal_submitted = _exit_record is not None
+                        logger.info(f"[체결] {fill.symbol} SELL journal 기록 호출 반환 (type={_etype}, DB commit 별도 확인)")
                         # 재진입 제한 등록은 저널 앞 독립 블록으로 이동 (2026-08-05 P1)
                         # 거래 메모리: Layer 1 기록
                         if bot.engine and bot.engine.risk_manager and hasattr(bot.engine.risk_manager, '_trade_memory'):
@@ -3154,8 +3215,10 @@ JSON:
                     else:
                         # trade_id 없음 → trades DB 직접 조회 후 기록
                         # (sync_detected 등 journal 미등록 포지션 대응)
-                        logger.warning(f"[체결] {fill.symbol} SELL trade_id 없음 → DB 직접 기록 시도")
-                        _db_pool = getattr(bot.trade_journal, 'pool', None)
+                        logger.warning(
+                            f"[체결] {fill.symbol} SELL trade_id 없음 → "
+                            + ("식별 체결 귀속 미확정" if identified else "DB 직접 기록 시도"))
+                        _db_pool = None if identified else getattr(bot.trade_journal, 'pool', None)
                         if _db_pool:
                             try:
                                 async with _db_pool.acquire() as _dbc:
@@ -3246,7 +3309,7 @@ JSON:
                             except Exception as _dbe:
                                 logger.warning(f"[체결] {fill.symbol} SELL DB 직접 기록 실패: {_dbe}")
                         else:
-                            logger.warning(f"[체결] {fill.symbol} SELL journal 완전 스킵 (pool 없음)")
+                            logger.warning(f"[체결] {fill.symbol} SELL journal 미기록 (명시 거래 또는 저장 경로 없음)")
                 except Exception as _je:
                     logger.warning(f"[체결] {fill.symbol} SELL journal 기록 실패: {_je}")
 
@@ -3322,11 +3385,11 @@ JSON:
                     f"(pos={'없음' if not pos else 'OK'}, exit_manager={'없음' if not bot.exit_manager else 'OK'})"
                 )
 
-            # trade journal BUY 기록 (trade_id 미설정 시에만)
-            if pos and bot.trade_journal and not getattr(pos, 'trade_id', None):
+            # 식별된 모든 BUY 증분을 기록한다. 비식별 레거시의 첫 진입 규약은 유지한다.
+            if pos and bot.trade_journal and (identified or not getattr(pos, 'trade_id', None)):
                 try:
                     from datetime import datetime as _dt
-                    _tid = f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
+                    _tid = getattr(pos, 'trade_id', None) or f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
 
                     # ── 시그널 캐시에서 메타데이터 추출 ──────────────
                     _rm = getattr(bot.engine, 'risk_manager', None)
@@ -3480,14 +3543,16 @@ JSON:
                         theme_info=_theme or None,
                         entry_tags=_tags,
                         market="KR",
+                        **self._execution_journal_kwargs(fill),
                     )
+                    journal_submitted = _rec is not None
                     pos.trade_id = _rec.id
                     if event.position_owner is not None:
                         event.position_owner.trade_id = _rec.id
                     if _entry_lot is not None and _entry_lot.get("confirmed"):
                         _entry_lot["journal_synced"] = True   # 확정값이 이미 레코드에 들어감
                     logger.info(
-                        f"[체결] {fill.symbol} BUY journal 기록 완료 "
+                        f"[체결] {fill.symbol} BUY journal 기록 호출 반환 (DB commit 별도 확인) "
                         f"(id={_rec.id}, 전략={_sig_strategy}, 태그={len(_tags)}개)"
                     )
                 except Exception as _je:
@@ -3502,6 +3567,8 @@ JSON:
                     logger.debug(f"[체결] {fill.symbol} WS 우선 구독 추가")
                 except Exception as e:
                     logger.debug(f"[체결] {fill.symbol} WS 구독 갱신 실패: {e}")
+
+        return journal_submitted
 
 
     @with_request_source("fill_check")
