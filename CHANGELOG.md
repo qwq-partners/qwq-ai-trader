@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-02 — Codex 최근 작업 교차 리뷰·실행 원장 보류 해제·전량 SELL 허용(47차)
+
+- PR #119~#138(20건, 176파일) 교차 리뷰: 코디네이터 + 독립 리뷰어 3명(브로커·스케줄러·저장소). P0 없음, P1 네 건의 뿌리는 "실행 원장·식별 체결 경로가 한 번 실패하면 영구 보류, 해제 수단 없음". [리뷰 정본](docs/reviews/codex-recent-work-review-2026-10-02.md).
+- P1-1 수정: 원장 `acknowledge(note)` 이벤트와 운영자 CLI `scripts/ops/acknowledge_execution_ledger.py`(봇 정지 중만, `--note` 영구 기록). 확인된 과거 비정상 세션·미완결 주문만 보류 사유에서 빠지고 기록은 불변, 과거 체결 재생은 여전히 금지. [절차: runbook "실행 원장 보류 해제" 절](docs/operations/runbook.md).
+- P1-2 수정: 원장 open 실패(`session_recorded=False`)에서 BUY·분할 SELL만 거부하고 보호 전량 SELL은 ERROR 로그 후 전송. 브로커·CLI가 같은 원장 경로를 쓰도록 `execution_ledger_location()` 공용화.
+- 35차 결정 번복 명시: 35차 테스트 `test_initial_open_failure_cannot_send_unmarked_emergency_sell`(시작 기록 실패 시 전량 SELL도 차단)을 새 계약(BUY·분할만 차단, 전량 SELL 전송·ERROR 로그·storage_fault 유지)으로 교체. 근거는 리뷰 정본.
+- 독립 리뷰(Claude Opus 요청/high) 조건부 승인 → 반영: **`acknowledge` 이벤트가 든 원장은 47차 이전 코드(df1a5af 포함)가 열지 못해 전 주문 거부가 된다.** runbook에 "봇 코드가 47차 이후일 때만 실행·ack 뒤 이전 SHA 롤백 금지·미체결 0 확인 후 실행" 조건을 명시했다. 파일 삭제 서술 정정, CLI sqlite 예외/연결 닫기, 테스트 락 fd 정리.
+- P1-3(식별 체결 저널 실패 → 세션 전체 보류)·P1-4(동기화 보류 무경보)·P2는 미수정으로 기록. **10월 6일 활성화 설정은 df1a5af 고정이라 이 수정은 별도 승인 없이는 10월 6일에 적용되지 않는다.** 운영·예약·매수 중지 변경 없음.
+
 ## 2026-10-02 — 10월6일 비활성 설치·예약 완료(46차)
 
 - 명시 승인 후 운영 지문·상태·DB 스키마를 읽기 점검하고, 검토 대상df1a5af·실제 보존 설정·새 입력/토스 grant를 결합했다.10월6일08:55 활성화와09:15~09:33 관측을 예약했다. 현재 봇 재시작·주문·매수 재개는 수행하지 않았다.

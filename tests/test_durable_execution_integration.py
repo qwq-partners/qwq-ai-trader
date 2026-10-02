@@ -196,18 +196,31 @@ def test_shutdown_fences_new_full_sell_even_if_history_close_is_waiting(broker):
     asyncio.run(run())
 
 
-def test_initial_open_failure_cannot_send_unmarked_emergency_sell(broker):
+def test_initial_open_failure_sends_full_protective_sell_but_blocks_buy_and_partial(broker):
+    """2026-10-02 47차 리뷰 P1-2 로 35차 결정을 번복: 시작 기록 실패는 신규 위험(BUY·분할 SELL)만 막는다.
+
+    35차는 "기록 없는 주문이 다음 시작에서 사라질 수 있다"는 이유로 전량 SELL 도 막았다. 번복 근거: 막힌 손절은
+    상한 없는 손실이고, 미기록 전량 SELL 은 KIS 매도가능수량이 이중 매도를 막으며 체결은 잔고 동기화·기동 시
+    거래소 미체결 대사로 반영되는 유한한 대사 공백이다. 전송은 ERROR 로그를 남기고 세션은 clean close 불가로 남는다.
+    """
     async def run():
         async def broken(*args):
             raise OSError('synthetic open failure')
         broker._execution_history.ledger.open = broken
         calls = []
         async def post(*args, **kwargs):
-            calls.append(1)
+            calls.append(kwargs.get('cancel_guard'))
             return {'rt_cd': '0', 'output': {'ODNO': '001'}}
         broker._api_post = post
-        assert not (await broker.submit_order(order(OrderSide.SELL)))[0]
+        assert not (await broker.submit_order(order(OrderSide.BUY)))[0]
+        partial = order(OrderSide.SELL)
+        partial.partial_exit = True
+        assert not (await broker.submit_order(partial))[0]
         assert calls == []
+        assert (await broker.submit_order(order(OrderSide.SELL)))[0]
+        assert len(calls) == 1 and calls[0][1] == OrderSide.SELL and calls[0][2] is False
+        assert broker._execution_history.fault == 'open_failed'
+        assert broker.execution_recovery_status()['status'] == 'storage_fault'
     asyncio.run(run())
 
 

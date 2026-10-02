@@ -65,6 +65,14 @@ class ExecutionLedger:
     async def receipt(self, execution_id: str, stage: str) -> None:
         await self._run("receipt", execution_id=execution_id, stage=stage)
 
+    async def acknowledge(self, note: str) -> dict:
+        """운영자가 명시 대사를 마친 과거 비정상 종료·미완결 주문을 보류 사유에서 제외한다.
+
+        과거 기록은 바꾸지 않고 `acknowledged` 표시만 남긴다. 현재 실행이 소유한 주문은
+        대상이 아니며, 체결을 재생하거나 장부/잔고를 고치지 않는다.
+        """
+        return await self._run("acknowledge", note=note)
+
     async def close_session(self) -> bool:
         if self._fault:
             return False
@@ -315,6 +323,17 @@ def _facts(facts: Any) -> None:
         raise ExecutionLedgerError("주문 날짜 오류") from exc
 
 
+def order_unresolved(record: dict) -> bool:
+    """접수됐지만 최종 수량·적용·후처리 반환이 모두 확인되지 않은 주문."""
+    if record["status"] in ("not_sent", "rejected"):
+        return False
+    if record["status"] in ("unknown", "modified"):
+        return True
+    terminal = record["terminal_quantity"]
+    return (terminal is None or terminal != record["observed_quantity"]
+            or any(not e["handoff_returned"] for e in record["executions"]))
+
+
 def _can_close(state: dict, session_id: str) -> bool:
     sessions = state["sessions"]
     if session_id not in sessions or next(reversed(sessions)) != session_id:
@@ -322,7 +341,8 @@ def _can_close(state: dict, session_id: str) -> bool:
     if sessions[session_id]["prior_unclean"]:
         return False
     return all(
-        order["status"] in {"not_sent", "rejected"}
+        order.get("acknowledged") is True
+        or order["status"] in {"not_sent", "rejected"}
         or (
             order["status"] in {"accepted", "canceled"}
             and order["terminal_quantity"] is not None
@@ -341,7 +361,7 @@ def _apply(state: dict, session_id: str, operation: str, payload: dict) -> Any:
         "open": set(), "close": set(), "intent": {"key", "facts"},
         "accepted": {"key", "odno", "orgno"}, "outcome": {"key", "status"},
         "observe": {"key", "quantity", "average", "terminal"},
-        "receipt": {"execution_id", "stage"},
+        "receipt": {"execution_id", "stage"}, "acknowledge": {"note"},
     }
     if operation not in shapes or set(payload) != shapes[operation]:
         raise ExecutionLedgerError("알 수 없는 이벤트 또는 필드")
@@ -349,7 +369,11 @@ def _apply(state: dict, session_id: str, operation: str, payload: dict) -> Any:
     if operation == "open":
         if session_id in sessions:
             raise ExecutionLedgerError("이전 실행 ID를 재사용할 수 없습니다")
-        prior_unclean = any(not value["clean"] or value["prior_unclean"] for value in sessions.values())
+        # 운영자가 명시 확인(acknowledge)한 비정상 종료는 다음 실행에 상속하지 않는다.
+        prior_unclean = any(
+            (not value["clean"] or value["prior_unclean"]) and value.get("acknowledged") is not True
+            for value in sessions.values()
+        )
         sessions[session_id] = {"clean": False, "prior_unclean": prior_unclean}
         return None
     if not sessions or next(reversed(sessions)) != session_id:
@@ -361,6 +385,16 @@ def _apply(state: dict, session_id: str, operation: str, payload: dict) -> Any:
         return True
     if sessions[session_id]["clean"]:
         raise ExecutionLedgerError("종료한 실행에는 기록할 수 없습니다")
+    if operation == "acknowledge":
+        _text(payload["note"])
+        for other_id, value in sessions.items():
+            if other_id != session_id and (not value["clean"] or value["prior_unclean"]):
+                value["acknowledged"] = True
+        for order in orders.values():
+            if order["session_id"] != session_id and order_unresolved(order):
+                order["acknowledged"] = True
+        sessions[session_id]["prior_unclean"] = False
+        return None
     if operation == "intent":
         key, facts = payload["key"], payload["facts"]
         _text(key)
