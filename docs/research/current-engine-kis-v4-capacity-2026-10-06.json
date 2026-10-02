@@ -1,0 +1,563 @@
+{
+  "cases": [
+    {
+      "artifact": {
+        "bytes": 19991142,
+        "max_line_bytes": 20325,
+        "sha256": "ec9bd8b073fc1536d7fd153cce63b73034a655a674caaaa1f4e7ea1843995947"
+      },
+      "close": {
+        "error": null,
+        "fsync_confirmed": true,
+        "path": "temporary:pilot-volume-50k.jsonl",
+        "persisted_records": 31946,
+        "sealed": true
+      },
+      "declared": {
+        "batch_size": 256,
+        "buffer_capacity": 50000,
+        "max_bytes": 67108864,
+        "max_record_bytes": 65536,
+        "queue_capacity": 4096
+      },
+      "frame_report": {
+        "counts": {
+          "available": 1803,
+          "connection_gaps": 1803,
+          "eligible_frame_gaps": 1803,
+          "unavailable": 0
+        },
+        "dropped_records": 0,
+        "persistence_dropped_records": 0,
+        "source_complete": false,
+        "stream_complete": false
+      },
+      "gate_report": {
+        "counts": {
+          "blocked": 0,
+          "not_reached": 0,
+          "recorded": 100,
+          "signal_created": 0,
+          "total": 100,
+          "unavailable": 0,
+          "unknown": 100
+        },
+        "source_complete": false
+      },
+      "metrics": {
+        "cpu_seconds": 26.246851501000002,
+        "observed_queue_high_water_records": 1473,
+        "python_peak_bytes": 26284957,
+        "wall_seconds": 27.435235183686018
+      },
+      "name": "pilot-volume-50k",
+      "payload_scope": {
+        "book": "operational_symbols_only",
+        "close_timeout_seconds": 10,
+        "entry_gate_trace": "100_unknown_rows_without_steps",
+        "selection_basis": "unavailable_payload_rows"
+      },
+      "planned": {
+        "attempted_records": 31946,
+        "end_at": "2026-10-06T00:33:00+00:00",
+        "first_scan_at": "2026-10-06T00:17:00+00:00",
+        "installed_at": "2026-10-05T23:55:00+00:00",
+        "intentional_gap_rows": 1803,
+        "pilot_volume_rows": 31745,
+        "subscription_rows": 1833,
+        "v4_reserved_burst_rows": 201,
+        "ws_quote_rows": 29912
+      },
+      "scale": 1,
+      "strict_read": {
+        "complete": false,
+        "dropped_records": 0,
+        "durability_confirmed": false,
+        "incomplete_reasons": [
+          "unsupported_frame_shape"
+        ],
+        "kinds": {
+          "entry_gate_trace": 100,
+          "quote_subscription": 1833,
+          "scan": 1,
+          "selection_basis": 100,
+          "ws_quote": 29912
+        },
+        "persistence_dropped_records": 0,
+        "record_count": 31946,
+        "sealed": true
+      }
+    },
+    {
+      "artifact": {
+        "bytes": 31332901,
+        "max_line_bytes": 20327,
+        "sha256": "3ab8d3fd5d22b17609f554c7ada09cc78df083309abe327a00f00b66abab5581"
+      },
+      "close": {
+        "error": null,
+        "fsync_confirmed": true,
+        "path": "temporary:double-volume-50k.jsonl",
+        "persisted_records": 50000,
+        "sealed": true
+      },
+      "declared": {
+        "batch_size": 256,
+        "buffer_capacity": 50000,
+        "max_bytes": 67108864,
+        "max_record_bytes": 65536,
+        "queue_capacity": 4096
+      },
+      "frame_report": {
+        "counts": {
+          "available": 3606,
+          "connection_gaps": 3606,
+          "eligible_frame_gaps": 3606,
+          "unavailable": 0
+        },
+        "dropped_records": 13691,
+        "persistence_dropped_records": 0,
+        "source_complete": false,
+        "stream_complete": false
+      },
+      "gate_report": {
+        "counts": {
+          "blocked": 0,
+          "not_reached": 0,
+          "recorded": 100,
+          "signal_created": 0,
+          "total": 100,
+          "unavailable": 0,
+          "unknown": 100
+        },
+        "source_complete": false
+      },
+      "metrics": {
+        "cpu_seconds": 47.06527115099999,
+        "observed_queue_high_water_records": 1492,
+        "python_peak_bytes": 41070970,
+        "wall_seconds": 51.42612278833985
+      },
+      "name": "double-volume-50k",
+      "payload_scope": {
+        "book": "operational_symbols_only",
+        "close_timeout_seconds": 10,
+        "entry_gate_trace": "100_unknown_rows_without_steps",
+        "selection_basis": "unavailable_payload_rows"
+      },
+      "planned": {
+        "attempted_records": 63691,
+        "end_at": "2026-10-06T00:33:00+00:00",
+        "first_scan_at": "2026-10-06T00:17:00+00:00",
+        "installed_at": "2026-10-05T23:55:00+00:00",
+        "intentional_gap_rows": 3606,
+        "pilot_volume_rows": 63490,
+        "subscription_rows": 3666,
+        "v4_reserved_burst_rows": 201,
+        "ws_quote_rows": 59824
+      },
+      "scale": 2,
+      "strict_read": {
+        "complete": false,
+        "dropped_records": 13691,
+        "durability_confirmed": false,
+        "incomplete_reasons": [
+          "unsupported_frame_shape"
+        ],
+        "kinds": {
+          "entry_gate_trace": 100,
+          "quote_subscription": 3666,
+          "scan": 1,
+          "selection_basis": 100,
+          "ws_quote": 46133
+        },
+        "persistence_dropped_records": 0,
+        "record_count": 50000,
+        "sealed": true
+      }
+    },
+    {
+      "artifact": {
+        "bytes": 39903463,
+        "max_line_bytes": 20327,
+        "sha256": "3463c440b11e098595deec02c5eaf421ad873980e9882cbac444d205d1535438"
+      },
+      "close": {
+        "error": null,
+        "fsync_confirmed": true,
+        "path": "temporary:double-volume-80k.jsonl",
+        "persisted_records": 63691,
+        "sealed": true
+      },
+      "declared": {
+        "batch_size": 256,
+        "buffer_capacity": 80000,
+        "max_bytes": 67108864,
+        "max_record_bytes": 65536,
+        "queue_capacity": 4096
+      },
+      "frame_report": {
+        "counts": {
+          "available": 3606,
+          "connection_gaps": 3606,
+          "eligible_frame_gaps": 3606,
+          "unavailable": 0
+        },
+        "dropped_records": 0,
+        "persistence_dropped_records": 0,
+        "source_complete": false,
+        "stream_complete": false
+      },
+      "gate_report": {
+        "counts": {
+          "blocked": 0,
+          "not_reached": 0,
+          "recorded": 100,
+          "signal_created": 0,
+          "total": 100,
+          "unavailable": 0,
+          "unknown": 100
+        },
+        "source_complete": false
+      },
+      "metrics": {
+        "cpu_seconds": 68.35482710299999,
+        "observed_queue_high_water_records": 1472,
+        "python_peak_bytes": 52244730,
+        "wall_seconds": 74.91052713617682
+      },
+      "name": "double-volume-80k",
+      "payload_scope": {
+        "book": "operational_symbols_only",
+        "close_timeout_seconds": 10,
+        "entry_gate_trace": "100_unknown_rows_without_steps",
+        "selection_basis": "unavailable_payload_rows"
+      },
+      "planned": {
+        "attempted_records": 63691,
+        "end_at": "2026-10-06T00:33:00+00:00",
+        "first_scan_at": "2026-10-06T00:17:00+00:00",
+        "installed_at": "2026-10-05T23:55:00+00:00",
+        "intentional_gap_rows": 3606,
+        "pilot_volume_rows": 63490,
+        "subscription_rows": 3666,
+        "v4_reserved_burst_rows": 201,
+        "ws_quote_rows": 59824
+      },
+      "scale": 2,
+      "strict_read": {
+        "complete": false,
+        "dropped_records": 0,
+        "durability_confirmed": false,
+        "incomplete_reasons": [
+          "unsupported_frame_shape"
+        ],
+        "kinds": {
+          "entry_gate_trace": 100,
+          "quote_subscription": 3666,
+          "scan": 1,
+          "selection_basis": 100,
+          "ws_quote": 59824
+        },
+        "persistence_dropped_records": 0,
+        "record_count": 63691,
+        "sealed": true
+      }
+    }
+  ],
+  "contract": {
+    "entry_gate_trace": {
+      "configuration_ref": "synthetic-config-fixed-v4-capacity",
+      "max_candidates": 100,
+      "policy_ref": "kr-live-screening-gates-v1",
+      "source_version_ref": "synthetic-source-at-6a22b82",
+      "version": "entry-gate-trace-v1"
+    },
+    "frame_diagnostics": {
+      "version": "kis-frame-diagnostics-v1"
+    },
+    "selection_basis": {
+      "max_candidates": 100,
+      "max_source_terms": 16,
+      "version": "selection-basis-v2"
+    }
+  },
+  "coordinator_validation": {
+    "burst_reproduced_in_integrator_worktree": true,
+    "projection_latency": {
+      "cases": [
+        {
+          "buffer_capacity": 80000,
+          "candidates": 100,
+          "dropped_records": 0,
+          "json_bytes": 10208,
+          "max_ms": 9.5263896510005,
+          "median_ms": 6.13568676635623,
+          "output_records": 7,
+          "p95_ms": 7.246611639857292,
+          "published_through_buffer": true,
+          "samples": 100,
+          "source_records": 50000
+        },
+        {
+          "buffer_capacity": 80000,
+          "candidates": 100,
+          "dropped_records": 0,
+          "json_bytes": 10208,
+          "max_ms": 11.283598840236664,
+          "median_ms": 9.14021860808134,
+          "output_records": 7,
+          "p95_ms": 10.379432700574398,
+          "published_through_buffer": true,
+          "samples": 100,
+          "source_records": 80000
+        }
+      ],
+      "limitation": "Local projection plus JSON serialization timing only; no live bot load, HTTP transport or worst-case scheduling bound.",
+      "poll_seconds": 1,
+      "synthetic": true
+    },
+    "projection_source_sha256": "220b28bea5e977d973ca1370aece032391083257934453b9a188b422f87128b9",
+    "strict_reader_fsync_note": "Writer close reports fsync_confirmed; strict reread alone leaves durability_confirmed false without an independent durability receipt.",
+    "whole_flow": {
+      "artifact": {
+        "bytes": 39903484,
+        "max_line_bytes": 20327,
+        "sha256": "8be78fb4cc7d3800fee579cd59af3779af53c449fca445fe28326f40f23d5b73"
+      },
+      "close": {
+        "error": null,
+        "fsync_confirmed": true,
+        "persisted_records": 63691,
+        "sealed": true
+      },
+      "declared": {
+        "batch_size": 256,
+        "buffer_capacity": 80000,
+        "max_bytes": 67108864,
+        "max_record_bytes": 65536,
+        "queue_capacity": 4096
+      },
+      "frame_report": {
+        "counts": {
+          "available": 3606,
+          "connection_gaps": 3606,
+          "eligible_frame_gaps": 3606,
+          "unavailable": 0
+        },
+        "dropped_records": 0,
+        "persistence_dropped_records": 0,
+        "source_complete": false,
+        "stream_complete": false
+      },
+      "gate_report": {
+        "counts": {
+          "blocked": 0,
+          "not_reached": 0,
+          "recorded": 100,
+          "signal_created": 0,
+          "total": 100,
+          "unavailable": 0,
+          "unknown": 100
+        },
+        "source_complete": false
+      },
+      "metrics": {
+        "cpu_seconds": 49.574866765,
+        "observed_queue_high_water_records": 1527,
+        "python_peak_bytes": 52264600,
+        "wall_seconds": 50.710524432361126
+      },
+      "name": "double-volume-80k-close5",
+      "planned": {
+        "attempted_records": 63691,
+        "end_at": "2026-10-06T00:33:00+00:00",
+        "first_scan_at": "2026-10-06T00:17:00+00:00",
+        "installed_at": "2026-10-05T23:55:00+00:00",
+        "intentional_gap_rows": 3606,
+        "pilot_volume_rows": 63490,
+        "subscription_rows": 3666,
+        "v4_reserved_burst_rows": 201,
+        "ws_quote_rows": 59824
+      },
+      "scale": 2,
+      "strict_read": {
+        "complete": false,
+        "dropped_records": 0,
+        "durability_confirmed": false,
+        "incomplete_reasons": [
+          "unsupported_frame_shape"
+        ],
+        "kinds": {
+          "entry_gate_trace": 100,
+          "quote_subscription": 3666,
+          "scan": 1,
+          "selection_basis": 100,
+          "ws_quote": 59824
+        },
+        "persistence_dropped_records": 0,
+        "record_count": 63691,
+        "sealed": true
+      }
+    },
+    "whole_flow_close_timeout_seconds": 5,
+    "whole_flow_probe": {
+      "exit_code": 0,
+      "path": "/tmp/qwq-v4-review-20261002/root-flow-close5-probe.py",
+      "sha256": "7a7c360e6a3d1c8ae97723f8cc309e5843d0d217e51ffc7a692f0a6d60e87514"
+    }
+  },
+  "decision": {
+    "double_volume_50000_buffer": "rejected_buffer_overflow_13691_records",
+    "double_volume_80000_buffer": "recommended_for_the_paced_count_envelope_subject_to_stated_limits",
+    "double_volume_headroom": {
+      "buffer_records": 16309,
+      "conservative_file_bytes_by_adding_full_burst_budget_without_subtracting_existing_burst": 53489895,
+      "file_bytes_after_conservative_bound": 13618969,
+      "paced_whole_flow_observed_queue_high_water_records": 1472,
+      "queue_records_after_observed_high_water": 2624,
+      "validator_maximum_201_row_burst_budget_bytes": 13586432,
+      "whole_flow_file_bytes": 39903463
+    },
+    "focused_max_payload_burst": {
+      "candidate_book_symbols": 3,
+      "close_timeout_seconds": 5,
+      "dropped_records": 0,
+      "gate_steps_per_candidate": 31,
+      "max_line_bytes": 20228,
+      "persistence_dropped_records": 0,
+      "records": 201,
+      "selection_source_terms_per_candidate": 16,
+      "serialized_journal_bytes": 2153804
+    },
+    "future_live_guarantee": false,
+    "pilot_volume_50000_buffer": "qualified_for_the_paced_count_envelope_and_partial_payload_shape",
+    "profit_or_production_evidence": false,
+    "proposed_parameters": {
+      "batch_size": 256,
+      "buffer_capacity": 80000,
+      "max_bytes": 67108864,
+      "max_record_bytes": 65536,
+      "queue_capacity": 4096
+    },
+    "queue_qualification": "4096 exceeds the 201-row contractual immediate burst and the paced whole-flow observed high-water; arbitrary instantaneous whole-window arrival was not tested",
+    "stream_quality": "intentionally_incomplete_due_to_preserved_frame_gaps"
+  },
+  "execution": {
+    "max_payload_burst": {
+      "command": "python3 /tmp/kis_v4_burst_probe.py",
+      "exit_code": 0,
+      "network_calls": 0,
+      "private_paths_read": false,
+      "temporary_artifacts_removed_by_probe": true
+    },
+    "whole_flow": {
+      "command": "python3 /tmp/kis_v4_capacity_probe.py --repo /home/ubuntu/projects/qwq-ai-trader/.claude/worktrees/kis-v4-capacity-20261006 --source-commit 6a22b82d46bb21414c21a5b4eb7c90e22d25a920 --output /tmp/kis-v4-capacity-result.json",
+      "exit_code": 0,
+      "network_calls": 0,
+      "private_paths_read": false,
+      "stderr": "",
+      "stdout": "",
+      "temporary_artifacts_removed_by_probe": true
+    }
+  },
+  "existing_call_path": [
+    "src.analytics.entry_observation.EntryObservationBuffer",
+    "src.analytics.entry_observation.capture_scan",
+    "src.analytics.entry_gate_trace.begin_gate_trace",
+    "src.analytics.entry_observation_journal.ObservationJournal.open/close",
+    "src.analytics.entry_observation_journal.read_observation_journal",
+    "src.analytics.kis_frame_diagnostics.validate_study_binding/build_frame_report",
+    "src.analytics.entry_gate_report.build_gate_report"
+  ],
+  "limitations": [
+    "Synthetic pilot-count envelope, not replayed market frames or a future live-rate upper bound.",
+    "The old scan slot in each 31,745-row volume block is represented by one benign operational subscription so one valid v4 first scan plus 100 selection and 100 gate rows can be exercised.",
+    "The whole-flow probe used operating BOOK symbols that did not match the synthetic first-scan cohort; its selection rows had unavailable basis payloads and its gate rows had no steps. It qualifies record count, pacing and persistence for that partial payload shape.",
+    "A separate bounded probe exercised three candidate BOOK symbols, 16 selection source terms for each of 100 candidates, 31 gate steps for each candidate, one candidate-scoped frame gap, and the proposed five-second close timeout. It does not repeat the whole 63,691-row flow.",
+    "The conservative 64MiB calculation adds the validator maximum 201-row burst budget to the whole-flow file without subtracting the smaller burst already present; it is a bounded schema calculation, not a live payload guarantee.",
+    "Queue load is paced after bounded batches; this qualifies declared steady-flow persistence plus a supported immediate 201-row burst, not arbitrary instantaneous 63,691-row arrival.",
+    "Intentional frame gaps keep source_complete and stream_complete false even when the journal is sealed and fsync-confirmed.",
+    "The 52MiB whole-flow Python tracemalloc peak is for the partial payload shape; it is not process RSS, hard isolation, or a maximum-payload whole-window measurement."
+  ],
+  "max_payload_burst_case": {
+    "artifact_bytes": 2157956,
+    "burst": {
+      "max_line_bytes": 20228,
+      "queue_after_immediate_burst_records": 75,
+      "records": 201,
+      "serialized_journal_bytes": 2153804
+    },
+    "candidate_book_symbols": [
+      "100000",
+      "100001",
+      "100002"
+    ],
+    "close": {
+      "error": null,
+      "fsync_confirmed": true,
+      "path": "temporary:max-payload-burst.jsonl",
+      "persisted_records": 206,
+      "sealed": true
+    },
+    "close_timeout_seconds": 5,
+    "cpu_seconds": 1.077242449,
+    "dropped_records": 0,
+    "frame_counts": {
+      "available": 1,
+      "connection_gaps": 1,
+      "eligible_frame_gaps": 1,
+      "unavailable": 0
+    },
+    "gate_counts": {
+      "blocked": 0,
+      "not_reached": 0,
+      "recorded": 100,
+      "signal_created": 100,
+      "total": 100,
+      "unavailable": 0,
+      "unknown": 0
+    },
+    "kinds": {
+      "entry_gate_trace": 100,
+      "quote_subscription": 1,
+      "scan": 1,
+      "selection_basis": 100,
+      "ws_quote": 4
+    },
+    "persistence_dropped_records": 0,
+    "python_peak_bytes": 2637852,
+    "record_count": 206,
+    "schema_version": "kis-v4-max-payload-burst-v1",
+    "source_commit": "6a22b82d46bb21414c21a5b4eb7c90e22d25a920",
+    "source_complete": false,
+    "stream_complete": false,
+    "synthetic": true,
+    "wall_seconds": 1.1022316832095385
+  },
+  "prepared_for_capture_date": "2026-10-06",
+  "probes": {
+    "max_payload_burst": {
+      "path": "/tmp/kis_v4_burst_probe.py",
+      "sha256": "cca8319778362b92af1de3ac12f3eb10c20961c381d44660b70828880fd6a224"
+    },
+    "whole_flow": {
+      "path": "/tmp/kis_v4_capacity_probe.py",
+      "sha256": "60ac05879de6a8676b62dd3035d2a3a852170674754919d7d0b2b479340179ab"
+    }
+  },
+  "production_eligible": false,
+  "profit_comparison_available": false,
+  "schedule": {
+    "chosen_first_scan_at": "2026-10-06T00:17:00+00:00",
+    "end_at": "2026-10-06T00:33:00+00:00",
+    "first_scan_window": [
+      "2026-10-06T00:15:00+00:00",
+      "2026-10-06T00:17:30+00:00"
+    ],
+    "installed_at": "2026-10-05T23:55:00+00:00"
+  },
+  "schema_version": "kis-v4-journal-capacity-qualification-v1",
+  "source_commit": "6a22b82d46bb21414c21a5b4eb7c90e22d25a920",
+  "synthetic": true
+}

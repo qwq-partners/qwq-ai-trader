@@ -617,3 +617,54 @@ def test_legacy_projection_still_accepts_whole_small_cohort():
     p.pop('selection')
     api_module().validate_projection(p)
     assert service_module()._input(p, ws_plan()['websocket'], START+timedelta(seconds=51))[1] == ['005930']
+
+
+@pytest.mark.parametrize('record_count', [50001, 80000, 80001])
+def test_projection_preserves_late_anchors_with_bounded_80k_journal(record_count):
+    r = runtime()
+    r.buffer.evaluation_epoch = 'kr-entry-20261006-firstscan-v4'
+    scan, quote, signal, order = r.buffer._records
+    filler = {'kind': 'ws_quote', 'account': 'not-exported'}
+    r.buffer._records = [scan, quote] + [filler] * (record_count - 4)
+    signal['sequence'], order['sequence'] = record_count - 1, record_count
+    r.buffer._records.extend([signal, order])
+    if record_count > 80000:
+        with pytest.raises(ValueError, match='anchor_source_too_large'):
+            api_module().project_anchors(r, now=START + timedelta(seconds=3))
+        return
+    value = api_module().project_anchors(r, now=START + timedelta(seconds=3))
+    assert value['source_record_count'] == record_count
+    assert value['evaluation_epoch'] == 'kr-entry-20261006-firstscan-v4'
+    assert [row['source_sequence'] for row in value['records']] == [1, record_count - 1, record_count]
+    assert [row['sequence'] for row in value['records']] == [1, 2, 3]
+    assert value['schema_version'] == 'entry-anchor-projection-v2'
+    assert 'not-exported' not in json.dumps(value)
+    assert value['complete'] is False
+
+
+def test_real_80k_buffer_publishes_late_anchors_and_reports_overflow(monkeypatch):
+    from src.analytics.entry_observation import EntryObservationBuffer, capture_scan
+    import src.analytics.entry_observation as observation
+    monkeypatch.setattr(observation, '_now', lambda: START.isoformat())
+    r = runtime()
+    r.buffer = EntryObservationBuffer(evaluation_epoch='kr-entry-20261006-firstscan-v4',
+        capacity=80000, scan_scope='first', scan_admission_ref='bounded-80k-test')
+    sid = capture_scan(r.buffer, [SimpleNamespace(symbol='005930', price=10000, score=99)], 'regular')
+    quote = {'kind': 'ws_quote', 'symbol': '005930', 'observed_at': START.isoformat(), 'ask': 10001, 'bid': 10000}
+    for _ in range(79997):
+        assert r.buffer.publish(quote)
+    assert r.buffer.publish({'kind': 'signal', 'candidate_id': sid + ':005930',
+        'signal_id': 'late-signal', 'observed_at': (START + timedelta(seconds=1)).isoformat()})
+    assert r.buffer.publish({'kind': 'order_ready', 'signal_id': 'late-signal',
+        'symbol': '005930', 'order_id': 'late-order', 'requested_quantity': 3,
+        'observed_at': (START + timedelta(seconds=2)).isoformat()})
+    value = api_module().project_anchors(r, now=START + timedelta(seconds=3))
+    assert value['source_record_count'] == 80000
+    assert [row['source_sequence'] for row in value['records']] == [1, 79999, 80000]
+    assert value['dropped_records'] == 0
+    assert not r.buffer.publish(quote)
+    r.buffer._capture_closed = True
+    r.result = {'sealed': True, 'fsync_confirmed': True, 'error': None}
+    value = api_module().project_anchors(r, now=START + timedelta(seconds=3))
+    assert value['source_record_count'] == 80000 and value['dropped_records'] == 1
+    assert value['complete'] is False
