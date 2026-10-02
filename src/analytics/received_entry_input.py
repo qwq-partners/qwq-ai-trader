@@ -121,6 +121,17 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
     if any(isinstance(r,dict) and (r.get('kind')=='entry_gate_trace' or GATE_SCAN_FIELDS & set(r)) for r in records):
         from .entry_gate_report import build_gate_report
         build_gate_report(observations,as_of=payload['as_of'])
+    capture = payload.get('capture', {})
+    journal = observations.get('journal', {})
+    if ((isinstance(capture, dict) and (capture.get('version') == 'runner-first-scan-v4'
+                                      or 'frame_diagnostics' in capture))
+            or 'frame_diagnostics' in observations
+            or (isinstance(journal, dict) and (journal.get('format') == 'entry-observation-journal-v2'
+                                               or 'frame_diagnostics' in journal))
+            or any(isinstance(r, dict) and 'frame_diagnostic' in r for r in records)):
+        from .kis_frame_diagnostics import build_frame_report, validate_study_binding
+        validate_study_binding(observations, payload)
+        build_frame_report(observations, as_of=payload['as_of'])
     subscription_gap = not _subscription_stream_complete(records, report_at)
     # 정렬해서 자료를 복구하지 않는다. 원래 버퍼의 연속 순서가 없으면 연결 불가다.
     for seq, record in enumerate(records, 1):

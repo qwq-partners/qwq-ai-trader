@@ -1,5 +1,7 @@
 # 외부 API 연동
 
+> **41차 로컬 관측:** 명시v4에서 기존5종 프레임 오류만 제한된 TR/count/암호화/현재lease 범위로 기록한다. 원문/종목은 추가 진단에 저장하지 않고 다중/암호화 프레임을 첫 종목에 귀속하지 않는다. 기존 ACK/PRICE/BOOK 처리와 incomplete는 유지한다. API 호출/구독 정책·실접속 변경 없음. [PDS와 계약](../research/current-engine-capture-and-account-pds-2026-10-02.md).
+
 > **23차 토스 WS(10-01, 로컬 미배포):** `orderbook_stream`은 인증된 전용 소켓의 소유권을 주입받는 한정 관측기다. 연결/토큰 발급 없이 국내 호가 full-replace1회·ACK 대조·최우선 호가·종료를 처리한다. 통합 KRX+NXT/LOSSY는 별도 후보 품질 보고에만 사용하고 KIS 호가/주문 경로에 투입하지 않는다. [선정·진입 규약23차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
 
 > **15차 관측 수명(10-01):** 명시 Runner 설치가 정지 feed의 기존 관측 조정기를 사용한다. 관측 종료는 후보 lease 수요만 닫고 운영 PRICE/BOOK·미확인 등록을 보존한다. 이미 전송 중인 요청은 해제 완료로 바꾸지 않으며 정확한 해제 ACK 허용 집합은 여전히 기본 빈 값이다. 새 세션/운영 API 호출을 이번 검증에서 실행하지 않았다.

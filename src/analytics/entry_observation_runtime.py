@@ -95,13 +95,18 @@ class CapturePlan:
             'source_version_ref configuration_ref fee_evidence_ref capital_evidence_ref capacity_evidence_ref '
             'journal_path buffer_capacity queue_capacity batch_size max_bytes max_record_bytes '
             'open_timeout_seconds close_timeout_seconds channels').split())
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4'):
             expected.add('selection_basis')
-        if type(s) is dict and s.get('version') == 'runner-first-scan-v3':
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4'):
             expected.add('entry_gate_trace')
+        if type(s) is dict and s.get('version') == 'runner-first-scan-v4':
+            expected.add('frame_diagnostics')
         if (type(s) is not dict or set(s) != expected
-                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3')):
+                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4')):
             raise ValueError('지원하지 않는 capture 계약/필드')
+        if s['version'] == 'runner-first-scan-v4':
+            from .kis_frame_diagnostics import validate_settings as validate_frame_settings
+            validate_frame_settings(s['frame_diagnostics'])
         for key in ('study_ref', 'scan_admission_ref', 'source_version_ref', 'configuration_ref',
                     'fee_evidence_ref', 'capital_evidence_ref', 'capacity_evidence_ref'):
             if not isinstance(s[key], str) or not s[key].strip() or len(s[key]) > 200:
@@ -129,14 +134,14 @@ class CapturePlan:
                 raise ValueError('자원 한도는 양의 정수 필요')
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
-        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3'):
+        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4'):
             from .selection_basis import validate_settings
             selection = validate_settings(s['selection_basis'])
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
             record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
-            if s['version'] == 'runner-first-scan-v3':
+            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4'):
                 from .entry_gate_trace import validate_settings as validate_gate_settings
                 gate = validate_gate_settings(s['entry_gate_trace'])
                 if (gate['source_version_ref'] != s['source_version_ref']
@@ -168,7 +173,8 @@ class _WindowBuffer(EntryObservationBuffer):
         super().__init__(evaluation_epoch=plan.context['evaluation_epoch'], capacity=s['buffer_capacity'],
                          scan_scope='first', scan_admission_ref=s['scan_admission_ref'],
                          selection_basis_settings=s.get('selection_basis'),
-                         entry_gate_trace_settings=s.get('entry_gate_trace'))
+                         entry_gate_trace_settings=s.get('entry_gate_trace'),
+                         frame_diagnostics_settings=s.get('frame_diagnostics'))
         self._now = now
         self.start_at, self.end_at = plan.start_at, plan.end_at
         self.admission_end = _timestamp(s['admission_end_at'], 'admission_end_at')

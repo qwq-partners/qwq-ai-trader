@@ -40,7 +40,7 @@ class EntryObservationBuffer:
     """한 이벤트 루프용 유한 메모리 버퍼. 가득 차면 새 기록을 버리고 결손을 보존한다."""
 
     def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None,
-                 selection_basis_settings=None, entry_gate_trace_settings=None):
+                 selection_basis_settings=None, entry_gate_trace_settings=None, frame_diagnostics_settings=None):
         if not isinstance(evaluation_epoch, str) or not evaluation_epoch.strip():
             raise ValueError("evaluation_epoch 필요")
         if type(capacity) is not int or capacity <= 0:
@@ -61,6 +61,9 @@ class EntryObservationBuffer:
                                          if entry_gate_trace_settings is not None else None)
         if self.entry_gate_trace_settings is not None and scan_scope != 'first':
             raise ValueError('entry gate trace requires first scan scope')
+        from .kis_frame_diagnostics import validate_settings as validate_frame_settings
+        self.frame_diagnostics_settings = (validate_frame_settings(frame_diagnostics_settings)
+                                           if frame_diagnostics_settings is not None else None)
         self._entry_gate_trace_started = False
         self._first_scan_id = None
         self._first_scan_recorded = False
@@ -146,7 +149,9 @@ class EntryObservationBuffer:
                 "incomplete_reasons": sorted(reasons), "dropped_records": self._dropped}
 
     def export(self) -> dict:
-        return {**self.capture_status(), "records": deepcopy(self._records)}
+        return {**self.capture_status(), "records": deepcopy(self._records),
+                **({"frame_diagnostics": dict(self.frame_diagnostics_settings)}
+                   if self.frame_diagnostics_settings is not None else {})}
 
 
 def _capture_failed(observer):

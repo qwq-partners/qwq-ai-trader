@@ -24,6 +24,8 @@ from .selection_basis import BASIS_FIELDS, TERM_FIELDS, MAX_TERMS
 from .selection_source_status import SCAN_FIELDS, RUN_FIELDS, ORDER
 from .entry_gate_trace import TRACE_FIELDS, STEP_FIELDS, STAGES, SCAN_FIELDS as GATE_SCAN_FIELDS
 
+from .kis_frame_diagnostics import FIELDS as FRAME_FIELDS, validate_settings as validate_frame_settings, validate_diagnostic
+
 MAX_LINE_BYTES = 1024 * 1024
 ZERO_HASH = "0" * 64
 FIELDS = {
@@ -33,7 +35,7 @@ FIELDS = {
     "emit_result": "candidate_id signal_id observed_at emitted",
     "order_ready": "signal_id symbol order_id observed_at requested_quantity order_reference_price order_type risk_stop_pct effective_stop_pct base_stop_source effective_stop_source crash_cap_applied is_core strategy stop_snapshot_ref capital_budget capital_snapshot capital_snapshot_ref capital_snapshot_status stop_basis stop_resolved_at_stage fill_applied transport_status",
     "ws_quote": "quote_id symbol observed_at ask bid ask_size bid_size provenance",
-    "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at",
+    "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic",
 }
 FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))
@@ -50,6 +52,7 @@ NESTED = {
 NESTED['source_terms'] = TERM_FIELDS
 NESTED['selection_source_runs'] = RUN_FIELDS
 NESTED['steps'] = STEP_FIELDS
+NESTED['frame_diagnostic'] = FRAME_FIELDS
 
 
 def _json(value):
@@ -93,6 +96,10 @@ def _record_shape(record, maximum):
     if type(record) is not dict or record.get("kind") not in FIELDS:
         raise ValueError("지원하지 않는 관측 종류")
     _positive(record.get("sequence"), "sequence")
+    if "frame_diagnostic" in record:
+        if record.get("kind") != "quote_subscription" or record.get("status") != "connection_gap":
+            raise ValueError("frame 진단은 connection_gap 전용")
+        validate_diagnostic(record["frame_diagnostic"], reason=record.get("reason"))
     budget = maximum
 
     def scalar(value):
@@ -174,6 +181,9 @@ class ObservationJournal:
             "study_ref": study_ref, "study_sha256": study_sha256,
             "capacity": buffer.capacity, "queue_capacity": queue_capacity, "batch_size": batch_size,
             "max_bytes": max_bytes, "max_record_bytes": max_record_bytes}
+        if buffer.frame_diagnostics_settings is not None:
+            self._header.update(format="entry-observation-journal-v2",
+                                frame_diagnostics=dict(buffer.frame_diagnostics_settings))
         self._thread = threading.Thread(target=self._run, name="entry-observation-journal", daemon=True)
         self._thread.start()
         try:
@@ -204,6 +214,8 @@ class ObservationJournal:
             self.buffer.mark_incomplete("journal_failed")
             return
         try:
+            if "frame_diagnostic" in record and "frame_diagnostics" not in self._header:
+                raise ValueError("선언되지 않은 frame 진단")
             _record_shape(record, self._max_record_bytes)
             self._queue.put_nowait(record)
         except (ValueError, TypeError, queue.Full):
@@ -350,8 +362,11 @@ def read_observation_journal(path, *, max_bytes, expected_study_sha256):
             if seq == 1:
                 keys = {"format", "capture_id", "evaluation_epoch", "created_at", "study_ref", "study_sha256",
                         "capacity", "queue_capacity", "batch_size", "max_bytes", "max_record_bytes"}
+                if type(payload) is dict and payload.get("format") == "entry-observation-journal-v2":
+                    keys.add("frame_diagnostics")
+                    validate_frame_settings(payload.get("frame_diagnostics"))
                 if (kind != "start" or type(payload) is not dict or set(payload) != keys
-                        or payload["format"] != "entry-observation-journal-v1"
+                        or payload["format"] not in ("entry-observation-journal-v1", "entry-observation-journal-v2")
                         or payload["study_sha256"] != expected_study_sha256):
                     raise ValueError("원장 헤더/연구 규약 불일치")
                 for key in ("capacity", "queue_capacity", "batch_size", "max_bytes", "max_record_bytes"):
@@ -366,6 +381,8 @@ def read_observation_journal(path, *, max_bytes, expected_study_sha256):
                 header = payload
             elif kind == "record":
                 _record_shape(payload, header["max_record_bytes"])
+                if "frame_diagnostic" in payload and "frame_diagnostics" not in header:
+                    raise ValueError("선언되지 않은 frame 진단")
                 if (payload["sequence"] != len(records) + 1 or len(records) >= header["capacity"]
                         or len(_json(payload)) > header["max_record_bytes"]):
                     raise ValueError("원래 관측 sequence 불일치")
@@ -396,10 +413,13 @@ def read_observation_journal(path, *, max_bytes, expected_study_sha256):
         if header is None or total > header["max_bytes"]:
             raise ValueError("원장 헤더 부재/선언 크기 초과")
     return {"schema_version": 1, "evaluation_epoch": header["evaluation_epoch"],
+        **({"frame_diagnostics": dict(header["frame_diagnostics"])} if "frame_diagnostics" in header else {}),
         "complete": seal["complete"] if seal else False,
         "incomplete_reasons": seal["incomplete_reasons"] if seal else ["journal_unsealed"],
         "dropped_records": seal["dropped_records"] if seal else None, "records": records,
-        "journal": {"capture_id": header["capture_id"], "study_ref": header["study_ref"],
+        "journal": {**({"format": header["format"], "frame_diagnostics": dict(header["frame_diagnostics"]),
+                           "created_at": header["created_at"]} if "frame_diagnostics" in header else {}),
+            "capture_id": header["capture_id"], "study_ref": header["study_ref"],
             "study_sha256": header["study_sha256"], "sealed": seal is not None,
             "capture_closed_at": seal["sealed_at"] if seal else None,
             "dropped_count_exact": seal is not None,

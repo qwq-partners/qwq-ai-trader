@@ -95,18 +95,31 @@ class QuoteSubscriptionCoordinator:
         self._candidate_status: dict[str, str] = {}
         self._observation_ended = False
 
-    def _record(self, status, key=None, *, candidate_id=None, reason=None, expires_at=None):
+    def _record(self, status, key=None, *, candidate_id=None, reason=None, expires_at=None, frame_diagnostic=None):
         record = {"kind": "quote_subscription", "observed_at": datetime.now(timezone.utc).isoformat(),
                   "status": status, "generation": self.generation,
                   "connection_id": self.connection_id, "candidate_id": candidate_id,
                   "tr_id": key[0] if key else None, "symbol": key[1] if key else None,
                   "reason": reason, "expires_at": expires_at}
+        if frame_diagnostic is not None:
+            record["frame_diagnostic"] = frame_diagnostic
         # 정해진 버퍼는 publish 실패를 dropped_records로 보존한다.
         self.observer.publish(record)
 
-    def _gap(self, reason):
+    def _gap(self, reason, *, frame_diagnostic=None):
         self.observer.mark_incomplete(reason)
-        self._record("connection_gap", reason=reason)
+        self._record("connection_gap", reason=reason, frame_diagnostic=frame_diagnostic)
+
+    def frame_gap(self, reason, **frame):
+        """진단 실패도 기존 gap을 한 번 보존한다. 원문/예외는 저장하지 않는다."""
+        detail = None
+        if self.observer.frame_diagnostics_settings is not None:
+            try:
+                from src.analytics.kis_frame_diagnostics import classify_frame, validate_diagnostic
+                detail = validate_diagnostic(classify_frame(owner=self, **frame), reason=reason)
+            except Exception:
+                self.observer.mark_incomplete("frame_diagnostic_failed")
+        self._gap(reason, frame_diagnostic=detail)
 
     async def start(self, send):
         async with self._lock:
