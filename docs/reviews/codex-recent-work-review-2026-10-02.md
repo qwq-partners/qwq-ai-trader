@@ -51,15 +51,15 @@
 - 실패로 표시된 보류는 `set_sync_status(False)`지만 `risk/manager.py` 10분 강제 해제로 약 90초 주기 차단·해제 반복.
 - 운영 로그상 9월 이후 발생 0건. 권고: 보류 시작 시각 기록, N분 초과 시 `record_failure` + 텔레그램.
 
-### P2 (미수정, 기록)
-- 삭제된 `sync_from_kis` 자동 보충(누락 매수·매도 저널, 수수료 포함 PnL 보정, 전략 추론)이 대체 없이 사라져 대시보드·20:30 원장 집계가 달라질 수 있다. KR `_reconcile_pnl`은 호출처 없는 죽은 코드.
-- 매수가능조회 실패 시 포지션 대사까지 통째로 중단(이전엔 예수금 대체 후 진행).
-- 손절 POST 직전 원장 기록 2회 + FULL fsync가 공용 `to_thread` 풀을 거침. 저널 JSON fsync는 이벤트 루프에서 동기 실행.
-- 취소 종료 판정이 미확인 KIS 응답 형태(`cncl_yn`, 원주문 행 `tot_ccld_qty+cnc_cfrm_qty`)에 의존(**가설**, 실계좌 8001R 원본 행 1건으로 확정 필요).
-- 저장 장애(`unavailable`/`unknown`/`pending`)에 재시도·확정 조회(`lookup_execution_receipt`, 미호출) 없음. 미commit 식별 기록을 DB로 재전송하는 경로 없음(`predecessor_uncommitted` 연쇄).
-- "미해결 주문" 상태가 네 곳(order_unknown.json, 원장 hold, 체결 관측, handoff)에 겹치고 해제 규칙이 다름.
-- `execution_recovery_status()` 소비처(대시보드·ops_check) 없음. 미사용 변수(`_sig_cache_h`, `_sig_cache`), `_exit_basis_is_idle` 종목별 검사는 토큰이 이미 계좌 전체로 막아 사실상 죽은 검사.
-- `allow_nan=False`·저장 예외 전파가 기존 경로에도 적용돼 지표에 NaN 하나면 같은 날짜 파일의 이후 저장이 모두 실패(**가설**).
+### P2 (2026-10-03 48차 정리에서 대부분 수정 — 각 항목 끝 표기)
+- 삭제된 `sync_from_kis` 자동 보충(누락 매수·매도 저널, 수수료 포함 PnL 보정, 전략 추론)이 대체 없이 사라져 대시보드·20:30 원장 집계가 달라질 수 있다. KR `_reconcile_pnl`은 호출처 없는 죽은 코드. → **죽은 코드 제거(P2 정리). 자동 보충 복원은 34차 설계 결정(추정 기반 보정 제거)이라 복원하지 않고 P1-3 귀속 미확정 JSONL + 운영자 대사로 대체.**
+- 매수가능조회 실패 시 포지션 대사까지 통째로 중단(이전엔 예수금 대체 후 진행). → **수정: 예수금 폴백(미검증) + 현금만 보류, 포지션 대사 계속.**
+- 손절 POST 직전 원장 기록 2회 + FULL fsync가 공용 `to_thread` 풀을 거침. 저널 JSON fsync는 이벤트 루프에서 동기 실행. → **원장은 전용 단일 스레드 executor로 수정. 저널 JSON fsync는 메모리/파일 순서 보존 때문에 그대로(수용).**
+- 취소 종료 판정이 미확인 KIS 응답 형태(`cncl_yn`, 원주문 행 `tot_ccld_qty+cnc_cfrm_qty`)에 의존(**가설**, 실계좌 8001R 원본 행 1건으로 확정 필요). → **미수정(근거 필요). 해소 안 되는 취소 관측은 P1-4 경보(15분)로 가시화.**
+- 저장 장애(`unavailable`/`unknown`/`pending`)에 재시도·확정 조회(`lookup_execution_receipt`, 미호출) 없음. 미commit 식별 기록을 DB로 재전송하는 경로 없음(`predecessor_uncommitted` 연쇄). → **수정: `resolve_execution_receipt`(확정 조회 + 미commit batch 1회 재큐)를 drain 에서 최대 2주기 호출.**
+- "미해결 주문" 상태가 네 곳(order_unknown.json, 원장 hold, 체결 관측, handoff)에 겹치고 해제 규칙이 다름. → **미수정(설계 과제). 가드 표는 `docs/risk/risk-and-exit.md`.**
+- `execution_recovery_status()` 소비처(대시보드·ops_check) 없음. 미사용 변수(`_sig_cache_h`, `_sig_cache`), `_exit_basis_is_idle` 종목별 검사는 토큰이 이미 계좌 전체로 막아 사실상 죽은 검사. → **`/api/health.execution_recovery` + ops_check 한 줄 노출, 미사용 변수 제거. `_exit_basis_is_idle`은 무해해 유지.**
+- `allow_nan=False`·저장 예외 전파가 기존 경로에도 적용돼 지표에 NaN 하나면 같은 날짜 파일의 이후 저장이 모두 실패(**가설**). → **수정: 지표·시장 맥락·점수 분해·테마의 NaN/Inf를 None으로 정리.**
 
 ### 집중 질문 중 이상 없음으로 확인된 것
 - 잔고 보류의 활동 카운터 자체는 `finally`에서 항상 감소(누수 없음). 영구 보류는 위 P1-3/P1-4 경로만.
@@ -128,6 +128,7 @@
 | P1-3·P1-4 수정 뒤(2차 커밋) | 관련 8파일 217 passed → `scripts/dev/verify.sh` | **4084 passed / 2 xfailed**, 143.72초, 격리 위반 0, 비밀정보 검사 통과 |
 | 2차 독립 리뷰 반영 뒤(최종) | `scripts/dev/verify.sh` | **4086 passed / 2 xfailed**, 132.31초, 격리 위반 0, 비밀정보 검사 통과 |
 | CI 플레이크 수정 뒤 | `TZ=UTC` / `TZ=Asia/Seoul` 각각 `scripts/dev/verify.sh` | UTC **4086 passed / 2 xfailed** 137.76초 · KST **4086 passed / 2 xfailed** 129.60초, 격리 위반 0 |
+| 48차 P2 정리(10-03, 미배포) | 신규 8개 + 관련 테스트 → `TZ=UTC` / `TZ=Asia/Seoul` 각각 `scripts/dev/verify.sh` | UTC **4093 passed / 2 xfailed** 139.51초 · KST **4093 passed / 2 xfailed** 130.71초, 격리 위반 0. 독립 리뷰(요청 Opus/high) 조건부 APPROVE → P2 4건 반영 |
 | 신규 + 인접 7파일 | `test_execution_ledger_acknowledge.py` 외 ledger/readonly/cancel_fill/order_post_unknown/recovery_evidence(+cli) | 220 passed, 7.84초 |
 | 35차 테스트 교체 뒤 | `test_durable_execution_integration.py` + 신규 | 36 passed, 4.04초 |
 | 독립 리뷰(요청 Opus/high, 작성자 아님) | 수정 전 코드로 신규 테스트 재실행 | 9개 중 6개 실패(ack 4·CLI 1·open_failure 1) → 결함을 잡는 테스트임을 확인. 조건부 APPROVE, 지적 전부 반영 |

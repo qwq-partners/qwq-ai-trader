@@ -2147,10 +2147,12 @@ class KISBroker(BaseBroker):
                         if not cash_value.is_finite() or cash_value < 0:
                             raise ValueError("invalid orderable cash")
                     except (ValueError, ArithmeticError):
-                        logger.warning("[잔고] 매수가능금액 누락/유효하지 않음 → 잔고 적용 보류")
-                        return {}
-                    available_cash = float(cash_value)
-                    available_cash_verified = True
+                        # 빈 응답을 {} 로 돌려 잔고 전체를 버리지 않는다 — 다른 폴백과 같이 예수금(미검증)으로 표기 (48차 P2)
+                        logger.warning(f"[잔고] 매수가능금액 누락/유효하지 않음 → 예수금 {deposit:,.0f}원 폴백(미검증)")
+                        available_cash = deposit
+                    else:
+                        available_cash = float(cash_value)
+                        available_cash_verified = True
                 else:
                     # rt_cd 실패(재시도 소진 등)도 예외 경로와 동일하게 예수금 폴백 —
                     # 0원으로 성공 반환하면 기동 시 portfolio.cash=0/initial_capital 과소 (2026-09-03 P2)

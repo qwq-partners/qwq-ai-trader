@@ -354,22 +354,6 @@ async def test_outer_accounting_corruption_never_commits(pg_socket,tmp_path,monk
 
 
 @pytest.mark.asyncio
-async def test_legacy_kr_reconcile_preserves_identified_rows_and_memory(pg_socket,tmp_path,monkeypatch):
-    storage = await storage_for(pg_socket,tmp_path,monkeypatch)
-    try:
-        buy(storage)
-        sell(storage,exit_quantity=2)
-        await storage._write_queue.join()
-        before = [dict(r) for r in await storage.pool.fetch('SELECT * FROM trades')]
-        cached = storage._journal.get_trade('t1').to_dict()
-        await storage._reconcile_pnl(date.today(),{'005930':[{'tot_ccld_qty':'2','avg_prvs':'900'}]})
-        assert [dict(r) for r in await storage.pool.fetch('SELECT * FROM trades')] == before
-        assert storage._journal.get_trade('t1').to_dict() == cached
-    finally:
-        await storage.disconnect()
-
-
-@pytest.mark.asyncio
 async def test_identified_buy_preserves_signal_score_in_sealed_event_and_db(pg_socket,tmp_path,monkeypatch):
     storage = await storage_for(pg_socket,tmp_path,monkeypatch)
     try:

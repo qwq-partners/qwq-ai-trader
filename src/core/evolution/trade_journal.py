@@ -5,6 +5,7 @@ AI Trading Bot v2 - 거래 저널 (Trade Journal)
 """
 
 import json
+import math
 import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
@@ -121,6 +122,17 @@ class TradeRecord:
                 except (ValueError, TypeError):
                     data[key] = None
         return cls(**data)
+
+
+def _finite_json(value):
+    """지표·시장 맥락의 NaN/Inf 를 None 으로 바꾼다 — allow_nan=False 저장이 같은 날짜 파일 전체를 막지 않게 (48차 P2)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _finite_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite_json(v) for v in value]
+    return value
 
 
 def _journal_today() -> date:
@@ -448,11 +460,11 @@ class TradeJournal:
             entry_reasons=_reasons_list,
             entry_strategy=_strategy,
             entry_signal_score=signal_score,
-            score_breakdown=score_breakdown or {},
+            score_breakdown=_finite_json(score_breakdown or {}),
             entry_tags=_tags,
-            indicators_at_entry=indicators or {},
-            market_context=market_context or {},
-            theme_info=theme_info or {},
+            indicators_at_entry=_finite_json(indicators or {}),
+            market_context=_finite_json(market_context or {}),
+            theme_info=_finite_json(theme_info or {}),
         )
 
         self._trades[trade_id] = trade
@@ -550,7 +562,7 @@ class TradeJournal:
                 _effective_exit_type = "sync_detected"
             # 그 외 'manual'은 진짜 수동 청산 (사용자 KIS HTS 매도 등)
         trade.exit_type = _effective_exit_type
-        trade.indicators_at_exit = indicators or {}
+        trade.indicators_at_exit = _finite_json(indicators or {})
 
         # 손익 계산 (수수료 포함, 누적: 부분 매도 시 += 방식)
         # 포트폴리오 평균단가 우선 사용 (KIS와 일치)
@@ -661,10 +673,10 @@ class TradeJournal:
                     entry_signal_score=values.get("signal_score", 0),
                     entry_reasons=list(values.get("entry_reasons") or [reason]),
                     entry_tags=list(values.get("entry_tags") or []),
-                    score_breakdown=deepcopy(values.get("score_breakdown") or {}),
-                    indicators_at_entry=deepcopy(values.get("indicators") or {}),
-                    market_context=deepcopy(values.get("market_context") or {}),
-                    theme_info=deepcopy(values.get("theme_info") or {}), created_at=now, updated_at=now)
+                    score_breakdown=_finite_json(deepcopy(values.get("score_breakdown") or {})),
+                    indicators_at_entry=_finite_json(deepcopy(values.get("indicators") or {})),
+                    market_context=_finite_json(deepcopy(values.get("market_context") or {})),
+                    theme_info=_finite_json(deepcopy(values.get("theme_info") or {})), created_at=now, updated_at=now)
         else:
             if quantity > previous.entry_quantity - (previous.exit_quantity or 0):
                 raise ValueError("execution_sell_exceeds_trade")
@@ -672,7 +684,7 @@ class TradeJournal:
             trade.exit_time, trade.exit_price = now, float(price)
             trade.exit_quantity = (trade.exit_quantity or 0) + quantity
             trade.exit_reason, trade.exit_type = reason, values["exit_type"]
-            trade.indicators_at_exit = deepcopy(values.get("indicators") or {})
+            trade.indicators_at_exit = _finite_json(deepcopy(values.get("indicators") or {}))
             from ...utils.fee_calculator import calculate_net_pnl
             basis = values.get("avg_entry_price")
             basis = trade.entry_price if basis is None else basis

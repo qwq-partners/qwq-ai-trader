@@ -1426,16 +1426,21 @@ class KRScheduler:
                     bot.risk_manager.set_sync_status(False)
                 _hb.record_failure("kr_portfolio_sync", "잔고 조회 실패")
                 return
+            _cash_verified = True
             try:
                 available_cash = Decimal(str(balance['available_cash']))
                 if (balance.get('available_cash_verified', True) is not True
                         or not available_cash.is_finite() or available_cash < 0):
                     raise ValueError("invalid cash")
             except (KeyError, ValueError, ArithmeticError):
+                # 현금만 보류한다. 포지션 대사(유령·누락·평단)는 계속 진행해 매수가능조회 일시 실패가
+                # 보유 정합을 미루지 않게 한다 (48차 P2). 매수 건강성 검사는 종전대로 실패로 센다.
+                _cash_verified = False
+                available_cash = None
                 if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
                     bot.risk_manager.set_sync_status(False)
-                _hb.record_failure("kr_portfolio_sync", "가용 현금 누락/유효하지 않음")
-                return
+                _hb.record_failure("kr_portfolio_sync", "가용 현금 누락/유효하지 않음 — 현금 보류, 포지션만 대사")
+                logger.warning("[동기화] 가용 현금 미검증 → 현금 갱신 보류, 포지션 대사만 진행")
             kis_positions = await bot.broker.get_positions()
 
             # 2. API 빈 결과 방어: lock 밖에서 재시도 (lock 내 sleep 방지)
@@ -1617,13 +1622,14 @@ class KRScheduler:
                     if kis_pos.current_price > 0:
                         bot_pos.current_price = kis_pos.current_price
 
-                # 현금 동기화
+                # 현금 동기화 (미검증이면 보류)
                 old_cash = portfolio.cash
-                portfolio.cash = available_cash
-                if abs(old_cash - available_cash) > 1000:
-                    logger.info(
-                        f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
-                    )
+                if _cash_verified:
+                    portfolio.cash = available_cash
+                    if abs(old_cash - available_cash) > 1000:
+                        logger.info(
+                            f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
+                        )
 
                 # lock 안에서 로깅 값 캡처
                 _log_ghost = len(ghost_symbols)
@@ -1653,8 +1659,10 @@ class KRScheduler:
 
             # 동기화 성공 → 리스크 매니저에 알림
             if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
-                bot.risk_manager.set_sync_status(True)
-            _hb.record_success("kr_portfolio_sync")
+                if _cash_verified:  # 현금 미검증 동기화는 건강 복구로 세지 않는다 (48차 P2)
+                    bot.risk_manager.set_sync_status(True)
+            if _cash_verified:  # 현금 미검증 주기는 실패 기록을 유지해 정체 경보가 유지되게 (48차 P2 리뷰)
+                _hb.record_success("kr_portfolio_sync")
 
         except Exception as e:
             logger.error(f"포트폴리오 동기화 오류: {e}")
@@ -3055,9 +3063,31 @@ JSON:
             try:
                 asyncio.create_task(send_alert(
                     f"⚠️ 체결 장부 귀속 미확정: {fill.symbol} {fill.side.value} {fill.quantity}주 — {reason}\n"
-                    f"포트폴리오 반영 완료, 저널/DB 미기록 → ~/.cache/ai_trader/unattributed_executions.jsonl 대사 필요"))
+                    f"포트폴리오 반영 완료, 장부 commit 여부 불명/미기록 → ~/.cache/ai_trader/unattributed_executions.jsonl 대사 필요"))
             except RuntimeError:
                 pass
+
+    JOURNAL_RESOLVE_ATTEMPTS = 2  # 불명/일시 장애 영수증의 DB 확정 조회·재제출 횟수 (48차 P2)
+
+    async def _retry_execution_journal(self, handoff):
+        """commit 불명(unknown)·DB 일시 장애(unavailable)·큐 거부는 영수증을 DB 에서 확정하거나 보관 batch 를
+        다시 큐에 넣는다. 재삽입은 (account_scope, execution_id) 유일 인덱스와 서명 검사로 멱등이다.
+        True 를 돌려주면 호출부가 다음 주기에 다시 본다. 횟수를 넘기거나 확정 실패면 False(귀속 미확정 기록)."""
+        attempts = handoff.get('journal_retries', 0)
+        resolver = getattr(self.bot.trade_journal, 'resolve_execution_receipt', None)
+        if attempts >= self.JOURNAL_RESOLVE_ATTEMPTS or not callable(resolver):
+            return False
+        handoff['journal_retries'] = attempts + 1
+        fill = handoff['fill']
+        try:
+            receipt = await resolver(fill.account_scope, fill.execution_id)
+        except Exception as exc:
+            logger.warning(f"[체결] {fill.symbol} 장부 영수증 확정 조회 실패: {exc}")
+            return False
+        status, reason = getattr(receipt, 'status', None), getattr(receipt, 'reason', '')
+        logger.info(f"[체결] {fill.symbol} 장부 영수증 재확인 {attempts + 1}/{self.JOURNAL_RESOLVE_ATTEMPTS}: {status}/{reason}")
+        # DB 장애 중 조회 자체가 실패한 경우(database_lookup_failed)도 예산 안에서 계속 본다
+        return status in ('pending', 'committed', 'unavailable') or (status == 'unknown' and reason == 'database_lookup_failed')
 
     def _execution_journal_committed(self, fill):
         """메모리 receipt만 조회한다. DB 대기로 다른 체결의 보호 후처리를 막지 않는다."""
@@ -3113,6 +3143,8 @@ JSON:
                     try:
                         committed = self._execution_journal_committed(handoff['fill'])
                     except Exception as exc:
+                        if await self._retry_execution_journal(handoff):
+                            continue  # DB 확정 조회/재제출 뒤 다음 주기에 다시 본다 (48차 P2, 유한 횟수)
                         await self._record_unattributed_execution(handoff, f'장부 DB commit 미확정: {exc}')
                     else:
                         if not committed:
@@ -3429,8 +3461,6 @@ JSON:
                 # 체결 시점 스냅샷이 정본 — 엔진이 주문 완결 시 캐시를 비운다
                 _atr_hint: Optional[float] = None
                 try:
-                    _rm_h = getattr(bot.engine, 'risk_manager', None)
-                    _sig_cache_h = getattr(_rm_h, '_pending_signal_cache', {}) if _rm_h else {}
                     _sig_meta_h = (_entry_lot["signal"] if _entry_lot is not None
                                    else self._fill_signal_metadata(fill))
                     _atr_meta = _sig_meta_h.get("metadata", {}).get("atr_pct")
@@ -3486,8 +3516,6 @@ JSON:
                     _tid = getattr(pos, 'trade_id', None) or f"{fill.symbol}_{_dt.now().strftime('%Y%m%d%H%M%S%f')}"
 
                     # ── 시그널 캐시에서 메타데이터 추출 ──────────────
-                    _rm = getattr(bot.engine, 'risk_manager', None)
-                    _sig_cache = getattr(_rm, '_pending_signal_cache', {}) if _rm else {}
                     # 체결 시점 스냅샷이 정본. 엔진 캐시는 pop 하지 않는다 —
                     # 부분체결 잔여분·등록 재시도가 빈 메타를 쓰지 않도록 수명을
                     # 엔진 pending 정리(on_fill 완결·clear_pending)에 맞춘다 (2026-09-14 T3)

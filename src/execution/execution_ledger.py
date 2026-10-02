@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import os
 import sqlite3
 import stat
@@ -38,6 +39,8 @@ class ExecutionLedger:
         self._session_id: str | None = None
         self._lock = asyncio.Lock()
         self._fault = False
+        # 공용 to_thread 풀을 쓰지 않는다 — pykrx 등이 풀을 점유해도 손절 POST 전 기록이 뒤에서 기다리지 않게 (48차 P2)
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="execution-ledger")
 
     async def open(self, session_id: str) -> dict:
         return await self._run("open", session_id=session_id)
@@ -90,7 +93,8 @@ class ExecutionLedger:
                 frozen_payload = json.loads(_encode(payload))
             except (TypeError, ValueError) as exc:
                 raise ExecutionLedgerError("허용하지 않은 입력 형식") from exc
-            task = asyncio.create_task(asyncio.to_thread(self._transaction, operation, frozen_payload))
+            loop = asyncio.get_running_loop()
+            task = asyncio.ensure_future(loop.run_in_executor(self._executor, self._transaction, operation, frozen_payload))
             try:
                 return await asyncio.shield(task)
             except asyncio.CancelledError:
