@@ -102,7 +102,7 @@
 | 단계 | 명령/범위 | 결과 |
 |---|---|---|
 | 리뷰 기준본 | `scripts/dev/verify.sh` @ 0843c54 (수정 전) | 4045 passed / 2 xfailed, 186.81초, 격리 위반 0 |
-| main 병합 뒤(#139/#140 포함) | 아래 "병합 후 verify" | 본문 끝 참조 |
+| main 병합 뒤(#139/#140 포함, 85a7e44) | `scripts/dev/verify.sh` | **4078 passed / 2 xfailed**, 134.00초, 격리 위반 0, 비밀정보 검사 통과 |
 | 신규 + 인접 7파일 | `test_execution_ledger_acknowledge.py` 외 ledger/readonly/cancel_fill/order_post_unknown/recovery_evidence(+cli) | 220 passed, 7.84초 |
 | 35차 테스트 교체 뒤 | `test_durable_execution_integration.py` + 신규 | 36 passed, 4.04초 |
 | 독립 리뷰(요청 Opus/high, 작성자 아님) | 수정 전 코드로 신규 테스트 재실행 | 9개 중 6개 실패(ack 4·CLI 1·open_failure 1) → 결함을 잡는 테스트임을 확인. 조건부 APPROVE, 지적 전부 반영 |
