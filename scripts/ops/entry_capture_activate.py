@@ -48,6 +48,7 @@ class ActivationProfile:
     evaluation_epoch: str
     not_before: datetime
     latest_start_at: datetime
+    allow_predeployed: bool = False
 
 
 def activation_profile(name):
@@ -65,7 +66,7 @@ def activation_profile(name):
             Path('/etc/qwq-entry-capture/20261006-pilot2/entry-capture.conf'),
             'kr-entry-20261006-firstscan-v4',
             datetime(2026,10,5,23,55,tzinfo=timezone.utc),
-            datetime(2026,10,5,23,57,tzinfo=timezone.utc))
+            datetime(2026,10,5,23,57,tzinfo=timezone.utc), allow_predeployed=True)
     raise GuardError()
 
 
@@ -171,7 +172,7 @@ def load_config(profile='20261002'):
     for name in ('old_head','new_head'):
         if type(raw[name]) is not str or not re.fullmatch('[0-9a-f]{40}', raw[name]):
             raise GuardError()
-    if raw['old_head'] == raw['new_head']:
+    if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
         raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
@@ -357,8 +358,9 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
                  f'--groups={cfg.toss_gid}','/usr/bin/env','-i','TOSS_API=1','/usr/bin/python3',
                  '-I','-S',str(cfg.launcher_path),'--deployment',str(cfg.deployment_path),'--check'])
         phase = 'checkout'
-        changed = True  # 부분 실패도 원래 HEAD 복구를 시도한다.
-        git('checkout','-q','--detach',cfg.new_head)
+        if cfg.old_head != cfg.new_head:
+            changed = True  # 부분 실패도 원래 HEAD 복구를 시도한다.
+            git('checkout','-q','--detach',cfg.new_head)
         if git('rev-parse','HEAD').strip() != cfg.new_head:
             raise GuardError()
         for path, sha in cfg.source_hashes.items():
@@ -428,10 +430,11 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
         status = 'complete'
     except Exception:
         status = 'failed' if receipt else 'rejected'
-        if changed and not restart_attempted:
+        if (changed or installed) and not restart_attempted:
             rollback = 'failed'
             try:
-                git('checkout','-q','--detach',cfg.old_head,rollback_command=True)
+                if changed:
+                    git('checkout','-q','--detach',cfg.old_head,rollback_command=True)
                 if installed:
                     visible = cfg.dropin_path.lstat()
                     if (not stat.S_ISREG(visible.st_mode) or visible.st_uid != trusted_uid

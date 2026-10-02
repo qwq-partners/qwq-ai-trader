@@ -393,6 +393,134 @@ def october6_raw(s):
     return raw
 
 
+@pytest.mark.parametrize('profile', ['20261002', '20261006-pilot2'])
+def test_equal_heads_permitted_only_by_october6_profile(setup, monkeypatch, profile):
+    s = setup
+    m = s.m
+    raw = october6_raw(s)
+    selected = m.activation_profile(profile)
+    old_once = raw['once_path']
+    for key in ('state_dir', 'once_path', 'staged_dropin'):
+        raw[key] = str(getattr(selected, key))
+    raw['evaluation_epoch'] = selected.evaluation_epoch
+    raw['not_before'] = selected.not_before.isoformat()
+    raw['latest_start_at'] = selected.latest_start_at.isoformat()
+    raw['input_hashes'] = {
+        path.replace(str(Path(old_once).parent), str(selected.once_path.parent)): sha
+        for path, sha in raw['input_hashes'].items()}
+    raw['old_head'] = raw['new_head']
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(m, 'trusted_dir', lambda *args: None)
+    monkeypatch.setattr(m, 'read_file', lambda *args, **kwargs: json.dumps(raw).encode())
+    if profile == '20261002':
+        with pytest.raises(m.GuardError):
+            m.load_config(profile)
+    else:
+        cfg = m.load_config(profile)
+        assert cfg.old_head == cfg.new_head
+
+
+def predeployed_run(s, *, runner=None):
+    from dataclasses import replace
+    return s.m.activate(replace(s.cfg, old_head=s.cfg.new_head),
+        runner=runner or s.runner, clock=lambda: s.current[0], fetch=s.fetch,
+        sleep=lambda seconds: s.current.__setitem__(0, s.current[0]+timedelta(seconds=seconds)),
+        trusted_uid=os.getuid(), lock_uid=os.getuid(), engine_input_uid=os.getuid())
+
+
+def test_predeployed_capture_restarts_once_without_checkout(setup):
+    s = setup
+    s.source.write_bytes(b'new\n')
+    result = predeployed_run(s)
+    assert result['status'] == 'complete'
+    assert not any('checkout' in c for c in s.events)
+    assert sum('restart' in c for c in s.events) == 1
+    assert sum('start' in c for c in s.events) == 1
+    assert s.source.read_bytes() == b'new\n'
+    assert s.dropin.read_bytes() == s.staged.read_bytes()
+    count = len(s.events)
+    assert predeployed_run(s)['status'] == 'rejected'
+    assert len(s.events) == count
+
+
+@pytest.mark.parametrize('problem', ['head', 'source', 'pending', 'kill', 'input'])
+def test_predeployed_checks_current_code_and_all_preflight_gates(setup, problem):
+    s = setup
+    s.source.write_bytes(b'new\n')
+    if problem in ('head', 'source'):
+        s.source.write_bytes(b'tampered\n')
+    if problem == 'pending':
+        s.health['broker']['pending_orders'] = 1
+    if problem == 'kill':
+        s.kill.unlink()
+    if problem == 'input':
+        s.once.write_bytes(b'tampered')
+    def runner(argv, **kwargs):
+        result = s.runner(argv, **kwargs)
+        if problem == 'source' and 'rev-parse' in argv:
+            result.stdout = s.cfg.new_head
+        return result
+    assert predeployed_run(s, runner=runner)['status'] == 'failed'
+    assert not any('checkout' in c or 'restart' in c or 'start' in c for c in s.events)
+    assert not s.dropin.exists()
+
+
+def test_predeployed_expiry_removes_own_dropin_without_checkout(setup):
+    s = setup
+    s.source.write_bytes(b'new\n')
+    def hook(argv):
+        if 'daemon-reload' in argv:
+            s.current[0] = s.now+timedelta(seconds=120)
+    s.behavior['hook'] = hook
+    result = predeployed_run(s)
+    assert result['status'] == 'failed' and result['rollback'] == 'complete'
+    assert not s.dropin.exists()
+    assert s.source.read_bytes() == b'new\n'
+    assert not any('checkout' in c or 'restart' in c or 'start' in c for c in s.events)
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+def test_predeployed_partial_dropin_cleanup_respects_inode(setup, monkeypatch, replacement):
+    s = setup
+    s.source.write_bytes(b'new\n')
+    original = s.m.os.fsync
+    injected = [False]
+    def fsync(fd):
+        if s.dropin.exists() and not injected[0]:
+            opened, visible = os.fstat(fd), s.dropin.stat()
+            if (opened.st_dev, opened.st_ino) == (visible.st_dev, visible.st_ino):
+                injected[0] = True
+                if replacement:
+                    s.dropin.rename(s.dropin.with_suffix('.original'))
+                    s.dropin.write_bytes(b'independent-replacement')
+                else:
+                    os.ftruncate(fd, 3)
+                raise OSError('injected dropin failure')
+        return original(fd)
+    monkeypatch.setattr(s.m.os, 'fsync', fsync)
+    result = predeployed_run(s)
+    assert injected[0] and result['status'] == 'failed'
+    assert result['rollback'] == ('failed' if replacement else 'complete')
+    if replacement:
+        assert s.dropin.read_bytes() == b'independent-replacement'
+    else:
+        assert not s.dropin.exists()
+    assert s.source.read_bytes() == b'new\n'
+    assert not any('checkout' in c or 'restart' in c for c in s.events)
+
+
+def test_predeployed_restart_failure_never_rolls_back_or_retries(setup):
+    s = setup
+    s.source.write_bytes(b'new\n')
+    s.behavior['fail'] = lambda argv: 'restart' in argv
+    result = predeployed_run(s)
+    assert result['status'] == 'failed' and result['restart_attempted'] is True
+    assert result['rollback'] == 'not_needed'
+    assert s.dropin.exists() and s.source.read_bytes() == b'new\n'
+    assert sum('restart' in c for c in s.events) == 1
+    assert not any('checkout' in c or 'start' in c for c in s.events)
+
+
 @pytest.mark.parametrize('mismatch',[None,'once_path','staged_dropin','state_dir','evaluation_epoch','not_before','latest_start_at','input_hashes','study_sha256'])
 def test_new_profile_binds_every_repeated_identity_and_uses_separate_config(setup,monkeypatch,mismatch):
     s=setup; m=s.m; raw=october6_raw(s)
