@@ -1,0 +1,155 @@
+{
+  "schema_version": "next-capture-capacity-review-v1",
+  "dataset_kind": "synthetic",
+  "source_commit": "5828b6b6d4e4ad35ad516dfdc0ba19522cfbe985",
+  "qualifier_sha256": "0d6d851cecd127293bcba7a0da93dc6314da4e3d9d998013ad70efe2131b18e4",
+  "reference_rate_assumption": "2 * 10000 / 435.343147 seconds; not a future upper bound",
+  "cases": [
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "proposed-seventeen-minutes-double",
+        "duration_seconds": 1020,
+        "frame_count": 46860,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 33554432
+      },
+      "received_frames": 46860,
+      "quote_count": 46859,
+      "quote_counts_by_symbol": {
+        "111111": 33427,
+        "222222": 10767,
+        "333333": 2665
+      },
+      "first_quote_offset_seconds": 0.021767,
+      "last_quote_offset_seconds": 1019.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 197105457,
+        "wall_seconds": 83.90185484662652,
+        "cpu_seconds": 83.312027617
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 16765024,
+      "artifact_bytes": 16765529,
+      "artifact_sha256": "abbb71c3741415c03699543f11b996344672f1f90739b69812b3606c81e41b79",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ],
+      "source_commit": "5828b6b6d4e4ad35ad516dfdc0ba19522cfbe985",
+      "qualifier_sha256": "0d6d851cecd127293bcba7a0da93dc6314da4e3d9d998013ad70efe2131b18e4",
+      "validation": {
+        "pytest": "1 passed",
+        "seconds": 84.2,
+        "exit_code": 0,
+        "isolation_violations": 0
+      }
+    },
+    {
+      "schema_version": "toss-capacity-case-v1",
+      "synthetic": true,
+      "case": {
+        "name": "proposed-eighteen-minutes-double",
+        "duration_seconds": 1080,
+        "frame_count": 49617,
+        "max_frames": 50000,
+        "distribution": "pilot",
+        "timing": "uniform",
+        "levels": 10,
+        "horizon_seconds": 900,
+        "expected_stop": "window_ended",
+        "artifact_max_bytes": 33554432
+      },
+      "received_frames": 49617,
+      "quote_count": 49616,
+      "quote_counts_by_symbol": {
+        "111111": 35394,
+        "222222": 11401,
+        "333333": 2821
+      },
+      "first_quote_offset_seconds": 0.021767,
+      "last_quote_offset_seconds": 1079.999999,
+      "horizon_quote_by_symbol": {
+        "111111": true,
+        "222222": true,
+        "333333": true
+      },
+      "all_symbols_horizon_quote": true,
+      "stop_reason": "window_ended",
+      "cleanup_failed": false,
+      "window_coverage_met": true,
+      "resource_budget_met": true,
+      "test_expectation_met": true,
+      "metrics": {
+        "python_peak_bytes": 208806991,
+        "wall_seconds": 87.0008075516671,
+        "cpu_seconds": 86.75840013
+      },
+      "budgets": {
+        "python_peak_bytes": 268435456,
+        "wall_seconds": 120,
+        "cpu_seconds": 120
+      },
+      "serialized_result_bytes": 17751988,
+      "artifact_bytes": 17752493,
+      "artifact_sha256": "cfb5ac3f802764bb6ecf382d2f7aaf2760b1a3b9c22ccc0adfc8673c0ade8f94",
+      "artifact_error": null,
+      "artifact_roundtrip_verified": true,
+      "production_eligible": false,
+      "profit_comparison_available": false,
+      "stream_complete": null,
+      "limitations": [
+        "Synthetic envelope assumption; not replayed market ticks or future capacity guarantee.",
+        "Python tracked allocation includes export/storage/readback; not process RSS or hard memory isolation.",
+        "Window completion does not prove lossless delivery or account profitability."
+      ],
+      "source_commit": "5828b6b6d4e4ad35ad516dfdc0ba19522cfbe985",
+      "qualifier_sha256": "0d6d851cecd127293bcba7a0da93dc6314da4e3d9d998013ad70efe2131b18e4",
+      "validation": {
+        "pytest": "1 passed",
+        "seconds": 87.31,
+        "exit_code": 0,
+        "isolation_violations": 0
+      }
+    }
+  ],
+  "actual_entry_anchor_validated": false,
+  "kis_journal_capacity_validated": false,
+  "calendar_validated": false,
+  "new_capture_registered": false,
+  "live_capture_started": false,
+  "account_sources_supplied": false,
+  "account_net_gain": null,
+  "production_eligible": false,
+  "conclusions": {
+    "seventeen_minutes": "reject_as_fixed_window_due_to_observed_scan_delay_counterexample",
+    "eighteen_minutes": "conditional_quality_pilot_option_only; narrow_frame_headroom_and_entry_latency_unverified"
+  }
+}
