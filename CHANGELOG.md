@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-03 — 48차 운영 배포·10월6일 관측 입력/토스 grant 재등록
+
+- 사용자 승인으로 01:13~01:15 KST `local_deploy.sh 2645820`(PR #141 머지) 배포·재시작. 운영 verify 4086 passed/2 xfailed, rollback 없음, PID 172854→249914, NRestarts 0, 새 PID 오류 0, 매수 중지·override 보존.
+- 10월6일 프로필이 df1a5af(HEAD·284 소스 해시·study `source_version_ref`·토스 plan `engine_study_sha256`·grant plan 해시)를 고정하고 있어 새 엔진에서는 08:55 활성화와 토스 관측이 실패하는 상태였다. 사용자 결정("study + 토스 grant 전체 재등록")으로 study/manifest/plan/deployment/registry(grant `toss-entry-20261006-pilot2-r2`)/보존 스냅샷/activation.json을 새 SHA 기준으로 재발급하고 새 cohort를 만들었다. 토큰·시작 영수증·unit·실행기·시각·epoch 불변, 봇 재시작·토스 시작 없음. 타이머 다음 실행 10/6 08:55 유지. [실행 기록 48차](docs/operations/capture-execution-2026-10-06.md).
+- 독립 리뷰 2회가 각각 토스 plan 결합 누락(P0)과 승인 로더 시각 창 검사(현재 시각 `approval_expired`)를 잡아 반영했다. 스크립트·영수증은 `/var/lib/qwq-entry-capture/rereg-20261003/`(root).
+
 ## 2026-10-02 — Codex 최근 작업 교차 리뷰·실행 원장 보류 해제·전량 SELL 허용(48차, PR #141)
 
 - PR #119~#138(20건, 176파일) 교차 리뷰: 코디네이터 + 독립 리뷰어 3명(브로커·스케줄러·저장소). P0 없음, P1 네 건의 뿌리는 "실행 원장·식별 체결 경로가 한 번 실패하면 영구 보류, 해제 수단 없음". [리뷰 정본](docs/reviews/codex-recent-work-review-2026-10-02.md).
