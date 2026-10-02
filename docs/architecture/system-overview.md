@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **38차 실제 관측 흐름:** 고정5468208 첫 scan9개→signal/order_ready0; KIS 상위3개 호가14,040개와 토스10,000프레임 조기 종료를 별도로 평가한다. 오프라인 보고는 예정 종료 뒤까지 기다린 것처럼 시각을 바꾸지 않고 알려진 조기 중단을 incomplete로 출력한다. 최종 엔진 봉인을 조기 토스 snapshot에 소급 삽입하지 않는다. [실제 흐름·검증·후속 설계](../research/current-engine-integrated-pds-2026-10-02.md#38차-plan--첫-실제-관측의-품질과-진입-병목).
+
 > **37차(10-02):** 검증된 `Fill` identity → `TradeJournal`의 실행별 JSON → `TradeStorage`의 불변 transaction batch → DB commit receipt → Scheduler의 `handoff_returned`/broker ack 순서다. 청산 후처리는 메모리 적용 뒤 한 번 수행하고 DB 대기는 비차단 조회한다. 현재 session의 미완료 receipt를 신규 위험 보류에 반영하며, SELL 거래 ID는 해당 Fill의 매도 직전 보유 객체에서만 보강한다. [통합 흐름과 한계](../research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit). 이전 v1 원장의 receipt를 새 DB commit 근거로 소급 해석하지 않는다. 운영 미배포.
 
 > **36차(10-02):** 실행 중 경로와 분리된 `read_execution_ledger`가 완결된 오프라인 SQLite를 검증한다. `reconcile_execution_evidence`와 명시 파일 CLI는 증권사 원주문·거래 이벤트·양쪽 잔고의 차이만 보고하며 broker/Engine/Scheduler에 복구 결과를 적용하지 않는다. [입력·출력·복구 경계](../operations/execution-recovery-evidence.md). 기존 운영/예약에는 미적용이다.

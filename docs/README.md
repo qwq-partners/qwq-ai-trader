@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [38차 실제 관측 품질·진입 병목·다음 PDS](research/current-engine-integrated-pds-2026-10-02.md#38차-plan--첫-실제-관측의-품질과-진입-병목) · [집계 근거](research/current-engine-capture-quality-2026-10-02.json): 후보9개·신호0, 토스 조기 종료와 KIS 완전성 실패를 확인했다. 조기 종료 보고를 수정했고 순수익은 미확정이다. 우선 진입 탈락 사유·관측 기간·오류 범위의 근거를 확보한다.
+
 > [37차 체결 identity·장부 commit와 통합 흐름](research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit) · [설계](superpowers/specs/2026-10-02-journal-durability-design.md): 모든 식별 KR 체결 증분의 멱등 기록, 실제 DB transaction 완료와 보호 청산을 연결한다. 운영 미배포이며 실제 계좌 대사·baseline·수익성은 별도 검증한다.
 
 > [36차 복구 증거 대사와 통합 흐름](research/current-engine-integrated-pds-2026-10-02.md#36차-plan--복구-증거의-읽기-전용-대사) · [입력/실행/판독 절차](operations/execution-recovery-evidence.md): 독립 원장·증권사 원주문·거래 장부·잔고의 누락/중복/차이를 읽기 전용으로 보고한다. 실제 계좌 대사·보류 해제·순수익 검증은 남아 있으며 운영/예약은 보존한다.
