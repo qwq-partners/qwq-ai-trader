@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [44차 KIS 실제 비용 기준·개선 우선순위](research/current-engine-observed-cost-next-step-2026-10-02.md): 직접 읽기 전용 조회·내부 대사 이후의 현재 상태와 다음 가격 비교 조건. 계좌 상세는 Git 밖에 보존하며 전체 TWR/수익성 승격은 별도다. 아래 원본 위치 요청은 이전 단계의 기록이다.
+
 > [43차 계좌 입력 대사·다음 관측 창 검산](research/current-engine-next-evidence-2026-10-02.md):17/18분의 용량과 실제 첫 후보·진입 호가 시간 조건을 분리한다. 원본 위치 확인이 다음 실제 행동이며 새 관측/전략/운영 변경은 없다.
 
 > [40·41·42차 관측 용량·오류 진단·계좌 순손익 PDS](research/current-engine-capture-and-account-pds-2026-10-02.md): 합성 용량 검증, 명시v4 KIS 원문 없는 오류 범위, 읽기 전용 순손익/TWR과 코드·처리 흐름. [계좌 입력/실행 절차](operations/account-net-return-input.md). 실제 성과와 운영 적용은 별도다.
