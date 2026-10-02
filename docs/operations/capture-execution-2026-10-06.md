@@ -139,3 +139,31 @@
 1.10월6일 관측 기동/봉인 품질 확인 → 전체 후보의 원천 상태와 첫 진입 탈락 원인 집계. 선정과 진입을 각각 평가한다.
 2.실제 수량/자본과 호가가 확보된 후보만 동일 조건에서 가격 가설1개를 비용 후 비교한다. 유효쌍이 없으면 수익률을 만들지 않고 확인된 병목을 개선한다.
 3.독립 기간에서 같은 진입의 청산 차이를 검증하고 실제 계좌 순이익에 연결한다. 전체 KODEX200과 대칭 반도체 제외 보조 비교, 버전/국면 차이, 열린 보유분/현금/입출금/거래·운영비를 유지한다.
+
+## 48차 Do / See — 10월3일 엔진 재배포와 관측 입력·토스 grant 재등록
+
+사용자 결정("P1-3·P1-4도 수정, 문서·커밋·푸시·배포까지" → 배포 시점 질문에 "지금 배포 + study 재등록" → 범위 질문에 "study + 토스 grant 전체 재등록")에 따라 수행했다. 정본 리뷰는 [48차 리뷰](../reviews/codex-recent-work-review-2026-10-02.md).
+
+**엔진 배포(01:13~01:15 KST).** `scripts/deploy/local_deploy.sh 2645820`(PR #141 머지 커밋). 운영 체크아웃에서 전체 4086 passed / 2 xfailed / 132.35초·문법·비밀정보 검사 통과 후 재시작, rollback 없음. PID 172854 → **249914**, 01:15:45 KST 기동, NRestarts 0, HEAD `2645820` detached, `config/evolved_overrides.yml` 미커밋 수정 보존. 시작 로그 KIS 연결·TR 세트 legacy·엔진 시작 정상, 새 PID ERROR/Traceback 0, 이전 세션은 `종료 완료`로 정상 종료. 기동 뒤 ops 점검: KIS 오류 0, pending `[]`, 정체/실패 없음, 현금 비중 22.9%·보유 2종목. 새 세션에 원장 보류 로그 없음. 매수 중지·설정 지문 불변.
+
+**재등록 필요성.** 10월 6일 프로필은 old/new HEAD·284개 소스 해시를 df1a5af로 고정했고, 사전등록 `study.json`의 `capture.source_version_ref`가 `commit:df1a5af;capture-source-sha256:e819a2c…`(활성화 실행기 포함 284 파일 `{path: sha256}` compact sorted JSON의 SHA-256)를 담았다. 독립 리뷰가 추가로 잡은 것: 토스 `plan.json`의 `websocket.engine_study_sha256`이 옛 study 해시라 study만 바꾸면 토스 WS 서비스가 첫 엔진 응답에서 `engine_identity_or_time_invalid`로 실패하고, plan 해시는 `deployment.json`·`registry.json` grant·보존 스냅샷·활성화 `input_hashes`에 묶여 있다.
+
+**재등록(01:41:46 KST, 루트, `/var/lib/qwq-entry-capture/rereg-20261003/rereg_20261006.py`).** 바꾼 것과 지문:
+
+| 파일 | 변경 | 새 SHA256 |
+|---|---|---|
+| `~/.local/share/qwq-entry-observation/20261006-pilot2/study.json` | 두 `source_version_ref` → `commit:2645820760d0…;capture-source-sha256:e2104b9e…`(285 파일) | `f77d450d…` |
+| 같은 디렉터리 `manifest.json` | `study_sha256` | `b8e6bf55…` |
+| `/etc/qwq-toss-observer/plan.json` | `websocket.engine_study_sha256` | raw `9c156615…` / canonical `1a454e7e…` |
+| `/etc/qwq-toss-observer/deployment.json` | plan 두 해시·cohort 경로·`grant_id` → `toss-entry-20261006-pilot2-r2`·`config_hash` `473c667e…` | `03b44a31…` |
+| `/etc/qwq-toss-observer/registry.json` | grant 1개 재발급(같은 identity·시각·capabilities, `approval_reference=user-explicit-phase48-reregister-20261003`) | `0e70cfc1…` |
+| `/etc/qwq-toss-observer/retention/20261006/{plan,deployment,registry,hashes}.json` | 라이브와 동일 바이트로 갱신(11/05 보존 timer bind) | — |
+| `/etc/qwq-entry-capture/20261006-pilot2/activation.json` | old/new HEAD `2645820…`, `source_hashes` 285개, `input_hashes` 5개, `study_sha256` | `04be26ce…` |
+| 새 cohort `/var/lib/qwq-toss-observer/cohorts/1a454e7e…` | 997:987/0700 생성 | — |
+
+바꾸지 않은 것: `once.json`, 런처·retention.py·활성화 실행기 바이트, 토스 release artifact, 토큰·발급 기록·시작 영수증, 시각(`not_before` 10/5 23:55Z)·epoch·`request_id`, 보호 설정 지문(default `81b7cd25…`, override `4970f2bf…`), systemd unit. 옛 cohort `01634caa…`(빈 디렉터리)는 남는다. 봇 재시작·토스 시작·KIS/토스 호출 없음.
+
+검증: 기존 파일을 같은 직렬화로 바이트 재생산 확인 뒤 교체(실패 시 역순 복원·cohort 제거·타이머 재개·rollback 영수증). 교체 후 런처 `verify_release`(루트)와 서비스 UID에서 `load_verified_document` + 승인 로더(`load_authority`, grant 창 안 시각 주입) + `_validate_policy`, 활성화 실행기 `load_config` + 08:55 preflight 동등 검사(HEAD·detached·dirty·소스/보호/입력 해시·drop-in·pending·kill·상태 디렉터리) 통과. 타이머는 enable 유지 상태로 stop/start만 했고 다음 실행 `Tue 2026-10-06 08:55:00 KST` 확인. 독립 리뷰 2회(요청 Opus/high): 1차가 토스 plan 결합 P0를 잡아 범위를 확장했고, 2차가 승인 로더의 시각 창 검사(현재 시각 `approval_expired`)·작업본 import·타이머 disable 문제를 잡아 반영했다. 영수증·원본/신규 바이트·스크립트는 `/var/lib/qwq-entry-capture/rereg-20261003/`(root 0700).
+
+한계: 재등록은 10월 6일 08:55 실행기의 사전 검사와 토스 결합을 복원한 것이며 실제 기동·수집·수익 비교는 여전히 예정이다. 그 전 운영 override 지문이 바뀌면 관측은 중단된다. 공개 45차 제안 JSON의 base 지문은 당시 검토안으로 보존한다.
+
