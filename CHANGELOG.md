@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-02 — 엔진 즉시 배포·첫 기동 검증(47차 실행)
+
+- 사용자 현재 승인으로22:17 KST 기존 검토df1a5af를 일반 모드로 배포·재시작했다. 운영 전체4045검사/문법/비밀정보 통과 후 PID172854·자동 재시작0·매수 중지·운영 설정 보존을 확인했다.
+- 신규 실행 원장1개/DB 실행 열7개/장부 연결 성공/시작 저장 오류0을 읽기 점검했다. 바이트 배열 로그 형식을 엄격히 해독한 검증기의8검사도 통과했다. [실제 실행과 다음 PDS](docs/operations/capture-execution-2026-10-06.md#47차-do--see--10월2일-일반-모드-배포). 루트 실행기/old_head 교체와 독립 리뷰 조건 검증 후22:28:56에10월6일08:55 예약도 재개했다.39개 운영 점검 도구 검사·실제 최종 계약 검증을 통과했으며 새 관측·매수 재개는 수행하지 않았다.
+
 ## 2026-10-02 — 엔진 선배포 후 동일 버전 관측 연결(47차 준비)
 
 - 정확한10월6일 프로필만 동일 old/new HEAD를 허용한다. checkout을 생략해도 실제 소스/설정/입력 검증과 시간·한 번 실행·재시작 경계를 유지한다.10월2일 계약은 변경하지 않는다.
@@ -735,9 +740,9 @@ PR #81 교차 리뷰 P1-5(당시 '최우선 후속 과제'로 기록)의 수정�
 ## 2026-09-21 — ops: main `f25b0c6` 운영 반영 (PR #81 병합·배포·재시작)
 
 - **지시·조건:** 사용자 지시 "4회차 리뷰 통과하면 #81 머지하고 운영 반영". 교차 공급자 리뷰(Codex, 요청 gpt-6-astra/xhigh, 세션 기록상 같은 값·응답 측 실효 필드는 미확인, 전부 정적) 1~3회차 병합 불가 → 매회 지적을 실코드로 확인해 반영 → **4회차 병합 가능(P0·P1·P2 0, 대상 `9c9d6dc`·기준 main `d8d78fe`)**. 판정·처분 기록은 PR #81 코멘트.
-- **4회차 뒤의 변화:** 다른 세션의 PR #83(exit_exempt 중앙 가드)이 main 에 들어와 22:29 에 먼저 배포됐고, 같은 stale SELL 루프를 건드린다 → #81 에 병합(`daa790f`, 텍스트 충돌 0). 면제 취소 분기(루프 머리) → 폴백 상한 → 동시호가 유지 순서라 면제 종목은 동시호가에도 취소가 우선하고 동시호가 유지는 비면제 종목에만 적용된다. 두 PR 의 시험 47건 동시 통과, 결합 커밋 `0575a5d` 의 필수 verify SUCCESS. **결합 상태에 대한 교차 리뷰는 다시 받지 않았다**(직접 검토 + 시험 + verify 가 근거).
+- **4회차 뒤의 변화:** 다른 세션의 PR #83(exit_exempt 중앙 가드)이 main 에 들어와 22:28:56 에 먼저 배포됐고, 같은 stale SELL 루프를 건드린다 → #81 에 병합(`daa790f`, 텍스트 충돌 0). 면제 취소 분기(루프 머리) → 폴백 상한 → 동시호가 유지 순서라 면제 종목은 동시호가에도 취소가 우선하고 동시호가 유지는 비면제 종목에만 적용된다. 두 PR 의 시험 47건 동시 통과, 결합 커밋 `0575a5d` 의 필수 verify SUCCESS. **결합 상태에 대한 교차 리뷰는 다시 받지 않았다**(직접 검토 + 시험 + verify 가 근거).
 - **배포 전 점검(23:04 KST, 장 마감 후):** pending `[]`, 브로커 연결, 운영 트리 청결(`dc508fb`), 설정3파일·킬스위치4경로 지문이 20:37 기록과 동일, 경합 pytest 없음·부하 1.0. 운영 HEAD 대비 제품 경로 변경은 `src/core/engine.py`·`src/execution/broker/kis_kr.py`·`src/schedulers/kr_scheduler.py` 뿐.
-- **배포:** `scripts/deploy/local_deploy.sh f25b0c6` 23:04:35 시작 → 운영 서버 verify **1895 passed / 2 known xfailed / 기존 warning 1**(96.8초) → 재시작 → 헬스 통과, 23:06:38 `[완료]`(자동 롤백 없음). 이전 PID1381422(22:29:25 기동) → **PID1409857, 23:06:23 기동.** 운영 checkout 은 `main` 으로 복귀(트리 동일).
+- **배포:** `scripts/deploy/local_deploy.sh f25b0c6` 23:04:35 시작 → 운영 서버 verify **1895 passed / 2 known xfailed / 기존 warning 1**(96.8초) → 재시작 → 헬스 통과, 23:06:38 `[완료]`(자동 롤백 없음). 이전 PID1381422(22:28:56:25 기동) → **PID1409857, 23:06:23 기동.** 운영 checkout 은 `main` 으로 복귀(트리 동일).
 - **사후 점검:** `KIS API 연결 완료`·`KIS TR 세트: legacy`·축출면제 1종목·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 179초 시점 `ops_check`: HTTP 500·EGW00201·EGW00215·토큰 오류 전부 0, 루프 정체·실패 누적 없음, pending `[]`, 현금 비율 0.4%(매수 불가 상태 지속 — 이번 변경 경로는 매수 재개 뒤에야 실행된다). 지문 7경로 전후 동일, Toss 관측 서비스 PID3335469 무변경. `.env`·설정·킬스위치·주문 변경 0.
 - **남은 것:** 매도 쪽 취소 실패 뒤 재발행(분할 매도 이중 매도)은 PR #84 에서 진행 중(#81 위에 쌓임). 주문 ID 단위 대사 부재·첫 10분 BUY pending 의 청산 차단·거래소 조회 첫 페이지 한계는 `docs/risk/risk-and-exit.md` 첫 절에 잔존 위험으로 기록.
 
@@ -746,12 +751,12 @@ PR #81 교차 리뷰 P1-5(당시 '최우선 후속 과제'로 기록)의 수정�
 - **지시·범위:** 사용자 지시("PR #83 머지해줘" → "배포해줘")로 PR #83(자동매도 금지 종목 SELL 차단)을 병합하고 main 을 운영에 반영했다. 운영 checkout `d8d78fe` → `388411c`. 제품 경로 변경은 #83 의 4파일(`src/core/engine.py`·`src/core/batch_analyzer.py`·`src/schedulers/kr_scheduler.py`·`scripts/run_trader.py`, +117/−2)뿐이다. 면제 종목이 아닌 종목의 주문·청산 경로는 불변(대조군 시험으로 고정).
 - **병합 전 확인:** head `6cd75bf` 의 필수 verify SUCCESS(1865 passed / 2 xfailed), main 무변동(`d8d78fe`)·`mergeState=CLEAN`. 독립 리뷰(claude-opus-5/xhigh, 1차 head) APPROVE, 교차 공급자 리뷰(Codex gpt-6-astra/xhigh, rollout 으로 실제 모델 확인) REQUEST_CHANGES ×3 → 최종 head APPROVE. 22:09:55 KST 병합(merge commit `388411c`). 병합 직후에는 운영 checkout 을 건드리지 않았다 — `local_deploy.sh` 가 현재 HEAD 를 롤백 기준으로 잡으므로 미리 pull 하면 롤백 기준이 새 커밋이 된다.
 - **배포 전 점검(22:27 KST, 장 마감 후):** pending `[]`, 브로커 연결, 운영 트리 청결, `--market kr` 단독 운용(미국장 개장과 무관), 동시 pytest 0(2 vCPU 부하 플레이크로 인한 불필요한 롤백 방지), 최근 5분 ERROR 0, 설정3파일·킬스위치4경로 지문 기록.
-- **배포:** `scripts/deploy/local_deploy.sh 388411c…` 22:27:32 시작 → 운영 verify **1865 passed / 2 xfailed**(92초) → 재시작 → 헬스 통과, 22:29:40 `[완료]`(자동 롤백 없음). 이전 PID1193531(20:44:08 기동) → **PID1381422, 22:29:25 기동.** 이후 운영 checkout 을 `main` 으로 복귀 — 로컬 `main` 참조를 먼저 앞으로 옮긴 뒤(`git fetch origin main:main`) 체크아웃해 디스크 파일이 옛 코드로 잠시도 바뀌지 않게 했다(트리 동일, 재시작 없음).
+- **배포:** `scripts/deploy/local_deploy.sh 388411c…` 22:27:32 시작 → 운영 verify **1865 passed / 2 xfailed**(92초) → 재시작 → 헬스 통과, 22:28:56:40 `[완료]`(자동 롤백 없음). 이전 PID1193531(20:44:08 기동) → **PID1381422, 22:28:56:25 기동.** 이후 운영 checkout 을 `main` 으로 복귀 — 로컬 `main` 참조를 먼저 앞으로 옮긴 뒤(`git fetch origin main:main`) 체크아웃해 디스크 파일이 옛 코드로 잠시도 바뀌지 않게 했다(트리 동일, 재시작 없음).
 - **사후 점검:** 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`[KR] 자동매도 금지 종목 복원: ['087010']`(정규화된 6자리 문자열)·`축출면제=1종목`(엔진 `_exit_exempt_ref` live set 주입 확인)·`통합 트레이딩 엔진 시작`. ERROR/Traceback 0(종료되던 이전 PID 의 `Unclosed client session` 1건은 기지의 종료 잡음). 154초 시점 `ops_check`: HTTP 500·EGW00201·원장 EGW00215·토큰 오류 전부 0, 루프 정체·실패 누적 없음(degraded 3건은 '재시작 전 완료 복원' 표시), pending `[]`, 포트폴리오 1종목·`cash_ratio` 0.4%(기존 현금 고갈 상태 그대로). 지문 7경로 전후 동일. Toss 관측 서비스 PID3335469 무변경.
 - **하지 않은 것:** `.env`·설정·킬스위치·주문·Toss grant/토큰 변경 0. PR #81 은 미병합 — 머지 전 main 재머지 필요(#83 과 같은 stale SELL 루프를 건드리지만 사전 병합 트리에서 충돌 0·양쪽 시험 47 passed, 면제 분기가 #81 의 동시호가 분기보다 앞에 있어야 한다).
 - **관찰 포인트(다음 장중):** 면제 종목 087010 은 `manual` 전략이라 가드가 발화할 일이 없는 것이 정상이다. `[리스크] 자동매도 금지 종목 SELL 차단`·`SELL 제출 차단`·`[청산 pending] … 자동매도 금지 종목` 로그가 보이면 어느 발행처가 SELL 을 냈는지(`source=`) 확인한다.
 
-## 2026-09-21 — fix(exit-exempt): 자동매도 금지 종목 SELL 을 엔진에서 막는다 (가드 없는 발행처 공백 — PR #83, 22:29 KST 배포는 위 ops 항목)
+## 2026-09-21 — fix(exit-exempt): 자동매도 금지 종목 SELL 을 엔진에서 막는다 (가드 없는 발행처 공백 — PR #83, 22:28:56 KST 배포는 위 ops 항목)
 
 - **배경:** PR #81 독립 리뷰(claude-opus-5)·교차 리뷰(Codex gpt-6-astra/xhigh)에서 확인된 잠재 공백. `exit_exempt`(CORE-023) 가드가 발행처별로 흩어져 있어 두 부류가 비어 있었다. ① 코어 경로(조기경보·stale 자동매도·리밸런싱 폴백 손절/교체·금요 트림)는 `strategy == "core_holding"` + `rebalance_exclude` 로만 걸렀다 — `core_holding` 포지션을 면제로 지정하면 SELL 이 나간다. ② `StrategyManager.on_market_data` 가 보유 포지션을 모든 활성 전략에 넘기고 `gap_and_go._check_exit_signal` 은 `position.strategy` 를 보지 않는다 — 같은 날 갭 후보로 등록된 뒤 MTS 수동 매수로 `manual` 포지션이 된 면제 종목은 갭 시작점 ×0.99 이탈 시 SELL 이 나간다(`theme_chasing` 의 `_position_themes` 도 같은 구조, 현재 폐지 전략). **현재 면제 종목 087010 은 `manual` 이고 당일 갭 후보가 아니라 실제 발생 이력은 없다.**
 - **수정(제품 4파일, +67/-2줄):** `RiskManager.on_signal` 에 중앙 가드 — SELL 이면서 `_exit_exempt_ref`(ExitManager live set)에 든 종목이면 주문 생성 전에 `None`. 남은 `_pending_exit_reasons` 를 지우고, 틱마다 재발행되는 전략 SELL 때문에 경고는 30초 간격으로만 남긴다(전용 `_exempt_block_logged` — 신호 쿨다운과 분리). 코어 경로 3곳(`_monitor_core_positions` 대상 목록 → stale 포함, `execute_core_rebalance`·금요 트림의 `rebalance_exclude`)은 면제 종목을 대상에서 뺀다.
