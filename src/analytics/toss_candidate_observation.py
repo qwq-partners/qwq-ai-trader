@@ -83,8 +83,17 @@ def _books(capture, as_of):
             or capture.get("stream_complete") is not None):
         raise ValueError("토스 통합/LOSSY 관측 계약 불일치")
     start, end = aware_time(capture.get("start_at")), aware_time(capture.get("end_at"))
-    if not start < end <= as_of or (end - start).total_seconds() > 3600:
+    if not start < end or (end - start).total_seconds() > 3600:
         raise ValueError("종료된 관측 구간과 보고 시각 필요")
+    stop_reason = capture.get("stop_reason")
+    early_terminal_reasons = {
+        "frame_limit", "receive_time_invalid", "receive_time_reversed", "before_window",
+        "frame_too_large", "invalid_frame", "invalid_ack", "unacknowledged_topic",
+        "server_error", "transport_error", "cancelled",
+    }
+    if end > as_of:
+        if not start <= as_of or stop_reason not in early_terminal_reasons:
+            raise ValueError("조기 종료 관측의 종료 사유/보고 시각 필요")
     symbols = capture.get("symbols")
     if (not isinstance(symbols, list) or not 1 <= len(symbols) <= 3
             or any(not isinstance(s, str) or len(s) != 6 or not s.isascii() or not s.isdigit() for s in symbols)
@@ -94,6 +103,8 @@ def _books(capture, as_of):
     if (type(max_frames) is not int or not 1 <= max_frames <= 50000
             or type(received_frames) is not int or not 0 <= received_frames <= max_frames):
         raise ValueError("수신 프레임 예산/개수 불일치")
+    if stop_reason == "frame_limit" and received_frames != max_frames:
+        raise ValueError("프레임 상한 종료 계수 불일치")
     acknowledged, rejected = capture.get("acknowledged_symbols"), capture.get("rejected_symbols")
     if (not isinstance(acknowledged, list) or not isinstance(rejected, list)
             or any(not isinstance(x, str) for x in acknowledged + rejected)
@@ -103,7 +114,8 @@ def _books(capture, as_of):
     ack_at = capture.get("acknowledged_at")
     if ack_at is not None:
         ack_at = aware_time(ack_at)
-        if not start <= ack_at < end or set(acknowledged + rejected) != set(symbols):
+        if (not start <= ack_at < end or ack_at > as_of
+                or set(acknowledged + rejected) != set(symbols)):
             raise ValueError("구독 ACK 시각/모집단 불일치")
     elif acknowledged or rejected:
         raise ValueError("구독 ACK 근거 없음")
@@ -122,7 +134,7 @@ def _books(capture, as_of):
         if (quote.get("source") != SOURCE or quote.get("market_basis") != MARKET
                 or quote.get("delivery") != "LOSSY" or quote.get("source_sequence") is not None
                 or quote.get("kis_executable") is not False or quote.get("symbol") not in acknowledged
-                or ack_at is None or not ack_at <= received < end or received < prior_at
+                or ack_at is None or not ack_at <= received < end or received > as_of or received < prior_at
                 or type(index) is not int or not prior_index < index <= received_frames
                 or not isinstance(quote.get("quality_issues"), list)
                 or any(not isinstance(x, str) for x in quote["quality_issues"])):
@@ -213,6 +225,12 @@ def build_toss_candidate_report(engine, capture, *, as_of):
             "population": dict(returned_candidate_count=len(rows), observed_subset_count=len(selected_ids),
                                unobserved_candidate_count=len(rows)-len(selected_ids),
                                selection_rule=selection['rule'] if selection is not None else 'whole_returned_cohort'),
+            "coverage": dict(planned_start_at=start.isoformat(), planned_end_at=end.isoformat(),
+                             reported_as_of=as_of.isoformat(),
+                             last_received_quote_at=quotes[-1]["received_at"] if quotes else None,
+                             stop_reason=capture.get("stop_reason"),
+                             received_frames=capture["received_frames"], max_frames=capture["max_frames"],
+                             quote_count=len(quotes), cleanup_failed=capture.get("cleanup_failed")),
             "limitations": ["반환 후보 집합만 보존하며 스크리너 내부 탈락 종목 전체는 아니다.",
                             "처음 수신한 호가이며 최초 시장 호가/무손실 틱/체결 가능한 유동성이 아니다.",
                             "order_ready는 주문 생성 기록이며 매수 승인·접수·체결 증거가 아니다.",

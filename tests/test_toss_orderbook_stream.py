@@ -290,6 +290,68 @@ def test_missing_engine_records_and_capture_gap_prevent_usable_comparison():
     assert row["first_after_decision"]["status"] == "unknown"
 
 
+def test_report_accepts_terminal_frame_limit_before_planned_end_and_reports_coverage():
+    c = observed(capture(max_frames=2))
+    assert c.export()["stop_reason"] == "frame_limit"
+
+    result = importlib.import_module("src.analytics.toss_candidate_observation").build_toss_candidate_report(
+        engine_records(), c.export(), as_of=START + timedelta(seconds=3))
+
+    assert result["coverage"] == {
+        "planned_start_at": START.isoformat(),
+        "planned_end_at": (START + timedelta(seconds=120)).isoformat(),
+        "reported_as_of": (START + timedelta(seconds=3)).isoformat(),
+        "last_received_quote_at": (START + timedelta(seconds=2)).isoformat(),
+        "stop_reason": "frame_limit",
+        "received_frames": 2,
+        "max_frames": 2,
+        "quote_count": 1,
+        "cleanup_failed": False,
+    }
+    assert "toss_capture_incomplete" in result["candidates"][0]["first_after_decision"]["reasons"]
+    assert result["profit_comparison_available"] is False
+    assert result["kis_execution_evidence"] is False
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda value: value.update(acknowledged_at=(START + timedelta(seconds=4)).isoformat()),
+    lambda value: value["records"][0].update(received_at=(START + timedelta(seconds=4)).isoformat()),
+])
+def test_report_rejects_ack_or_quote_observed_after_early_report_time(mutate):
+    c = observed(capture(max_frames=2))
+    data = c.export()
+    mutate(data)
+
+    with pytest.raises(ValueError):
+        importlib.import_module("src.analytics.toss_candidate_observation").build_toss_candidate_report(
+            engine_records(), data, as_of=START + timedelta(seconds=3))
+
+
+def test_report_requires_frame_limit_to_match_the_frame_budget():
+    c = capture(max_frames=1)
+    feed(c, ack(), 1)
+    data = c.export()
+    assert data["stop_reason"] == "frame_limit"
+    data["received_frames"] = 0
+
+    with pytest.raises(ValueError):
+        importlib.import_module("src.analytics.toss_candidate_observation").build_toss_candidate_report(
+            engine_records(), data, as_of=START + timedelta(seconds=3))
+
+
+@pytest.mark.parametrize("stop_reason", [None, "window_ended"])
+def test_report_rejects_nonterminal_or_claimed_window_end_before_planned_end(stop_reason):
+    c = observed()
+    if stop_reason is None:
+        c = capture()
+    else:
+        c.stop(stop_reason)
+
+    with pytest.raises(ValueError):
+        importlib.import_module("src.analytics.toss_candidate_observation").build_toss_candidate_report(
+            engine_records(), c.export(), as_of=START + timedelta(seconds=3))
+
+
 @pytest.mark.parametrize("symbols", [[], ["005930"] * 2, ["5930"], ["005930", "000660", "035420", "035720"]])
 def test_invalid_cohort_never_silently_truncates(symbols):
     with pytest.raises(ValueError):

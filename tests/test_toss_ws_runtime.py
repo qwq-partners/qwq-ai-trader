@@ -395,6 +395,50 @@ def test_report_cli_reads_sealed_artifact_and_preserves_service_failure(tmp_path
     assert result['service_reason'] == 'cleanup_failed'
 
 
+def test_report_cli_accepts_sealed_early_frame_limit_artifact_and_marks_it_incomplete(tmp_path, capsys):
+    from scripts.report_toss_candidate_observation import main
+
+    capture_start = datetime(2026, 10, 2, 0, 15, tzinfo=timezone.utc)
+    capture_end = datetime(2026, 10, 2, 0, 45, tzinfo=timezone.utc)
+    reported_at = datetime(2026, 10, 2, 0, 24, 35, 678000, tzinfo=timezone.utc)
+    quote_base = datetime(2026, 10, 2, 0, 24, tzinfo=timezone.utc)
+    records = [dict(source='TOSS_WS_ORDERBOOK_KR', market_basis='KRX_NXT_CONSOLIDATED',
+        delivery='LOSSY', source_sequence=None, symbol='005930', received_index=index,
+        received_at=(quote_base + timedelta(microseconds=index)).isoformat(),
+        source_as_of=(quote_base + timedelta(microseconds=index - 1)).isoformat(),
+        ask='10000', bid='9990', ask_size='10', bid_size='20', quality_issues=[], kis_executable=False)
+        for index in range(9, 10001)]
+    engine = dict(schema_version=1, evaluation_epoch='epoch-early', complete=False,
+        dropped_records=0, incomplete_reasons=['capture_open'], observed_at='2026-10-02T00:24:34+00:00',
+        records=[dict(kind='scan', sequence=1, scan_id='scan-early', observed_at=capture_start.isoformat(),
+            route_origin='live_screening', population_scope='returned_screen_candidates',
+            candidates=[dict(candidate_id='scan-early:005930', symbol='005930')])])
+    toss = dict(schema_version='toss-orderbook-capture-v1', evaluation_epoch='epoch-early',
+        source='TOSS_WS_ORDERBOOK_KR', market_basis='KRX_NXT_CONSOLIDATED', delivery='LOSSY',
+        stream_complete=None, request_id='probe-early', symbols=['005930'], start_at=capture_start.isoformat(),
+        end_at=capture_end.isoformat(), max_source_age_seconds=1, max_frames=10000, received_frames=10000,
+        acknowledged_at=(capture_start + timedelta(seconds=1)).isoformat(), acknowledged_symbols=['005930'],
+        rejected_symbols=[], stop_reason='frame_limit', cleanup_failed=False, records=records)
+    path = tmp_path / 'early-frame-limit.jsonl'
+    artifact = service_module().CaptureArtifact(path, max_bytes=16 * 1024 * 1024, plan_hash='d' * 64)
+    artifact.open()
+    artifact.finish(dict(engine=engine, toss=toss, as_of=reported_at.isoformat(), service_complete=False,
+        service_reason='engine_input_incomplete', profit_comparison_available=False))
+    artifact.close()
+
+    assert main(['--artifact', str(path), '--plan-sha256', 'd' * 64]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['service_complete'] is False
+    assert result['profit_comparison_available'] is False
+    assert result['kis_execution_evidence'] is False
+    assert result['coverage'] == dict(planned_start_at=capture_start.isoformat(),
+        planned_end_at=capture_end.isoformat(), reported_as_of=reported_at.isoformat(),
+        last_received_quote_at=records[-1]['received_at'], stop_reason='frame_limit',
+        received_frames=10000, max_frames=10000, quote_count=9992, cleanup_failed=False)
+    assert {'engine_capture_incomplete', 'toss_capture_incomplete'} <= set(
+        result['candidates'][0]['first_after_scan']['reasons'])
+
+
 @pytest.mark.asyncio
 async def test_stop_revokes_authority_while_waiting_for_token(tmp_path, monkeypatch):
     a, stamp, ticks, _ = authority(tmp_path, monkeypatch)

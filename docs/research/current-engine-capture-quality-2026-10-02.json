@@ -1,0 +1,259 @@
+{
+  "version": "capture-quality-review-v1",
+  "review_date": "2026-10-02",
+  "source_commit": "5468208e2bf481eabae5c54da490c7da972756e1",
+  "analysis_base_commit": "579d86a73d142285fcfdd00572a7674aa937bb53",
+  "evidence": {
+    "engine": {
+      "bytes": 19426462,
+      "sha256": "c3b8f3adfe999c32b3de7328f0e92764eb385a0fb80685a9e06401a22ac6ec18"
+    },
+    "study": {
+      "bytes": 2533,
+      "sha256": "d29a09634707e9e40b05f2f31d0a913d812ff06265fbac017c63d244557a1660"
+    },
+    "startup_receipt": {
+      "bytes": 129,
+      "sha256": "8335925b69924cb477fb5646517978cca3c53eec11ed52013617a007486064a2"
+    },
+    "toss": {
+      "bytes": 3603165,
+      "sha256": "f0d17826f98d66a79f8f53af0d49b637a568e4b9b03431aa3249bdd277ca4c89"
+    }
+  },
+  "activation": {
+    "recorded_status": "complete",
+    "phase": "complete",
+    "restart_attempted": true,
+    "toss_attempted": true,
+    "rollback": "not_needed",
+    "attempted_at": "2026-10-01T23:55:00.472241+00:00",
+    "status_sha256": "5b6bc288a6063d1f4be4ce6d506c556bb6eecd4f9d57237474fb1e063c85ba5b",
+    "receipt_sha256": "9a5fd3abac828ec9ea4af78edb873e1c7451bae8595be81150fefb2ed8b61472",
+    "current_service_state_checked": false,
+    "current_restart_count": null,
+    "actual_process_exit_code": null
+  },
+  "engine": {
+    "record_count": 31745,
+    "kinds": {
+      "quote_subscription": 1832,
+      "ws_quote": 29912,
+      "scan": 1
+    },
+    "sealed": true,
+    "sealed_at": "2026-10-02T00:45:00.025020+00:00",
+    "complete": false,
+    "incomplete_reasons": [
+      "unsupported_frame_shape"
+    ],
+    "dropped_records": 0,
+    "persistence_dropped_records": 0,
+    "durability_confirmed": false,
+    "unsupported_frame_shape_events": 1803,
+    "quote_counts_by_symbol": {
+      "042700": 10933,
+      "087010": 4939,
+      "043260": 7398,
+      "078600": 5704,
+      "010955": 938
+    },
+    "candidate_krx_quote_count": 14040
+  },
+  "cohort": {
+    "captured_at": "2026-10-02T00:17:18.969309+00:00",
+    "returned_count": 9,
+    "toss_selected_count": 3,
+    "unobserved_toss_count": 6,
+    "selection_rule": "first_three_in_returned_order",
+    "candidates": [
+      {
+        "rank": 1,
+        "symbol": "043260",
+        "scan_score": 74.80000000000001,
+        "scan_change_pct": 12.63,
+        "selected_for_toss": true
+      },
+      {
+        "rank": 2,
+        "symbol": "078600",
+        "scan_score": 58.24799999999999,
+        "scan_change_pct": 8.68,
+        "selected_for_toss": true
+      },
+      {
+        "rank": 3,
+        "symbol": "010955",
+        "scan_score": 49.184,
+        "scan_change_pct": 11.04,
+        "selected_for_toss": true
+      },
+      {
+        "rank": 4,
+        "symbol": "020150",
+        "scan_score": 38.256,
+        "scan_change_pct": 8.96,
+        "selected_for_toss": false
+      },
+      {
+        "rank": 5,
+        "symbol": "327260",
+        "scan_score": 13.0,
+        "scan_change_pct": 13.16,
+        "selected_for_toss": false
+      },
+      {
+        "rank": 6,
+        "symbol": "217590",
+        "scan_score": 2.2549999999999955,
+        "scan_change_pct": 8.17,
+        "selected_for_toss": false
+      },
+      {
+        "rank": 7,
+        "symbol": "001250",
+        "scan_score": 0.7759999999999962,
+        "scan_change_pct": 6.56,
+        "selected_for_toss": false
+      },
+      {
+        "rank": 8,
+        "symbol": "041190",
+        "scan_score": 0.0,
+        "scan_change_pct": 5.69,
+        "selected_for_toss": false
+      },
+      {
+        "rank": 9,
+        "symbol": "010170",
+        "scan_score": 0.0,
+        "scan_change_pct": 5.29,
+        "selected_for_toss": false
+      }
+    ]
+  },
+  "entry_diagnosis": {
+    "signal_records": 0,
+    "order_ready_records": 0,
+    "score_floor_in_source": 75,
+    "highest_scan_score": 74.80000000000001,
+    "change_cap_before_1000_in_source_pct": 5,
+    "lowest_scan_change_pct": 5.29,
+    "conditional_eligible_count": 0,
+    "condition": "If the 09:00-hour pre-signal candidate filter evaluated this unchanged cohort. First actually evaluated blocking gate is not recorded.",
+    "actual_first_blocking_gate": "unknown",
+    "threshold_change_authorized": false
+  },
+  "toss": {
+    "service_complete": false,
+    "service_reason": "websocket_incomplete",
+    "artifact_as_of": "2026-10-02T00:24:35.678025+00:00",
+    "planned_start_at": "2026-10-02T00:15:00+00:00",
+    "planned_end_at": "2026-10-02T00:45:00+00:00",
+    "acknowledged_at": "2026-10-02T00:17:20.334878+00:00",
+    "acknowledged_symbols": [
+      "043260",
+      "078600",
+      "010955"
+    ],
+    "rejected_symbols": [],
+    "received_frames": 10000,
+    "max_frames": 10000,
+    "quote_count": 9992,
+    "quote_counts_by_symbol": {
+      "078600": 7128,
+      "043260": 2296,
+      "010955": 568
+    },
+    "quality_issue_counts": {
+      "source_time_not_increasing": 477,
+      "invalid_book": 27
+    },
+    "quality_flagged_quote_count": 501,
+    "stop_reason": "frame_limit",
+    "cleanup_failed": false,
+    "delivery": "LOSSY",
+    "stream_complete": null,
+    "first_quote_at": "2026-10-02T00:17:20.377309+00:00",
+    "last_quote_at": "2026-10-02T00:24:35.023953+00:00",
+    "ack_to_artifact_seconds": 435.343147,
+    "first_scan_to_artifact_seconds": 436.708716,
+    "planned_markout_seconds": 900,
+    "reached_scan_plus_900_seconds": false
+  },
+  "evaluation": {
+    "readiness": {
+      "minimum_paired_outcomes_across_scenarios": 0,
+      "missing_required_session_evidence_candidates": 9,
+      "original_cohort_count": 9,
+      "profitability_pass": false,
+      "status": "no_comparable_pairs"
+    },
+    "counts": {
+      "allow": 0,
+      "baseline_cash": 0,
+      "cash": 0,
+      "in_scope": 9,
+      "out_of_scope": 0,
+      "paired_outcomes": 0,
+      "total": 9,
+      "unknown": 9
+    },
+    "summary": {
+      "complete_delta_net_pnl": null,
+      "known_avoided_loss": null,
+      "known_missed_gain": null,
+      "known_pair_delta_net_pnl": null
+    },
+    "slippage_bps_each": [
+      0,
+      10,
+      30
+    ],
+    "account_return": null,
+    "production_eligible": false,
+    "profitability_pass": false,
+    "source_authenticity_verified": false,
+    "selection_source_v2_available": false,
+    "kis_execution_evidence": false
+  },
+  "private_raw_data_committed": false,
+  "live_orders_placed_by_review": false,
+  "deployment_or_restart_by_review": false,
+  "collection_retry_by_review": false,
+  "limitations": [
+    "Structural seals are not independent fsync or current process exit evidence.",
+    "A result timestamp before the planned end is retained; early termination is incomplete.",
+    "The first evaluated pre-signal blocking gate is unknown.",
+    "KIS connection_gap records lack frame/TR attribution; candidate losses cannot be inferred.",
+    "LOSSY source gaps are not measurable from source sequence.",
+    "No order_ready quantity/capital, reviewed session evidence, account source exports, or account/benchmark performance is supplied.",
+    "Historical pilot fields are not upgraded to later source-instrumentation versions."
+  ],
+  "offline_toss_report": {
+    "exit_code": 0,
+    "sha256": "7beb19adb2fec870a5f78cdaba17c5464d003906ab525b1f5db7d95c3c4e4aa4",
+    "source_sha256": "b95ce8b3ba667bd5ebd0873b40ab470a2f5e2a7f7f55b9f80d671a7b3fd58ce4",
+    "population": {
+      "returned_candidate_count": 9,
+      "observed_subset_count": 3,
+      "unobserved_candidate_count": 6,
+      "selection_rule": "first_three_in_returned_order"
+    },
+    "coverage": {
+      "planned_start_at": "2026-10-02T00:15:00+00:00",
+      "planned_end_at": "2026-10-02T00:45:00+00:00",
+      "reported_as_of": "2026-10-02T00:24:35.678025+00:00",
+      "last_received_quote_at": "2026-10-02T00:24:35.023953+00:00",
+      "stop_reason": "frame_limit",
+      "received_frames": 10000,
+      "max_frames": 10000,
+      "quote_count": 9992,
+      "cleanup_failed": false
+    },
+    "service_complete": false,
+    "service_reason": "websocket_incomplete",
+    "profit_comparison_available": false,
+    "kis_execution_evidence": false
+  }
+}

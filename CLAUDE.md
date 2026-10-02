@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **최신38차(10-02, 실자료 품질 평가):** [첫 관측·진입 병목과 다음 순서](docs/research/current-engine-integrated-pds-2026-10-02.md#38차-plan--첫-실제-관측의-품질과-진입-병목). 예약5468208의 후보9개·signal/order_ready0, KIS 호가29,912개를 확인했다. 토스는10,000프레임 상한으로09:24 조기 종료해900초 평가에 부족하다. 조기 종료 품질 보고 오류를 로컬 수정했으며 비교쌍0·순수익null을 유지한다. 다음은 실제 진입 탈락 사유·관측 용량·프레임 오류 범위의 계측 설계다. 계좌 원본 경로는 미제공, 현재 서비스 상태는 미조회. 이번 운영 변경·추가 수집 없음. 아래는 단계별 이력이다.
+
 > **최신37차(10-02, 로컬 구현·검증 완료):** [체결 identity·장부 commit](docs/research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit). 미래 식별 KR 체결의 모든 BUY 증분·SELL을 주문/실행 ID와 연결하고, JSON 멱등 기록·DB transaction·실제 commit 확인을 구분한다. 후처리는 한 번 수행하며 저장 대기는 신규 BUY/같은 종목 분할 SELL을 보류하고 전량 보호 SELL은 유지한다. 과거 receipt의 의미·실제 계좌 대사·baseline 포함 근거·순수익은 별도다. 운영·예약5468208·설치 입력·매수 중지 보존. 아래는 단계별 이력이다.
 
 > **최신36차(10-02):** [복구 증거의 읽기 전용 대사](docs/research/current-engine-integrated-pds-2026-10-02.md#36차-plan--복구-증거의-읽기-전용-대사) · [입력/실행/판독 절차](docs/operations/execution-recovery-evidence.md). 독립 SQLite 복사본과 증권사 원주문·거래 이벤트·잔고 JSON에서 날짜+주문번호, 증분 구성, 수량/금액, 잔고 차이와 필요한 자료를 보고한다. 입력을 변경하거나 replay/보류 해제를 하지 않는다. `consistent`는 제공 자료 안의 일치이며 출처/계좌 완전성 인증이 아니다. **실제 계좌 대사·DB commit 근거·baseline 포함 경계·비용 후 수익은 미검증**. 운영·예약5468208·설치 입력·매수 중지 보존. 아래는 단계별 이력이다.
