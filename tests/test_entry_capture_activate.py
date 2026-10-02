@@ -22,10 +22,11 @@ def module():
     return mod
 
 
-@pytest.fixture
-def setup(tmp_path):
+@pytest.fixture(params=['20261002', '20261006-pilot2'])
+def setup(tmp_path, request):
     m = module()
-    now = datetime(2026, 10, 1, 23, 55, tzinfo=timezone.utc)
+    profile = m.activation_profile(request.param)
+    now = profile.not_before
     repo = tmp_path / 'repo'
     repo.mkdir()
     protected = {}
@@ -37,14 +38,15 @@ def setup(tmp_path):
     source = repo / 'scripts/run_trader.py'
     source.parent.mkdir()
     source.write_bytes(b'old\n')
-    once = tmp_path / 'once.json'
+    once = tmp_path / request.param / 'once.json'
+    once.parent.mkdir()
     once.write_bytes(b'{}')
     launcher, deployment = tmp_path / 'launcher.py', tmp_path / 'deployment.json'
     launcher.write_bytes(b'launcher')
     deployment.write_bytes(b'{}')
     kill = tmp_path / 'KILL_SWITCH_KR'
     kill.touch()
-    state = tmp_path / 'state'
+    state = tmp_path / ('state-' + request.param)
     state.mkdir(mode=0o700)
     dropin = tmp_path / 'dropins/entry-capture.conf'
     dropin.parent.mkdir(mode=0o755)
@@ -63,7 +65,7 @@ def setup(tmp_path):
         kill_path=kill, state_dir=state, lock_path=lock,
         not_before=now, latest_start_at=now+timedelta(seconds=120),
         toss_uid=997, toss_gid=987, study_sha256='c'*64,
-        evaluation_epoch='kr-entry-20261002-firstscan-v1')
+        evaluation_epoch=profile.evaluation_epoch)
     events = []
     current = [now]
     health = {'broker': {'connected': True, 'pending_orders': 0},
@@ -108,7 +110,7 @@ def setup(tmp_path):
 
     def run():
         return m.activate(cfg, runner=runner, clock=lambda:current[0], fetch=fetch,
-                          sleep=lambda seconds:current.__setitem__(0,current[0]+timedelta(seconds=seconds)), trusted_uid=os.getuid(), lock_uid=os.getuid())
+                          sleep=lambda seconds:current.__setitem__(0,current[0]+timedelta(seconds=seconds)), trusted_uid=os.getuid(), lock_uid=os.getuid(), engine_input_uid=os.getuid())
     return SimpleNamespace(**locals())
 
 
@@ -275,7 +277,7 @@ def test_successful_toss_start_is_not_retried_on_status_failure(setup):
     assert sum('restart' in c for c in s.events) == 1
 
 
-@pytest.mark.parametrize('problem', [None, 'credentials', 'repo', 'time', 'group', 'source'])
+@pytest.mark.parametrize('problem', [None, 'credentials', 'repo', 'time', 'group', 'source', 'study_hash'])
 def test_fixed_configuration_contract(setup, monkeypatch, problem):
     from dataclasses import asdict
     s = setup
@@ -286,12 +288,15 @@ def test_fixed_configuration_contract(setup, monkeypatch, problem):
              'dropin_path':m.DROPIN_PATH,'kill_path':m.KILL_PATH,'state_dir':m.STATE_DIR,
              'lock_path':m.LOCK_PATH}
     raw.update({k:str(v) for k,v in fixed.items()})
+    raw['evaluation_epoch'] = 'kr-entry-20261002-firstscan-v1'
+    raw['study_sha256'] = 'e'*64
     raw['not_before'] = '2026-10-01T23:55:00+00:00'
     raw['latest_start_at'] = '2026-10-01T23:57:00+00:00'
     paths = [m.ONCE_PATH, m.ONCE_PATH.with_name('study.json'),m.ONCE_PATH.with_name('manifest.json'),
              m.LAUNCHER_PATH,m.DEPLOYMENT_PATH,Path('/etc/qwq-toss-observer/plan.json'),
              Path('/etc/qwq-toss-observer/registry.json')]
     raw['input_hashes'] = {str(p):'e'*64 for p in paths}
+    if problem == 'study_hash': raw['study_sha256'] = 'f'*64
     if problem == 'credentials': raw['input_hashes']['/etc/qwq-toss-observer/credentials.env'] = 'f'*64
     if problem == 'repo': raw['repo'] = '/tmp/other'
     if problem == 'time': raw['latest_start_at'] = '2026-10-01T23:58:00+00:00'
@@ -368,3 +373,104 @@ def test_rollback_never_removes_replacement_dropin_inode(setup, monkeypatch):
     assert result['rollback']=='failed'
     assert s.dropin.read_bytes()==b'independent-replacement'
     assert not any('restart' in c for c in s.events)
+
+
+def october6_raw(s):
+    from dataclasses import asdict
+    m = s.m
+    raw = asdict(s.cfg)
+    fixed = dict(repo=m.REPO, once_path=Path('/home/ubuntu/.local/share/qwq-entry-observation/20261006-pilot2/once.json'),
+        launcher_path=m.LAUNCHER_PATH, deployment_path=m.DEPLOYMENT_PATH,
+        staged_dropin=Path('/etc/qwq-entry-capture/20261006-pilot2/entry-capture.conf'),
+        dropin_path=m.DROPIN_PATH, kill_path=m.KILL_PATH,
+        state_dir=Path('/var/lib/qwq-entry-capture/20261006-pilot2'), lock_path=m.LOCK_PATH)
+    raw.update({k:str(v) for k,v in fixed.items()})
+    raw.update(not_before='2026-10-05T23:55:00+00:00', latest_start_at='2026-10-05T23:57:00+00:00',
+               evaluation_epoch='kr-entry-20261006-firstscan-v4', study_sha256='e'*64)
+    raw['input_hashes'] = {str(p):'e'*64 for p in (
+        fixed['once_path'],fixed['once_path'].with_name('study.json'),fixed['once_path'].with_name('manifest.json'),
+        m.LAUNCHER_PATH,m.DEPLOYMENT_PATH,Path('/etc/qwq-toss-observer/plan.json'),Path('/etc/qwq-toss-observer/registry.json'))}
+    return raw
+
+
+@pytest.mark.parametrize('mismatch',[None,'once_path','staged_dropin','state_dir','evaluation_epoch','not_before','latest_start_at','input_hashes','study_sha256'])
+def test_new_profile_binds_every_repeated_identity_and_uses_separate_config(setup,monkeypatch,mismatch):
+    s=setup; m=s.m; raw=october6_raw(s)
+    if mismatch == 'once_path': raw[mismatch]=str(m.ONCE_PATH)
+    elif mismatch == 'staged_dropin': raw[mismatch]=str(m.STAGED_DROPIN)
+    elif mismatch == 'state_dir': raw[mismatch]=str(m.STATE_DIR)
+    elif mismatch == 'evaluation_epoch': raw[mismatch]='kr-entry-20261002-firstscan-v1'
+    elif mismatch in ('not_before','latest_start_at'): raw[mismatch]=raw[mismatch].replace('10-05','10-01')
+    elif mismatch == 'study_sha256': raw[mismatch]='f'*64
+    elif mismatch == 'input_hashes': raw[mismatch][str(m.ONCE_PATH)]='e'*64
+    reads=[]
+    def read(path,**kwargs):
+        reads.append(path)
+        assert path==Path('/etc/qwq-entry-capture/20261006-pilot2/activation.json')
+        assert kwargs['owner']==0
+        return json.dumps(raw).encode()
+    monkeypatch.setattr(m.os,'geteuid',lambda:0)
+    monkeypatch.setattr(m,'trusted_dir',lambda *args:None)
+    monkeypatch.setattr(m,'read_file',read)
+    if mismatch:
+        with pytest.raises(m.GuardError):m.load_config('20261006-pilot2')
+    else:
+        cfg=m.load_config('20261006-pilot2')
+        assert cfg.once_path != m.ONCE_PATH and cfg.state_dir != m.STATE_DIR
+        assert cfg.not_before==datetime(2026,10,5,23,55,tzinfo=timezone.utc)
+        assert cfg.evaluation_epoch=='kr-entry-20261006-firstscan-v4'
+        assert str(cfg.once_path) in m.dropin_content(str(cfg.once_path))
+    assert len(reads)==1
+
+
+@pytest.mark.parametrize('args',[['--profile','arbitrary'],['--profile','20261002'],['--profile','20261006-pilot2','extra'],['--date','20261006'],['/tmp/config']])
+def test_cli_rejects_unknown_profile_before_configuration_or_commands(setup,monkeypatch,args,capsys):
+    m=setup.m
+    def forbidden(*args,**kwargs):pytest.fail('invalid selector reached configuration or activation')
+    monkeypatch.setattr(m,'load_config',forbidden)
+    monkeypatch.setattr(m,'activate',forbidden)
+    monkeypatch.setattr(m.sys,'argv',['driver',*args])
+    assert m.main()==1
+    assert json.loads(capsys.readouterr().out)['phase']=='configuration'
+
+
+def test_exact_new_cli_selector_passes_only_the_frozen_profile(setup,monkeypatch,capsys):
+    m=setup.m; selected=[]
+    def load(profile):selected.append(profile); return setup.cfg
+    monkeypatch.setattr(m,'load_config',load)
+    monkeypatch.setattr(m,'activate',lambda cfg:{'status':'complete'})
+    monkeypatch.setattr(m.sys,'argv',['driver','--profile','20261006-pilot2'])
+    assert m.main()==0
+    assert selected==['20261006-pilot2']
+    capsys.readouterr()
+
+
+def test_engine_input_owner_uses_selected_once_directory(setup,monkeypatch):
+    s=setup; original=s.m.read_file; calls=[]
+    def read(path,**kwargs):
+        calls.append((path,kwargs.get('owner')))
+        if path==s.once:
+            assert kwargs.get('owner')==os.getuid()
+            raise s.m.GuardError()
+        return original(path,**kwargs)
+    monkeypatch.setattr(s.m,'read_file',read)
+    result=s.run()
+    assert result['status']=='failed' and result['phase']=='preflight'
+    assert (s.once,os.getuid()) in calls
+    assert not any('restart' in c or 'checkout' in c for c in s.events)
+
+
+def test_other_profile_receipt_does_not_consume_selected_state(setup,monkeypatch):
+    s=setup
+    old_state=s.tmp_path/'old-state'; old_state.mkdir()
+    old_receipt=old_state/'activation.receipt'; old_receipt.write_bytes(b'old consumed attempt')
+    old_status=old_state/'status.json'; old_status.write_bytes(b'old result')
+    monkeypatch.setattr(s.m,'STATE_DIR',old_state)
+    assert s.run()['status']=='complete'
+    assert old_receipt.read_bytes()==b'old consumed attempt'
+    assert old_status.read_bytes()==b'old result'
+    receipt=json.loads((s.state/'activation.receipt').read_text())
+    assert receipt['new_head']==s.cfg.new_head
+    assert datetime.fromisoformat(receipt['attempted_at'])==s.profile.not_before
+    assert json.loads((s.state/'status.json').read_text())['status']=='complete'
+    assert str(s.once) in s.dropin.read_text()

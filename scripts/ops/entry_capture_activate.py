@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""검토·준비된 2026-10-02 관측을 좁은 시간 안에 한 번만 활성화한다.
+"""검토·준비된 명시 날짜의 관측을 좁은 시간 안에 한 번만 활성화한다.
 
 루트 전용 고정 JSON을 읽는다. 준비/발급/다운로드/전체 테스트/재시도는 하지 않는다.
 재시작 요청 이후의 오류는 복구 재시작 없이 운영자 확인 상태로 남긴다.
@@ -37,6 +37,36 @@ ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
 
 class GuardError(Exception):
     """세부 운영 자료를 출력하지 않는 경계 실패."""
+
+
+@dataclass(frozen=True)
+class ActivationProfile:
+    config_path: Path
+    state_dir: Path
+    once_path: Path
+    staged_dropin: Path
+    evaluation_epoch: str
+    not_before: datetime
+    latest_start_at: datetime
+
+
+def activation_profile(name):
+    """날짜/경로를 입력받지 않는다. 검토된 두 고정 계약만 선택한다."""
+    if name == '20261002':
+        return ActivationProfile(CONFIG_PATH, STATE_DIR, ONCE_PATH, STAGED_DROPIN,
+            'kr-entry-20261002-firstscan-v1',
+            datetime(2026,10,1,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,1,23,57,tzinfo=timezone.utc))
+    if name == '20261006-pilot2':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261006-pilot2/activation.json'),
+            Path('/var/lib/qwq-entry-capture/20261006-pilot2'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261006-pilot2/once.json'),
+            Path('/etc/qwq-entry-capture/20261006-pilot2/entry-capture.conf'),
+            'kr-entry-20261006-firstscan-v4',
+            datetime(2026,10,5,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,5,23,57,tzinfo=timezone.utc))
+    raise GuardError()
 
 
 @dataclass(frozen=True)
@@ -120,16 +150,17 @@ def parse_time(value):
     return result
 
 
-def load_config():
-    """CLI에는 경로/명령/시간 변경 인자가 없다. 루트 준비본만 허용한다."""
+def load_config(profile='20261002'):
+    """CLI에는 경로/명령/시간 변경 인자가 없다. 선택 날짜의 루트 준비본만 허용한다."""
+    selected = activation_profile(profile)
     if os.geteuid() != 0:
         raise GuardError()
-    trusted_dir(CONFIG_PATH.parent, 0)
-    raw = json.loads(read_file(CONFIG_PATH, owner=0, limit=1024*1024))
-    paths = dict(repo=REPO, once_path=ONCE_PATH, launcher_path=LAUNCHER_PATH,
-                 deployment_path=DEPLOYMENT_PATH, staged_dropin=STAGED_DROPIN,
+    trusted_dir(selected.config_path.parent, 0)
+    raw = json.loads(read_file(selected.config_path, owner=0, limit=1024*1024))
+    paths = dict(repo=REPO, once_path=selected.once_path, launcher_path=LAUNCHER_PATH,
+                 deployment_path=DEPLOYMENT_PATH, staged_dropin=selected.staged_dropin,
                  dropin_path=DROPIN_PATH, kill_path=KILL_PATH,
-                 state_dir=STATE_DIR, lock_path=LOCK_PATH)
+                 state_dir=selected.state_dir, lock_path=LOCK_PATH)
     keys = {'old_head','new_head','source_hashes','protected_hashes','input_hashes',
             'dropin_sha256','not_before','latest_start_at','toss_uid','toss_gid',
             'study_sha256','evaluation_epoch'} | set(paths)
@@ -158,12 +189,12 @@ def load_config():
             elif (not Path(path).is_absolute() or '..' in Path(path).parts
                   or not (path.startswith('/etc/qwq-toss-observer/')
                           or path == str(LAUNCHER_PATH)
-                          or path.startswith(str(ONCE_PATH.parent)+'/'))):
+                          or path.startswith(str(selected.once_path.parent)+'/'))):
                 raise GuardError()
     if set(raw['protected_hashes']) != {'config/default.yml','config/evolved_overrides.yml'}:
         raise GuardError()
-    expected_inputs = {str(ONCE_PATH), str(ONCE_PATH.with_name('study.json')),
-                       str(ONCE_PATH.with_name('manifest.json')), str(LAUNCHER_PATH),
+    expected_inputs = {str(selected.once_path), str(selected.once_path.with_name('study.json')),
+                       str(selected.once_path.with_name('manifest.json')), str(LAUNCHER_PATH),
                        str(DEPLOYMENT_PATH), '/etc/qwq-toss-observer/plan.json',
                        '/etc/qwq-toss-observer/registry.json'}
     if set(raw['input_hashes']) != expected_inputs:
@@ -173,7 +204,9 @@ def load_config():
     for name in ('dropin_sha256','study_sha256'):
         if type(raw[name]) is not str or not re.fullmatch('[0-9a-f]{64}',raw[name]):
             raise GuardError()
-    if raw['evaluation_epoch'] != 'kr-entry-20261002-firstscan-v1':
+    if raw['study_sha256'] != raw['input_hashes'][str(selected.once_path.with_name('study.json'))]:
+        raise GuardError()
+    if raw['evaluation_epoch'] != selected.evaluation_epoch:
         raise GuardError()
     if (type(raw['toss_uid']) is not int or raw['toss_uid'] != 997
             or type(raw['toss_gid']) is not int or raw['toss_gid'] != 987):
@@ -181,8 +214,8 @@ def load_config():
     raw.update(paths)
     raw['not_before'] = parse_time(raw['not_before'])
     raw['latest_start_at'] = parse_time(raw['latest_start_at'])
-    if (raw['not_before'] != datetime(2026,10,1,23,55,tzinfo=timezone.utc)
-            or raw['latest_start_at'] != datetime(2026,10,1,23,57,tzinfo=timezone.utc)):
+    if (raw['not_before'] != selected.not_before
+            or raw['latest_start_at'] != selected.latest_start_at):
         raise GuardError()
     return Config(**raw)
 
@@ -223,7 +256,7 @@ def pending_clear(health):
 
 def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc),
              fetch=fetch_loopback, pending_check=pending_clear, sleep=time.sleep,
-             trusted_uid=0, lock_uid=1000):
+             trusted_uid=0, lock_uid=1000, engine_input_uid=1000):
     """읽기/프로세스 경계를 주입할 수 있는 한 번 실행 상태 기계."""
     phase = 'window'
     receipt = False
@@ -266,8 +299,8 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
     def inputs():
         for path, sha in cfg.input_hashes.items():
             owner = trusted_uid if Path(path) in (cfg.launcher_path,cfg.deployment_path) or path.startswith('/etc/') else None
-            if path.startswith(str(ONCE_PATH.parent)+'/'):
-                owner = 1000
+            if path.startswith(str(cfg.once_path.parent)+'/'):
+                owner = engine_input_uid
             if digest(read_file(Path(path),owner=owner)) != sha:
                 raise GuardError()
 
@@ -428,9 +461,13 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
 def main():
     try:
-        if len(sys.argv) != 1:
+        if sys.argv[1:] == []:
+            cfg = load_config()
+        elif sys.argv[1:] == ['--profile', '20261006-pilot2']:
+            cfg = load_config('20261006-pilot2')
+        else:
             raise GuardError()
-        result = activate(load_config())
+        result = activate(cfg)
     except Exception:
         result = {'status':'rejected','phase':'configuration'}
     print(json.dumps(result,sort_keys=True))

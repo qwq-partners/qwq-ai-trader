@@ -16,6 +16,7 @@ ANCHOR_URL = 'http://127.0.0.1:8080/api/internal/entry-anchors'
 SCHEMA = 'entry-anchor-projection-v2'
 LEGACY_SCHEMA = 'entry-anchor-projection-v1'
 SELECTION_RULE = 'first_three_in_returned_order'
+MAX_SOURCE_RECORDS = 80000  # 장전 기존 호가를 포함한 v4 journal 예산. 투영 크기는 별도 제한.
 FIELDS = {
     'scan': ('scan_id', 'observed_at', 'route_origin', 'population_scope', 'scan_admission_ref'),
     'signal': ('candidate_id', 'signal_id', 'observed_at'),
@@ -29,7 +30,7 @@ def project_anchors(runtime, *, now=None):
     records = []
     selected, signal_ids = set(), set()
     cohort = []
-    if len(buffer._records) > 50000:
+    if len(buffer._records) > MAX_SOURCE_RECORDS:
         raise ValueError('anchor_source_too_large')
     for record in buffer._records:
         kind = record.get('kind')
