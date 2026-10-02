@@ -40,7 +40,7 @@ class EntryObservationBuffer:
     """한 이벤트 루프용 유한 메모리 버퍼. 가득 차면 새 기록을 버리고 결손을 보존한다."""
 
     def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None,
-                 selection_basis_settings=None):
+                 selection_basis_settings=None, entry_gate_trace_settings=None):
         if not isinstance(evaluation_epoch, str) or not evaluation_epoch.strip():
             raise ValueError("evaluation_epoch 필요")
         if type(capacity) is not int or capacity <= 0:
@@ -56,6 +56,12 @@ class EntryObservationBuffer:
         from .selection_basis import validate_settings
         self.selection_basis_settings = (validate_settings(selection_basis_settings)
                                          if selection_basis_settings is not None else None)
+        from .entry_gate_trace import validate_settings as validate_gate_settings
+        self.entry_gate_trace_settings = (validate_gate_settings(entry_gate_trace_settings)
+                                         if entry_gate_trace_settings is not None else None)
+        if self.entry_gate_trace_settings is not None and scan_scope != 'first':
+            raise ValueError('entry gate trace requires first scan scope')
+        self._entry_gate_trace_started = False
         self._first_scan_id = None
         self._first_scan_recorded = False
         self._cohort_candidates: set[str] = set()
@@ -105,7 +111,7 @@ class EntryObservationBuffer:
                     return False
                 record = {**record, "population_scope": "first_returned_scan_candidates",
                           "scan_admission_ref": self.scan_admission_ref}
-            elif kind in ("rest_quote", "signal", "emit_result", "selection_basis"):
+            elif kind in ("rest_quote", "signal", "emit_result", "selection_basis", "entry_gate_trace"):
                 if record.get("candidate_id") not in self._cohort_candidates:
                     return False
             elif kind == "order_ready" and not self.accepts_order_signal(record.get("signal_id")):
@@ -173,6 +179,9 @@ def capture_scan(observer, stocks, session: str) -> str | None:
         record = {"kind": "scan", "scan_id": scan_id, "observed_at": _now(),
                   "session": session, "route_origin": "live_screening",
                   "population_scope": "returned_screen_candidates", "candidates": candidates}
+        if isinstance(observer, EntryObservationBuffer) and observer.entry_gate_trace_settings is not None:
+            from .entry_gate_trace import scan_fields
+            record.update(scan_fields(observer.entry_gate_trace_settings))
         selection = observer.selection_basis_settings if isinstance(observer, EntryObservationBuffer) else None
         if selection is not None:
             record.update(selection_basis_expected=True, selection_basis_max_candidates=selection['max_candidates'],

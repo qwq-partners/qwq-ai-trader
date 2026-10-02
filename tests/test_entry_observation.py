@@ -211,6 +211,8 @@ def test_real_screen_loop_records_before_strategy_gate(monkeypatch, subscription
         if len(calls)>1: bot.running=False
     scope={"asyncio":SimpleNamespace(sleep=sleep),"datetime":datetime,"logger":logger,
            "MarketSession":MarketSession,"capture_scan":m.capture_scan,
+           "begin_gate_trace":__import__("src.analytics.entry_gate_trace", fromlist=["begin_gate_trace"]).begin_gate_trace,
+           "safe_trace_call":__import__("src.analytics.entry_gate_trace", fromlist=["safe_trace_call"]).safe_trace_call,
            "observe_screen_candidates":__import__("src.data.feeds.quote_subscription", fromlist=["observe_screen_candidates"]).observe_screen_candidates,
            "_hb":SimpleNamespace(**{k:lambda *a,**kw:None for k in ("record_attempt","record_idle","record_success","record_failure")}),
            "trading_logger":SimpleNamespace(log_screening=lambda **kwargs:None)}

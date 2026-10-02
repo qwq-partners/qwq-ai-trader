@@ -45,6 +45,7 @@ from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
 from ..analytics.entry_observation import capture_scan, capture_rest_quote, emit_with_observation
+from ..analytics.entry_gate_trace import begin_gate_trace, safe_trace_call
 from ..data.feeds.quote_subscription import observe_screen_candidates
 
 
@@ -3820,6 +3821,7 @@ JSON:
     async def run_screening(self):
         """주기적 종목 스크리닝 루프"""
         bot = self.bot
+        _gate_trace = None
         try:
             # 초기 대기 (다른 컴포넌트 초기화 후)
             await asyncio.sleep(60)
@@ -3913,6 +3915,7 @@ JSON:
                     )
                     # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
                     _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
+                    _gate_trace = begin_gate_trace(_entry_observer, _entry_scan_id, screened)
                     observe_screen_candidates(getattr(bot, "ws_feed", None), _entry_observer,
                                               _entry_scan_id, screened)
 
@@ -3979,14 +3982,31 @@ JSON:
                 _screening_allowed = bool(_enabled)
                 _idx_change = None   # 아래 레짐 블록에서 가중 등락률로 채움 (2026-08-04 P1)
 
-                if (screened
-                        and _screening_allowed
-                        and current_session == MarketSession.REGULAR
-                        and bot.engine and bot.broker
-                        and "09:15" <= datetime.now().strftime("%H:%M") <= "15:00"):
+                # Copy each actually reached result; observer return values never control trading.
+                _entry_allowed = bool(screened)
+                if _entry_allowed:
+                    _entry_allowed = _screening_allowed
+                    safe_trace_call(_gate_trace, "check", "enabled", _entry_allowed)
+                if _entry_allowed:
+                    _entry_allowed = current_session == MarketSession.REGULAR
+                    safe_trace_call(_gate_trace, "check", "session", _entry_allowed,
+                                    value=current_session.value, threshold=MarketSession.REGULAR.value)
+                if _entry_allowed:
+                    _entry_allowed = bool(bot.engine)
+                    safe_trace_call(_gate_trace, "check", "engine", _entry_allowed)
+                if _entry_allowed:
+                    _entry_allowed = bool(bot.broker)
+                    safe_trace_call(_gate_trace, "check", "broker", _entry_allowed)
+                if _entry_allowed:
+                    _entry_time = datetime.now().strftime("%H:%M")
+                    _entry_allowed = "09:15" <= _entry_time <= "15:00"
+                    safe_trace_call(_gate_trace, "check", "entry_time", _entry_allowed,
+                                    value=_entry_time, threshold="09:15..15:00")
+                if _entry_allowed:
                     try:
                         # === 마켓 레짐 필터 (약세장 진입 차단) — KOSPI+KOSDAQ 종합 판단 ===
                         _market_regime_ok = True
+                        _regime_observed = True
                         _kospi_chg = 0.0
                         _kosdaq_chg = 0.0
                         _weighted_chg = 0.0
@@ -4000,6 +4020,7 @@ JSON:
                                 bot.broker.get_quote("229200"),  # KODEX KOSDAQ150
                                 return_exceptions=True,
                             )
+                            _regime_observed = isinstance(_kospi_q, dict) and isinstance(_kosdaq_q, dict)
                             _kospi_chg = _kospi_q.get("change_pct", 0.0) if isinstance(_kospi_q, dict) else 0.0
                             _kosdaq_chg = _kosdaq_q.get("change_pct", 0.0) if isinstance(_kosdaq_q, dict) else 0.0
 
@@ -4024,8 +4045,31 @@ JSON:
                                     f"보수적 진입 (점수 85+ 만)"
                                 )
                         except Exception as _mre:
+                            _regime_observed = False
                             logger.debug(f"[스크리닝] 마켓 레짐 조회 실패 (무시): {_mre}")
 
+                        # Evidence validation runs after policy evaluation and cannot alter its fallback.
+                        _regime_value = None
+                        try:
+                            _regime_observed = _regime_observed and all(
+                                isinstance(_q, dict) and type(_q.get("change_pct")) in (int, float)
+                                and math.isfinite(_q["change_pct"])
+                                for _q in (_kospi_q, _kosdaq_q)
+                            )
+                            if all(type(_v) in (int, float) and math.isfinite(_v)
+                                   for _v in (_kospi_chg, _kosdaq_chg, _weighted_chg)):
+                                _regime_value = (f"kospi={_kospi_chg!r};kosdaq={_kosdaq_chg!r};"
+                                                 f"weighted={_weighted_chg!r}")
+                        except Exception:
+                            _regime_observed = False
+                        if _regime_observed or not _market_regime_ok:
+                            safe_trace_call(_gate_trace, "check", "regime", _market_regime_ok,
+                                            value=_regime_value, threshold="weighted<=-1.0 or either_index<=-2.5",
+                                            reason=("weighted_or_index_floor" if _regime_observed
+                                                    else "partial_quote_index_floor"))
+                        else:
+                            safe_trace_call(_gate_trace, "note", "regime", "unknown",
+                                            value=_regime_value, reason="quote_error_fallback")
                         if not _market_regime_ok:
                             # G1_regime: 약세장 차단 → 상위 후보 기록
                             _top_cands = sorted(
@@ -4084,7 +4128,10 @@ JSON:
                                 f"제외={len(exclude)}, 쿨다운={len(bot._screening_signal_cooldown)}"
                             )
 
-                            if available_cash >= min_pos_value:
+                            _cash_ok = available_cash >= min_pos_value
+                            safe_trace_call(_gate_trace, "check", "cash", _cash_ok,
+                                            value=available_cash, threshold=min_pos_value)
+                            if _cash_ok:
                                 # 시간대별 등락률 상한 (과열 방지)
                                 hour_min = now.strftime("%H:%M")
                                 if hour_min < "10:00":
@@ -4115,18 +4162,39 @@ JSON:
                                     )
                                 # 시간대별 등락률 상한 (장초반 추격 방지)
                                 _max_rt_change = 10.0 if now.hour >= 11 else 7.0 if now.hour >= 10 else 5.0
-                                candidates = [
-                                    s for s in screened
-                                    if s.score >= _min_score
-                                    and s.symbol not in exclude
-                                    and s.symbol not in bot._screening_signal_cooldown
-                                    and bot._daily_entry_count.get(s.symbol, 0) < max_daily_entries
-                                    and s.change_pct <= _max_rt_change
-                                ]
+                                candidates = []
+                                for s in screened:
+                                    _score_ok = s.score >= _min_score
+                                    safe_trace_call(_gate_trace, "check", "score", _score_ok,
+                                                    symbol=s.symbol, value=s.score, threshold=_min_score)
+                                    if not _score_ok:
+                                        continue
+                                    _excluded_ok = s.symbol not in exclude
+                                    safe_trace_call(_gate_trace, "check", "excluded", _excluded_ok, symbol=s.symbol)
+                                    if not _excluded_ok:
+                                        continue
+                                    _cooldown_ok = s.symbol not in bot._screening_signal_cooldown
+                                    safe_trace_call(_gate_trace, "check", "cooldown", _cooldown_ok, symbol=s.symbol)
+                                    if not _cooldown_ok:
+                                        continue
+                                    _daily_count = bot._daily_entry_count.get(s.symbol, 0)
+                                    _count_ok = _daily_count < max_daily_entries
+                                    safe_trace_call(_gate_trace, "check", "daily_count", _count_ok,
+                                                    symbol=s.symbol, value=_daily_count, threshold=max_daily_entries)
+                                    if not _count_ok:
+                                        continue
+                                    _change_ok = s.change_pct <= _max_rt_change
+                                    safe_trace_call(_gate_trace, "check", "scan_change", _change_ok,
+                                                    symbol=s.symbol, value=s.change_pct, threshold=_max_rt_change)
+                                    if not _change_ok:
+                                        continue
+                                    candidates.append(s)
 
                                 # 장중 전략 사전 체크
                                 # momentum_breakout/theme_chasing/gap_and_go 우선,
                                 # 비활성 시 sepa_trend 허용 (rsi2_reversal만 단독 활성인 경우 스킵)
+                                _strategy_ok = True
+                                _strategy_candidates = candidates
                                 _strategy_type = StrategyType.SEPA_TREND  # 기본값
                                 _sched_cfg = bot.config.get("kr", "strategies", "momentum_breakout") or {}
                                 _momentum_start = _sched_cfg.get("trading_start_time", "09:15")
@@ -4141,11 +4209,18 @@ JSON:
                                     _strategy_type = StrategyType.SEPA_TREND
                                 elif "momentum_breakout" in _enabled and hour_min < _momentum_start:
                                     logger.debug(f"[스크리닝] 모멘텀 시작시간({_momentum_start}) 전 → 자동진입 스킵")
+                                    _strategy_ok = False
                                     candidates = []
                                 else:
                                     logger.debug("[스크리닝] 장중 전략 미활성 → 자동진입 스킵")
+                                    _strategy_ok = False
                                     candidates = []
 
+                                for _candidate in _strategy_candidates:
+                                    safe_trace_call(_gate_trace, "check", "strategy", _strategy_ok,
+                                                    symbol=_candidate.symbol, value=_strategy_type.value,
+                                                    threshold=_momentum_start,
+                                                    reason="selected" if _strategy_ok else "strategy_unavailable")
                                 signals_emitted = 0
                                 # RSI2 장중 진입은 run_screening에서 ScreenedStock 데이터로는
                                 # RSI(2) 계산 불가 → 08:20 + 12:30 배치 스캔(SwingScreener)으로만 처리
@@ -4209,28 +4284,53 @@ JSON:
                                 except Exception as _fts_err:
                                     logger.debug(f"[스크리닝] foreign_top_sectors 계산 실패: {_fts_err}")
 
-                                for stock in candidates[:8]:
-                                    if signals_emitted >= 5:
+                                for _candidate_index, _candidate in enumerate(candidates):
+                                    if _candidate_index < 8:
+                                        safe_trace_call(_gate_trace, "check", "batch_limit", True,
+                                                        symbol=_candidate.symbol, value=_candidate_index, threshold=8)
+                                    else:
+                                        safe_trace_call(_gate_trace, "stop", _candidate.symbol, "batch_limit",
+                                                        stage="batch_limit")
+                                for _candidate_index, stock in enumerate(candidates[:8]):
+                                    _signal_limit_reached = signals_emitted >= 5
+                                    if _signal_limit_reached:
+                                        for _remaining in candidates[_candidate_index:8]:
+                                            safe_trace_call(_gate_trace, "stop", _remaining.symbol, "signal_limit",
+                                                            stage="signal_limit")
                                         break
+                                    safe_trace_call(_gate_trace, "check", "signal_limit", True,
+                                                    symbol=stock.symbol, value=signals_emitted, threshold=5)
 
                                     # 섹터 사전 체크
                                     _sector = None
+                                    _sector_observed = True
                                     if hasattr(bot, '_get_sector'):
                                         try:
                                             _sector = await bot._get_sector(stock.symbol)
                                         except Exception:
-                                            pass
+                                            _sector_observed = False
                                     if _sector:
                                         max_per_sector = bot.engine.config.risk.max_positions_per_sector
                                         if max_per_sector > 0:
                                             same_sector = sum(1 for p in bot.engine.portfolio.positions.values()
                                                              if p.sector == _sector)
-                                            if same_sector >= max_per_sector:
+                                            _sector_blocked = same_sector >= max_per_sector
+                                            safe_trace_call(_gate_trace, "check", "sector", not _sector_blocked,
+                                                            symbol=stock.symbol, value=same_sector, threshold=max_per_sector)
+                                            if _sector_blocked:
                                                 logger.debug(
                                                     f"[스크리닝] {stock.symbol} 탈락: 섹터 한도 "
                                                     f"({_sector}: {same_sector}/{max_per_sector})"
                                                 )
                                                 continue
+
+                                        else:
+                                            safe_trace_call(_gate_trace, "note", "sector", "not_applicable",
+                                                            symbol=stock.symbol, reason="limit_disabled")
+                                    else:
+                                        safe_trace_call(_gate_trace, "note", "sector",
+                                                        "not_applicable" if _sector_observed else "unknown",
+                                                        symbol=stock.symbol, reason="sector_unavailable")
 
                                     # 실시간 가격 검증
                                     try:
@@ -4238,11 +4338,22 @@ JSON:
                                                                      if _entry_observer is not None else None)
                                         quote = await bot.broker.get_quote(stock.symbol)
                                     except Exception as e:
+                                        safe_trace_call(_gate_trace, "note", "quote_fetch", "unknown",
+                                                        symbol=stock.symbol, reason="quote_error")
+                                        safe_trace_call(_gate_trace, "stop", stock.symbol, "quote_error", outcome="unknown")
                                         logger.debug(f"[스크리닝] {stock.symbol} 호가 조회 실패: {e}")
                                         continue
+                                    safe_trace_call(_gate_trace, "check", "quote_fetch", True, symbol=stock.symbol)
                                     capture_rest_quote(_entry_observer, _entry_scan_id, stock.symbol, quote,
                                                        requested_at=_entry_quote_requested_at)
-                                    if not quote or quote.get("price", 0) <= 0:
+                                    _gate_blocked = not quote
+                                    _quote_price = None
+                                    if not _gate_blocked:
+                                        _quote_price = quote.get("price", 0)
+                                        _gate_blocked = _quote_price <= 0
+                                    safe_trace_call(_gate_trace, "check", "quote_price", not _gate_blocked,
+                                                    symbol=stock.symbol, value=_quote_price, threshold=0)
+                                    if _gate_blocked:
                                         continue
 
                                     rt_price = quote["price"]
@@ -4251,16 +4362,33 @@ JSON:
                                     rt_volume = quote.get("volume", 0)
 
                                     # 검증 조건
-                                    if rt_change < 1.0:
+                                    _gate_blocked = rt_change < 1.0
+                                    safe_trace_call(_gate_trace, "check", "rt_min_change", not _gate_blocked,
+                                                    symbol=stock.symbol, value=rt_change, threshold=1.0)
+                                    if _gate_blocked:
                                         logger.debug(f"[스크리닝] {stock.symbol} 탈락: 등락률 {rt_change:+.1f}% < 1%")
                                         continue
-                                    if rt_change > overheating_cap:
+                                    _gate_blocked = rt_change > overheating_cap
+                                    safe_trace_call(_gate_trace, "check", "rt_max_change", not _gate_blocked,
+                                                    symbol=stock.symbol, value=rt_change, threshold=overheating_cap)
+                                    if _gate_blocked:
                                         logger.debug(f"[스크리닝] {stock.symbol} 탈락: 과열 {rt_change:+.1f}% > {overheating_cap}%")
                                         continue
-                                    if rt_open > 0 and rt_price < rt_open:
+                                    _open_available = rt_open > 0
+                                    _gate_blocked = _open_available and rt_price < rt_open
+                                    if _open_available:
+                                        safe_trace_call(_gate_trace, "check", "open_price", not _gate_blocked,
+                                                        symbol=stock.symbol, value=rt_price, threshold=rt_open)
+                                    else:
+                                        safe_trace_call(_gate_trace, "note", "open_price", "not_applicable",
+                                                        symbol=stock.symbol, reason="open_unavailable")
+                                    if _gate_blocked:
                                         logger.debug(f"[스크리닝] {stock.symbol} 탈락: 현재가 {rt_price:,.0f} < 시가 {rt_open:,.0f}")
                                         continue
-                                    if rt_volume <= 0:
+                                    _gate_blocked = rt_volume <= 0
+                                    safe_trace_call(_gate_trace, "check", "volume", not _gate_blocked,
+                                                    symbol=stock.symbol, value=rt_volume, threshold=0)
+                                    if _gate_blocked:
                                         logger.debug(f"[스크리닝] {stock.symbol} 탈락: 거래량 0")
                                         continue
 
@@ -4281,10 +4409,17 @@ JSON:
                                             for r in stock.reasons
                                         )
                                         _vol_threshold = 1.5 if _has_supply else 2.5
-                                        if _vol_ratio <= 0:
+                                        _volume_missing = _vol_ratio <= 0
+                                        if _volume_missing:
+                                            safe_trace_call(_gate_trace, "check", "momentum_volume", False,
+                                                            symbol=stock.symbol, value=_vol_ratio, threshold=0,
+                                                            reason="ratio_unavailable")
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: 거래량 비율 미확인")
                                             continue
-                                        if _vol_ratio < _vol_threshold:
+                                        _gate_blocked = _vol_ratio < _vol_threshold
+                                        safe_trace_call(_gate_trace, "check", "momentum_volume", not _gate_blocked,
+                                                        symbol=stock.symbol, value=_vol_ratio, threshold=_vol_threshold)
+                                        if _gate_blocked:
                                             logger.debug(
                                                 f"[스크리닝] {stock.symbol} 탈락: 거래량 부족 "
                                                 f"({_vol_ratio:.1f}배 < {_vol_threshold}배, 수급={'있음' if _has_supply else '없음'})"
@@ -4297,7 +4432,11 @@ JSON:
                                         if _ma_match:
                                             if float(_ma_match.group(1)) >= 2.0:
                                                 _has_momentum = True
-                                        if not _has_momentum and rt_change < 3.0:
+                                        _gate_blocked = not _has_momentum and rt_change < 3.0
+                                        safe_trace_call(_gate_trace, "check", "momentum_strength", not _gate_blocked,
+                                                        symbol=stock.symbol, value=rt_change, threshold=3.0,
+                                                        reason="ma20_evidence" if _has_momentum else "rt_change_fallback")
+                                        if _gate_blocked:
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: 모멘텀 부족 (등락률 {rt_change:+.1f}%)")
                                             continue
 
@@ -4308,28 +4447,50 @@ JSON:
                                             _rsi_val = float(_rsi_match.group(1))
                                             if _rsi_val > 75:
                                                 _rsi_blocked = True
+                                        if _rsi_match:
+                                            safe_trace_call(_gate_trace, "check", "rsi", not _rsi_blocked,
+                                                            symbol=stock.symbol, value=_rsi_val, threshold=75)
+                                        else:
+                                            safe_trace_call(_gate_trace, "note", "rsi", "not_applicable",
+                                                            symbol=stock.symbol, reason="rsi_unavailable")
                                         if _rsi_blocked:
                                             logger.debug(f"[스크리닝] {stock.symbol} 탈락: RSI 과열 (> 75)")
                                             continue
 
                                         # 4) 장초반 수급 필터
                                         if now.hour < 11 and not _has_supply:
-                                            if stock.score < 85:
+                                            _gate_blocked = stock.score < 85
+                                            safe_trace_call(_gate_trace, "check", "early_supply", not _gate_blocked,
+                                                            symbol=stock.symbol, value=stock.score, threshold=85)
+                                            if _gate_blocked:
                                                 logger.debug(
                                                     f"[스크리닝] {stock.symbol} 탈락: 장초반 수급부재 "
                                                     f"(점수 {stock.score:.0f} < 85)"
                                                 )
                                                 continue
 
+                                        else:
+                                            safe_trace_call(_gate_trace, "note", "early_supply", "not_applicable",
+                                                            symbol=stock.symbol, reason="time_or_supply_exempt")
+                                    else:
+                                        for _stage in ("momentum_volume", "momentum_strength", "rsi", "early_supply"):
+                                            safe_trace_call(_gate_trace, "note", _stage, "not_applicable",
+                                                            symbol=stock.symbol, reason="other_strategy")
+
                                     # === 뉴스/공시 검증 ===
                                     _confidence_adj = 0.0
+                                    _news_checked = False
                                     if bot._stock_validator:
                                         try:
                                             validation = await bot._stock_validator.validate(
                                                 symbol=stock.symbol,
                                                 stock_name=stock.name,
                                             )
-                                            if not validation.approved:
+                                            _gate_blocked = not validation.approved
+                                            _news_checked = True
+                                            safe_trace_call(_gate_trace, "check", "news", not _gate_blocked,
+                                                            symbol=stock.symbol, value=None, threshold=None)
+                                            if _gate_blocked:
                                                 logger.info(
                                                     f"[스크리닝] {stock.symbol} {stock.name} 탈락: "
                                                     f"{validation.block_reason}"
@@ -4337,23 +4498,37 @@ JSON:
                                                 continue
                                             _confidence_adj = validation.confidence_adjustment
                                         except Exception as e:
+                                            if not _news_checked:
+                                                safe_trace_call(_gate_trace, "note", "news", "unknown",
+                                                                symbol=stock.symbol, reason="validation_error_fallback")
                                             logger.debug(f"[스크리닝] {stock.symbol} 검증 오류 (무시): {e}")
+                                    else:
+                                        safe_trace_call(_gate_trace, "note", "news", "not_applicable",
+                                                        symbol=stock.symbol, reason="validator_disabled")
 
                                     # ATR 기반 stop/target 계산 (stock.atr_pct 직접 접근, reason 파싱 폴백)
-                                    atr_pct = stock.atr_pct if stock.atr_pct is not None else 4.0
+                                    _atr_input = stock.atr_pct
+                                    atr_pct = _atr_input if _atr_input is not None else 4.0
+                                    _atr_reason = "screened_atr" if _atr_input is not None else "default_fallback"
                                     if atr_pct <= 0:
                                         # atr_pct=0 폴백: reason에서 재시도
                                         for reason in stock.reasons:
                                             if "ATR:" in reason:
                                                 try:
                                                     atr_pct = float(reason.split("ATR:")[1].replace("%)", "").strip())
+                                                    _atr_reason = "reason_fallback"
                                                 except Exception:
                                                     pass
                                         if atr_pct <= 0:
                                             atr_pct = 4.0
+                                            _atr_reason = "default_fallback"
 
                                     # ATR > 10% 초고변동 종목 제외
-                                    if atr_pct > 10.0:
+                                    _gate_blocked = atr_pct > 10.0
+                                    safe_trace_call(_gate_trace, "check", "atr", not _gate_blocked,
+                                                    symbol=stock.symbol, value=atr_pct, threshold=10.0,
+                                                    reason=_atr_reason)
+                                    if _gate_blocked:
                                         logger.info(f"[스크리닝] {stock.symbol} 탈락: ATR 초과 ({atr_pct:.1f}% > 10%)")
                                         continue
 
@@ -4362,7 +4537,10 @@ JSON:
 
                                     # R/R 비율 검증 (장중 자동진입도 기대수익 체크)
                                     _rr = target_pct / stop_pct if stop_pct > 0 else 0
-                                    if _rr < 1.5:
+                                    _gate_blocked = _rr < 1.5
+                                    safe_trace_call(_gate_trace, "check", "risk_reward", not _gate_blocked,
+                                                    symbol=stock.symbol, value=_rr, threshold=1.5)
+                                    if _gate_blocked:
                                         logger.debug(f"[스크리닝] {stock.symbol} 탈락: R/R 부족 ({_rr:.1f} < 1.5)")
                                         continue
 
@@ -4370,12 +4548,19 @@ JSON:
                                     # 당일 등락률이 높은데 ATR 대비 이미 많이 올랐으면 추격
                                     if rt_change > 0 and atr_pct > 0:
                                         _surge_ratio = rt_change / atr_pct
-                                        if _surge_ratio > 1.2:  # ATR의 120% 이상 급등 = 추격
+                                        _gate_blocked = _surge_ratio > 1.2
+                                        safe_trace_call(_gate_trace, "check", "chase", not _gate_blocked,
+                                                        symbol=stock.symbol, value=_surge_ratio, threshold=1.2)
+                                        if _gate_blocked:
                                             logger.info(
                                                 f"[스크리닝] {stock.symbol} 탈락: 고점 추격 "
                                                 f"(등락 {rt_change:+.1f}% / ATR {atr_pct:.1f}% = {_surge_ratio:.1f}x)"
                                             )
                                             continue
+
+                                    else:
+                                        safe_trace_call(_gate_trace, "note", "chase", "not_applicable",
+                                                        symbol=stock.symbol, reason="nonpositive_change_or_atr")
 
                                     stop_price = rt_price * (1 - stop_pct / 100)
                                     target_price = rt_price * (1 + target_pct / 100)
@@ -4441,8 +4626,11 @@ JSON:
 
                                     try:
                                         event = SignalEvent.from_signal(signal, source="live_screening")
+                                        safe_trace_call(_gate_trace, "signal", stock.symbol, event.id)
                                         await emit_with_observation(bot.engine, event, _entry_observer, _entry_scan_id)
                                     except Exception as e:
+                                        for _remaining in candidates[_candidate_index + 1:8]:
+                                            safe_trace_call(_gate_trace, "stop", _remaining.symbol, "emit_break")
                                         logger.error(f"[스크리닝] {stock.symbol} 시그널 발행 실패: {e}", exc_info=True)
                                         break
 
@@ -4469,6 +4657,9 @@ JSON:
 
                     except Exception as e:
                         logger.error(f"[스크리닝] 자동진입 오류: {e}", exc_info=True)
+
+                safe_trace_call(_gate_trace, "finish")
+                _gate_trace = None
 
                 # ── 장중 품질 진입 (intraday_buy Option C) ───────────────────
                 _ib_cfg = bot.config.get("kr", "intraday_buy") or {}
@@ -4885,6 +5076,8 @@ JSON:
 
         except asyncio.CancelledError:
             pass
+        finally:
+            safe_trace_call(_gate_trace, "finish", "scope_interrupted")
 
     async def run_market_trend_monitor(self):
         """KOSPI/KOSDAQ 장중 추세 모니터 (2분 주기) → RiskManager 사이드카 연동
