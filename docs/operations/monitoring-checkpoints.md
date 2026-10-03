@@ -6,7 +6,8 @@
 
 - [ ] 10월6일 08:55 관측은 `2645820`과 등록된 입력/보호 설정 지문으로 실행되는지 확인한다.
 - [ ] 09:33 이후 실제 자료 봉인·관측 종료·수집 품질과 후보별 평가 가능성을 확인한다.
-- [ ] 16:00 배포 결과는 실행 기록의 새 고정 SHA·PID·오류·`execution_recovery`를 대조한다. 최초 예약 `2f5cbae`를 수정 완료 대상으로 쓰지 않는다.
+- [x] PR #145 CI 통과 후 예약 TARGET을 `7049bba`로 교체; cron·가드·운영/관측 지문·PID·매수 중지 불변 확인.
+- [ ] 16:00 배포 결과는 `7049bba`·실제 PID·오류·`execution_recovery`를 대조한다. 가드 중단과 실패/롤백을 완료로 처리하지 않는다.
 - [ ] 현금 미검증 기동이면 보유 보호가 유지되고 일반/수동예약 BUY가 보류되는지 확인한다. 검증 현금·포지션 대사 이후 기준자본이 한 번만 확정되는지 확인한다.
 - [ ] 장부 재확인 지연 중 다른 종목의 체결·보호 등록이 진행되고, 귀속 미확정 알림이 있으면 기존 JSONL 대사 절차를 따른다.
 - [ ] 소비된 once 요청과 대조한 뒤 활성화 drop-in 정리는 별도 승인 범위로 진행한다.
@@ -38,8 +39,8 @@
 - [x] df1a5af/source/config/study/plan/artifact/grant/deployment 지문7개 입력 교차 검증·새10월6일 일회 입력·비영속 활성화 timer 설치. 날짜별 보존 서비스5개 읽기 전용 연결과 공용 설정 교체 후 이전 cohort 고정 재확인. 신규 영수증/원장 부재·봇 PID34408/NRestarts0 유지.
 - [ ] (48차 PR #141 **배포됨 10-03 01:15, PID 249914**) 첫 체결 후 `unattributed_executions.jsonl` 생성 여부·`execution_recovery_status()` 의 `unattributed_symbols`/`status`·`[동기화] 잔고 동기화 정지` 로그 0건·`acknowledge` CLI 는 배포된 코드에서만 실행.
 - [ ] 10월6일 08:55 전: `systemctl show qwq-entry-capture-20261006.timer -p NextElapseUSecRealtime` = 10/6 08:55, 운영 HEAD `2645820` detached 유지(main 복귀·재배포 금지), override 지문 `4970f2bf…` 불변, 토스 service inactive. 재등록 영수증 `/var/lib/qwq-entry-capture/rereg-20261003/rereg.receipt.json`.
-- [ ] 10월6일 16:00 이후: 예약 배포 결과 확인 — `tail ~/.local/state/qwq-deploy/deploy-20261006.log`, 운영 HEAD `2f5cbae`·새 PID·`curl -s localhost:8080/api/health`의 `execution_recovery.status`, 텔레그램 `✅ 10/6 예약 배포 완료`. `⚠️ 중단`이면 가드 사유를 보고 수동 `/deploy-local`. `🚨 실패 rc=2`는 롤백 실패이므로 즉시 점검. 활성화 drop-in이 남아 있으면 소비된 once 요청과 대조 후 별도 승인으로 정리.
-- [ ]10월6일08:55~08:57 일회 시작 뒤 정확한 df1a5af/study/epoch·준비 상태·실제 NRestarts·신규 실행 원장 메타데이터/저장 오류 확인. broker connected만으로 원장 정상 판정 금지. 실패/강제 종료 시 영수증 삭제·재시작/토스 start 반복 금지.
+- [ ] 10월6일 16:00 이후: 예약 배포 결과 확인 — `tail ~/.local/state/qwq-deploy/deploy-20261006.log`, 운영 HEAD `7049bba`(49차 갱신 대상)·새 PID·`curl -s localhost:8080/api/health`의 `execution_recovery.status`, 텔레그램 `✅ 10/6 예약 배포 완료`. `⚠️ 중단`이면 가드 사유를 보고 수동 `/deploy-local`. `🚨 실패 rc=2`는 롤백 실패이므로 즉시 점검. 활성화 drop-in이 남아 있으면 소비된 once 요청과 대조 후 별도 승인으로 정리.
+- [ ]10월6일08:55~08:57 일회 시작 뒤 정확한 2645820/study/epoch(48차 재등록 기준)·준비 상태·실제 NRestarts·신규 실행 원장 메타데이터/저장 오류 확인. broker connected만으로 원장 정상 판정 금지. 실패/강제 종료 시 영수증 삭제·재시작/토스 start 반복 금지.
 - [ ]09:33 종료의 봉인/드롭/오류·전체 후보/상위3개·gate/frame 보고,09:34 grant/소켓 종료 확인. 봉인 성공을 호가 무손실로 간주하지 않음.
 - [ ] 실제 order_ready 수량/자본과 별도 평가 입력이 없으면 가격 비교 unknown 유지. 유효쌍만 동일 수량·900초·비용/슬리피지·놓친 이익/회피 손실로 평가.
 - [ ]11월1일09:46:10은 기존10월2일 cohort,11월5일09:34:10은 새10월6일 cohort 보존 만료 정리 확인. 날짜별 영수증·대상 일치를 검산하고 인증/발급/송신/시작 안전 기록 보존.
