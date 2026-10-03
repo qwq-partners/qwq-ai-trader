@@ -188,3 +188,5 @@ flowchart TD
 최종 배포 대상 변경 결과는 [49차 실행 기록](../operations/capture-execution-2026-10-06.md#49차--p1-수정과-관측-후-배포-예약-갱신)에 남긴다. 실제 수집·배포 성공은 10월6일에 별도로 판정한다.
 
 마지막 행 오류 집계·정형 진단 보완도 독립 Astra/xhigh가 2개 회귀를 직접 재실행해 통과시켰다. 조정자는 최종 소스 전체 검증 후 PR/CI 단계로 진행한다.
+
+제품 PR #145는 head `a12779600a72e51c8fd1a7a1eebafe8b02df137e`의 필수CI4199 passed/2 xfailed·격리0을 확인한 뒤 `7049bbaef752bdf8cb3c623de6cebc034dfe7ba8`로 병합됐다. 두 tree는 동일하다. 예약 TARGET만 이 머지 SHA로 교체하고 운영/관측 지문·PID·cron 보존과 격리10가드를 다시 확인했다. 이 뒤 문서 커밋은 예약 대상에 자동 포함되지 않는다.
