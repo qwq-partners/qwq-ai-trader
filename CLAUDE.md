@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-03 — 10월6일 16:00 KST 배포 예약:** 관측 종료 뒤 P2 정리본 `2f5cbae`(PR #143)를 ubuntu crontab 1회용 항목이 `local_deploy.sh`로 배포한다(가드: 날짜·15:40 이후·관측/토스 서비스 비활성·봇 active·운영 HEAD `2645820`·pending `[]`). 결과는 텔레그램, 로그 `~/.local/state/qwq-deploy/deploy-20261006.log`. **10월6일 전 운영 HEAD를 바꾸면 관측과 이 예약이 모두 중단된다.** 10월6일 이후 세션은 운영 HEAD가 `2f5cbae`인지와 로그를 먼저 확인한다.
+
 > **2026-10-03 — 48차 P2 정리(main 머지, 운영 미배포):** 매수가능조회 실패 시 현금만 보류·포지션 대사 계속, 장부 영수증 확정 조회/재큐(유한), 원장 전용 스레드, 저널 NaN 정리, `/api/health.execution_recovery`·ops_check 노출, 죽은 코드 제거. **운영은 10월6일 관측까지 `2645820` 고정(활성화 HEAD 검사)이라 이 변경은 관측 종료 뒤 배포한다.** 남은 P2: 취소 종료 판정의 실계좌 근거, 보류 상태 중복 설계 정리. [리뷰 정본 P2 절](docs/reviews/codex-recent-work-review-2026-10-02.md).
 
 > **2026-10-03 — 48차 배포·10월6일 재등록 완료:** 01:15 KST `2645820`(PR #141: 원장 acknowledge 해제·open 실패 시 전량 SELL·귀속 미확정 종목 한정·동기화 보류 경보·저널 KST 날짜) 운영 배포, **PID 249914**/NRestarts 0·매수 중지·override 보존. 01:41 study·manifest·토스 plan/deployment/registry grant(`toss-entry-20261006-pilot2-r2`)·보존 스냅샷·활성화 설정을 새 SHA 기준으로 재등록해 10월6일 08:55 예약 유지(NextElapse 확인). [실행 기록 48차](docs/operations/capture-execution-2026-10-06.md#48차-do--see--10월3일-엔진-재배포와-관측-입력토스-grant-재등록) · [리뷰 정본](docs/reviews/codex-recent-work-review-2026-10-02.md). 운영 코드가 48차 이후이므로 `acknowledge` CLI 사용 가능(runbook). 실제 10월6일 기동·수집·수익 비교는 예정.
