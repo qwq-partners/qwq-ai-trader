@@ -38,6 +38,7 @@ from ..core.market_regime import (
 from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, StrategyType, MarketSession
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
+from ..risk.cash_verification import initial_holdings_match_balance
 from ..utils.telegram import send_alert
 from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..utils.kis_request_metrics import request_source, with_request_source
@@ -1453,7 +1454,10 @@ class KRScheduler:
             # 부분 누락(일부 종목만 빠짐)만 매도 pending 종목을 정상 누락으로 제외한다 (2026-09-13).
             # 기존엔 pending 제외 집합 하나로 판정해 봇 보유 전부가 매도 pending이면 빈 응답을 재조회 없이
             # 유령 루프로 넘겼고, pending 31분이면 실제 포지션을 삭제했다.
-            empty_inconsistent = bool(bot_symbols) and not kis_symbols and _kis_stock_value > 0
+            # 기동 보유 조회가 실패하면 로컬 보유도 비어 있다. 기준자본이 미확정인
+            # 첫 대사 역시 잔고상 주식평가액과 빈 보유 응답의 모순을 확인해야 한다.
+            needs_initial_positions = getattr(bot, '_kr_capital_baseline_pending', False) is True
+            empty_inconsistent = (bool(bot_symbols) or needs_initial_positions) and not kis_symbols and _kis_stock_value > 0
             partial_missing = (bot_symbols - kis_symbols) - bot._exit_pending_symbols
             needs_retry = empty_inconsistent or (bool(partial_missing) and _kis_stock_value > 0)
             if needs_retry:
@@ -1470,7 +1474,7 @@ class KRScheduler:
                 kis_symbols = set(kis_positions.keys()) if kis_positions else set()
                 # 재시도에도 평가액 양수·전체 빈 응답이면 동기화 실패 기록 + 상태 보존
                 # (pending 경과 시간·좀비 후보 마킹은 이 방어를 우회하지 못한다)
-                if bool(bot_symbols) and not kis_symbols and _kis_stock_value > 0:
+                if (bool(bot_symbols) or needs_initial_positions) and not kis_symbols and _kis_stock_value > 0:
                     logger.warning(
                         "[동기화] 재시도에도 KIS 포지션 0건 → API 오류로 간주, 동기화 건너뜀"
                     )
@@ -1622,10 +1626,24 @@ class KRScheduler:
                     if kis_pos.current_price > 0:
                         bot_pos.current_price = kis_pos.current_price
 
+                # 최초 확정은 부분 포지션 응답도 방어한다. 조회된 보유분의 보호
+                # 관리는 계속하지만 요약과 합계가 맞기 전 현금·기준자본은 보류한다.
+                if (needs_initial_positions
+                        and (not initial_holdings_match_balance(balance, kis_positions)
+                             or not initial_holdings_match_balance(balance, portfolio.positions))):
+                    _cash_verified = False
+                    if bot.risk_manager and hasattr(bot.risk_manager, 'set_sync_status'):
+                        bot.risk_manager.set_sync_status(False)
+                    _hb.record_failure("kr_portfolio_sync", "최초 보유 평가액 불일치 — 기준자본 확정 보류")
+                    logger.warning("[동기화] 최초 보유 평가액 불일치 — 현금/기준자본 보류, 보유 보호 계속")
+
                 # 현금 동기화 (미검증이면 보류)
                 old_cash = portfolio.cash
                 if _cash_verified:
                     portfolio.cash = available_cash
+                    confirm_cash = getattr(bot, '_confirm_kr_cash', None)
+                    if callable(confirm_cash):
+                        confirm_cash(available_cash)
                     if abs(old_cash - available_cash) > 1000:
                         logger.info(
                             f"[동기화] 현금 수정: {old_cash:,.0f}원 → {available_cash:,.0f}원"
@@ -3069,25 +3087,68 @@ JSON:
 
     JOURNAL_RESOLVE_ATTEMPTS = 2  # 불명/일시 장애 영수증의 DB 확정 조회·재제출 횟수 (48차 P2)
 
+    JOURNAL_RESOLVE_TIMEOUT_SEC = 5.0  # 체결별 DB 복구 시한; 체결 확인 루프는 기다리지 않는다.
+
+    def _track_journal_resolver(self, task):
+        tasks = self.__dict__.setdefault('_journal_resolver_tasks', set())
+        tasks.add(task)
+
+        def finished(done):
+            tasks.discard(done)
+            if not done.cancelled():
+                done.exception()  # handoff가 먼저 반환돼도 늦은 예외를 회수한다.
+
+        task.add_done_callback(finished)
+        return task
+
+    async def _cancel_journal_resolvers(self):
+        """체결 루프 종료 시 DB 조회를 취소·회수한다. 미확정 handoff는 해제하지 않는다."""
+        tasks = list(getattr(self, '_journal_resolver_tasks', ()))
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        for handoff in getattr(self, '_pending_fill_handoffs', {}).values():
+            handoff.pop('journal_resolver_task', None)
+
     async def _retry_execution_journal(self, handoff):
-        """commit 불명(unknown)·DB 일시 장애(unavailable)·큐 거부는 영수증을 DB 에서 확정하거나 보관 batch 를
-        다시 큐에 넣는다. 재삽입은 (account_scope, execution_id) 유일 인덱스와 서명 검사로 멱등이다.
-        True 를 돌려주면 호출부가 다음 주기에 다시 본다. 횟수를 넘기거나 확정 실패면 False(귀속 미확정 기록)."""
+        """체결별로 한 조회만 시작하고 완료된 결과만 회수한다. DB 대기는 별도 task에서 한다.
+
+        pending은 기존 메모리 경로로 기다리고, 불명/장애 복구는 시한과 2회 예산을 적용한다.
+        resolver 반환은 commit 증거가 아니며 다음 주기에 메모리 영수증을 다시 검증한다.
+        """
+        fill = handoff['fill']
+        task = handoff.get('journal_resolver_task')
+        if task is not None:
+            if not task.done():
+                return True
+            handoff.pop('journal_resolver_task')
+            try:
+                receipt = task.result()
+            except asyncio.CancelledError:
+                logger.warning(f"[체결] {fill.symbol} 장부 영수증 확정 조회 취소")
+            except Exception as exc:
+                logger.warning(f"[체결] {fill.symbol} 장부 영수증 확정 조회 예외/시한: {exc}")
+            else:
+                status, reason = getattr(receipt, 'status', None), getattr(receipt, 'reason', '')
+                logger.info(f"[체결] {fill.symbol} 장부 영수증 재확인 {handoff['journal_retries']}/{self.JOURNAL_RESOLVE_ATTEMPTS}: {status}/{reason}")
+                if status in ('pending', 'committed'):
+                    return True
+                if not (status == 'unavailable' or (status == 'unknown' and reason == 'database_lookup_failed')):
+                    return False
         attempts = handoff.get('journal_retries', 0)
         resolver = getattr(self.bot.trade_journal, 'resolve_execution_receipt', None)
         if attempts >= self.JOURNAL_RESOLVE_ATTEMPTS or not callable(resolver):
             return False
         handoff['journal_retries'] = attempts + 1
-        fill = handoff['fill']
-        try:
-            receipt = await resolver(fill.account_scope, fill.execution_id)
-        except Exception as exc:
-            logger.warning(f"[체결] {fill.symbol} 장부 영수증 확정 조회 실패: {exc}")
-            return False
-        status, reason = getattr(receipt, 'status', None), getattr(receipt, 'reason', '')
-        logger.info(f"[체결] {fill.symbol} 장부 영수증 재확인 {attempts + 1}/{self.JOURNAL_RESOLVE_ATTEMPTS}: {status}/{reason}")
-        # DB 장애 중 조회 자체가 실패한 경우(database_lookup_failed)도 예산 안에서 계속 본다
-        return status in ('pending', 'committed', 'unavailable') or (status == 'unknown' and reason == 'database_lookup_failed')
+
+        async def resolve():
+            return await asyncio.wait_for(
+                resolver(fill.account_scope, fill.execution_id), self.JOURNAL_RESOLVE_TIMEOUT_SEC)
+
+        handoff['journal_resolver_task'] = self._track_journal_resolver(
+            asyncio.create_task(resolve(), name='kr_journal_resolver'))
+        return True
 
     def _execution_journal_committed(self, fill):
         """메모리 receipt만 조회한다. DB 대기로 다른 체결의 보호 후처리를 막지 않는다."""
@@ -3174,6 +3235,9 @@ JSON:
                 logger.exception(f"[체결] 후처리 대사 필요: {event.symbol} ({event_id})")
             else:
                 pending.pop(event_id, None)
+                resolver_task = handoff.pop('journal_resolver_task', None)
+                if resolver_task is not None and not resolver_task.done():
+                    resolver_task.cancel()
 
     async def _complete_fill_handoff(self, fill, event, _sell_pos_snap,
                                      _exit_reason_snap, _entry_lot, _order_done,
@@ -3252,11 +3316,12 @@ JSON:
                     if _tid and identified:
                         # 30일 창 밖·재시작 전 거래는 메모리에 없다. 식별 경로는 종목 추정 대신 DB 복구만 쓴다 (48차 P1-3).
                         _get = getattr(bot.trade_journal, 'get_trade', None)
-                        _recover = getattr(bot.trade_journal, 'recover_trade', None)
+                        _recover = getattr(bot.trade_journal, 'recover_trade_async', None)
                         if callable(_get) and _get(_tid) is None and callable(_recover):
-                            # 동기 DB 복구는 작업 스레드에서 5초 안에 — 루프를 막아 다른 종목 손절을 늦추지 않는다.
+                            # 비동기 facade를 5초만 기다린다(동기 facade 폴백 금지).
+                            # 내부 DB 작업 스레드는 읽기만 하며 취소 후 캐시를 게시하지 않는다.
                             try:
-                                _recovered = await asyncio.wait_for(asyncio.to_thread(_recover, _tid), 5)
+                                _recovered = await asyncio.wait_for(_recover(_tid), 5)
                             except Exception as _rexc:
                                 _recovered = False
                                 logger.warning(f"[체결] {fill.symbol} 식별 SELL 거래 {_tid} DB 복구 예외/시한: {_rexc}")
@@ -3888,6 +3953,8 @@ JSON:
 
         except asyncio.CancelledError:
             pass
+        finally:
+            await self._cancel_journal_resolvers()
 
     SYNC_INTERVAL_SEC = 30
     SYNC_INTERVAL_CLOSED_SEC = 300

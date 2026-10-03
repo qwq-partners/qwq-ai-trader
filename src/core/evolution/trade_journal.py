@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from copy import deepcopy
 import tempfile
@@ -22,6 +22,9 @@ from typing import Dict, List, Optional, Any
 
 import asyncio
 from loguru import logger
+
+
+_DB_RECOVERY_IO_TIMEOUT = 2.0
 
 
 @dataclass
@@ -243,9 +246,13 @@ class TradeJournal:
     async def _async_fetch_trade(self, db_url: str, trade_id: str) -> Optional["TradeRecord"]:
         """단일 거래 DB 조회"""
         import asyncpg
-        conn = await asyncpg.connect(db_url)
+        conn = await asyncio.wait_for(
+            asyncpg.connect(db_url, timeout=_DB_RECOVERY_IO_TIMEOUT,
+                            command_timeout=_DB_RECOVERY_IO_TIMEOUT),
+            timeout=_DB_RECOVERY_IO_TIMEOUT,
+        )
         try:
-            row = await conn.fetchrow(
+            row = await asyncio.wait_for(conn.fetchrow(
                 """SELECT id, symbol, name, entry_time, entry_price, entry_quantity,
                           entry_reason, entry_strategy, entry_signal_score,
                           exit_time, exit_price, exit_quantity, exit_reason, exit_type,
@@ -253,13 +260,18 @@ class TradeJournal:
                    FROM trades WHERE id = $1
                      AND (to_jsonb(trades)->>'execution_scope') IS NULL
                      AND (to_jsonb(trades)->>'execution_head') IS NULL""",
-                trade_id,
-            )
+                trade_id, timeout=_DB_RECOVERY_IO_TIMEOUT,
+            ), timeout=_DB_RECOVERY_IO_TIMEOUT)
             if not row:
                 return None
             return self._row_to_trade_record(row)
         finally:
-            await conn.close()
+            try:
+                await asyncio.wait_for(conn.close(timeout=_DB_RECOVERY_IO_TIMEOUT),
+                                       timeout=_DB_RECOVERY_IO_TIMEOUT)
+            except (Exception, asyncio.CancelledError):
+                conn.terminate()
+                raise
 
     @staticmethod
     def _row_to_trade_record(row) -> "TradeRecord":
@@ -315,35 +327,20 @@ class TradeJournal:
                 cutoff,
             )
 
-            synced = 0
+            synced, failed = 0, 0
             for row in rows:
-                tid = row["id"]
+                try:
+                    synced += bool(self._merge_legacy_db_trade(row))
+                except Exception as exc:
+                    # 손상된 날짜는 보존하고 무관한 날짜의 보강은 계속한다.
+                    failed += 1
+                    reason = str(exc) if isinstance(exc, ExecutionPayloadError) else type(exc).__name__
+                    logger.warning(f"[저널] DB 행 보강 보류: {row.get('id', 'unknown')} ({reason})")
 
-                if tid in self._trades:
-                    existing = self._trades[tid]
-                    if existing.execution_records:
-                        # 별도 execution registry가 없는 옛 DB 보강으로 최신 누계를 되돌리지 않는다.
-                        continue
-                    # exit 정보가 없는 레코드 보강 (부분 누락)
-                    if not existing.is_closed and row["pnl"] is not None:
-                        existing.exit_time = row["exit_time"]
-                        existing.exit_price = float(row["exit_price"] or 0)
-                        existing.exit_quantity = int(row["exit_quantity"] or 0)
-                        existing.pnl = float(row["pnl"] or 0)
-                        existing.pnl_pct = float(row["pnl_pct"] or 0)
-                        existing.exit_type = row["exit_type"] or ""
-                        existing.exit_reason = row["exit_reason"] or ""
-                        existing.holding_minutes = int(row["holding_minutes"] or 0)
-                        synced += 1
-                    continue
-
-                # _trades에 없으면 새로 생성
-                trade = self._row_to_trade_record(row)
-                self._trades[tid] = trade
-                synced += 1
-
-            if synced > 0:
-                logger.info(f"[저널] DB 동기화: {synced}건 보강 (JSON 누락분)")
+            if failed:
+                logger.warning(f"[저널] DB 동기화: {synced}건 복원/보강, {failed}건 보류 ({len(rows)}건 조회)")
+            elif synced > 0:
+                logger.info(f"[저널] DB 동기화: {synced}건 복원/보강")
             else:
                 logger.debug(f"[저널] DB 동기화: 보강 대상 없음 ({len(rows)}건 조회)")
 
@@ -352,6 +349,54 @@ class TradeJournal:
         finally:
             if pool:
                 await pool.close()
+
+    def _merge_legacy_db_trade(self, row):
+        """한 행의 보강: 원본 검증·디스크 저장이 끝난 뒤 메모리에 게시한다."""
+        tid = row["id"]
+
+        existing = self._trades.get(tid)
+        if existing is None:
+            # 최근 캐시 밖의 날짜라도 원본 metadata/registry를 먼저 확인한다.
+            db_trade = self._row_to_trade_record(row)
+            payload = self._read_daily_payload(db_trade.entry_time.date())
+            saved = next((item for item in payload["trades"] if item["id"] == tid), None)
+            if saved is not None:
+                self._check_trade_identity(saved, db_trade.to_dict())
+                existing = TradeRecord.from_dict(deepcopy(saved))
+
+        if existing is not None:
+            if existing.execution_records:
+                # 별도 execution registry가 없는 옛 DB 보강으로 최신 누계를 되돌리지 않는다.
+                return False
+            # DB가 뒤처지거나 같은 수량이면 JSON의 정밀한 금액/시각을 보존한다.
+            db_exit_quantity = int(row["exit_quantity"] or 0)
+            if db_exit_quantity <= (existing.exit_quantity or 0):
+                if tid not in self._trades:
+                    self._trades[tid] = existing
+                    return True
+                return False
+            if db_exit_quantity > existing.entry_quantity:
+                logger.warning(f"[저널] DB 청산 수량 충돌: {tid}")
+                return False
+            if existing.is_closed or row["pnl"] is None:
+                return False
+            trade = deepcopy(existing)
+            trade.exit_time = row["exit_time"]
+            trade.exit_price = float(row["exit_price"] or 0)
+            trade.exit_quantity = db_exit_quantity
+            trade.pnl = float(row["pnl"] or 0)
+            trade.pnl_pct = float(row["pnl_pct"] or 0)
+            trade.exit_type = row["exit_type"] or ""
+            trade.exit_reason = row["exit_reason"] or ""
+            trade.holding_minutes = int(row["holding_minutes"] or 0)
+            trade.updated_at = datetime.now()
+        else:
+            trade = db_trade
+
+        # 다음 식별 체결의 legacy 기준도 함께 전진시킨 뒤에만 캐시에 게시한다.
+        self._persist_identified_trade(trade)
+        self._trades[tid] = trade
+        return True
 
     def _save_trades(self, trade_date: date):
         """해당 날짜 거래 저장"""
@@ -724,10 +769,94 @@ class TradeJournal:
                        updated_at=datetime.now().isoformat())
         self._write_daily_payload(day, payload)
 
+    @staticmethod
+    def _validate_daily_payload(day, payload):
+        """부분 손상도 누락으로 해석하지 않고 날짜 전체를 검증한다."""
+        try:
+            if (not isinstance(payload, dict) or payload.get("date") != day.isoformat()
+                    or not isinstance(payload.get("trades"), list)):
+                raise ValueError("invalid_daily_payload")
+            trades, executions = {}, set()
+            for data in payload["trades"]:
+                trade = TradeRecord.from_dict(deepcopy(data))
+                if (not isinstance(trade.id, str) or not trade.id or not trade.symbol
+                        or trade.entry_time is None or trade.entry_time.date() != day
+                        or trade.id in trades):
+                    raise ValueError("daily_trade_identity_conflict")
+                for key in trade.execution_records:
+                    if key in executions:
+                        raise ValueError("daily_execution_identity_conflict")
+                    executions.add(key)
+                trades[trade.id] = data
+            if "count" in payload and payload["count"] != len(trades):
+                raise ValueError("daily_trade_count_conflict")
+            return trades
+        except (TypeError, KeyError, ValueError, AttributeError):
+            raise ExecutionPayloadError("daily_trade_payload_corrupt") from None
+
+    def _read_daily_payload(self, day):
+        path = self._get_file_path(day)
+        def finite_number(value):
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise ValueError("nonfinite_daily_payload")
+            return parsed
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                payload = json.load(stream, parse_constant=finite_number, parse_float=finite_number)
+        except FileNotFoundError:
+            return {"date": day.isoformat(), "trades": []}
+        except (ValueError, UnicodeError):
+            raise ExecutionPayloadError("daily_trade_payload_corrupt") from None
+        self._validate_daily_payload(day, payload)
+        return payload
+
+    @staticmethod
+    def _check_trade_identity(previous, current):
+        for field in ("id", "symbol", "entry_time"):
+            if previous.get(field) != current.get(field):
+                raise ExecutionPayloadError("daily_trade_identity_conflict")
+
+    @classmethod
+    def _check_trade_progress(cls, previous, current):
+        try:
+            cls._check_trade_identity(previous, current)
+            old_records = list(previous.get("execution_records", {}).items())
+            new_records = list(current.get("execution_records", {}).items())
+            if old_records != new_records[:len(old_records)]:
+                raise ExecutionPayloadError("daily_execution_history_conflict")
+            if not old_records and new_records:
+                # 첫 식별 실행의 직전 legacy 회계와 파일이 일치해야 한다.
+                first = new_records[0][1]
+                facts, summary = first["facts"], first["summary"]
+                buy_quantity = facts["quantity"] if facts["side"] == "BUY" else 0
+                sell_quantity = facts["quantity"] if facts["side"] == "SELL" else 0
+                if (summary["entry_quantity"] != previous["entry_quantity"] + buy_quantity
+                        or summary["exit_quantity"] != (previous.get("exit_quantity", 0) or 0) + sell_quantity
+                        or summary["entry_strategy"] != previous.get("entry_strategy", "")
+                        or (not buy_quantity and summary["entry_price"] != previous["entry_price"])):
+                    raise ExecutionPayloadError("daily_legacy_accounting_conflict")
+            if old_records and len(old_records) == len(new_records):
+                # 검증된 동일 registry의 회계 projection은 이미 일치한다.
+                return
+            if (previous.get("exit_quantity", 0) or 0) > (current.get("exit_quantity", 0) or 0):
+                raise ExecutionPayloadError("daily_trade_progress_conflict")
+        except ExecutionPayloadError:
+            raise
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise ExecutionPayloadError("daily_trade_payload_corrupt") from None
+
     def _write_daily_payload(self, day, payload):
-        """날짜 파일의 모든 쓰기는 임시 파일 동기화·원자 교체를 공유한다."""
-        for trade in payload["trades"]:
-            validate_trade_execution_state(trade)
+        """전체 날짜 파일과 병합한 뒤 동기화·원자 교체한다. 캐시는 일부일 수 있다."""
+        incoming = self._validate_daily_payload(day, payload)
+        existing = self._read_daily_payload(day)
+        entries = {item["id"]: item for item in existing["trades"]}
+        for trade_id, trade in incoming.items():
+            if trade_id in entries:
+                self._check_trade_progress(entries[trade_id], trade)
+            entries[trade_id] = trade
+        payload = {**existing, **payload, "trades": list(entries.values()), "count": len(entries)}
+        self._validate_daily_payload(day, payload)
         name = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.storage_dir,
@@ -806,9 +935,57 @@ class TradeJournal:
         if trade_id in self._trades:
             return True
         trade = self._recover_trade_from_db_sync(trade_id)
+        return self._publish_recovered_trade(trade_id, trade)
+
+    async def recover_trade_async(self, trade_id: str) -> bool:
+        """DB 조회만 스레드로 보낸다. 취소된 호출은 캐시에 결과를 게시하지 않는다."""
+        if trade_id in self._trades:
+            return True
+        trade = await asyncio.to_thread(self._recover_trade_from_db_sync, trade_id)
+        return self._publish_recovered_trade(trade_id, trade)
+
+    @staticmethod
+    def _matches_legacy_db_accounting(field, journal_value, db_value):
+        """legacy writer/asyncpg/NUMERIC의 저장 정밀도로만 비교한다. 원본은 바꾸지 않는다."""
+        scales = {"entry_price": "0.01", "exit_price": "0.01", "pnl": "0.01", "pnl_pct": "0.0001"}
+        if field not in scales:
+            return journal_value == db_value
+        try:
+            # writer는 float를 전달하고 asyncpg binary codec은 Decimal(float)로 인코딩한다.
+            # PnL만 먼저 Python round()를 거치므로 그 순서와 ties-to-even도 보존한다.
+            value = float(journal_value)
+            encoded = Decimal(round(value)) if field == "pnl" else Decimal.from_float(value)
+            stored = Decimal(str(db_value))
+            return (encoded.is_finite() and stored.is_finite()
+                    and encoded.quantize(Decimal(scales[field]), rounding=ROUND_HALF_UP) == stored)
+        except (ArithmeticError, TypeError, ValueError):
+            return False
+
+    def _publish_recovered_trade(self, trade_id, trade):
+        # 조회 중 최신 체결이 들어왔으면 DB 결과(또는 조회 실패)보다 우선한다.
+        if trade_id in self._trades:
+            return True
         if trade is None:
             return False
-        self._trades[trade_id] = trade
+        if trade.id != trade_id or trade.entry_time is None:
+            raise ExecutionPayloadError("recovered_trade_identity_conflict")
+        validate_trade_execution_state(trade.to_dict())
+        payload = self._read_daily_payload(trade.entry_time.date())
+        for data in payload["trades"]:
+            if data["id"] == trade_id:
+                self._check_trade_identity(data, trade.to_dict())
+                fields = ("entry_price", "entry_quantity", "entry_strategy")
+                if not data.get("execution_records"):
+                    fields += ("exit_price", "exit_quantity", "pnl", "pnl_pct")
+                recovered = trade.to_dict()
+                if any(not self._matches_legacy_db_accounting(
+                        field, data.get(field, recovered[field]), recovered[field]) for field in fields):
+                    raise ExecutionPayloadError("recovered_trade_accounting_conflict")
+                # legacy DB 요약에 없는 복기/맥락/식별 registry를 보존한다.
+                trade = TradeRecord.from_dict(deepcopy(data))
+                break
+        # 동기 호환 호출도 조회/파일 읽기 도중 게시된 객체를 교체하지 않는다.
+        self._trades.setdefault(trade_id, trade)
         logger.info(f"[저널] 거래 ID {trade_id} DB에서 복원 (식별 SELL 귀속)")
         return True
 

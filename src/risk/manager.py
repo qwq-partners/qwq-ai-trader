@@ -114,6 +114,10 @@ class RiskManager:
         # 차단 로그 스팸 방지 쿨다운
         self._last_sync_block_log: Dict[str, datetime] = {}
 
+        # 기동 현금 미검증 보류는 동기화 타임아웃/일일 초기화로 해제하지 않는다.
+        # 실거래 KR 기동에서 False로 설정하고 검증 잔고 적용 뒤에만 True로 바꾼다.
+        self._cash_verified: bool = True
+
         # 당일 청산 누적 쿨다운 (D+1 분리)
         # 4/14 -8.42% 사고 대응: 같은 날 다수 청산 + 다수 신규 매수 동시 발생 방지
         # 3건 이상 청산 발생 시 신규 매수 차단 → 다음 거래일에 재개
@@ -280,6 +284,9 @@ class RiskManager:
         Returns:
             (가능 여부, 거부 사유)
         """
+        if side == OrderSide.BUY and not self._cash_verified:
+            return False, "주문가능현금 미검증 — 신규 매수 차단"
+
         # 0. 매크로 이벤트 캘린더 체크 (KR 전용) — 2026-04-25 추가
         # FOMC/한은 금통위/KOSPI 옵션만기 등 고변동성 날짜에 신규 매수 1건으로 제한.
         # 당일 진입한 포지션 수(entry_time == today) 기준으로 카운트.
@@ -687,6 +694,10 @@ class RiskManager:
             return False, f"급락 중 재진입 차단 (청산가 대비 {from_exit:+.1f}%)"
 
         return True, ""
+
+    def set_cash_verification(self, verified: bool) -> None:
+        """현금 검증 보류 설정 — BUY에만 적용하며 시간/일자 경과와 독립이다."""
+        self._cash_verified = verified is True
 
     def set_sync_status(self, healthy: bool):
         """포트폴리오 동기화 상태 갱신 (trading_lock 제어)

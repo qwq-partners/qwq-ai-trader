@@ -20,7 +20,7 @@ import os
 import fcntl
 from collections import deque
 from datetime import datetime, date, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, List
 
@@ -300,33 +300,36 @@ class UnifiedTradingBot:
                     logger.error("[KR] 브로커 연결 실패")
                     return False
 
-                # 계좌 잔고 로드
-                balance = await self.broker.get_account_balance()
-                if balance:
-                    actual_capital = balance.get('total_equity', 0)
-                    available_cash = balance.get('available_cash', 0)
-                    stock_value = balance.get('stock_value', 0)
+                # 설정 자본/예수금 폴백을 실제 주문가능현금으로 확정하지 않는다.
+                # 현금과 보유 조회가 확인될 때까지 기준자본도 미확정으로 둔다.
+                self._kr_cash_verified = False
+                self._kr_capital_baseline_pending = True
+                self.broker.set_cash_verification(False)
+                self.engine.portfolio.cash = Decimal("0")
+                self.engine.portfolio.initial_capital = Decimal("0")
+                self.config.trading.initial_capital = Decimal("0")
+                available_cash = None
+                try:
+                    balance = await self.broker.get_account_balance()
+                    if isinstance(balance, dict) and balance.get('available_cash_verified', True) is True:
+                        candidate = Decimal(str(balance['available_cash']))
+                        if candidate.is_finite() and candidate >= 0:
+                            available_cash = candidate
+                except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+                    logger.warning(f"[KR] 기동 현금 형식 검증 실패: {type(exc).__name__}")
+                except Exception as e:
+                    logger.warning(f"[KR] 기동 잔고 조회 실패 (보유 조회 계속): {e}")
 
-                    if actual_capital > 0:
-                        self.engine.portfolio.initial_capital = Decimal(str(actual_capital))
-                        self.engine.portfolio.cash = Decimal(str(available_cash))
-                        self.config.trading.initial_capital = Decimal(str(actual_capital))
-
-                        logger.info(f"[KR] === 실제 계좌 잔고 ===")
-                        logger.info(f"[KR]   초기자본(총자산): {actual_capital:,.0f}원")
-                        logger.info(f"[KR]   주문가능금액:     {available_cash:,.0f}원")
-                        logger.info(f"[KR]   주식평가금액:     {stock_value:,.0f}원")
-
-                        # 기존 보유 종목 로드
-                        await self._load_existing_positions()
-                    else:
-                        logger.warning("[KR] 계좌 잔고 조회 실패, 설정값 사용")
-                        self.engine.portfolio.initial_capital = Decimal(str(self.config.trading.initial_capital))
-                        self.engine.portfolio.cash = Decimal(str(self.config.trading.initial_capital))
+                # 현금 검증 실패와 무관하게 보유 종목의 보호 청산 초기화는 계속한다.
+                positions_loaded = await self._load_existing_positions()
+                if available_cash is not None and positions_loaded:
+                    from src.risk.cash_verification import initial_holdings_match_balance
+                    positions_loaded = initial_holdings_match_balance(
+                        balance, self.engine.portfolio.positions)
+                if available_cash is not None and positions_loaded:
+                    self._confirm_kr_cash(available_cash)
                 else:
-                    logger.warning("[KR] 계좌 잔고 조회 실패, 설정값 사용")
-                    self.engine.portfolio.initial_capital = Decimal(str(self.config.trading.initial_capital))
-                    self.engine.portfolio.cash = Decimal(str(self.config.trading.initial_capital))
+                    logger.warning("[KR] 기동 현금/보유 미검증 — 기준자본 확정 보류, 신규 매수 차단")
             else:
                 logger.info(f"[KR] Dry Run 모드: 설정 자본 사용 ({self.config.trading.initial_capital:,}원)")
                 self.engine.portfolio.initial_capital = Decimal(str(self.config.trading.initial_capital))
@@ -573,6 +576,9 @@ class UnifiedTradingBot:
                 self.config.trading.initial_capital,
                 market="KR",
             )
+            self.risk_manager.set_cash_verification(
+                self.dry_run or getattr(self, "_kr_cash_verified", False)
+            )
 
             # 8.5 전문가 시스템 초기화 (2026-05-29 추가, 7명)
             try:
@@ -790,10 +796,12 @@ class UnifiedTradingBot:
             try:
                 from src.analytics.equity_tracker import EquityTracker
                 self.equity_tracker = EquityTracker()
-                if self.trade_journal:
+                if self.trade_journal and not getattr(self, '_kr_capital_baseline_pending', False):
                     self.equity_tracker.backfill_from_journal(
                         initial_capital=float(self.engine.portfolio.initial_capital)
                     )
+                elif getattr(self, '_kr_capital_baseline_pending', False):
+                    logger.warning("[KR] 기준자본 미확정 — 과거 자산 백필은 다음 정상 기동까지 보류")
             except Exception as e:
                 logger.warning(f"[KR] 자산 추적기 초기화 실패 (무시): {e}")
                 self.equity_tracker = None
@@ -1054,6 +1062,36 @@ class UnifiedTradingBot:
         except Exception as e:
             logger.exception(f"[KR] 초기화 실패: {e}")
             return False
+
+    def _confirm_kr_cash(self, available_cash: Decimal) -> None:
+        """대사 완료 경계에서 현금을 확정하고 미확정 기동 기준자본을 한 번만 설정한다."""
+        if not isinstance(available_cash, Decimal) or not available_cash.is_finite() or available_cash < 0:
+            raise ValueError("검증 현금은 유한한 0 이상 Decimal이어야 합니다")
+        portfolio = self.engine.portfolio
+        risk_manager = getattr(self, "risk_manager", None)
+        if getattr(self, "_kr_capital_baseline_pending", False):
+            # 잔고 total_equity는 미검증 예수금 폴백을 포함할 수 있어 사용하지 않는다.
+            initial_capital = available_cash + portfolio.total_position_value
+            if not initial_capital.is_finite() or initial_capital < 0:
+                raise ValueError("검증 기준자본은 유한한 0 이상이어야 합니다")
+            portfolio.initial_capital = initial_capital
+            self.config.trading.initial_capital = initial_capital
+            if risk_manager is not None:
+                risk_manager.initial_capital = initial_capital
+                # 재시작에서 복원한 당일 고점/손익을 첫 현금 확인으로 낮추지 않는다.
+                risk_manager.daily_stats.peak_equity = max(
+                    risk_manager.daily_stats.peak_equity, initial_capital
+                )
+            self._kr_capital_baseline_pending = False
+            logger.info(f"[KR] 검증 잔고 기준자본 확정: {initial_capital:,.0f}원")
+        portfolio.cash = available_cash
+        self._kr_cash_verified = True
+        if risk_manager is not None:
+            risk_manager.set_cash_verification(True)
+        broker = getattr(self, 'broker', None)
+        confirm_broker_cash = getattr(broker, 'set_cash_verification', None)
+        if callable(confirm_broker_cash):
+            confirm_broker_cash(True)
 
     # ============================================================
     # US 시장 초기화
@@ -1793,15 +1831,18 @@ class UnifiedTradingBot:
     # ============================================================
 
     @with_request_source("startup")
-    async def _load_existing_positions(self):
+    async def _load_existing_positions(self) -> bool:
         """KIS API에서 기존 보유 종목 로드"""
         if not self.broker:
-            return
+            return False
         try:
             positions = await self.broker.get_positions()
+            if positions is None:
+                logger.warning("[KR] 보유 종목 조회 미확정")
+                return False
             if not positions:
                 logger.info("[KR] 보유 종목 없음")
-                return
+                return True
 
             from src.core.types import Position, PositionSide
             # get_positions()는 Dict[str, Position] 반환 — .items()로 순회
@@ -1854,8 +1895,10 @@ class UnifiedTradingBot:
                 self.ws_feed.set_priority_symbols(pos_symbols)
                 await self.ws_feed.subscribe(pos_symbols)
                 logger.info(f"[KR] WS 보유 종목 {len(pos_symbols)}개 우선 구독 설정")
+            return True
         except Exception as e:
             logger.error(f"[KR] 보유 종목 로드 실패: {e}")
+            return False
 
     async def _restore_position_metadata(self, positions: dict):
         """DB에서 포지션 전략/진입시간 복원"""

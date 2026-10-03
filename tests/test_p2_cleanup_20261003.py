@@ -59,6 +59,12 @@ def _with_resolver(bot, sequence):
     return calls
 
 
+async def _settle_resolvers(sched):
+    tasks = list(getattr(sched, '_journal_resolver_tasks', ()))
+    if tasks:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 1)
+
+
 def test_unknown_receipt_is_resolved_from_db_before_unattributed(monkeypatch, tmp_path):
     sched, bot, receipts, acks, failures = setup(monkeypatch, tmp_path)
     bot.trade_journal.status = "unknown"
@@ -67,7 +73,8 @@ def test_unknown_receipt_is_resolved_from_db_before_unattributed(monkeypatch, tm
     async def run():
         fill = identified()
         await enqueue(sched, bot, fill)
-        await sched._drain_fill_handoffs(wait=False)   # unknown → 조회 → pending
+        await sched._drain_fill_handoffs(wait=False)   # unknown → 별도 task에서 조회
+        await _settle_resolvers(sched)
         assert calls == [fill.execution_id] and not acks and sched._pending_fill_handoffs
         await sched._drain_fill_handoffs(wait=False)   # pending → 대기(재조회 없음)
         assert calls == [fill.execution_id] and not acks
@@ -93,8 +100,10 @@ def test_lookup_failed_during_db_outage_keeps_retrying_within_budget(monkeypatch
         fill = identified()
         await enqueue(sched, bot, fill)
         await sched._drain_fill_handoffs(wait=False)
+        await _settle_resolvers(sched)
         assert calls == [fill.execution_id] and not acks and sched._pending_fill_handoffs  # 예산 안에서 대기
         await sched._drain_fill_handoffs(wait=False)
+        await _settle_resolvers(sched)
         await sched._drain_fill_handoffs(wait=False)
         assert len(calls) == sched.JOURNAL_RESOLVE_ATTEMPTS and acks and len(_unattributed(tmp_path)) == 1
     asyncio.run(run())
@@ -111,6 +120,7 @@ def test_unavailable_receipt_exhausts_bounded_retries_then_records_unattributed(
         await enqueue(sched, bot, fill)
         for _ in range(3):
             await sched._drain_fill_handoffs(wait=False)
+            await _settle_resolvers(sched)
         assert len(calls) == sched.JOURNAL_RESOLVE_ATTEMPTS                # 유한 횟수
         assert acks == [(fill.order_id, 3)] and len(_unattributed(tmp_path)) == 1
     asyncio.run(run())
