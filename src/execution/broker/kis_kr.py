@@ -953,8 +953,14 @@ class KISBroker(BaseBroker):
     # 주문 접수 불명 (2026-09-29)
     # ============================================================
 
+    def set_cash_verification(self, verified: bool) -> None:
+        """실거래 기동의 현금 보류를 BUY 제출·전송 직전 공통 경계에 반영한다."""
+        self._cash_verified = verified is True
+
     def unknown_buy_hold(self) -> Optional[str]:
-        """오늘 BUY 접수 불명이 있으면 신규 매수 보류 사유, 없으면 None (날짜는 로컬 datetime.now())."""
+        """현금 검증·접수 불명·실행 이력에 따른 신규 매수 보류 사유."""
+        if getattr(self, '_cash_verified', True) is not True:
+            return '주문가능현금 미검증 — 신규 매수 차단'
         book = getattr(self, "_unknown_book", None)
         known = book.buy_hold_reason(datetime.now()) if book is not None else None
         if known:

@@ -717,6 +717,9 @@ class TradeStorage:
     def recover_trade(self, trade_id: str) -> bool:
         return self._journal.recover_trade(trade_id)
 
+    async def recover_trade_async(self, trade_id: str) -> bool:
+        return await self._journal.recover_trade_async(trade_id)
+
     def get_recent_trades(self, days: int = 7) -> List[TradeRecord]:
         return self._journal.get_recent_trades(days)
 

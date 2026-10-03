@@ -209,11 +209,11 @@ def test_identified_sell_recovers_trade_from_db_before_recording(monkeypatch, tm
     bot.engine.portfolio.positions["005930"].trade_id = "T-old"
     recovered = []
 
-    def recover(trade_id):
+    async def recover(trade_id):
         recovered.append(trade_id)
         bot.trade_journal._trades[trade_id] = SimpleNamespace(id=trade_id, market_context={})
         return True
-    bot.trade_journal.recover_trade = recover
+    bot.trade_journal.recover_trade_async = recover
 
     async def run():
         fill = identified(OrderSide.SELL, 3)

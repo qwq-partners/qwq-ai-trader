@@ -86,7 +86,7 @@
 
 바꾸지 않은 것: 과거 체결 자동 재생(여전히 금지), 현재 세션 주문의 보류, fault 뒤 신규 BUY/분할 SELL 차단, `order_unknown.json` 당일 규칙, 운영 설정·예약·매수 중지.
 
-**35차 설계 결정의 번복(P1-2).** 35차는 "session 시작 기록조차 실패하면 기록 없는 주문이 다음 시작에서 사라질 수 있어 전량 포함 새 주문을 보류한다"로 정했고 독립 리뷰가 "최초 RUN_OPEN 실패 뒤 미기록 SELL"을 P1로 잡아 테스트(`test_initial_open_failure_cannot_send_unmarked_emergency_sell`)로 고정했다. 이번에 그 테스트를 새 계약으로 교체했다. 근거: 막힌 손절은 상한 없는 손실이고, 미기록 전량 SELL은 KIS 매도가능수량이 이중 매도를 막으며 체결은 잔고 동기화와 기동 시 거래소 미체결 대사(`get_exchange_open_orders`)로 반영되는 유한한 대사 공백이다. 전송은 ERROR 로그를 남기고 `execution_recovery_status()`는 `storage_fault`를 유지하며 그 세션은 clean close가 불가해 다음 기동이 보류(→ acknowledge 절차)로 이어진다.
+**35차 설계 결정의 번복(P1-2).** 35차는 "session 시작 기록조차 실패하면 기록 없는 주문이 다음 시작에서 사라질 수 있어 전량 포함 새 주문을 보류한다"로 정했고 독립 리뷰가 "최초 RUN_OPEN 실패 뒤 미기록 SELL"을 P1로 잡아 테스트(`test_initial_open_failure_cannot_send_unmarked_emergency_sell`)로 고정했다. 이번에 그 테스트를 새 계약으로 교체했다. 근거: 막힌 손절은 상한 없는 손실이고, 미기록 전량 SELL은 KIS 매도가능수량이 이중 매도를 막으며 체결은 잔고 동기화와 기동 시 거래소 미체결 대사(`get_exchange_open_orders`)로 반영되는 유한한 대사 공백이다. 전송은 ERROR 로그를 남기고 `execution_recovery_status()`는 `storage_fault`를 유지한다. 시작 이벤트가 저장된 실패 세션은 clean close가 불가해 다음 기동 보류(→ acknowledge 절차)로 이어진다. **시작 이벤트 저장 전 open 실패는 영구 기록이 없어 다음 기동의 보류 상속을 보장하지 않는다**(2026-10-03 독립 리뷰 정정). 재시작 성공만으로 해당 세션의 미기록 SELL이 대사됐다고 판단하지 않는다.
 
 **버전 호환 조건(독립 리뷰 P1 반영).** `acknowledge` 이벤트가 든 원장은 47차 이전 코드(df1a5af 포함)가 `알 수 없는 이벤트`로 손상 판정해 열지 못하고, 그 코드의 P1-2 동작으로 손절까지 전 주문이 거부된다. 그래서 runbook은 "봇 코드가 47차 이후일 때만 CLI 실행, ack 뒤 이전 SHA 롤백 금지, 미체결 0 확인 후 실행"을 조건으로 둔다. ack 이후 `reconcile_execution_evidence` 보고서의 `unclean_session_window_unknown`은 사실 보존을 위해 계속 남는다.
 
