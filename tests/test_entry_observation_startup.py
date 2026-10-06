@@ -214,6 +214,7 @@ def test_receipt_parent_requires_private_existing_directory(envelope):
     path, _ = envelope
     public = path.parent / "public"
     public.mkdir(mode=0o755)
+    public.chmod(0o755)  # 호출자 umask와 무관하게 거부할 공개 권한을 만든다.
     rewrite(envelope, receipt_path=str(public / "receipt"))
     with pytest.raises(startup.ObservationStartupError):
         startup.claim_once_manifest(path, now=NOW)

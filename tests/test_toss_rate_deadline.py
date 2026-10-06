@@ -217,6 +217,7 @@ def test_unsafe_sender_file_is_rejected(tmp_path, unsafe):
     path = tmp_path / "sender.lock"
     if unsafe == "mode":
         path.touch(mode=0o644)
+        path.chmod(0o644)  # umask가 불안전한 시험 파일을 안전한 권한으로 바꾸지 않게 한다.
     else:
         (tmp_path / "other").touch(mode=0o600)
         path.symlink_to(tmp_path / "other")
