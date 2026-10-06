@@ -52,7 +52,7 @@ class ActivationProfile:
 
 
 def activation_profile(name):
-    """날짜/경로를 입력받지 않는다. 검토된 두 고정 계약만 선택한다."""
+    """날짜/경로를 입력받지 않는다. 검토된 세 고정 계약만 선택한다."""
     if name == '20261002':
         return ActivationProfile(CONFIG_PATH, STATE_DIR, ONCE_PATH, STAGED_DROPIN,
             'kr-entry-20261002-firstscan-v1',
@@ -67,6 +67,15 @@ def activation_profile(name):
             'kr-entry-20261006-firstscan-v4',
             datetime(2026,10,5,23,55,tzinfo=timezone.utc),
             datetime(2026,10,5,23,57,tzinfo=timezone.utc), allow_predeployed=True)
+    if name == '20261007-pilot3':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261007-pilot3/activation.json'),
+            Path('/var/lib/qwq-entry-capture/20261007-pilot3'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261007-pilot3/once.json'),
+            Path('/etc/qwq-entry-capture/20261007-pilot3/entry-capture.conf'),
+            'kr-entry-20261007-firstscan-v4',
+            datetime(2026,10,6,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,6,23,57,tzinfo=timezone.utc), allow_predeployed=True)
     raise GuardError()
 
 
@@ -468,6 +477,8 @@ def main():
             cfg = load_config()
         elif sys.argv[1:] == ['--profile', '20261006-pilot2']:
             cfg = load_config('20261006-pilot2')
+        elif sys.argv[1:] == ['--profile', '20261007-pilot3']:
+            cfg = load_config('20261007-pilot3')
         else:
             raise GuardError()
         result = activate(cfg)
