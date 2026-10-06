@@ -459,6 +459,54 @@ async def test_grace_misses_never_complete_from_pre_grace_seal(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_grace_rejects_sealed_projection_returned_after_deadline(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class LateSeal(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50):
+                self.at(56)
+            return fresh_projection(self)
+
+    h = LateSeal(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is False and result['service_reason'] == 'engine_input_grace_expired'
+    assert result['failure_phase'] == 'finalization' and result['error_kind'] == 'grace_expired'
+
+
+@pytest.mark.asyncio
+async def test_grace_fetch_is_bounded_by_remaining_time(tmp_path, monkeypatch):
+    original_plan = ws_plan
+
+    def short_grace_plan():
+        plan = original_plan()
+        plan['limits']['cleanup_timeout_seconds'] = .02
+        return plan
+
+    monkeypatch.setattr(__import__(__name__), 'ws_plan', short_grace_plan)
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class SlowSeal(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50):
+                await asyncio.sleep(.1)
+            return fresh_projection(self)
+
+    h = SlowSeal(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 1) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is False and result['service_reason'] == 'engine_input_grace_expired'
+    assert result['failure_phase'] == 'finalization' and result['error_kind'] == 'input_timeout'
+
+
+@pytest.mark.asyncio
 async def test_changed_live_projection_fails_without_input_tolerance(tmp_path, monkeypatch):
     a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
     monkeypatch.setenv('TOSS_API', '1')

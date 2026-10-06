@@ -20,7 +20,8 @@ from .toss_positions import InputUnavailable
 FAILURE_PHASES = frozenset(('none', 'startup', 'initial_scan', 'live_poll', 'finalization',
                             'cleanup', 'cancelled'))
 ERROR_KINDS = frozenset(('none', 'input_unavailable', 'invalid_input', 'approval_denied',
-                         'websocket_incomplete', 'cleanup_failed', 'cancelled', 'unexpected'))
+                         'websocket_incomplete', 'input_timeout', 'grace_expired', 'cleanup_failed',
+                         'cancelled', 'unexpected'))
 
 
 def _json(value):
@@ -368,7 +369,12 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
         while authority.clock() < grace:
             check()
             try:
-                fetched = await inputs.fetch()
+                remaining = grace - authority.clock()
+                async with asyncio.timeout(remaining):
+                    fetched = await inputs.fetch()
+            except TimeoutError:
+                record_failure(phase, 'input_timeout', 'engine_input_grace_expired')
+                raise
             except InputUnavailable:
                 if unavailable_input(phase) >= 2:
                     record_failure(phase, 'input_unavailable', 'engine_input_unavailable')
@@ -378,6 +384,10 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
             except InputInvalid:
                 invalid_input(phase)
                 raise
+            check()
+            if authority.clock() >= grace:
+                record_failure(phase, 'grace_expired', 'engine_input_grace_expired')
+                raise ValueError(reason)
             accepted_input(fetched, phase)
             if latest['capture_closed'] and latest['journal_sealed']:
                 sealed_fresh = True

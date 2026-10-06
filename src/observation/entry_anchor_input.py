@@ -25,7 +25,7 @@ FIELDS = {
 
 
 class InputInvalid(Exception):
-    """The local endpoint answered, but its bounded payload cannot be trusted."""
+    """로컬 endpoint가 응답했지만 제한된 payload를 신뢰할 수 없다."""
     def __init__(self):
         super().__init__('input_invalid')
 
