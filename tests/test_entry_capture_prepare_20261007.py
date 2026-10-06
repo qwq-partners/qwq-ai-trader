@@ -70,19 +70,6 @@ def test_successful_replace_publishes_all_before_validation(m, tmp_path):
     m.replace_set({a:b'new-a',b:b'new-b'},{a:b'old-a',b:b'old-b'},validate,read=lambda p:p.read_bytes())
     assert (a.read_bytes(),b.read_bytes()) == (b'new-a',b'new-b')
 
-@pytest.mark.parametrize('kind',['symlink','hardlink','writable'])
-def test_unsafe_files_rejected(m, tmp_path, kind):
-    import os
-    p = tmp_path/'file'; p.write_bytes(b'hello'); p.chmod(0o600)
-    if kind=='symlink':
-        target = tmp_path/'symlink'; target.symlink_to(p); p = target
-    elif kind=='hardlink':
-        os.link(p,tmp_path/'hardlink')
-    else:
-        p.chmod(0o666)
-    with pytest.raises((m.GuardError,OSError)):
-        m.trusted_read(p,owner=os.getuid())
-
 def test_consumed_matching_request_and_history_accepted(m):
     request = {'version':'entry-observation-once-v1','receipt_path':str(m.OLD_RECEIPT),
                'manifest_path':str(m.OLD_ONCE.with_name('manifest.json'))}
@@ -273,3 +260,125 @@ def test_cohort_swap_cannot_change_outside_file(m,tmp_path,monkeypatch,stage):
     after=victim.stat()
     assert (after.st_uid,after.st_gid,stat.S_IMODE(after.st_mode)) == (
             before.st_uid,before.st_gid,0o600)
+
+@pytest.fixture
+def trusted_tree(m,tmp_path,monkeypatch):
+    """Traverse real directories/files, redirect only '/', and supply synthetic ownership."""
+    import os
+    from types import SimpleNamespace
+    tree=tmp_path/'root';tree.mkdir(mode=0o755)
+    changes={}; reached=[]
+    real_open=os.open;real_fstat=os.fstat
+    def opened(path,*args,**kwargs):
+        return real_open(tree if path=='/' else path,*args,**kwargs)
+    def metadata(fd):
+        info=real_fstat(fd)
+        physical=Path(os.readlink('/proc/self/fd/'+str(fd)))
+        if not physical.is_relative_to(tree):return info
+        virtual=Path('/')/physical.relative_to(tree)
+        reached.append(virtual)
+        user=virtual==Path('/home/ubuntu') or virtual.is_relative_to('/home/ubuntu')
+        values={key:getattr(info,key) for key in dir(info) if key.startswith('st_')}
+        values.update(st_uid=1000 if user else 0,st_gid=1000 if user else 0)
+        values.update(changes.get(virtual,{}))
+        return SimpleNamespace(**values)
+    monkeypatch.setattr(m.os,'open',opened);monkeypatch.setattr(m.os,'fstat',metadata)
+    def make(path,mode=0o600):
+        physical=tree/str(path).lstrip('/')
+        physical.parent.mkdir(parents=True,exist_ok=True)
+        for parent in physical.parents:
+            if parent==tree:break
+            parent.chmod(0o775 if parent.is_relative_to(tree/'home/ubuntu') else 0o755)
+        physical.write_bytes(b'actual pinned bytes');physical.chmod(mode)
+        return physical
+    return make,changes,reached
+
+@pytest.mark.parametrize('target',['once','receipt','source','config'])
+def test_real_traversal_accepts_established_ubuntu_layout(m,trusted_tree,target):
+    make,changes,reached=trusted_tree
+    paths={'once':m.OLD_ONCE,'receipt':m.OLD_RECEIPT,'source':m.REPO/'src/test.py',
+           'config':m.REPO/'config/default.yml'}
+    path=paths[target];source=target in ('source','config')
+    make(path,0o664 if source else 0o600)
+    kwargs={'expected_sha256':m.sha(b'actual pinned bytes')} if source else {}
+    assert m.trusted_read(path,owner=1000,**kwargs)==b'actual pinned bytes'
+    assert path in reached
+
+@pytest.mark.parametrize('fault',['parent_uid','parent_gid','parent_worldwrite','leaf_uid',
+    'leaf_gid','leaf_groupwrite','leaf_worldwrite','leaf_hardlink','leaf_symlink','parent_symlink','root_read'])
+def test_real_input_traversal_rejects_at_actual_boundary(m,trusted_tree,fault):
+    import os,stat
+    make,changes,reached=trusted_tree
+    path=m.OLD_ONCE;physical=make(path)
+    parent=Path('/home/ubuntu/.local')
+    if fault=='parent_uid':changes[parent]={'st_uid':1001}
+    if fault=='parent_gid':changes[parent]={'st_gid':1001}
+    if fault=='parent_worldwrite':changes[parent]={'st_mode':stat.S_IFDIR|0o777}
+    if fault=='leaf_uid':changes[path]={'st_uid':1001}
+    if fault=='leaf_gid':changes[path]={'st_gid':1001}
+    if fault=='leaf_groupwrite':physical.chmod(0o660)
+    if fault=='leaf_worldwrite':physical.chmod(0o602)
+    if fault=='leaf_hardlink':os.link(physical,physical.with_name('hardlink'))
+    if fault=='leaf_symlink':
+        physical.rename(physical.with_name('real'));physical.symlink_to(physical.with_name('real'))
+    if fault=='parent_symlink':
+        folder=physical.parent;folder.rename(folder.with_name('real'));folder.symlink_to(folder.with_name('real'))
+    with pytest.raises((m.GuardError,OSError)):
+        m.trusted_read(path,owner=0 if fault=='root_read' else 1000)
+    if fault.startswith('leaf_') and fault!='leaf_symlink':assert path in reached
+    if fault.startswith('parent_') and fault!='parent_symlink':assert parent in reached
+
+@pytest.mark.parametrize('fault',['no_pin','wrong_pin','foreign_gid','worldwrite','unlisted_path','root_owner'])
+def test_pinned_source_relaxation_cannot_escape_scope(m,trusted_tree,fault):
+    import stat
+    make,changes,reached=trusted_tree
+    path=m.REPO/('unlisted.py' if fault=='unlisted_path' else 'src/test.py')
+    physical=make(path,0o664)
+    if fault=='foreign_gid':changes[path]={'st_gid':1001}
+    if fault=='worldwrite':physical.chmod(0o666)
+    kwargs={} if fault=='no_pin' else {'expected_sha256':'0'*64 if fault=='wrong_pin' else m.sha(b'actual pinned bytes')}
+    with pytest.raises(m.GuardError):m.trusted_read(path,owner=0 if fault=='root_owner' else 1000,**kwargs)
+
+@pytest.mark.parametrize('mode',[0o600,0o644,0o664,0o775])
+def test_pinned_source_reads_all_existing_modes(m,trusted_tree,mode):
+    make,_,reached=trusted_tree
+    path=m.REPO/'scripts/runtime.py';make(path,mode)
+    assert m.trusted_read(path,owner=1000,expected_sha256=m.sha(b'actual pinned bytes'))==b'actual pinned bytes'
+    assert path in reached
+
+@pytest.mark.parametrize('bad',[None,'leaf','parent'])
+def test_root_owned_traversal_retains_strict_leaf_guard(m,trusted_tree,bad):
+    make,_,reached=trusted_tree
+    path=Path('/etc/qwq-toss-observer/deployment.json')
+    physical=make(path,0o664 if bad=='leaf' else 0o644)
+    if bad=='parent':physical.parent.chmod(0o775)
+    if bad:
+        with pytest.raises(m.GuardError):m.trusted_read(path)
+    else:
+        assert m.trusted_read(path)==b'actual pinned bytes'
+    assert (path.parent if bad=='parent' else path) in reached
+
+@pytest.mark.parametrize('fault',[None,'worldwrite','foreign_gid','different_path'])
+def test_only_exact_kill_marker_allows_existing_groupwrite(m,trusted_tree,fault):
+    make,changes,reached=trusted_tree
+    path=m.KILL.with_name('other-marker') if fault=='different_path' else m.KILL
+    physical=make(path,0o664)
+    if fault=='worldwrite':physical.chmod(0o666)
+    if fault=='foreign_gid':changes[path]={'st_gid':1001}
+    if fault:
+        with pytest.raises(m.GuardError):m.trusted_read(path,owner=1000)
+    else:
+        assert m.trusted_read(path,owner=1000)==b'actual pinned bytes'
+        assert path in reached
+
+def test_real_input_changed_during_read_is_rejected(m,trusted_tree,monkeypatch):
+    import os
+    make,_,_=trusted_tree
+    physical=make(m.OLD_ONCE)
+    real_dup=os.dup
+    def dup(fd):
+        physical.write_bytes(b'changed while reading')
+        return real_dup(fd)
+    monkeypatch.setattr(m.os,'dup',dup)
+    with pytest.raises(m.GuardError,match='file_changed'):
+        m.trusted_read(m.OLD_ONCE,owner=1000)
