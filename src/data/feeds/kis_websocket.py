@@ -884,9 +884,10 @@ class KISWebSocketFeed:
                 _price_before = self._price_data_count
                 _connect_time = datetime.now()
 
-                async for msg in self._ws:
+                receiving_socket = self._ws
+                async for msg in receiving_socket:
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_message(msg.data)
+                        await self._handle_message(msg.data, socket=receiving_socket)
 
                     elif msg.type == aiohttp.WSMsgType.CLOSED:
                         logger.warning(f"WebSocket 연결 종료 (close_code={getattr(self._ws, 'close_code', '?')})")
@@ -1093,11 +1094,17 @@ class KISWebSocketFeed:
             return
 
         for record in records:
+            if not self._price_socket_is_current(socket):
+                return
             if owner is not None and (socket is not self._ws or not self._connected
                                       or generation != owner.generation):
                 return
             await self._handle_price_data("^".join(record), tr_id=tr_id,
                                           generation=generation, socket=socket)
+
+    def _price_socket_is_current(self, socket):
+        """소켓 미지정 파싱은 허용하고, 실제 수신은 열린 현재 연결로 한정한다."""
+        return socket is None or (socket is self._ws and self._connected and not socket.closed)
 
     async def _handle_price_data(self, data: str, *, tr_id="", generation=None, socket=None):
         """실시간 체결가 처리"""
@@ -1125,6 +1132,8 @@ class KISWebSocketFeed:
             volume = int(fields[13])      # 누적거래량
             value = int(fields[14])       # 누적거래대금
 
+            if not self._price_socket_is_current(socket):
+                return
             owner = getattr(self, "_quote_subscription_owner", None)
             if owner is not None:
                 if (socket is not self._ws or not self._connected
@@ -1161,6 +1170,8 @@ class KISWebSocketFeed:
 
             # 콜백 호출
             for callback in self._data_callbacks:
+                if not self._price_socket_is_current(socket):
+                    return
                 if owner is not None and (socket is not self._ws or not self._connected
                                           or not owner.accepts((tr_id, symbol), generation)):
                     return

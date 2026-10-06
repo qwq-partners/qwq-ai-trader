@@ -2,6 +2,7 @@
 import asyncio
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -162,3 +163,57 @@ async def test_maximum_supported_count_is_bounded_and_delivered(managed):
         assert feed._price_data_count == 999
     finally:
         if managed: await feed.disconnect()
+
+
+@pytest.mark.parametrize("change", ["socket", "disconnected", "closed", None])
+@pytest.mark.parametrize("count", [1, 2])
+async def test_unmanaged_callback_wait_fences_the_receiving_socket(change, count):
+    feed, owner, _, events = await setup(False, ["005930"])
+    feed._ws = SimpleNamespace(closed=False)
+    feed._connected = True
+    later_events = []
+
+    async def invalidate(event):
+        await asyncio.sleep(0)
+        if change == "socket": feed._ws = SimpleNamespace(closed=False)
+        elif change == "disconnected": feed._connected = False
+        elif change == "closed": feed._ws.closed = True
+
+    async def collect_later(event): later_events.append(event)
+    feed.on_market_data(invalidate)
+    feed.on_market_data(collect_later)
+    await deliver(feed, owner, frame([record()] * count))
+    assert len(events) == (count if change is None else 1)
+    assert len(later_events) == (count if change is None else 0)
+    assert feed._price_data_count == (count if change is None else 1)
+
+
+@pytest.mark.parametrize("change", ["socket", "disconnected", "before_yield"])
+async def test_legacy_receive_loop_preserves_socket_identity(change):
+    import aiohttp
+
+    feed, _, _, events = await setup(False, ["005930"])
+
+    class Socket:
+        closed = False
+
+        async def close(self): self.closed = True
+
+        async def __aiter__(self):
+            if change == "before_yield": feed._ws = Socket()
+            yield SimpleNamespace(type=aiohttp.WSMsgType.TEXT, data=frame([record(), record()]))
+            feed._running = False
+
+    feed._ws = Socket()
+    feed._connected = True
+    feed._is_market_active = lambda: True
+    feed._kr_session = SimpleNamespace(get_session=lambda: feed._current_session)
+
+    async def invalidate(event):
+        await asyncio.sleep(0)
+        if change == "socket": feed._ws = Socket()
+        elif change == "disconnected": feed._connected = False
+
+    feed.on_market_data(invalidate)
+    await asyncio.wait_for(feed.run(), timeout=2)
+    assert len(events) == (0 if change == "before_yield" else 1)
