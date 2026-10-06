@@ -62,8 +62,8 @@ def test_native_quote_uses_quantity_columns_and_preserves_provenance(tr):
     assert e.timestamp.tzinfo is None  # 기존 이벤트 정렬의 시각 의미는 보존한다.
 
 
-@pytest.mark.parametrize("hour,count", [("bad",1),("",1),("100001",2)])
-def test_invalid_clock_or_multi_record_frame_is_not_promoted(hour,count):
+@pytest.mark.parametrize("hour,count", [("bad",1),("",1)])
+def test_invalid_clock_is_not_promoted(hour,count):
     f = feed(); events=[]
     async def collect(event): events.append(event)
     f.on_quote(collect)
@@ -72,6 +72,14 @@ def test_invalid_clock_or_multi_record_frame_is_not_promoted(hour,count):
     assert events[0].metadata["message_count"] == count
     assert events[0].metadata["exchange_time"] == hour
     assert events[0].metadata["source_as_of"] is None
+
+
+def test_multi_record_book_frame_is_rejected_without_partial_callback():
+    f = feed(); events = []
+    async def collect(event): events.append(event)
+    f.on_quote(collect)
+    asyncio.run(f._handle_message(frame(count=2)))
+    assert events == []
 
 
 def test_buffer_copies_inputs_and_exposes_overflow():
