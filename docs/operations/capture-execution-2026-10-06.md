@@ -305,11 +305,11 @@ PR #147은 필수CI(run37443793645) 성공 후 `1d4289f0a07f20174cb921ba24308d9d
 | 19:01:38 점검 | HTTP200·broker connected·stale loops 없음·로컬 pending0 |
 | 실행 복구 상태 | `ready`, reason=null, journal_pending_count=0, unattributed_symbols=[], prior_unclean=false |
 | 보존 검산 | default/override·KR 매수 중지·10월6일 엔진 원장/시작 영수증의 사전 SHA256과 모두 일치 |
-| 새 프로세스 로그 | 점검 시점147개 메시지에서 ERROR/Traceback0. 현금 검증·기준자본 확정 로그는 이 표본에서 확인되지 않아 추가 인증으로 주장하지 않음 |
+| 19:05:36 후속 점검 | 같은 PID·broker 연결·stale 없음·로컬 pending0·실행 복구 ready 유지. 새 PID의265개 로그에서 ERROR/Traceback0, 검증 잔고 기준자본 확정·KR/통합 봇 초기화 완료 확인 |
 | 관측 서비스 | 활성화 inactive, 토스 failed 유지. 토스 불변 release 교체·재기동·새 grant/관측 예약 없음 |
 | 예약 | 소비된16:00 cron 항목 없음·시도 영수증 보존. 08:55 timer의 다음 실행 없음. 날짜별 보존 timer는11/1 09:46:10·11/5 09:34:10 KST 유지 |
 
-비공개 근거는 `~/.local/state/qwq-deploy/recovery-20261006/deploy-final.log`와 `deployment-result.json`이다. 이전 `deploy-recovery.log`와 원래 `deploy-20261006.log`/시도 영수증도 보존했다. 기존 공용 retention service의 failed 상태는9월29일 종료 이력이며 이번 두 날짜별 보존 timer와 구분한다.
+비공개 근거는 `~/.local/state/qwq-deploy/recovery-20261006/deploy-final.log`, `deployment-result.json`, `deployment-followup.json`이다. 19:01 초기 로그 집계는 journald JSON의 MESSAGE 바이트 배열을 해석하지 않았으므로 로그 관련 판정은19:05 후속 집계로 정정한다. 후속 집계는 배열을 UTF-8로 해석한 뒤 고정 문구의 존재/오류 수만 저장했고 계좌 금액이나 원문을 공개하지 않았다. 나머지19:01 health/지문 검산은 유효하다. 이전 `deploy-recovery.log`와 원래 `deploy-20261006.log`/시도 영수증도 보존했다. 기존 공용 retention service의 failed 상태는9월29일 종료 이력이며 이번 두 날짜별 보존 timer와 구분한다.
 
 적용 범위: 운영 봇은 이전2645820 이후의 P1/P2 복구·현금 검증과 이번 KIS/배포 수정을 포함한다. 저장소에 토스 소스 수정도 있지만, 별도 서비스가 사용하는 불변 배포물은 교체되지 않았다. 소비된 관측 drop-in은 남아 있으며 재시작 후 오늘 엔진 원장과 시작 영수증이 바뀌지 않았음을 확인했다. 이번 작업에서 수동 주문·매수 재개·전략 점수/위험 설정 변경은 하지 않았다. 이 문서 후속 커밋 때문에 봇을 다시 배포하지 않는다.
 
