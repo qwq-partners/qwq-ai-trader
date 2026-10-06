@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CALLER_PWD=$PWD
 DEFAULT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 ROOT=${QWQ_VERIFY_ROOT:-$DEFAULT_ROOT}
+[[ $ROOT = /* ]] || ROOT="$CALLER_PWD/$ROOT"
+if [[ -d "$ROOT" ]]; then
+  ROOT=$(cd "$ROOT" && pwd -P)
+fi
 PYTHON_BIN=${QWQ_VERIFY_PYTHON:-$ROOT/venv/bin/python}
+if [[ -n ${QWQ_VERIFY_PYTHON:-} && $PYTHON_BIN != /* ]]; then
+  PYTHON_BIN="$CALLER_PWD/$PYTHON_BIN"
+fi
 
 fail() {
   printf '[실패] %s\n' "$1" >&2
@@ -12,6 +20,7 @@ fail() {
 
 [[ -d "$ROOT/.git" || -f "$ROOT/.git" ]] || fail "Git 작업 트리를 찾지 못했습니다: $ROOT"
 [[ -x "$PYTHON_BIN" ]] || fail "실행 가능한 Python을 찾지 못했습니다: $PYTHON_BIN"
+cd "$ROOT"
 
 check_python_syntax() {
   printf '[검증] Python 문법 검사\n'

@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -67,6 +68,47 @@ def test_verify_propagates_pytest_failure(tmp_path):
 
     assert result.returncode != 0
     assert "테스트" in result.stdout
+
+
+def test_verify_runs_pytest_from_relative_target_root_outside_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    init_repo(repo)
+    tests = repo / "tests"
+    tests.mkdir()
+    (tests / "test_context.py").write_text(
+        "from pathlib import Path\n\n"
+        "def test_pytest_uses_repository_context(pytestconfig):\n"
+        "    root = Path(__file__).resolve().parents[1]\n"
+        "    assert Path.cwd().resolve() == root\n"
+        "    assert Path(str(pytestconfig.rootpath)).resolve() == root\n",
+        encoding="utf-8",
+    )
+    track_all(repo)
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    python = caller / "python"
+    python.write_text(
+        f"#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} \"$@\"\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    env = os.environ | {
+        "QWQ_VERIFY_ROOT": "../repo",
+        "QWQ_VERIFY_PYTHON": "python",
+        "QWQ_VERIFY_SKIP_TESTS": "0",
+    }
+
+    result = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=caller,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_verify_rejects_private_key(tmp_path):
