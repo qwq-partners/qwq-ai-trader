@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **52차20:03 설치·예약 확정:** [결과·다음 세션 인계](operations/entry-capture-installation-2026-10-07.md#see--2003-설치예약-확정).10월7일08:55 활성화·09:15~09:33 관측은 서버 타이머가 수행한다. 현재 엔진4384b28/PID504793·매수 중지 유지, 토스inactive·수집 예정. 로컬/CI4449 passed/2 xfailed, 실제 설치rc0·과거 원본/보존 예약 보존. 아래는 당시 이력이다.
+
 > **52차:** [10월7일 관측 설치/예약 정본](operations/entry-capture-installation-2026-10-07.md) · [실제 점수61의 구성과 선정·진입 불일치](research/current-engine-selection-diagnosis-2026-10-06.md). 현재 엔진4384b28·매수 중지를 유지하며 새 날짜의 완결 관측을 준비한다. 실제 설치/예약은 정본의 실행 결과, 수익성은 별도 검증을 따른다. 아래는 당시 이력이다.
 
 > [51차 19:00 복구 배포 확정·다음 PDS](operations/capture-execution-2026-10-06.md#see--51차-복구-배포-확정): 운영 `4384b28`/PID504793, CI·배포 각각4296 passed/2 xfailed, 실행 원장 ready·로컬 pending0·매수 중지/설정/원본 보존. 별도 토스 불변 release 미교체·오늘 관측 불완전은 유지한다. 다음은 새 관측 준비→선정 점수 근거→진입 가설1개와 실제 비용 후 검증이다. 아래 진행형·예정 표시는 각 당시 이력이다.
