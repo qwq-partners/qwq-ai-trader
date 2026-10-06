@@ -337,7 +337,215 @@ async def test_service_cancel_closes_socket_and_preserves_incomplete_evidence(tm
     result = service_module().read_capture_artifact(a.grant.ledger_path,
         max_bytes=1000000, plan_hash=a.plan.canonical_hash)
     assert result['service_complete'] is False and result['service_reason'] == 'cancelled'
+    assert result['failure_phase'] == 'cancelled'
+    assert result['error_kind'] == 'cancelled'
     assert 'close' in h.events
+
+
+def fresh_projection(h, *, closed=None):
+    if closed is None:
+        closed = h.stamp[0] >= START + timedelta(seconds=50)
+    value = projection(closed=closed)
+    value['observed_at'] = h.stamp[0].isoformat()
+    return value
+
+
+@pytest.mark.asyncio
+async def test_one_live_input_miss_is_tolerated_until_window_ends(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class OneMiss(ServiceHarness):
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.allow_end = asyncio.Event()
+
+        async def fetch(self):
+            self.fetches += 1
+            if self.fetches == 2:
+                raise service_module().InputUnavailable()
+            if self.fetches == 3:
+                self.allow_end.set()
+            return fresh_projection(self)
+
+        async def receive_str(self):
+            self.messages += 1
+            if self.messages == 1:
+                return json.dumps({'type':'subscriptions', 'id':'probe-1',
+                    'subscribed':['orderbook:kr:005930'], 'rejected':[]})
+            await self.allow_end.wait()
+            self.at(50)
+            raise asyncio.TimeoutError()
+
+    h = OneMiss(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 0
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is True and result['service_reason'] == 'captured'
+    assert result['input_unavailable'] == dict(live_total=1, live_consecutive=0,
+                                                grace_total=0, grace_consecutive=0)
+
+
+@pytest.mark.asyncio
+async def test_two_consecutive_live_input_misses_fail_at_fixed_budget(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class TwoMisses(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.fetches > 1:
+                raise service_module().InputUnavailable()
+            return fresh_projection(self)
+
+        async def receive_str(self):
+            self.messages += 1
+            if self.messages == 1:
+                return json.dumps({'type':'subscriptions', 'id':'probe-1',
+                    'subscribed':['orderbook:kr:005930'], 'rejected':[]})
+            await asyncio.sleep(30)
+
+    h = TwoMisses(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_reason'] == 'engine_input_unavailable'
+    assert result['failure_phase'] == 'live_poll' and result['error_kind'] == 'input_unavailable'
+    assert result['input_unavailable'] == dict(live_total=2, live_consecutive=2,
+                                                grace_total=0, grace_consecutive=0)
+
+
+@pytest.mark.asyncio
+async def test_one_grace_input_miss_can_recover_only_with_fresh_seal(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class GraceMiss(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50) and self.fetches == 2:
+                raise service_module().InputUnavailable()
+            return fresh_projection(self)
+
+    h = GraceMiss(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 0
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is True and result['engine']['journal_sealed'] is True
+    assert result['input_unavailable'] == dict(live_total=0, live_consecutive=0,
+                                                grace_total=1, grace_consecutive=0)
+
+
+@pytest.mark.asyncio
+async def test_grace_misses_never_complete_from_pre_grace_seal(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class StaleSeal(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50):
+                raise service_module().InputUnavailable()
+            return fresh_projection(self, closed=True)
+
+    h = StaleSeal(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is False and result['service_reason'] == 'engine_input_unavailable'
+    assert result['failure_phase'] == 'finalization' and result['error_kind'] == 'input_unavailable'
+    assert result['input_unavailable'] == dict(live_total=0, live_consecutive=0,
+                                                grace_total=2, grace_consecutive=2)
+
+
+@pytest.mark.asyncio
+async def test_grace_rejects_sealed_projection_returned_after_deadline(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class LateSeal(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50):
+                self.at(56)
+            return fresh_projection(self)
+
+    h = LateSeal(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is False and result['service_reason'] == 'engine_input_grace_expired'
+    assert result['failure_phase'] == 'finalization' and result['error_kind'] == 'grace_expired'
+
+
+@pytest.mark.asyncio
+async def test_grace_fetch_is_bounded_by_remaining_time(tmp_path, monkeypatch):
+    original_plan = ws_plan
+
+    def short_grace_plan():
+        plan = original_plan()
+        plan['limits']['cleanup_timeout_seconds'] = .02
+        return plan
+
+    monkeypatch.setattr(__import__(__name__), 'ws_plan', short_grace_plan)
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+
+    class SlowSeal(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.stamp[0] >= START + timedelta(seconds=50):
+                await asyncio.sleep(.1)
+            return fresh_projection(self)
+
+    h = SlowSeal(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 1) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_complete'] is False and result['service_reason'] == 'engine_input_grace_expired'
+    assert result['failure_phase'] == 'finalization' and result['error_kind'] == 'input_timeout'
+
+
+@pytest.mark.asyncio
+async def test_changed_live_projection_fails_without_input_tolerance(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+    h = ServiceHarness(a, stamp, ticks, problem='changed')
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_reason'] == 'engine_input_invalid'
+    assert result['failure_phase'] == 'live_poll' and result['error_kind'] == 'invalid_input'
+
+
+@pytest.mark.asyncio
+async def test_secret_bearing_runtime_exception_is_not_written_to_artifact(tmp_path, monkeypatch):
+    a, stamp, ticks, _ = authority(tmp_path, monkeypatch)
+    monkeypatch.setenv('TOSS_API', '1')
+    secret = 'bearer-top-secret-123'
+
+    class SecretFailure(ServiceHarness):
+        async def fetch(self):
+            self.fetches += 1
+            if self.fetches > 1:
+                raise RuntimeError(secret)
+            return fresh_projection(self)
+
+        async def receive_str(self):
+            self.messages += 1
+            if self.messages == 1:
+                return json.dumps({'type':'subscriptions', 'id':'probe-1',
+                    'subscribed':['orderbook:kr:005930'], 'rejected':[]})
+            await asyncio.sleep(30)
+
+    h = SecretFailure(a, stamp, ticks)
+    assert await asyncio.wait_for(h.run(), 3) == 1
+    result = service_module().read_capture_artifact(a.grant.ledger_path,
+        max_bytes=1000000, plan_hash=a.plan.canonical_hash)
+    assert result['service_reason'] == 'capture_failed'
+    assert result['failure_phase'] == 'live_poll' and result['error_kind'] == 'unexpected'
+    with open(a.grant.ledger_path, encoding='utf-8') as artifact:
+        assert secret not in artifact.read()
 
 
 @pytest.mark.asyncio

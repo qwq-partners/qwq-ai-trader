@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -882,9 +884,10 @@ class KISWebSocketFeed:
                 _price_before = self._price_data_count
                 _connect_time = datetime.now()
 
-                async for msg in self._ws:
+                receiving_socket = self._ws
+                async for msg in receiving_socket:
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        await self._handle_message(msg.data)
+                        await self._handle_message(msg.data, socket=receiving_socket)
 
                     elif msg.type == aiohttp.WSMsgType.CLOSED:
                         logger.warning(f"WebSocket 연결 종료 (close_code={getattr(self._ws, 'close_code', '?')})")
@@ -1015,11 +1018,26 @@ class KISWebSocketFeed:
                 logger.warning(f"[WS] 데이터 건수 파싱 실패 (숫자 아님): parts[2]='{parts[2]}'")
                 return
             raw_data = parts[3]
-            if owner is not None:
-                symbol = raw_data.split("^", 1)[0]
-                if encrypted != "0" or count != 1:
+            is_price = tr_id in (KISWebSocketType.PRICE.value, KISWebSocketType.NXT_PRICE.value)
+            if encrypted != "0" or not 1 <= count <= 999 or (count != 1 and not is_price):
+                if owner is not None:
                     owner.frame_gap("unsupported_frame_shape", parts=parts)
-                    return
+                return
+            if len(parts) != 4:
+                if owner is not None:
+                    if count > 1:
+                        owner.frame_gap("unsupported_frame_shape", parts=parts)
+                    else:
+                        owner._gap("message_parse_failed")
+                return
+            # 기존 짧은 단건은 보존하되, 여러 레코드를 단건으로 표기한
+            # 프레임을 첫 체결만 남기는 방식으로 처리하지 않는다.
+            if is_price and count == 1 and raw_data.count("^") >= 47:
+                if owner is not None:
+                    owner._gap("message_parse_failed")
+                return
+            if owner is not None and count == 1:
+                symbol = raw_data.split("^", 1)[0]
                 if not owner.accepts((tr_id, symbol), generation):
                     return
 
@@ -1028,8 +1046,13 @@ class KISWebSocketFeed:
                 logger.info(f"[WS] 메시지 수신 통계: 총 {self._message_count}건, TR={tr_id}")
 
             # TR ID별 처리 (정규장 + NXT 공통)
-            if tr_id in (KISWebSocketType.PRICE.value, KISWebSocketType.NXT_PRICE.value):
-                await self._handle_price_data(raw_data, tr_id=tr_id, generation=generation)
+            if is_price:
+                if count > 1:
+                    await self._handle_price_batch(raw_data, tr_id=tr_id, count=count,
+                                                   socket=socket, generation=generation)
+                else:
+                    await self._handle_price_data(raw_data, tr_id=tr_id, generation=generation,
+                                                  socket=socket)
 
             elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
                 await self._handle_orderbook_data(raw_data, tr_id=tr_id, received_at=received_at,
@@ -1040,7 +1063,50 @@ class KISWebSocketFeed:
                 owner._gap("message_parse_failed")
             logger.error(f"메시지 처리 오류: {e}")
 
-    async def _handle_price_data(self, data: str, *, tr_id="", generation=None):
+    async def _handle_price_batch(self, data: str, *, tr_id: str, count: int,
+                                  socket=None, generation=None):
+        """구형 46/현행 47필드 레코드 전체를 검증한 뒤 체결을 전달한다."""
+        owner = getattr(self, "_quote_subscription_owner", None)
+        try:
+            # 헤더 건수 상한으로 손상된 대형 배치의 분할 개수도 제한한다.
+            fields = data.split("^", count * 47)
+            width, remainder = divmod(len(fields), count)
+            if remainder or width not in (46, 47):
+                raise ValueError("unsupported price record width")
+            records = [fields[offset:offset + width] for offset in range(0, len(fields), width)]
+            for record in records:
+                if not re.fullmatch(r"[0-9]{6}", record[0]):
+                    raise ValueError("invalid price symbol")
+                if (not re.fullmatch(r"[0-9]{6}", record[1])
+                        or not 0 <= int(record[1][:2]) <= 23
+                        or not 0 <= int(record[1][2:4]) <= 59
+                        or not 0 <= int(record[1][4:]) <= 59):
+                    raise ValueError("invalid price time")
+                if record[3] not in {"1", "2", "3", "4", "5"}:
+                    raise ValueError("invalid price change sign")
+                values = {index: int(record[index]) for index in (2, 4, 7, 8, 9, 13, 14)}
+                if (values[2] <= 0 or any(values[index] < 0 for index in (7, 8, 9, 13, 14))
+                        or not math.isfinite(float(record[5]))):
+                    raise ValueError("invalid price values")
+        except (ValueError, OverflowError):
+            if owner is not None:
+                owner.frame_gap("unsupported_frame_shape", tr_id=tr_id, count=count, encrypted="0")
+            return
+
+        for record in records:
+            if not self._price_socket_is_current(socket):
+                return
+            if owner is not None and (socket is not self._ws or not self._connected
+                                      or generation != owner.generation):
+                return
+            await self._handle_price_data("^".join(record), tr_id=tr_id,
+                                          generation=generation, socket=socket)
+
+    def _price_socket_is_current(self, socket):
+        """소켓 미지정 파싱은 허용하고, 실제 수신은 열린 현재 연결로 한정한다."""
+        return socket is None or (socket is self._ws and self._connected and not socket.closed)
+
+    async def _handle_price_data(self, data: str, *, tr_id="", generation=None, socket=None):
         """실시간 체결가 처리"""
         try:
             fields = data.split("^")
@@ -1066,9 +1132,12 @@ class KISWebSocketFeed:
             volume = int(fields[13])      # 누적거래량
             value = int(fields[14])       # 누적거래대금
 
+            if not self._price_socket_is_current(socket):
+                return
             owner = getattr(self, "_quote_subscription_owner", None)
             if owner is not None:
-                if not owner.accepts((tr_id, symbol), generation):
+                if (socket is not self._ws or not self._connected
+                        or not owner.accepts((tr_id, symbol), generation)):
                     return
                 owner.note_data((tr_id, symbol), generation)
                 self._managed_data_count += 1
@@ -1101,6 +1170,11 @@ class KISWebSocketFeed:
 
             # 콜백 호출
             for callback in self._data_callbacks:
+                if not self._price_socket_is_current(socket):
+                    return
+                if owner is not None and (socket is not self._ws or not self._connected
+                                          or not owner.accepts((tr_id, symbol), generation)):
+                    return
                 try:
                     await callback(event)
                 except Exception as e:
