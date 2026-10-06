@@ -39,6 +39,7 @@ OLD_RECEIPT = ENGINE_STATE.parent / '20261006-pilot2/startup.receipt'
 OLD_STATUS = STATE.parent / '20261006-pilot2/status.json'
 DROPIN = UNITS / 'qwq-ai-trader.service.d/entry-capture.conf'
 LOCK = Path('/tmp/qwq-ai-trader-deploy.lock')
+KILL = Path('/home/ubuntu/.cache/ai_trader/KILL_SWITCH_KR')
 BOT = 'qwq-ai-trader.service'
 TOSS = 'qwq-toss-observer.service'
 ACT_SERVICE = 'qwq-entry-capture-20261007.service'
@@ -83,10 +84,29 @@ def document(data):
 def hash_value(value):
     require(type(value) is str and re.fullmatch('[0-9a-f]{64}', value), 'invalid_hash')
 
-def trusted_read(path, owner=0, limit=64*1024*1024):
-    """Pin every parent with NOFOLLOW; permit ubuntu parents only for UID1000 files."""
+def engine_file_path(path):
+    try:
+        name = str(path.relative_to(REPO))
+    except ValueError:
+        return False
+    return name in ('config/default.yml','config/evolved_overrides.yml') or bool(
+        re.fullmatch(r'(src|scripts)/[a-zA-Z0-9_./-]+\.py', name))
+
+def trusted_read(path, owner=0, limit=64*1024*1024, *, expected_sha256=None):
+    """Root files stay strict. Ubuntu source writes require a content pin.
+
+    The fixed Ubuntu group was confirmed to contain only Ubuntu before install.
+    Its established umask002 layout is permitted only within these read scopes;
+    once/receipt leaves remain non-group-writable and all world writes fail.
+    """
     path = Path(path)
     require(path.is_absolute() and '..' not in path.parts)
+    source = engine_file_path(path)
+    ubuntu_scope = owner == 1000 and (source or path in (OLD_ONCE,OLD_RECEIPT,KILL))
+    if expected_sha256 is not None:
+        hash_value(expected_sha256)
+        require(owner == 1000 and source, 'invalid_pinned_read_scope')
+    cursor = Path('/')
     fd = os.open('/', os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     try:
         for i, name in enumerate(path.parts[1:]):
@@ -95,9 +115,15 @@ def trusted_read(path, owner=0, limit=64*1024*1024):
                             (0 if last else os.O_DIRECTORY), dir_fd=fd)
             os.close(fd); fd = child
             info = os.fstat(fd)
+            cursor = cursor/name
+            ubuntu_group = ubuntu_scope and info.st_uid == info.st_gid == 1000
+            group_write_ok = ubuntu_group and (
+                (not last and cursor.is_relative_to('/home/ubuntu')) or
+                (last and (expected_sha256 is not None or path == KILL)))
             require(info.st_uid in ((0,owner) if not last else (owner,))
                     and info.st_gid in ((0,owner) if not last else (owner,))
-                    and not info.st_mode & 0o022, 'unsafe_file_ownership')
+                    and not info.st_mode & (0o002 if group_write_ok else 0o022),
+                    'unsafe_file_ownership')
             if last:
                 require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= limit,
                         'unsafe_file_type')
@@ -109,6 +135,8 @@ def trusted_read(path, owner=0, limit=64*1024*1024):
         after = os.fstat(fd)
         require(len(data) <= limit and (before.st_size,before.st_mtime_ns,before.st_ctime_ns) ==
                 (after.st_size,after.st_mtime_ns,after.st_ctime_ns), 'file_changed')
+        if expected_sha256 is not None:
+            require(sha(data) == expected_sha256, 'pinned_file_changed')
         return data
     finally:
         os.close(fd)
@@ -331,8 +359,8 @@ def runtime_guards(m, host, *, retired=False):
                       for p in (REPO/directory).rglob('*.py')}
     require(actual_sources == set(m['source_hashes']), 'engine_inventory_changed')
     for name, digest in {**m['source_hashes'], **m['protected_hashes']}.items():
-        require(sha(trusted_read(REPO/name,owner=1000)) == digest, 'engine_bytes_changed')
-    trusted_read(Path('/home/ubuntu/.cache/ai_trader/KILL_SWITCH_KR'),owner=1000)
+        require(sha(trusted_read(REPO/name,owner=1000,expected_sha256=digest)) == digest, 'engine_bytes_changed')
+    trusted_read(KILL,owner=1000)
     host.pending()
 
 def old_retention(m, host):
