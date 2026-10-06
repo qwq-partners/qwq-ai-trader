@@ -8,7 +8,7 @@ import json
 import re
 import time
 
-from src.data.providers.toss.http_body import BodyLimits, read_json_bounded
+from src.data.providers.toss.http_body import BodyError, BodyLimits, read_json_bounded
 from src.data.providers.toss.orderbook_stream import aware_time
 from .toss_positions import InputUnavailable
 
@@ -22,6 +22,12 @@ FIELDS = {
     'signal': ('candidate_id', 'signal_id', 'observed_at'),
     'order_ready': ('signal_id', 'symbol', 'order_id', 'requested_quantity', 'observed_at'),
 }
+
+
+class InputInvalid(Exception):
+    """The local endpoint answered, but its bounded payload cannot be trusted."""
+    def __init__(self):
+        super().__init__('input_invalid')
 
 
 def project_anchors(runtime, *, now=None):
@@ -198,13 +204,23 @@ class AnchorClient:
                         timeout=aiohttp.ClientTimeout(total=2, connect=.5, sock_connect=.5)) as response:
                     if response.status != 200:
                         raise InputUnavailable()
-                    value = await read_json_bounded(response, limits=BodyLimits(65536, 8, 4096, 1024, .2),
-                                                    deadline=deadline, clock=self._clock)
-            return validate_projection(value)
+                    try:
+                        value = await read_json_bounded(response, limits=BodyLimits(65536, 8, 4096, 1024, .2),
+                                                        deadline=deadline, clock=self._clock)
+                    except BodyError as exc:
+                        if exc.code in ('network_error', 'timeout'):
+                            raise InputUnavailable() from None
+                        raise InputInvalid() from None
         except asyncio.CancelledError:
+            raise
+        except (InputUnavailable, InputInvalid):
             raise
         except Exception:
             raise InputUnavailable() from None
+        try:
+            return validate_projection(value)
+        except Exception:
+            raise InputInvalid() from None
 
     async def close(self):
         self._closed = True

@@ -14,8 +14,13 @@ from types import SimpleNamespace
 from src.data.providers.toss.approval import ApprovedAuthority, ApprovalError
 from src.data.providers.toss.orderbook_stream import (TossOrderbookCapture, aware_time,
     receive_orderbooks, unique_json_keys, reject_json_constant)
-from .entry_anchor_input import AnchorClient, validate_projection
+from .entry_anchor_input import AnchorClient, InputInvalid, validate_projection
 from .toss_positions import InputUnavailable
+
+FAILURE_PHASES = frozenset(('none', 'startup', 'initial_scan', 'live_poll', 'finalization',
+                            'cleanup', 'cancelled'))
+ERROR_KINDS = frozenset(('none', 'input_unavailable', 'invalid_input', 'approval_denied',
+                         'websocket_incomplete', 'cleanup_failed', 'cancelled', 'unexpected'))
 
 
 def _json(value):
@@ -213,10 +218,45 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
     authority = inputs = components = artifact = capture = receiver = None
     latest = None
     reason, complete = 'capture_failed', False
+    failure_phase, error_kind = 'none', 'none'
+    input_unavailable = dict(live_total=0, live_consecutive=0,
+                             grace_total=0, grace_consecutive=0)
+    phase = 'startup'
     stop = stop_event if stop_event is not None else asyncio.Event()
     handlers = []
     cancelled = False
     stop_watcher = None
+
+    def record_failure(where, kind, value):
+        nonlocal failure_phase, error_kind, reason
+        if where not in FAILURE_PHASES or kind not in ERROR_KINDS:
+            raise ValueError('failure_taxonomy_invalid')
+        failure_phase, error_kind, reason = where, kind, value
+
+    def invalid_input(where):
+        record_failure(where, 'invalid_input', 'engine_input_invalid')
+
+    def unavailable_input(where):
+        total, consecutive = (('live_total', 'live_consecutive') if where == 'live_poll'
+                              else ('grace_total', 'grace_consecutive'))
+        input_unavailable[total] += 1
+        input_unavailable[consecutive] += 1
+        return input_unavailable[consecutive]
+
+    def accepted_input(value, where):
+        nonlocal latest
+        try:
+            projected, symbols = _input(value, p, authority.now(), latest)
+        except Exception:
+            invalid_input(where)
+            raise
+        latest = projected
+        if where == 'live_poll':
+            input_unavailable['live_consecutive'] = 0
+        elif where == 'finalization':
+            input_unavailable['grace_consecutive'] = 0
+        return symbols
+
     try:
         if os.environ.get('TOSS_API') != '1':
             raise ApprovalError('approval_denied')
@@ -255,6 +295,7 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
                 handlers.append(sig)
         inputs = (anchor_factory or AnchorClient)()
         symbols = None
+        phase = 'initial_scan'
         while symbols is None and authority.clock() < scan_deadline:
             check()
             try:
@@ -262,14 +303,17 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
             except InputUnavailable:
                 await asyncio.sleep(min(p['poll_seconds'], max(0, scan_deadline - authority.clock())))
                 continue
-            latest, symbols = _input(fetched, p, authority.now(), latest)
+            except InputInvalid:
+                invalid_input(phase)
+                raise
+            symbols = accepted_input(fetched, phase)
             if authority.clock() >= scan_deadline:
-                reason = 'first_scan_unavailable'
+                record_failure('initial_scan', 'input_unavailable', 'first_scan_unavailable')
                 raise ValueError(reason)
             if symbols is None:
                 await asyncio.sleep(p['poll_seconds'])
         if symbols is None:
-            reason = 'first_scan_unavailable'
+            record_failure('initial_scan', 'input_unavailable', 'first_scan_unavailable')
             raise ValueError(reason)
         if not symbols:
             reason = 'first_scan_empty'
@@ -295,31 +339,63 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
         token = None
         receiver = asyncio.create_task(receive_orderbooks(socket, capture, exclusive=True,
             now=authority.now, monotonic=authority.clock), name='toss_candidate_orderbooks')
+        phase = 'live_poll'
         while not receiver.done():
             await asyncio.wait((receiver,), timeout=p['poll_seconds'])
             if receiver.done():
                 break
             check()
-            latest, _ = _input(await inputs.fetch(), p, authority.now(), latest)
+            try:
+                fetched = await inputs.fetch()
+            except InputUnavailable:
+                if unavailable_input(phase) >= 2:
+                    record_failure(phase, 'input_unavailable', 'engine_input_unavailable')
+                    raise
+                await asyncio.sleep(p['poll_seconds'])
+                continue
+            except InputInvalid:
+                invalid_input(phase)
+                raise
+            accepted_input(fetched, phase)
         await receiver
         if capture.stop_reason != 'window_ended' or capture._cleanup_failed:
-            reason = 'websocket_incomplete'
+            record_failure('live_poll', 'websocket_incomplete', 'websocket_incomplete')
             raise ValueError(reason)
         # 원천 봉인 결과만 제한된 로컬 유예 시간 동안 회수한다. WS는 이미 닫혔다.
         grace = authority.clock() + min(5, limits['cleanup_timeout_seconds'])
+        sealed_fresh = False
+        phase = 'finalization'
         while authority.clock() < grace:
             check()
-            latest, _ = _input(await inputs.fetch(), p, authority.now(), latest)
+            try:
+                fetched = await inputs.fetch()
+            except InputUnavailable:
+                if unavailable_input(phase) >= 2:
+                    record_failure(phase, 'input_unavailable', 'engine_input_unavailable')
+                    raise
+                await asyncio.sleep(min(p['poll_seconds'], max(0, grace - authority.clock())))
+                continue
+            except InputInvalid:
+                invalid_input(phase)
+                raise
+            accepted_input(fetched, phase)
             if latest['capture_closed'] and latest['journal_sealed']:
+                sealed_fresh = True
                 break
-            await asyncio.sleep(p['poll_seconds'])
-        complete = latest['complete'] is True
+            await asyncio.sleep(min(p['poll_seconds'], max(0, grace - authority.clock())))
+        complete = sealed_fresh and latest['complete'] is True
         reason = 'captured' if complete else 'engine_input_incomplete'
     except asyncio.CancelledError:
         cancelled = True
-        reason = 'cancelled'
+        record_failure('cancelled', 'cancelled', 'cancelled')
+    except ApprovalError:
+        complete = False
+        if error_kind == 'none':
+            record_failure(phase, 'approval_denied', reason)
     except Exception:
         complete = False
+        if error_kind == 'none':
+            record_failure(phase, 'unexpected', reason)
     finally:
         if stop_watcher is not None:
             stop_watcher.cancel()
@@ -334,14 +410,18 @@ async def run_ws_service(*, deployment, settings=None, claim_start, stop_event=N
                 try:
                     await asyncio.wait_for(resource.close(), timeout=2)
                 except asyncio.CancelledError:
-                    cancelled, complete, reason = True, False, 'cancelled'
+                    cancelled, complete = True, False
+                    record_failure('cancelled', 'cancelled', 'cancelled')
                 except Exception:
-                    complete, reason = False, 'cleanup_failed'
+                    complete = False
+                    record_failure('cleanup', 'cleanup_failed', 'cleanup_failed')
         if artifact is not None:
             try:
                 artifact.finish(dict(service_complete=complete, service_reason=reason,
                     engine=latest, toss=capture.export() if capture else None,
-                    as_of=authority.now().isoformat(), profit_comparison_available=False))
+                    as_of=authority.now().isoformat(), profit_comparison_available=False,
+                    failure_phase=failure_phase, error_kind=error_kind,
+                    input_unavailable=input_unavailable))
             except Exception:
                 complete = False
             finally:
