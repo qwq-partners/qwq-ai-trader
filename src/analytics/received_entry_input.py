@@ -108,6 +108,8 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         raise ValueError("records/evaluation_inputs 배열 필요")
     from .entry_observation import observation_population
     population = observation_population(records)
+    from .entry_observation_runtime import validate_window_contract
+    validate_window_contract(payload, observations)
     from .selection_source_status import SCAN_FIELDS
     if any(isinstance(r, dict) and (r.get('kind') == 'selection_basis' or r.get('selection_basis_expected') or SCAN_FIELDS & set(r))
            for r in records):

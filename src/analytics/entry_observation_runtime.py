@@ -41,6 +41,48 @@ def _decode(raw):
     return value
 
 
+def validate_window_contract(context, observations=None):
+    """Offline as well as install-time binding; never reopen or amend a study."""
+    s = context.get('capture', {})
+    scans = ([r for r in observations['records'] if r.get('kind') == 'scan']
+             if observations is not None else [])
+    if s.get('version') != 'runner-signal-window-v1':
+        if any(r.get('population_scope') == 'window_returned_scan_candidates' for r in scans):
+            raise ValueError('window population requires explicit window study')
+        return
+    if (type(s.get('max_scans')) is not int or not 1 <= s['max_scans'] <= 100
+            or s.get('quote_admission') != 'signal_created'
+            or context.get('outcome_basis') != 'fixed_horizon_bid_markout'):
+        raise ValueError('bounded signal-window contract required')
+    from .entry_capital_limits import CapitalPolicy
+    from .entry_markout import MarkoutPolicy
+    from .entry_gate_trace import validate_settings as gate_settings, scan_fields
+    from .selection_basis import validate_settings as selection_settings
+    capital = CapitalPolicy.from_dict(context.get('capital_policy'))
+    markout = MarkoutPolicy.from_dict(context.get('markout_policy'))
+    gate = gate_settings(s.get('entry_gate_trace'))
+    selection = selection_settings(s.get('selection_basis'))
+    start, admission, end = (_timestamp(s.get(k), k) for k in ('start_at', 'admission_end_at', 'end_at'))
+    if (not max(capital.fixed_at, markout.fixed_at) <= start < admission < end
+            or end != _timestamp(context.get('as_of'), 'as_of')
+            or (end - admission).total_seconds() <= markout.horizon_seconds
+            or capital.source_version_ref != s.get('source_version_ref')
+            or capital.configuration_ref != s.get('configuration_ref')):
+        raise ValueError('window time/capital policy binding mismatch')
+    if observations is not None:
+        if len(scans) > s['max_scans']:
+            raise ValueError('window scan count exceeds study bound')
+        for r in scans:
+            if (r.get('population_scope') != 'window_returned_scan_candidates'
+                    or r.get('scan_admission_ref') != s.get('scan_admission_ref')
+                    or not start <= _timestamp(r.get('observed_at'), 'scan') < admission
+                    or any(r.get(k) != v for k, v in scan_fields(gate).items())
+                    or r.get('selection_basis_expected') is not True
+                    or r.get('selection_basis_max_candidates') != selection['max_candidates']
+                    or r.get('selection_basis_max_terms') != selection['max_source_terms']):
+                raise ValueError('window population/time binding mismatch')
+
+
 @dataclass(frozen=True)
 class CapturePlan:
     study_path: Path
@@ -95,18 +137,22 @@ class CapturePlan:
             'source_version_ref configuration_ref fee_evidence_ref capital_evidence_ref capacity_evidence_ref '
             'journal_path buffer_capacity queue_capacity batch_size max_bytes max_record_bytes '
             'open_timeout_seconds close_timeout_seconds channels').split())
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1'):
             expected.add('selection_basis')
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
             expected.add('entry_gate_trace')
-        if type(s) is dict and s.get('version') == 'runner-first-scan-v4':
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1'):
             expected.add('frame_diagnostics')
+        if type(s) is dict and s.get('version') == 'runner-signal-window-v1':
+            expected.update(('max_scans', 'quote_admission'))
         if (type(s) is not dict or set(s) != expected
-                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4')):
+                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1')):
             raise ValueError('지원하지 않는 capture 계약/필드')
-        if s['version'] == 'runner-first-scan-v4':
+        if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1'):
             from .kis_frame_diagnostics import validate_settings as validate_frame_settings
             validate_frame_settings(s['frame_diagnostics'])
+        if s['version'] == 'runner-signal-window-v1':
+            validate_window_contract(context)
         for key in ('study_ref', 'scan_admission_ref', 'source_version_ref', 'configuration_ref',
                     'fee_evidence_ref', 'capital_evidence_ref', 'capacity_evidence_ref'):
             if not isinstance(s[key], str) or not s[key].strip() or len(s[key]) > 200:
@@ -134,14 +180,14 @@ class CapturePlan:
                 raise ValueError('자원 한도는 양의 정수 필요')
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
-        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4'):
+        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
             from .selection_basis import validate_settings
             selection = validate_settings(s['selection_basis'])
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
             record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
-            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4'):
+            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
                 from .entry_gate_trace import validate_settings as validate_gate_settings
                 gate = validate_gate_settings(s['entry_gate_trace'])
                 if (gate['source_version_ref'] != s['source_version_ref']
@@ -150,8 +196,10 @@ class CapturePlan:
                     raise ValueError('진입 관측 소스/설정/후보 범위 불일치')
                 burst += gate['max_candidates']
                 record_minimum = 65536
-            if (min(s['buffer_capacity'], s['queue_capacity']) < burst or s['max_record_bytes'] < record_minimum
-                    or s['max_bytes'] < burst * (s['max_record_bytes'] + 2048) + 2048):
+            metadata_records = burst * (s['max_scans'] if s['version'] == 'runner-signal-window-v1' else 1)
+            if (s['buffer_capacity'] < metadata_records or s['queue_capacity'] < burst
+                    or s['max_record_bytes'] < record_minimum
+                    or s['max_bytes'] < metadata_records * (s['max_record_bytes'] + 2048) + 2048):
                 raise ValueError('선정 근거의 최소 저장 예산 부족')
         for key in ('open_timeout_seconds', 'close_timeout_seconds'):
             if type(s[key]) not in (int, float) or not math.isfinite(s[key]) or not 0 < s[key] <= 10:
@@ -171,7 +219,8 @@ class _WindowBuffer(EntryObservationBuffer):
     def __init__(self, plan, now):
         s = plan.settings
         super().__init__(evaluation_epoch=plan.context['evaluation_epoch'], capacity=s['buffer_capacity'],
-                         scan_scope='first', scan_admission_ref=s['scan_admission_ref'],
+                         scan_scope='window' if s['version'] == 'runner-signal-window-v1' else 'first',
+                         max_scans=s.get('max_scans'), scan_admission_ref=s['scan_admission_ref'],
                          selection_basis_settings=s.get('selection_basis'),
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
                          frame_diagnostics_settings=s.get('frame_diagnostics'))
@@ -190,6 +239,11 @@ class _WindowBuffer(EntryObservationBuffer):
         if now >= self.end_at:
             self.ended = True
         return now
+
+    @property
+    def selection_capture_enabled(self):
+        return (not self.ended and self.current_time() < self.admission_end
+                and super().selection_capture_enabled)
 
     def begin_scan(self):
         now = self.current_time()
@@ -237,6 +291,8 @@ class ObservationRuntime:
             if now() >= plan.start_at or _read(plan.study_path) != plan.study_bytes:
                 raise ValueError('원장 준비 중 시작 시각/연구 지문 변경')
             feed.enable_quote_observation(self.buffer, **s['channels'])
+            if self.buffer.scan_scope == 'window':
+                self.buffer.signal_quote_submit = feed._quote_subscription_owner.submit
             bot._entry_price_observer = self.buffer
             bot._entry_observation_runtime = self
         except BaseException:

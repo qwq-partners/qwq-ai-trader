@@ -40,16 +40,19 @@ def main(argv=None):
         raw,study=_study(args.study);sha=hashlib.sha256(raw).hexdigest()
         obs=read_observation_journal(args.journal,max_bytes=args.max_journal_bytes,expected_study_sha256=sha)
         if obs['evaluation_epoch']!=study.get('evaluation_epoch'):raise ValueError('study epoch mismatch')
-        if study.get('capture', {}).get('version') == 'runner-first-scan-v4' or 'frame_diagnostics' in obs:
+        if (study.get('capture', {}).get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1')
+                or 'frame_diagnostics' in obs):
             from src.analytics.kis_frame_diagnostics import validate_study_binding, build_frame_report
             validate_study_binding(obs, study)
             build_frame_report(obs, as_of=args.as_of)
+        from src.analytics.entry_observation_runtime import validate_window_contract
+        validate_window_contract(study, obs)
         out=build_gate_report(obs,as_of=args.as_of)
         if out['references']:
             capture=study.get('capture',{})
-            if capture.get('version') not in ('runner-first-scan-v3','runner-first-scan-v4'):raise ValueError('gate trace requires v3/v4 study')
+            if capture.get('version') not in ('runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1'):raise ValueError('gate trace requires v3/v4 study')
             settings=validate_settings(capture.get('entry_gate_trace'))
-            if out['counts']['recorded'] and out['counts']['total']>settings['max_candidates']:
+            if any(len(r['candidates']) > settings['max_candidates'] for r in obs['records'] if r.get('kind') == 'scan'):
                 raise ValueError('trace exceeds declared study candidate bound')
             for key,marker in (('source_version_ref','entry_gate_source_version_ref'),
                                ('configuration_ref','entry_gate_configuration_ref')):

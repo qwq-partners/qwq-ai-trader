@@ -158,11 +158,14 @@ def begin_gate_trace(observer, scan_id, stocks):
     from .entry_observation import EntryObservationBuffer
     try:
         if (not isinstance(observer,EntryObservationBuffer) or observer.entry_gate_trace_settings is None
-                or observer._capture_closed or scan_id is None or observer._entry_gate_trace_started):
+                or observer._capture_closed or scan_id is None
+                or (observer.scan_scope == 'first' and observer._entry_gate_trace_started)
+                or scan_id in observer._window_traces_started):
             return NULL_TRACE
         scans=[r for r in observer._records if r.get('kind')=='scan' and r.get('scan_id')==scan_id]
         if len(scans)!=1: return NULL_TRACE
         observer._entry_gate_trace_started=True
+        if observer.scan_scope == 'window': observer._window_traces_started.add(scan_id)
         scan=scans[0];candidates=scan['candidates']
         if len(candidates)>observer.entry_gate_trace_settings['max_candidates']:
             raise ValueError('gate candidate bound exceeded')

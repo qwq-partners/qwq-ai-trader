@@ -24,13 +24,15 @@ def validate_study_binding(observations, study):
     """설치 시각/신규 경로를 요구하지 않고 저장된 v4 선언의 동일성을 대조한다."""
     if type(study) is not dict or observations.get('evaluation_epoch') != study.get('evaluation_epoch'):
         raise ValueError('연구 세대 불일치')
+    from .entry_observation_runtime import validate_window_contract
+    validate_window_contract(study, observations)
     capture = study.get('capture', {})
     if type(capture) is not dict:
         raise ValueError('capture 선언 불일치')
     journal = observations.get('journal', {})
     if type(journal) is not dict:
         raise ValueError('원장 metadata 불일치')
-    if capture.get('version') == 'runner-first-scan-v4':
+    if capture.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1'):
         from .selection_basis import validate_settings as selection_settings
         from .entry_gate_trace import validate_settings as gate_settings
         settings = validate_settings(capture.get('frame_diagnostics'))

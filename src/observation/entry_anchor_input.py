@@ -33,6 +33,8 @@ class InputInvalid(Exception):
 def project_anchors(runtime, *, now=None):
     """호출 이벤트 루프에서 허용 필드만 복사. 관측·주문 객체를 변경하지 않는다."""
     buffer = runtime.buffer
+    if getattr(buffer, 'scan_scope', None) == 'window':
+        raise ValueError('anchor_requires_first_scan_capture')
     records = []
     selected, signal_ids = set(), set()
     cohort = []
@@ -116,6 +118,8 @@ def validate_projection(value):
         allowed = set(FIELDS[row['kind']]) | {'kind','sequence','source_sequence'}
         required = allowed - {'scan_admission_ref'}
         if row['kind'] == 'scan':
+            if row.get('population_scope') not in ('returned_screen_candidates', 'first_returned_scan_candidates'):
+                raise ValueError('anchor_requires_first_scan_capture')
             allowed.add('candidates')
             required.add('candidates')
             cohort = row.get('candidates')

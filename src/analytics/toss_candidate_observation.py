@@ -29,7 +29,8 @@ def _anchors(engine, as_of):
     if any(not isinstance(r, dict) or type(r.get("sequence")) is not int
            or r["sequence"] != i for i, r in enumerate(records, 1)):
         raise ValueError("엔진 관측 순서/결손")
-    observation_population(records)
+    if observation_population(records)['population_scope'] == 'window_returned_scan_candidates':
+        raise ValueError('Toss requires first-scan capture')
     scans = [r for r in records if r.get("kind") == "scan"]
     if len(scans) != 1 or scans[0].get("route_origin") != "live_screening":
         raise ValueError("정확히 한 스캔의 반환 후보 필요")
