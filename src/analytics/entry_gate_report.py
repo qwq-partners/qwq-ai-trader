@@ -86,31 +86,39 @@ def build_gate_report(observations, *, as_of):
             raise ValueError('observation after report or journal seal')
     population=observation_population(records)
     scans=[r for r in records if r.get('kind')=='scan']
-    if len(scans)!=1: raise ValueError('exactly one original scan required')
-    scan=scans[0];scan_at=_timestamp(scan.get('observed_at'),'scan')
-    if scan.get('route_origin')!='live_screening': raise ValueError('live screening scan required')
-    scan_id=_text(scan.get('scan_id'))
-    if type(scan.get('candidates')) is not list or len(scan['candidates'])>10000:
-        raise ValueError('bounded original cohort required')
-    candidates={}
-    for c in scan['candidates']:
-        if type(c) is not dict: raise ValueError('candidate object required')
-        symbol=_text(c.get('symbol'));cid=_text(c.get('candidate_id'))
-        if cid!=f'{scan_id}:{symbol}' or cid in candidates: raise ValueError('candidate identity invalid')
-        candidates[cid]=c
-    expected=bool(SCAN_FIELDS & set(scan))
-    if expected:
-        if (not SCAN_FIELDS<=set(scan) or scan['entry_gate_trace_expected'] is not True
-                or scan['entry_gate_trace_version']!=VERSION or scan['entry_gate_policy_ref']!=POLICY_REF):
-            raise ValueError('explicit gate trace declaration required')
-        for key in ('entry_gate_source_version_ref','entry_gate_configuration_ref'):_text(scan[key])
+    if not scans or (len(scans) != 1 and population['population_scope'] != 'window_returned_scan_candidates'):
+        raise ValueError('explicit bounded window or exactly one original scan required')
+    candidates, candidate_times = {}, {}
+    reference_fields = None
+    for scan in scans:
+        scan_at = _timestamp(scan.get('observed_at'), 'scan')
+        if scan.get('route_origin') != 'live_screening': raise ValueError('live screening scan required')
+        scan_id = _text(scan.get('scan_id'))
+        if type(scan.get('candidates')) is not list or len(scan['candidates']) > 10000:
+            raise ValueError('bounded original cohort required')
+        fields = {k: scan[k] for k in SCAN_FIELDS if k in scan}
+        if reference_fields is not None and reference_fields != fields:
+            raise ValueError('mixed gate declarations across scans')
+        reference_fields = fields
+        if fields:
+            if (not SCAN_FIELDS <= set(scan) or scan['entry_gate_trace_expected'] is not True
+                    or scan['entry_gate_trace_version'] != VERSION or scan['entry_gate_policy_ref'] != POLICY_REF):
+                raise ValueError('explicit gate trace declaration required')
+            for key in ('entry_gate_source_version_ref', 'entry_gate_configuration_ref'): _text(scan[key])
+        for c in scan['candidates']:
+            if type(c) is not dict: raise ValueError('candidate object required')
+            symbol = _text(c.get('symbol')); cid = _text(c.get('candidate_id'))
+            if cid != f'{scan_id}:{symbol}' or cid in candidates: raise ValueError('candidate identity invalid')
+            candidates[cid] = c
+            candidate_times[cid] = (scan_at, scan['sequence'])
+    expected = bool(reference_fields)
     traces={}
     for row in records:
         if row.get('kind')!='entry_gate_trace':continue
         cid=row.get('candidate_id')
-        if not expected or cid not in candidates or cid in traces or row['sequence']<=scan['sequence']:
+        if not expected or cid not in candidates or cid in traces or row['sequence']<=candidate_times[cid][1]:
             raise ValueError('undeclared, orphan or duplicate gate trace')
-        traces[cid]=_trace(row,candidates[cid],scan_at,evidence_end)
+        traces[cid]=_trace(row,candidates[cid],candidate_times[cid][0],evidence_end)
     signal_owners={}
     for cid,trace in traces.items():
         sid=trace['signal_id']
@@ -177,7 +185,7 @@ def build_gate_report(observations, *, as_of):
         trace_coverage_complete=bool(expected and candidates and all_accounted and source_complete),
         incomplete_reasons=list(reasons),profit_comparison_available=False,production_eligible=False,
         source_authenticity_verified=False,
-        references={k:scan[k] for k in SCAN_FIELDS if k in scan},
+        references=reference_fields,
         limitations=['Signal creation is not emission, order acceptance or execution.',
             'Missing or unreached conditions are not reevaluated or treated as cash/zero profit.',
             'Only live_screening pre-signal gates are covered; configuration references are declarations.'])

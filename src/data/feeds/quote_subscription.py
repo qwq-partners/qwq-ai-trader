@@ -362,6 +362,8 @@ class QuoteSubscriptionCoordinator:
 
 def observe_screen_candidates(feed, observer, scan_id, stocks):
     """동일 버퍼가 명시 설치된 feed에만 후보 BOOK 요청. 기본 None은 완전한 no-op."""
+    if isinstance(observer, EntryObservationBuffer) and observer.scan_scope == 'window':
+        return  # Explicit signal-window runtime submits only recorded signal identities.
     owner = getattr(feed, "_quote_subscription_owner", None)
     if owner is not None and observer is owner.observer and scan_id is not None:
         try:

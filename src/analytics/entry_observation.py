@@ -39,32 +39,40 @@ def _scalar(value: Any) -> Any:
 class EntryObservationBuffer:
     """한 이벤트 루프용 유한 메모리 버퍼. 가득 차면 새 기록을 버리고 결손을 보존한다."""
 
-    def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None,
+    def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None, max_scans=None,
                  selection_basis_settings=None, entry_gate_trace_settings=None, frame_diagnostics_settings=None):
         if not isinstance(evaluation_epoch, str) or not evaluation_epoch.strip():
             raise ValueError("evaluation_epoch 필요")
         if type(capacity) is not int or capacity <= 0:
             raise ValueError("양의 정수 capacity 필요")
-        if scan_scope not in ("all", "first"):
+        if scan_scope not in ("all", "first", "window"):
             raise ValueError("지원하지 않는 scan_scope")
-        if ((scan_scope == "first" and (not isinstance(scan_admission_ref, str)
+        if ((scan_scope in ("first", "window") and (not isinstance(scan_admission_ref, str)
                 or not scan_admission_ref.strip() or len(scan_admission_ref) > 200))
                 or (scan_scope == "all" and scan_admission_ref is not None)):
             raise ValueError("첫 스캔 범위에는 명시한 사전 규약 참조 필요")
         self.scan_scope = scan_scope
         self.scan_admission_ref = scan_admission_ref
+        if ((scan_scope == 'window' and (type(max_scans) is not int or not 1 <= max_scans <= 100))
+                or (scan_scope != 'window' and max_scans is not None)):
+            raise ValueError('explicit window scan bound required')
+        self.max_scans = max_scans
+        self._window_scan_ids: set[str] = set()
+        self._recorded_scan_ids: set[str] = set()
+        self.signal_quote_submit = None
         from .selection_basis import validate_settings
         self.selection_basis_settings = (validate_settings(selection_basis_settings)
                                          if selection_basis_settings is not None else None)
         from .entry_gate_trace import validate_settings as validate_gate_settings
         self.entry_gate_trace_settings = (validate_gate_settings(entry_gate_trace_settings)
                                          if entry_gate_trace_settings is not None else None)
-        if self.entry_gate_trace_settings is not None and scan_scope != 'first':
+        if self.entry_gate_trace_settings is not None and scan_scope not in ('first', 'window'):
             raise ValueError('entry gate trace requires first scan scope')
         from .kis_frame_diagnostics import validate_settings as validate_frame_settings
         self.frame_diagnostics_settings = (validate_frame_settings(frame_diagnostics_settings)
                                            if frame_diagnostics_settings is not None else None)
         self._entry_gate_trace_started = False
+        self._window_traces_started: set[str] = set()
         self._first_scan_id = None
         self._first_scan_recorded = False
         self._cohort_candidates: set[str] = set()
@@ -80,7 +88,8 @@ class EntryObservationBuffer:
     @property
     def selection_capture_enabled(self):
         return (self.selection_basis_settings is not None and not self._capture_closed
-                and (self.scan_scope != 'first' or self._first_scan_id is None))
+                and (self.scan_scope != 'first' or self._first_scan_id is None)
+                and (self.scan_scope != 'window' or len(self._window_scan_ids) < self.max_scans))
 
     @property
     def selection_sources_capture_enabled(self):
@@ -91,9 +100,14 @@ class EntryObservationBuffer:
         """복사 전에 첫 시도를 예약한다. 빈 결과/복사 실패 뒤 재선정하지 않는다."""
         if self._capture_closed or (self.scan_scope == "first" and self._first_scan_id is not None):
             return None
+        if self.scan_scope == 'window' and len(self._window_scan_ids) >= self.max_scans:
+            self.mark_incomplete('scan_limit_exceeded')
+            return None
         scan_id = uuid4().hex
         if self.scan_scope == "first":
             self._first_scan_id = scan_id
+        elif self.scan_scope == 'window':
+            self._window_scan_ids.add(scan_id)
         return scan_id
 
     def accepts_order_signal(self, signal_id):
@@ -108,11 +122,15 @@ class EntryObservationBuffer:
         if self._capture_closed:
             return False
         kind = record.get("kind")
-        if self.scan_scope == "first":
+        if self.scan_scope in ("first", "window"):
             if kind == "scan":
-                if record.get("scan_id") != self._first_scan_id or self._first_scan_recorded:
+                sid = record.get('scan_id')
+                if ((self.scan_scope == 'first' and (sid != self._first_scan_id or self._first_scan_recorded))
+                        or (self.scan_scope == 'window' and
+                            (sid not in self._window_scan_ids or sid in self._recorded_scan_ids))):
                     return False
-                record = {**record, "population_scope": "first_returned_scan_candidates",
+                record = {**record, "population_scope": ('first_returned_scan_candidates'
+                          if self.scan_scope == 'first' else 'window_returned_scan_candidates'),
                           "scan_admission_ref": self.scan_admission_ref}
             elif kind in ("rest_quote", "signal", "emit_result", "selection_basis", "entry_gate_trace"):
                 if record.get("candidate_id") not in self._cohort_candidates:
@@ -125,10 +143,11 @@ class EntryObservationBuffer:
         copied = deepcopy(record)
         copied["sequence"] = len(self._records) + 1
         self._records.append(copied)
-        if self.scan_scope == "first":
+        if self.scan_scope in ("first", "window"):
             if kind == "scan":
-                self._cohort_candidates = {c["candidate_id"] for c in copied["candidates"]}
+                self._cohort_candidates.update(c["candidate_id"] for c in copied["candidates"])
                 self._first_scan_recorded = True
+                self._recorded_scan_ids.add(copied['scan_id'])
             elif kind == "signal":
                 self._cohort_signals.add(copied["signal_id"])
         if self._journal_sink is not None:
@@ -136,12 +155,26 @@ class EntryObservationBuffer:
                 self._journal_sink.offer(copied)
             except Exception:
                 self.mark_incomplete("journal_offer_failed")
+        if self.scan_scope == 'window' and kind == 'signal':
+            try:
+                if self.signal_quote_submit is None:
+                    self.mark_incomplete('signal_enrollment_unavailable')
+                else:
+                    scan_id, symbol = copied['candidate_id'].rsplit(':', 1)
+                    self.signal_quote_submit(scan_id, [symbol])
+            except Exception:
+                self.mark_incomplete('signal_enrollment_failed')
         return True
 
     def capture_status(self) -> dict:
         reasons = set(self._incomplete_reasons)
         if self.scan_scope == "first" and not self._first_scan_recorded:
             reasons.add("first_scan_not_recorded")
+        if self.scan_scope == 'window':
+            if not self._recorded_scan_ids:
+                reasons.add('window_scan_not_recorded')
+            if self._window_scan_ids != self._recorded_scan_ids:
+                reasons.add('window_scan_not_recorded')
         if self._journal_sink is not None and self._journal_sink.failure_reason:
             reasons.add(self._journal_sink.failure_reason)
         return {"schema_version": 1, "evaluation_epoch": self.evaluation_epoch,
@@ -302,8 +335,7 @@ def freeze_pre_pending_capital(owner, risk_manager, event, order):
         if observer is None or event.source != "live_screening" or order.side.value != "buy":
             return None
         if isinstance(observer, EntryObservationBuffer) and (
-                observer._capture_closed or (observer.scan_scope == "first"
-                    and event.id not in observer._cohort_signals)):
+                observer._capture_closed or not observer.accepts_order_signal(event.id)):
             return None
 
         def number(value):
@@ -391,7 +423,7 @@ def observation_population(records):
     """첫 스캔 선언을 손익 계산과 분리해 검증한다. 여러 스캔을 사후 고르지 않는다."""
     scans = [r for r in records if r.get("kind") == "scan"]
     scopes = {r.get("population_scope", "returned_screen_candidates") for r in scans}
-    known = {"returned_screen_candidates", "first_returned_scan_candidates"}
+    known = {"returned_screen_candidates", "first_returned_scan_candidates", "window_returned_scan_candidates"}
     if scopes - known or len(scopes) > 1:
         raise ValueError("관측 모집단 범위 혼합/미지원")
     if "first_returned_scan_candidates" in scopes:
@@ -401,6 +433,13 @@ def observation_population(records):
         if not isinstance(ref, str) or not ref.strip() or len(ref) > 200:
             raise ValueError("첫 스캔 사전 규약 참조 필요")
         return {"population_scope": "first_returned_scan_candidates", "scan_admission_ref": ref}
+    if 'window_returned_scan_candidates' in scopes:
+        refs = {r.get('scan_admission_ref') for r in scans}
+        ids = [r.get('scan_id') for r in scans]
+        if (len(refs) != 1 or len(ids) != len(set(ids)) or not 1 <= len(scans) <= 100
+                or any(not isinstance(ref, str) or not ref.strip() or len(ref) > 200 for ref in refs)):
+            raise ValueError('window population identity/reference invalid')
+        return {'population_scope': 'window_returned_scan_candidates', 'scan_admission_ref': refs.pop()}
     if any("scan_admission_ref" in r for r in scans):
         raise ValueError("전체 스캔과 첫 스캔 선언 혼합")
     return {"population_scope": "returned_screen_candidates"}
