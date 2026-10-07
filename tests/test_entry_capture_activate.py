@@ -11,7 +11,8 @@ from types import SimpleNamespace
 import pytest
 
 SCRIPT = Path(__file__).parents[1] / 'scripts/ops/entry_capture_activate.py'
-PROFILES = ['20261002', '20261006-pilot2', '20261007-pilot3']
+SIGNAL_PROFILE = '20261008-signal-window-v1'
+PROFILES = ['20261002', '20261006-pilot2', '20261007-pilot3', SIGNAL_PROFILE]
 
 
 def module():
@@ -66,7 +67,7 @@ def setup(tmp_path, request):
         kill_path=kill, state_dir=state, lock_path=lock,
         not_before=now, latest_start_at=now+timedelta(seconds=120),
         toss_uid=997, toss_gid=987, study_sha256='c'*64,
-        evaluation_epoch=profile.evaluation_epoch)
+        evaluation_epoch=profile.evaluation_epoch, engine_only=profile.engine_only)
     events = []
     current = [now]
     health = {'broker': {'connected': True, 'pending_orders': 0},
@@ -74,6 +75,13 @@ def setup(tmp_path, request):
     anchors = {'schema_version':'entry-anchor-projection-v2', 'study_sha256':'c'*64,
                'evaluation_epoch':cfg.evaluation_epoch, 'capture_id':'capture-1',
                'capture_closed':False, 'source_record_count':0, 'records':[]}
+    if profile.engine_only:
+        cfg.input_hashes.clear()
+        for path in (once, once.with_name('study.json'), once.with_name('manifest.json')):
+            path.write_bytes(b'{}')
+            path.chmod(0o600)
+            cfg.input_hashes[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        anchors.update(schema_version='entry-observation-readiness-v1', scan_scope='window')
     behavior = {}
 
     def runner(argv, *, timeout):
@@ -101,11 +109,11 @@ def setup(tmp_path, request):
 
     def fetch(path, *, timeout):
         events.append(('http', path))
-        if path.endswith('entry-anchors'):
+        if path in ('/api/internal/entry-anchors', '/api/internal/entry-observation-readiness'):
             behavior['anchor_attempts'] = behavior.get('anchor_attempts',0)+1
             if behavior['anchor_attempts'] <= behavior.get('ready_after',0):
                 raise ValueError('still starting')
-        if behavior.get('fetch_fail') and path.endswith('entry-anchors'):
+        if behavior.get('fetch_fail') and path in ('/api/internal/entry-anchors', '/api/internal/entry-observation-readiness'):
             raise ValueError('secret account output')
         return health if path == '/api/health' else anchors
 
@@ -133,6 +141,17 @@ def test_success_orders_check_checkout_reload_restart_health_then_toss(setup, of
     assert s.source.read_bytes() == b'new\n'
     assert s.dropin.read_bytes() == s.staged.read_bytes()
     commands = s.events
+    if s.cfg.engine_only:
+        restart = next(i for i, c in enumerate(commands) if 'restart' in c)
+        readiness = commands.index(('http', '/api/internal/entry-observation-readiness'))
+        assert restart < readiness
+        assert not any('--check' in c or 'start' in c for c in commands)
+        assert result['toss_attempted'] is False
+        assert sum('restart' in c for c in commands) == 1
+        count = len(commands)
+        assert s.run()['status'] == 'rejected'
+        assert len(commands) == count
+        return
     check = next(i for i, c in enumerate(commands) if '--check' in c)
     checkout = next(i for i,c in enumerate(commands) if 'checkout' in c)
     restart = next(i for i,c in enumerate(commands) if 'restart' in c)
@@ -220,6 +239,8 @@ def test_corrupt_target_source_aborts_before_checkout(setup):
 
 def test_launcher_failure_never_changes_live_checkout(setup):
     s = setup
+    if s.cfg.engine_only:
+        pytest.skip('엔진 전용 프로필에는 토스 실행기 검사가 없다')
     s.behavior['fail'] = lambda argv:'--check' in argv
     assert s.run()['status'] == 'failed'
     assert s.source.read_bytes() == b'old\n'
@@ -271,6 +292,8 @@ def test_symlink_receipt_does_not_overwrite_other_file(setup):
 
 def test_successful_toss_start_is_not_retried_on_status_failure(setup):
     s = setup
+    if s.cfg.engine_only:
+        pytest.skip('엔진 전용 프로필에는 토스 시작이 없다')
     def hook(argv):
         if 'start' in argv:
             s.current[0] = s.now+timedelta(seconds=120)
@@ -364,6 +387,7 @@ def profile_raw(s, profile):
     from dataclasses import asdict
     m = s.m
     raw = asdict(s.cfg)
+    raw.pop('engine_only')
     if profile == '20261002':
         once = Path('/home/ubuntu/.local/share/qwq-entry-observation/20261002-pilot1/once.json')
         staged = Path('/etc/qwq-entry-capture/entry-capture.conf')
@@ -374,6 +398,11 @@ def profile_raw(s, profile):
         staged = Path('/etc/qwq-entry-capture/20261006-pilot2/entry-capture.conf')
         state = Path('/var/lib/qwq-entry-capture/20261006-pilot2')
         date, epoch = '2026-10-05', 'kr-entry-20261006-firstscan-v4'
+    elif profile == SIGNAL_PROFILE:
+        once = Path('/home/ubuntu/.local/share/qwq-entry-observation/20261008-signal-window-v1/once.json')
+        staged = Path('/etc/qwq-entry-capture/20261008-signal-window-v1-entry-capture.conf')
+        state = Path('/var/lib/qwq-entry-capture/20261008-signal-window-v1')
+        date, epoch = '2026-10-07', '2026-10-08-engine-entry-signal-window-v1'
     else:
         assert profile == '20261007-pilot3'
         once = Path('/home/ubuntu/.local/share/qwq-entry-observation/20261007-pilot3/once.json')
@@ -389,6 +418,8 @@ def profile_raw(s, profile):
     raw['input_hashes'] = {str(p):'e'*64 for p in (
         once, once.with_name('study.json'), once.with_name('manifest.json'),
         m.LAUNCHER_PATH,m.DEPLOYMENT_PATH,Path('/etc/qwq-toss-observer/plan.json'),Path('/etc/qwq-toss-observer/registry.json'))}
+    if profile == SIGNAL_PROFILE:
+        raw['input_hashes'] = {str(p): 'e'*64 for p in (once, once.with_name('study.json'), once.with_name('manifest.json'))}
     return raw
 
 
@@ -424,7 +455,7 @@ def test_predeployed_capture_restarts_once_without_checkout(setup):
     assert result['status'] == 'complete'
     assert not any('checkout' in c for c in s.events)
     assert sum('restart' in c for c in s.events) == 1
-    assert sum('start' in c for c in s.events) == 1
+    assert sum('start' in c for c in s.events) == (0 if s.cfg.engine_only else 1)
     assert s.source.read_bytes() == b'new\n'
     assert s.dropin.read_bytes() == s.staged.read_bytes()
     count = len(s.events)
@@ -510,7 +541,7 @@ def test_predeployed_restart_failure_never_rolls_back_or_retries(setup):
     assert not any('checkout' in c or 'start' in c for c in s.events)
 
 
-@pytest.mark.parametrize('other_offset', [1, 2])
+@pytest.mark.parametrize('other_offset', [1, 2, 3])
 @pytest.mark.parametrize('mismatch', [None, 'once_path', 'staged_dropin', 'state_dir',
     'evaluation_epoch', 'not_before', 'latest_start_at', 'input_hashes', 'study_sha256'])
 def test_profile_binds_every_repeated_identity_and_uses_separate_config(setup, monkeypatch, mismatch, other_offset):
@@ -529,6 +560,7 @@ def test_profile_binds_every_repeated_identity_and_uses_separate_config(setup, m
         '20261002': Path('/etc/qwq-entry-capture/activation.json'),
         '20261006-pilot2': Path('/etc/qwq-entry-capture/20261006-pilot2/activation.json'),
         '20261007-pilot3': Path('/etc/qwq-entry-capture/20261007-pilot3/activation.json'),
+        SIGNAL_PROFILE: Path('/etc/qwq-entry-capture/20261008-signal-window-v1.json'),
     }
     reads = []
     def read(path, **kwargs):
@@ -573,6 +605,7 @@ def test_cli_rejects_unknown_profile_before_configuration_or_commands(monkeypatc
     ([], '20261002'),
     (['--profile', '20261006-pilot2'], '20261006-pilot2'),
     (['--profile', '20261007-pilot3'], '20261007-pilot3'),
+    (['--profile', SIGNAL_PROFILE], SIGNAL_PROFILE),
 ])
 def test_cli_passes_only_the_frozen_profile(monkeypatch, capsys, args, profile):
     m = module()
@@ -635,3 +668,95 @@ def test_other_profile_receipt_does_not_consume_selected_state(setup, monkeypatc
     assert run()['status'] == 'rejected'
     assert len(s.events) == count
     assert all(path.read_bytes() == value for path, value in preserved.items())
+
+
+@pytest.mark.parametrize('setup', [SIGNAL_PROFILE], indirect=True)
+def test_signal_window_never_reads_toss_files_or_starts_toss(setup):
+    s = setup
+    s.launcher.unlink()
+    s.deployment.unlink()
+    s.behavior['fail'] = lambda argv: '--check' in argv or 'start' in argv
+    s.source.write_bytes(b'new\n')
+    result = predeployed_run(s)
+    assert result['status'] == 'complete'
+    assert result['toss_attempted'] is False
+    assert not any('checkout' in c or '--check' in c or 'start' in c for c in s.events)
+    assert ('http', '/api/internal/entry-anchors') not in s.events
+    restart = next(i for i, c in enumerate(s.events) if 'restart' in c)
+    toss_checks = [i for i, c in enumerate(s.events) if 'is-active' in c and s.m.TOSS_UNIT in c]
+    assert any(i < restart for i in toss_checks)
+    assert any(i > restart for i in toss_checks)
+
+
+@pytest.mark.parametrize('setup', [SIGNAL_PROFILE], indirect=True)
+@pytest.mark.parametrize('problem', ['schema_version', 'study_sha256', 'evaluation_epoch',
+    'capture_id', 'capture_closed', 'scan_scope', 'unavailable'])
+def test_signal_readiness_rejects_wrong_or_closed_runtime_without_retry(setup, problem):
+    s = setup
+    if problem == 'unavailable':
+        s.behavior['fetch_fail'] = True
+    else:
+        s.anchors[problem] = {
+            'schema_version': 'entry-anchor-projection-v2', 'study_sha256': 'f'*64,
+            'evaluation_epoch': 'old', 'capture_id': '', 'capture_closed': True,
+            'scan_scope': 'first_scan',
+        }[problem]
+    result = s.run()
+    assert result['status'] == 'failed' and result['phase'] == 'readiness'
+    assert result['restart_attempted'] is True and result['toss_attempted'] is False
+    assert result['rollback'] == 'not_needed'
+    assert sum('restart' in c for c in s.events) == 1
+    assert not any('start' in c for c in s.events)
+    count = len(s.events)
+    assert s.run()['status'] == 'rejected'
+    assert len(s.events) == count
+
+
+@pytest.mark.parametrize('setup', [SIGNAL_PROFILE], indirect=True)
+@pytest.mark.parametrize('when', ['before', 'after'])
+def test_signal_window_fails_when_toss_is_active(setup, when):
+    s = setup
+    if when == 'before':
+        s.behavior['started'] = True
+    else:
+        def hook(argv):
+            if 'restart' in argv:
+                s.behavior['started'] = True
+        s.behavior['hook'] = hook
+    result = s.run()
+    assert result['status'] == 'failed'
+    assert result['restart_attempted'] is (when == 'after')
+    assert sum('restart' in c for c in s.events) == (1 if when == 'after' else 0)
+    assert not any('start' in c for c in s.events)
+
+
+@pytest.mark.parametrize('setup', [SIGNAL_PROFILE], indirect=True)
+@pytest.mark.parametrize('problem', [None, 'editable_engine_flag', 'toss_input', 'missing_manifest'])
+def test_signal_configuration_derives_engine_only_and_exact_inputs(setup, monkeypatch, problem):
+    s = setup
+    raw = profile_raw(s, SIGNAL_PROFILE)
+    raw['old_head'] = raw['new_head']
+    if problem == 'editable_engine_flag': raw['engine_only'] = False
+    if problem == 'toss_input': raw['input_hashes'][str(s.m.LAUNCHER_PATH)] = 'e'*64
+    if problem == 'missing_manifest':
+        del raw['input_hashes'][str(Path(raw['once_path']).with_name('manifest.json'))]
+    monkeypatch.setattr(s.m.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(s.m, 'trusted_dir', lambda *args: None)
+    monkeypatch.setattr(s.m, 'read_file', lambda *args, **kwargs: json.dumps(raw).encode())
+    if problem:
+        with pytest.raises(s.m.GuardError): s.m.load_config(SIGNAL_PROFILE)
+    else:
+        cfg = s.m.load_config(SIGNAL_PROFILE)
+        assert cfg.engine_only is True and cfg.old_head == cfg.new_head
+
+
+def test_signal_profile_is_available_with_predeployed_engine_only_contract():
+    m = module()
+    try:
+        profile = m.activation_profile(SIGNAL_PROFILE)
+    except m.GuardError:
+        pytest.fail('검토된 10월 8일 엔진 전용 활성화 계약이 필요하다')
+    assert profile.allow_predeployed is True
+    assert profile.engine_only is True
+    assert profile.not_before == datetime(2026, 10, 7, 23, 55, tzinfo=timezone.utc)
+    assert profile.latest_start_at == datetime(2026, 10, 7, 23, 57, tzinfo=timezone.utc)

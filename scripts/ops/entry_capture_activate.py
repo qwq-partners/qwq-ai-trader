@@ -49,10 +49,11 @@ class ActivationProfile:
     not_before: datetime
     latest_start_at: datetime
     allow_predeployed: bool = False
+    engine_only: bool = False
 
 
 def activation_profile(name):
-    """날짜/경로를 입력받지 않는다. 검토된 세 고정 계약만 선택한다."""
+    """날짜/경로를 입력받지 않는다. 검토된 고정 계약만 선택한다."""
     if name == '20261002':
         return ActivationProfile(CONFIG_PATH, STATE_DIR, ONCE_PATH, STAGED_DROPIN,
             'kr-entry-20261002-firstscan-v1',
@@ -76,6 +77,16 @@ def activation_profile(name):
             'kr-entry-20261007-firstscan-v4',
             datetime(2026,10,6,23,55,tzinfo=timezone.utc),
             datetime(2026,10,6,23,57,tzinfo=timezone.utc), allow_predeployed=True)
+    if name == '20261008-signal-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261008-signal-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261008-signal-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261008-signal-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261008-signal-window-v1-entry-capture.conf'),
+            '2026-10-08-engine-entry-signal-window-v1',
+            datetime(2026,10,7,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,7,23,57,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
 
 
@@ -102,6 +113,7 @@ class Config:
     toss_gid: int
     study_sha256: str
     evaluation_epoch: str
+    engine_only: bool = False
 
 
 def digest(value):
@@ -204,9 +216,11 @@ def load_config(profile='20261002'):
     if set(raw['protected_hashes']) != {'config/default.yml','config/evolved_overrides.yml'}:
         raise GuardError()
     expected_inputs = {str(selected.once_path), str(selected.once_path.with_name('study.json')),
-                       str(selected.once_path.with_name('manifest.json')), str(LAUNCHER_PATH),
-                       str(DEPLOYMENT_PATH), '/etc/qwq-toss-observer/plan.json',
-                       '/etc/qwq-toss-observer/registry.json'}
+                       str(selected.once_path.with_name('manifest.json'))}
+    if not selected.engine_only:
+        expected_inputs.update({str(LAUNCHER_PATH), str(DEPLOYMENT_PATH),
+                                '/etc/qwq-toss-observer/plan.json',
+                                '/etc/qwq-toss-observer/registry.json'})
     if set(raw['input_hashes']) != expected_inputs:
         raise GuardError()
     if 'scripts/run_trader.py' not in raw['source_hashes']:
@@ -227,7 +241,7 @@ def load_config(profile='20261002'):
     if (raw['not_before'] != selected.not_before
             or raw['latest_start_at'] != selected.latest_start_at):
         raise GuardError()
-    return Config(**raw)
+    return Config(**raw, engine_only=selected.engine_only)
 
 
 def run_command(argv, *, timeout):
@@ -237,7 +251,8 @@ def run_command(argv, *, timeout):
 
 
 def fetch_loopback(path, *, timeout):
-    if path not in ('/api/health','/api/internal/entry-anchors'):
+    if path not in ('/api/health','/api/internal/entry-anchors',
+                    '/api/internal/entry-observation-readiness'):
         raise GuardError()
     conn = http.client.HTTPConnection('127.0.0.1', 8080, timeout=timeout)
     try:
@@ -361,11 +376,12 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
             raise GuardError()
         if not pending_check(fetch('/api/health',timeout=min(2,(cfg.latest_start_at-clock()).total_seconds()))):
             raise GuardError()
-        phase = 'launcher_check'
-        # 설치된 런처가 요구하는 단일 서비스 그룹만 유지하고 환경을 비운다.
-        command(['/usr/bin/setpriv',f'--reuid={cfg.toss_uid}',f'--regid={cfg.toss_gid}',
-                 f'--groups={cfg.toss_gid}','/usr/bin/env','-i','TOSS_API=1','/usr/bin/python3',
-                 '-I','-S',str(cfg.launcher_path),'--deployment',str(cfg.deployment_path),'--check'])
+        if not cfg.engine_only:
+            phase = 'launcher_check'
+            # 설치된 런처가 요구하는 단일 서비스 그룹만 유지하고 환경을 비운다.
+            command(['/usr/bin/setpriv',f'--reuid={cfg.toss_uid}',f'--regid={cfg.toss_gid}',
+                     f'--groups={cfg.toss_gid}','/usr/bin/env','-i','TOSS_API=1','/usr/bin/python3',
+                     '-I','-S',str(cfg.launcher_path),'--deployment',str(cfg.deployment_path),'--check'])
         phase = 'checkout'
         if cfg.old_head != cfg.new_head:
             changed = True  # 부분 실패도 원래 HEAD 복구를 시도한다.
@@ -410,14 +426,19 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
                 if not pending_check(fetch('/api/health',timeout=min(2,(cfg.latest_start_at-clock()).total_seconds()))):
                     raise GuardError()
                 window()
-                projection = fetch('/api/internal/entry-anchors',timeout=min(2,(cfg.latest_start_at-clock()).total_seconds()))
+                readiness_path = ('/api/internal/entry-observation-readiness'
+                                  if cfg.engine_only else '/api/internal/entry-anchors')
+                expected_schema = ('entry-observation-readiness-v1'
+                                   if cfg.engine_only else 'entry-anchor-projection-v2')
+                projection = fetch(readiness_path,timeout=min(2,(cfg.latest_start_at-clock()).total_seconds()))
                 if (type(projection) is not dict
-                        or projection.get('schema_version') != 'entry-anchor-projection-v2'
+                        or projection.get('schema_version') != expected_schema
                         or projection.get('study_sha256') != cfg.study_sha256
                         or projection.get('evaluation_epoch') != cfg.evaluation_epoch
                         or type(projection.get('capture_id')) is not str
                         or not 1 <= len(projection['capture_id']) <= 120
-                        or projection.get('capture_closed') is not False):
+                        or projection.get('capture_closed') is not False
+                        or (cfg.engine_only and projection.get('scan_scope') != 'window')):
                     raise GuardError()
                 ready = True
                 break
@@ -426,15 +447,16 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
                 sleep(min(1,max(0,(cfg.latest_start_at-clock()).total_seconds())))
         if not ready:
             raise GuardError()
-        phase = 'before_toss'
+        phase = 'before_complete' if cfg.engine_only else 'before_toss'
         protected()
         inputs()
         active(TOSS_UNIT,'inactive')
         window()
-        phase = 'toss_start'
-        toss_attempted = True
-        command(['/usr/bin/systemctl','start',TOSS_UNIT])
-        active(TOSS_UNIT,'active')
+        if not cfg.engine_only:
+            phase = 'toss_start'
+            toss_attempted = True
+            command(['/usr/bin/systemctl','start',TOSS_UNIT])
+            active(TOSS_UNIT,'active')
         phase = 'complete'
         status = 'complete'
     except Exception:
@@ -479,6 +501,8 @@ def main():
             cfg = load_config('20261006-pilot2')
         elif sys.argv[1:] == ['--profile', '20261007-pilot3']:
             cfg = load_config('20261007-pilot3')
+        elif sys.argv[1:] == ['--profile', '20261008-signal-window-v1']:
+            cfg = load_config('20261008-signal-window-v1')
         else:
             raise GuardError()
         result = activate(cfg)

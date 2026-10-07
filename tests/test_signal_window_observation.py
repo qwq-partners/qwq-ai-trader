@@ -39,6 +39,25 @@ def stock(symbol='900001'):
     return SimpleNamespace(symbol=symbol, score=90)
 
 
+def test_window_keeps_prestart_ack_but_does_not_store_prestart_quotes(tmp_path):
+    plan, _ = load(tmp_path, window_plan)
+    clock = [NOW]
+    b = _WindowBuffer(plan, lambda: clock[0])
+    assert b.publish({'kind': 'quote_subscription', 'event': 'ack'})
+    assert not b.publish({'kind': 'ws_quote', 'symbol': '900001'})
+    assert len(b.export()['records']) == 1
+    assert b.capture_status()['dropped_records'] == 0
+    clock[0] = plan.start_at
+    assert b.publish({'kind': 'ws_quote', 'symbol': '900001'})
+    assert len(b.export()['records']) == 2
+
+
+def test_original_first_scan_contract_still_keeps_prestart_quotes(tmp_path):
+    plan, _ = load(tmp_path)
+    b = _WindowBuffer(plan, lambda: NOW)
+    assert b.publish({'kind': 'ws_quote', 'symbol': '900001'})
+
+
 def event(sid, symbol='900001'):
     return SimpleNamespace(id=sid, symbol=symbol, timestamp=NOW,
         strategy=SimpleNamespace(value='gap_and_go'), price=10000,
