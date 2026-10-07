@@ -55,7 +55,30 @@ flowchart TD
 
 ## 2. Do / See — 실제 적용 결과
 
-준비·검증 중. 이 문장의 미배포 표시는 실제 적용 결과가 추가될 때까지 유효하다.
+**1·2번 완료 — 2026-10-07 23:47:48 KST 설치 완료.**
+
+- [PR #157](https://github.com/qwq-partners/qwq-ai-trader/pull/157)을 문서/코드 커밋·푸시하고 필수 CI **4659 passed / 2 skipped / 2 xfailed**(101.86초) 후 머지했다. CI에는 의존성 경고33개가 있었고 검사 실패는 없었다. 리뷰한 소스와 머지본의 내용 일치를 확인했다.
+- 정확한 `1d457044e3febdc73bb9580ce4c658b448ecde24`를 승인된 장외 절차로 배포했다. 실제 운영 verify도 **4659 passed / 2 skipped / 2 xfailed**, 134.64초·문법/비밀정보 통과·격리 위반0이다. 배포 rc0·롤백 없음. 기동은23:45:56, PID601969/NRestarts0이다.
+- 배포 후 HTTP 정상·broker 연결·pending 네 항목0·로컬 미체결0·stale 없음·execution recovery ready/장부 대기0/귀속 미확정0/prior_unclean false를 확인했다. 사용 설정 두 지문과 KR 매수 중지를 보존했다.
+- 전체289개 src/scripts Python 지문을 고정했다. 사용자 소유 staging의 CapturePlan 전체 검증과 독립 입력 리뷰를 통과했다. 설치기는 실제 배포본으로 다시 검증했고 사전 검사 ready, 실제 apply rc0/complete이다.
+- 23:47:48 일회 타이머를 활성화했다. 실제 `NextElapseUSecRealtime=Thu 2026-10-08 08:55:00 KST`, 활성화 서비스는 inactive, 새 원장/시작 영수증/활성화 영수증은 미생성이다. 예약은 서버 systemd가 실행하며 대화 세션이 계속 열려 있을 필요가 없다.
+- 소비된10월7일 once/영수증/완료 상태/drop-in은 `/var/backups/qwq-entry-capture-20261008`에 지문과 함께 보관했다. 일치한 drop-in만 제거했고 현재 DropInPaths는 비어 있다. 설치 중 봇 재시작·토스 시작은 없었으며 PID601969를 유지했다.
+- 기존 엔진/토스 원장, 토스 deployment/plan/registry, 기존11월1·5·6일 보존 타이머8개 파일의 전후 SHA256 일치를 확인했다. 토스 서비스는 inactive다. 새 관측이 없는 현재 readiness는 의도한503이다.
+- 설치 정적 검사 중 기존 `claude-session.service`의 KillMode=none 폐기 예정 경고가 함께 출력됐으나 rc0이며 해당 서비스는 변경하지 않았다.
+
+| 고정 항목 | 값 |
+|---|---|
+| 운영 HEAD | `1d457044e3febdc73bb9580ce4c658b448ecde24` |
+| study SHA256 | `d2fcbbf28aa9957c0402497b982fc8d83c935f7a9853ffbd410e6969af801bb1` |
+| source inventory SHA256 | `524f2d88e8d1aee2b44d69d920d6e767cb49a62b0624668b78504edb472d1777` |
+| 설치 manifest SHA256 | `4283ccd84763e581e582e1d8c108c7bdff379c120b3c4f5cde903a3e3e07c23f` |
+| 정책 고정 시각 | 2026-10-07 23:42:21 KST |
+| 새 입력 | `~/.local/share/qwq-entry-observation/20261008-signal-window-v1/` |
+| 새 원장/시작 영수증 | `~/.local/state/qwq-entry-observation/20261008-signal-window-v1/` |
+| 활성화 영수증/상태 | `/var/lib/qwq-entry-capture/20261008-signal-window-v1/` |
+| 배포 로그 | `~/.local/state/qwq-deploy/signal-deploy-20261008.log` |
+
+**다음 관측 전 운영 HEAD·설정을 바꾸면 활성화 지문 검사에서 중단된다. 문서 후속 커밋은 운영 배포 대상이 아니며 운영 HEAD는 위 커밋으로 유지한다.** 오늘 완료한 것은 용량 검증·배포·예약이다. 내일 실제 관측과 비용 후 경제성 판정은 아직 실행되지 않았다.
 
 ## 관측 뒤 다음 PLAN–DO–SEE
 
