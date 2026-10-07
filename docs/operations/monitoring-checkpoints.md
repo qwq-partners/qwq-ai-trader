@@ -2,7 +2,7 @@
 
 ## 최신56차 — 경제성 관측 개발과 운영 분리
 
-[구현·검증·후속 순서](../research/current-engine-signal-window-2026-10-07.md). 새 signal-window 코드는 개발 검증 중이며 운영에 설치하지 않았다.
+[구현·검증·후속 순서](../research/current-engine-signal-window-2026-10-07.md). 새 signal-window 코드는 로컬 전체4482검사와 독립 리뷰 지적 수정 확인을 마쳤으며 운영에 설치하지 않았다.
 
 - [ ] 고정 시간대·스캔/신호 lease 상한·자본/비용·첫 호가 지연/horizon 여유를 갖춘 프로필 작성.
 - [ ] 장전 기존 호가를 포함한 전체 저장 수명·메모리/큐/원장 용량 검증.

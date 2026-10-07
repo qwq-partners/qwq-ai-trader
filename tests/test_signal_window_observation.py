@@ -286,3 +286,47 @@ async def test_sealed_window_gate_cli_uses_per_scan_candidate_bound(tmp_path, mo
     import json
     result = json.loads(capsys.readouterr().out)
     assert result['counts']['total'] == 4 and result['trace_coverage_complete'] is True
+
+
+def test_toss_offline_reader_rejects_even_a_single_window_scan():
+    from test_toss_orderbook_stream import engine_records, report
+    data = engine_records()
+    data['records'][0].update(population_scope='window_returned_scan_candidates',
+                              scan_admission_ref='synthetic-window')
+    with pytest.raises(ValueError, match='first.scan'):
+        report(engine=data)
+
+
+def test_toss_projection_consumer_rejects_window_scope():
+    from test_toss_ws_runtime import projection
+    from src.observation.entry_anchor_input import validate_projection
+    data = projection()
+    data['records'][0].update(population_scope='window_returned_scan_candidates',
+                              scan_admission_ref='synthetic-window')
+    with pytest.raises(ValueError, match='first.scan'):
+        validate_projection(data)
+
+
+@pytest.mark.asyncio
+async def test_window_gate_cli_rejects_legacy_journal_with_matching_study_hash(tmp_path, monkeypatch):
+    import src.analytics.entry_observation_journal as journal
+    from scripts.report_entry_gate_trace import main
+    plan, _ = load(tmp_path, window_plan); clock = [NOW]
+    for mod in (obs, gates): monkeypatch.setattr(mod, '_now', lambda: clock[0].isoformat())
+    monkeypatch.setattr(journal, '_timestamp', lambda: clock[0].isoformat())
+    b = _WindowBuffer(plan, lambda: clock[0])
+    b.frame_diagnostics_settings = None  # Deliberate incompatible producer, same study hash.
+    s = plan.settings
+    j = await journal.ObservationJournal.open(b, s['journal_path'], study_ref=s['study_ref'],
+        study_sha256=plan.study_sha256,
+        **{k: s[k] for k in ('queue_capacity', 'batch_size', 'max_bytes', 'max_record_bytes')})
+    try:
+        clock[0] = plan.start_at
+        scan = obs.capture_scan(b, [stock()], 'regular')
+        trace = gates.begin_gate_trace(b, scan, [])
+        trace.note('enabled', 'fail'); trace.finish()
+    finally:
+        clock[0] = plan.end_at
+        await j.close()
+    assert main(['--journal', s['journal_path'], '--study', str(plan.study_path),
+                 '--as-of', plan.end_at.isoformat(), '--max-journal-bytes', '4000000']) == 2

@@ -44,7 +44,9 @@
 - [x] Test repeated symbols across scans, reference mixing, source bounds and time violations.
 - [x] Test later-scan economic input preserves the original denominator and missing evidence.
 - [x] Implement and run focused tests, full verification and secret scan.
-- [ ] Independent Astra/xhigh source review; resolve findings; update CLAUDE/CHANGELOG/docs index; commit/push/PR and required CI.
+- [x] Independent Astra/xhigh source review; resolve findings; update CLAUDE/CHANGELOG/docs index and create PR #156.
+
+Integration gate: required verify on the final PR head. [PR #156](https://github.com/qwq-partners/qwq-ai-trader/pull/156) is authoritative for CI/merge status.
 
 ## Execution record
 
@@ -53,3 +55,5 @@
 
 - Do/See: initial six unsupported-mode failures, metadata-budget two failures and offline-binding two failures reproduced before fixes. Focused405 passed; full verify4479 passed/2knownxfail, syntax/secrets pass, isolation0.
 - Reviewer dispatch: source audit Sol/high and independent critical review Astra/xhigh; requested identity only unless runtime exposes actual metadata. No fallback used.
+
+- Final review: two P2 contract gaps reproduced by three failing tests; guards added in Toss consumers and gate CLI. Focused251 passed; independent reviewer ran the three reproducers (3 passed) and approved the fixes. No deferred findings. Final full verification4482 passed/2knownxfail, syntax/secrets pass and isolation0; CI gates integration.

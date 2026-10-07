@@ -40,7 +40,8 @@ def main(argv=None):
         raw,study=_study(args.study);sha=hashlib.sha256(raw).hexdigest()
         obs=read_observation_journal(args.journal,max_bytes=args.max_journal_bytes,expected_study_sha256=sha)
         if obs['evaluation_epoch']!=study.get('evaluation_epoch'):raise ValueError('study epoch mismatch')
-        if study.get('capture', {}).get('version') == 'runner-first-scan-v4' or 'frame_diagnostics' in obs:
+        if (study.get('capture', {}).get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1')
+                or 'frame_diagnostics' in obs):
             from src.analytics.kis_frame_diagnostics import validate_study_binding, build_frame_report
             validate_study_binding(obs, study)
             build_frame_report(obs, as_of=args.as_of)
