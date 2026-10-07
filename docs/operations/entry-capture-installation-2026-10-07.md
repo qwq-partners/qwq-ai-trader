@@ -1,6 +1,6 @@
 # 10월7일 관측 준비 — 52차 Plan → Do → See
 
-상태: **2026-10-06 20:03 KST 설치·예약 검증 완료, 활성화·수집은 예정**. 사용자의 51차 후속 진행 지시에 따라 기존 품질 관측을 새 날짜로 준비하고, 10월6일의 점수 탈락 원인을 실제 로그와 코드로 대조했다. 목적은 종목 선정과 진입 조건의 개선을 실제 비용 후 순이익으로 검증하는 것이다. 현재 봇4384b28/PID504793·매수 중지·점수 기준·위험 설정은 유지한다. 다음 세션은 이 문서의 마지막 실행 결과부터 확인한다.
+상태: **2026-10-07 21시대 확인 — 08:55 활성화와09:33 관측 종료 완료**. [55차 수집 품질·후보/진입 분석](../research/current-engine-capture-result-2026-10-07.md)이 현재 정본이다. 엔진4384b28/PID555199·매수 중지·설정 유지,첫 스캔3후보 모두 실제 점수85 문턱에서 탈락했다. 관측 완결성과 수익성 검증은 구분하며 다음 날짜의 관측은 미등록이다. 아래52차 준비/예정 문구는 당시 이력이다.
 
 ## Plan
 
@@ -82,7 +82,16 @@ PR #150 필수CI는4419 passed/2 known xfailed(77.43초), 격리0·문법/비밀
 
 비공개 근거는 `~/.local/state/qwq-deploy/preparation-20261007/`의 `before-install-evidence.json`, `apply.log`, `installation-result.json`, 두 전체 검증 로그/CI 로그에 있다. 루트 백업·시도/완료 영수증은 `/var/backups/qwq-entry-capture-20261007/`다. 앞선982b 준비 사본과 비변경 검사 실패 근거도 보존하며 **다시 --apply하지 않는다**.
 
-## 다음 세션 인계
+## See — 55차 실제 실행 결과와 인계
+
+- 10월7일08:55:00 활성화 시작,08:55:21 완료/rc0. 한 번 시도 영수증·startup 소비 영수증과 complete/restart_attempted=true/rollback=not_needed를 대조했다.
+- 봇은08:55:05 새 PID555199로 기동했다. 현재 active/NRestarts0·HEAD4384b28·보호 설정2개 지문·매수 중지 유지,health broker 연결/stale 없음/recovery ready·로컬pending0이다.
+- 엔진 원장은09:33:00 봉인·source_complete=true·drops/persistence0·connection gaps0. 첫09:17:01 스캔3후보의 선정/실제gate 기록이 모두 연결됐고 점수 문턱85에서 차단돼 신호0이다.
+- 토스는09:33:04 정상 종료/inactive,service_complete=true/captured·window_ended·cleanup_failed=false.25,015frames/24,999호가,3후보 모두 첫 스냅샷·900초 이후 스냅샷 존재. LOSSY·통합 호가이므로 무손실 틱/실제 체결/순수익을 뜻하지 않는다.
+- 활성화 타이머는elapsed·다음 실행 시각 없음이다. 새 날짜 입력/grant/예약은 등록하지 않았고 이번 세션에서 재시작·서비스 변경·drop-in 정리도 하지 않았다. 보존 타이머와 원본·소비 영수증을 유지한다.
+- 다음은 첫 스캔 반복 수집보다 실제 신호 시간대·자본 제약·비용을 포함한 경제성 관측 설계다. 오늘 장중66스캔 중48개 시장 차단,신호2회와 같은 종목의 매수 중지 로그가각0초/3초 뒤 연결됐다(이벤트ID 대사 아님). [정확한 분모·처리 경계·검증 결과](../research/current-engine-capture-result-2026-10-07.md)를 따른다.
+
+## 52차 예약 당시 인계 — 이력
 
 1. **08:55 이후:** `qwq-entry-capture-20261007.service`와 `/var/lib/qwq-entry-capture/20261007-pilot3/status.json`에서 활성화 결과를 확인한다. 새 봇 PID/health/매수 중지와 새 startup 영수증을 대조한다. 일정은 서버 systemd가 실행하며 AI 세션을 켜 둘 필요는 없다.08:57 창을 놓치거나 고정 HEAD/입력/설정이 달라지면 중단하며 영수증을 지워 재시도하지 않는다.
 2. **09:33 이후:** 엔진 `~/.local/state/qwq-entry-observation/20261007-pilot3/engine.jsonl`과 위ce034435 cohort의 토스 원장·상태에서 완결/조기 종료/오류 사유를 확인한다.09:34 grant 만료 뒤의 시도나 같은 날짜 자동 재수집은 없다. 실제 수집·900초 평가 가능성과 수익 비교는 아직 미완료다.
