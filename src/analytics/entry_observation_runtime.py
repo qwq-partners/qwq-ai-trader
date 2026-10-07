@@ -252,10 +252,14 @@ class _WindowBuffer(EntryObservationBuffer):
         return super().begin_scan()
 
     def publish(self, record):
-        self.current_time()
+        now = self.current_time()
         if self.ended:
             return False
-        # 준비 단계의 채널 ACK/호가도 보존; 첫 scan만 admission window로 제한.
+        # Window quotes start at the declared boundary; subscription ACKs and
+        # gaps before it remain necessary evidence for the existing session.
+        if self.scan_scope == 'window' and now < self.start_at and record.get('kind') == 'ws_quote':
+            return False
+        # Original first-scan contracts retain their preparation-stage quotes.
         return super().publish(record)
 
 

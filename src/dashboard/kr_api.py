@@ -26,6 +26,7 @@ def setup_kr_api_routes(app: web.Application, data_collector):
 
     app.router.add_get("/api/status", handler.get_status)
     app.router.add_get("/api/internal/entry-anchors", handler.get_entry_anchors)
+    app.router.add_get("/api/internal/entry-observation-readiness", handler.get_entry_observation_readiness)
     app.router.add_get("/api/portfolio", handler.get_portfolio)
     app.router.add_get("/api/positions", handler.get_positions)
     app.router.add_get("/api/risk", handler.get_risk)
@@ -956,14 +957,38 @@ class KRAPIHandler:
         import sys
         sys.exit(0)  # systemd/supervisor가 재시작 (graceful shutdown)
 
-    async def get_entry_anchors(self, request):
-        """관측이 설치된 경우에만 로컬 수집기에 제한한 후보 ID를 반환한다."""
+    @staticmethod
+    def _local_observation_request(request):
         headers = {k.lower(): v for k, v in request.headers.items()}
-        if (request.remote not in ('127.0.0.1', '::1')
+        return not (request.remote not in ('127.0.0.1', '::1')
                 or headers.get('host') != '127.0.0.1:8080'
                 or headers.get('x-qwq-observation') != '1'
                 or any(k in ('origin', 'forwarded', 'via') or k.startswith('x-forwarded-') for k in headers)
-                or getattr(request, 'query_string', '')):
+                or getattr(request, 'query_string', ''))
+
+    async def get_entry_observation_readiness(self, request):
+        """Prove this process owns the runtime, without exposing market/account data."""
+        if not self._local_observation_request(request):
+            return web.json_response({'status': 'forbidden'}, status=403)
+        runtime = getattr(getattr(self.dc, 'bot', None), '_entry_observation_runtime', None)
+        if runtime is None:
+            return web.json_response({'status': 'unavailable'}, status=503)
+        closed = runtime.buffer.ended or runtime.buffer._capture_closed
+        if (runtime.journal.failure_reason is not None
+                or (not closed and not runtime.journal._thread.is_alive())):
+            return web.json_response({'status': 'unavailable'}, status=503)
+        return web.json_response({
+            'schema_version': 'entry-observation-readiness-v1',
+            'study_sha256': runtime.plan.study_sha256,
+            'evaluation_epoch': runtime.buffer.evaluation_epoch,
+            'capture_id': runtime.journal._header['capture_id'],
+            'scan_scope': runtime.buffer.scan_scope,
+            'capture_closed': closed,
+        }, headers={'Cache-Control': 'no-store'})
+
+    async def get_entry_anchors(self, request):
+        """관측이 설치된 경우에만 로컬 수집기에 제한한 후보 ID를 반환한다."""
+        if not self._local_observation_request(request):
             return web.json_response({'status':'forbidden'}, status=403)
         runtime = getattr(getattr(self.dc, 'bot', None), '_entry_observation_runtime', None)
         if runtime is None:

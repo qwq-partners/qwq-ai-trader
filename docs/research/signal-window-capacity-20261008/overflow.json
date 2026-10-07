@@ -1,0 +1,92 @@
+{
+  "capture": {
+    "accepted_records": 300000,
+    "complete": false,
+    "dropped_records": 2413,
+    "journal": {
+      "error": null,
+      "fsync_confirmed": true,
+      "persisted_records": 300000,
+      "sealed": true
+    },
+    "journal_bytes": 188663208,
+    "metadata_accepted": 2412
+  },
+  "case": "overflow",
+  "counts": {
+    "attempted_records": 302413,
+    "expected_accepted_records": 300000,
+    "expected_dropped_records": 2413,
+    "metadata_attempted": 2412
+  },
+  "pacing": {
+    "batch_records": 256,
+    "max_drain_seconds": 2.0,
+    "queue_low_water_fraction": 0.5,
+    "sleep_seconds": 0.002
+  },
+  "production_eligible": false,
+  "profitability": false,
+  "qualifier": "signal-window-capacity-v1",
+  "quotes": {
+    "accepted": 297588,
+    "rejected": 2413,
+    "requested": 300001,
+    "schema": "ws_quote/H0STASP0/synthetic-six-digit-symbol"
+  },
+  "readback": {
+    "address_space_limit_bytes": 1342177280,
+    "complete": false,
+    "dropped_records": 2413,
+    "persistence_dropped_records": 0,
+    "reader_cpu_seconds": 31.599749,
+    "reader_peak_rss_bytes": 729268224,
+    "reader_wall_seconds": 32.674552,
+    "record_count": 300000,
+    "rss_scope": "reader process lifetime",
+    "sealed": true,
+    "strict_reader": true
+  },
+  "resource": {
+    "address_space_limit_bytes": 1342177280,
+    "capture_cpu_seconds": 32.891127,
+    "capture_peak_rss_bytes": 319045632,
+    "capture_wall_seconds": 37.491254,
+    "rss_scope": "capture process lifetime"
+  },
+  "result": {
+    "expectations_met": true,
+    "limitations": [
+      "synthetic records; no archive replay, live symbols, or network input",
+      "pacing lets the writer drain and is not evidence of live callback latency",
+      "the reader runs after capture in a separate process, so its RSS is reported separately",
+      "selection-basis-v2 rows are synthetic unavailable evidence; this is not a claim that every deployed selection row has maximum 16-term payload size",
+      "the storage contract is checked separately: if conservative metadata reserve plus quoted synthetic rows exceeds max_bytes, the journal must fail closed rather than claim capacity",
+      "observed Oct 7 was 20,338 quotes and rolling-60-second peak 1,035 across five channels; 2x scaling to eight channels is 55.2/s * 4,200s = 231,840, not a future guarantee"
+    ],
+    "overflow_fail_closed": true
+  },
+  "schema_version": 1,
+  "storage_contract": {
+    "all_maximum_sized_records_fit": false,
+    "all_record_contract_max_bytes": 20438282240,
+    "bounded_failure_required_if_exceeded": true,
+    "combined_conservative_bytes": 339715245,
+    "journal_max_bytes": 402653184,
+    "metadata_contract_reserve_bytes": 163014656,
+    "metadata_model": "selection-basis-v2 unavailable rows plus full synthetic gate steps",
+    "metadata_reserve_plus_synthetic_quotes_fit": true,
+    "quote_wire_bytes_per_row": 589,
+    "quoted_synthetic_bytes": 176700589
+  },
+  "synthetic": true,
+  "target_profile": {
+    "batch_size": 256,
+    "buffer_capacity": 300000,
+    "candidates_per_scan": 100,
+    "max_bytes": 402653184,
+    "max_record_bytes": 65536,
+    "queue_capacity": 8192,
+    "scans": 12
+  }
+}
