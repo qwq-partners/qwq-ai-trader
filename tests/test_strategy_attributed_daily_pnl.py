@@ -71,6 +71,16 @@ def test_legacy_baseline_with_zero_total_is_still_unmeasured():
     assert pf.strategy_effective_daily_pnl is None       # 가격 불변인데 -100만 으로 표시되면 결함
 
 
+def test_unknown_baseline_without_manual_positions_is_still_unmeasured():
+    """재리뷰 P2: 옛 파일 복원(총합 -100만) 뒤 manual 종목이 수동 매도로 사라진 상태 —
+    effective 는 +100만 이지만 귀속은 None 이어야 한다(+100만 으로 '측정 완료' 표시 금지)."""
+    pf = Portfolio(cash=Decimal("1000000"), daily_start_unrealized_pnl=Decimal("-1000000"))
+    assert pf.daily_start_unrealized_by_symbol is None and not pf.positions
+    assert pf.effective_daily_pnl == Decimal("1000000")
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
+
+
 def test_manual_sold_by_user_intraday_keeps_its_baseline():
     """리뷰 P2: 시작 미실현 -100만 manual 종목을 사용자가 수동 매도 → 동기화가 포지션 제거.
     effective_daily_pnl 은 +100만 으로 뛰지만(기존 한계) 전략 귀속은 0 이어야 한다."""
@@ -160,6 +170,24 @@ def test_corrupt_attribution_field_does_not_break_core_restore(tmp_path):
     assert fresh.portfolio.daily_start_unrealized_pnl == Decimal("0")
     assert fresh.portfolio.daily_trades == 3 and fresh._counted_buy_order_ids == {"o1"}
     assert fresh.portfolio.daily_start_unrealized_by_symbol is None
+
+
+def test_corrupt_manual_symbols_drop_attribution_to_unmeasured(tmp_path):
+    """재리뷰 P2: manual 집합이 null/문자열/기준선 밖 종목이면 귀속 전체를 미확보(None)로 — 빈 집합 수용 금지."""
+    from datetime import date
+    for bad in (None, "087010", ["999999"], 0):
+        path = tmp_path / f"stats-{type(bad).__name__}.json"
+        path.write_text(json.dumps({"date": date.today().isoformat(), "daily_pnl": "0",
+                                    "daily_start_unrealized_pnl": "-1000000", "daily_trades": 0,
+                                    "daily_start_unrealized_by_symbol": {"087010": "-1000000"},
+                                    "daily_start_manual_symbols": bad}))
+        fresh = SimpleNamespace(portfolio=Portfolio(), _counted_buy_order_ids=set(),
+                                _DAILY_STATS_PATH=path, _daily_stats_restored=False)
+        UnifiedEngine.restore_daily_stats(fresh)
+        assert fresh._daily_stats_restored is True
+        assert fresh.portfolio.daily_start_unrealized_pnl == Decimal("-1000000")
+        assert fresh.portfolio.daily_start_unrealized_by_symbol is None, bad
+        assert fresh.portfolio.strategy_effective_daily_pnl is None, bad
 
 
 def test_restore_without_per_symbol_key_leaves_empty_dict(tmp_path):

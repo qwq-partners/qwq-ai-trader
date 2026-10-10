@@ -393,9 +393,9 @@ class Portfolio:
         manual = [p for p in self.positions.values() if p.strategy == self.MANUAL_STRATEGY]
         starts = self.daily_start_unrealized_by_symbol
         if starts is None:
-            # 기준선 미확보: manual 보유가 있으면 귀속 불가(None). 없으면 0 — 시작 뒤 사라진 manual 은
-            # 이 상태에서 알 수 없으므로 분리하지 않는다(effective_daily_pnl 과 같은 한계).
-            return None if manual else Decimal("0")
+            # 기준선 미확보(옛 파일 복원·미기록): 시작 뒤 사라진 manual 도 알 수 없으므로 보유 유무와
+            # 무관하게 미측정(None). 0 으로 추론하지 않는다.
+            return None
         total = Decimal("0")
         for p in manual:
             total += p.unrealized_pnl - starts.get(p.symbol, Decimal("0"))

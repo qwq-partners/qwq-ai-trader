@@ -995,10 +995,13 @@ class UnifiedEngine:
                     _parsed = {str(s): Decimal(str(v)) for s, v in _by_sym.items()}
                     if any(not v.is_finite() for v in _parsed.values()):
                         raise ValueError("non-finite baseline")
+                    _manual = data.get("daily_start_manual_symbols")
+                    # 문자열 목록이고 전부 종목별 기준선에 있는 종목이어야 한다 — 아니면 귀속 전체를 미확보로
+                    if (not isinstance(_manual, list)
+                            or any(not isinstance(s, str) or s not in _parsed for s in _manual)):
+                        raise ValueError(f"manual symbols invalid: {type(_manual).__name__}")
                     self.portfolio.daily_start_unrealized_by_symbol = _parsed
-                    self.portfolio.daily_start_manual_symbols = {
-                        str(s) for s in (data.get("daily_start_manual_symbols") or [])
-                    }
+                    self.portfolio.daily_start_manual_symbols = set(_manual)
             except Exception as _ae:
                 self.portfolio.daily_start_unrealized_by_symbol = None
                 self.portfolio.daily_start_manual_symbols = set()
