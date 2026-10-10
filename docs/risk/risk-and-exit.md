@@ -208,6 +208,8 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
 | 기본 포지션 비율 | 25% | equity 대비 |
 | 최소 현금 보유 | 5% | total_equity 대비 |
 
+**전략 귀속 일일 손익 병기 (2026-10-10 59차, 측정 전용).** 10월8일 신호 3건 중 2건이 -27.6% 하드스탑에 막혔는데, 그 손실은 전부 사용자 수동 보유 087010(`strategy=manual`, 자동매도 금지)의 당일 급락이었고 봇 전략 포지션은 0건이었다. `Portfolio.mark_daily_start()` 가 총합과 **종목별** 당일 시작 미실현 기준선(`daily_start_unrealized_by_symbol`, `engine_daily_stats.json` 저장)을 함께 기록하고, `Portfolio.strategy_effective_daily_pnl` = `effective_daily_pnl` − manual 보유의 당일 미실현 변동을 계산한다. `RiskManager.can_open_position` 의 거부 사유는 `일일 손실 한도 초과 (-27.6%, 전략 귀속 +0.0%) - 전면 차단` 형태로 바뀌어 신호 원장 `block_reason` 에 남고, 16:00 자산 스냅샷에 `strategy_effective_daily_pnl` 필드가 추가된다. **판정은 계좌 전체 `effective_daily_pnl ÷ total_equity` 그대로다** — 한도 완화·분모 변경·청산 예외 변경이 아니다. 종목별 기준선은 `None`(미확보)과 `{}`(보유 없이 시작)를 구분하며, 시작 시 manual 종목 집합(`daily_start_manual_symbols`)도 저장해 당일 사용자가 수동 매도한 종목의 기준선 몫을 귀속에 남긴다. 옛 파일로 복원되면 값은 `None` 이고 사유는 `전략 귀속 미측정` 이다(0 으로 대체하지 않음). 귀속 필드가 파손돼도 실현손익·총합 기준선·복원 완료 플래그는 그대로 복원된다. manual 보유의 당일 실현 손익은 분리하지 않는다. 측정이 쌓인 뒤 게이트 분모·귀속 정책을 바꿀지는 사용자 결정이다. 시험 `tests/test_strategy_attributed_daily_pnl.py`.
+
 ### 스마트 사이드카 (일일 손실 구간별)
 | 구간 | 동작 |
 |------|------|

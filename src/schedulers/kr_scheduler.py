@@ -5958,7 +5958,7 @@ JSON:
                             try:
                                 _pf = bot.engine.portfolio
                                 if _pf.daily_start_unrealized_pnl == 0 and _pf.positions:
-                                    _pf.daily_start_unrealized_pnl = _pf.total_unrealized_pnl
+                                    _pf.mark_daily_start()
                                     bot.engine._save_daily_stats()
                                     logger.warning(
                                         f"[DailyStats] 미실현 기준선 재설정: "

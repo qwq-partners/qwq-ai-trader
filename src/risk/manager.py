@@ -392,13 +392,21 @@ class RiskManager:
             equity = portfolio.total_equity
             effective_pnl = getattr(portfolio, 'effective_daily_pnl', portfolio.daily_pnl)
             daily_pnl_pct = float(effective_pnl / equity * 100) if equity > 0 else 0.0
+            # 2026-10-10 59차: 사용자 manual 보유의 당일 변동을 뺀 전략 귀속 손익을 병기한다.
+            # 판정은 계좌 전체(effective_pnl) 그대로 — 10/8 신호 2건이 보유 -27.6%로 막힌 것을
+            # 사후에 "전략 손실 0%" 로 셀 수 있게 하는 측정이지 한도 완화가 아니다.
+            _attr = getattr(portfolio, 'strategy_effective_daily_pnl', None)
+            if _attr is not None and equity > 0:
+                _attr_txt = f"전략 귀속 {float(_attr / equity * 100):+.1f}%"
+            else:
+                _attr_txt = "전략 귀속 미측정"
 
             if self.market == "KR":
                 hard_stop_pct = max(self.config.daily_max_loss_pct * 2.5, 5.0)
                 if daily_pnl_pct <= -hard_stop_pct:
-                    return False, f"일일 손실 한도 초과 ({daily_pnl_pct:.1f}%) - 전면 차단"
+                    return False, f"일일 손실 한도 초과 ({daily_pnl_pct:.1f}%, {_attr_txt}) - 전면 차단"
                 else:
-                    return False, f"일일 손실 한도 도달 ({daily_pnl_pct:.1f}%) - 방어적 전략만 허용"
+                    return False, f"일일 손실 한도 도달 ({daily_pnl_pct:.1f}%, {_attr_txt}) - 방어적 전략만 허용"
             else:
                 return False, f"Daily loss limit reached ({daily_pnl_pct:.1f}%)"
 

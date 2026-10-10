@@ -923,8 +923,8 @@ class UnifiedEngine:
 
     def reset_daily_stats(self):
         """일일 통계 초기화"""
-        # 미실현 손익 기준선 기록 (전일 보유 포지션의 미실현 손익을 기준점으로)
-        self.portfolio.daily_start_unrealized_pnl = self.portfolio.total_unrealized_pnl
+        # 미실현 손익 기준선 기록 (전일 보유 포지션의 미실현 손익을 기준점으로, 종목별 포함)
+        self.portfolio.mark_daily_start()
         self.portfolio.daily_pnl = Decimal("0")
         self.portfolio.daily_trades = 0
         self._counted_buy_order_ids.clear()
@@ -952,6 +952,12 @@ class UnifiedEngine:
                 # 2026-08-05 P2: 재시작 시 부분체결 중복 카운트 방지 세트도 복원 대상
                 "counted_buy_order_ids": sorted(self._counted_buy_order_ids),
             }
+            # 59차 귀속 기준선 — 미확보(None)면 키를 쓰지 않아 복원 시에도 None 으로 남는다
+            if self.portfolio.daily_start_unrealized_by_symbol is not None:
+                data["daily_start_unrealized_by_symbol"] = {
+                    s: str(v) for s, v in self.portfolio.daily_start_unrealized_by_symbol.items()
+                }
+                data["daily_start_manual_symbols"] = sorted(self.portfolio.daily_start_manual_symbols)
             # 원자적 쓰기 (2026-08-04 P0) — 쓰기 도중 크래시로 파손된 파일이
             # 재시작 시 "장중 풀 리셋"을 트리거하던 경로 차단
             _tmp = self._DAILY_STATS_PATH.with_suffix(".tmp")
@@ -979,6 +985,27 @@ class UnifiedEngine:
             # 같은 날짜일 때만 복원 (위에서 날짜 불일치 시 이미 return)
             self._counted_buy_order_ids = set(data.get("counted_buy_order_ids", []))
             self._daily_stats_restored = True  # 기준선 백필(restore_daily_pnl_from_db) 스킵 플래그
+            # 59차 귀속 기준선(측정 전용)은 핵심 복원과 분리 — 이 필드가 파손돼도 위 게이트 기준선·복원
+            # 완료 상태를 건드리지 않는다(파손이 DB 백필을 유발해 기준선을 덮어쓰면 게이트가 바뀜).
+            self.portfolio.daily_start_unrealized_by_symbol = None
+            self.portfolio.daily_start_manual_symbols = set()
+            try:
+                _by_sym = data.get("daily_start_unrealized_by_symbol")
+                if isinstance(_by_sym, dict):
+                    _parsed = {str(s): Decimal(str(v)) for s, v in _by_sym.items()}
+                    if any(not v.is_finite() for v in _parsed.values()):
+                        raise ValueError("non-finite baseline")
+                    _manual = data.get("daily_start_manual_symbols")
+                    # 문자열 목록이고 전부 종목별 기준선에 있는 종목이어야 한다 — 아니면 귀속 전체를 미확보로
+                    if (not isinstance(_manual, list)
+                            or any(not isinstance(s, str) or s not in _parsed for s in _manual)):
+                        raise ValueError(f"manual symbols invalid: {type(_manual).__name__}")
+                    self.portfolio.daily_start_unrealized_by_symbol = _parsed
+                    self.portfolio.daily_start_manual_symbols = set(_manual)
+            except Exception as _ae:
+                self.portfolio.daily_start_unrealized_by_symbol = None
+                self.portfolio.daily_start_manual_symbols = set()
+                logger.warning(f"[DailyStats] 귀속 기준선 복원 실패 → 미측정으로 유지: {_ae}")
             logger.info(
                 f"[DailyStats] 복원 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원, "
                 f"시작미실현={self.portfolio.daily_start_unrealized_pnl:+,.0f}원, "
@@ -1029,7 +1056,7 @@ class UnifiedEngine:
                 and self.portfolio.positions):
             _baseline = self.portfolio.total_unrealized_pnl
             if _baseline != Decimal("0"):
-                self.portfolio.daily_start_unrealized_pnl = _baseline
+                self.portfolio.mark_daily_start()
                 logger.info(
                     f"[DailyStats] 미실현 기준선 백필: {_baseline:+,.0f}원 "
                     f"(JSON 미복원 → 일일손실 게이트 오염 방지)"
