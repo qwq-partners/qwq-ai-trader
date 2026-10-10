@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-10 — 60차 수량 추적·거절 기록(PR 대기·운영 미배포):** 10월8일 005490 수량 0 의 구성(전략 잔여 예산 약 57만 추정 → 손실 반감 ×0.5 → soft-reject ×0.5 → 20만 클램프 → 3주 보정 예산 초과)을 재현했고, `_calculate_position_size` 가 단계별 `size_trace` 를 메타에 남기며 수량 0 거절이 `signal_events` 에 `G3_size` 로 기록된다. G3 거절·수량 0 행에 `signal_id`(관측 원장 조인 키)와 쿨다운 소진 사실을 적는다. **쿨다운 의미 확정: 스크리너 30분·일일 2회는 큐 삽입 시 소진(신호 시도), 엔진 30초는 수량 0·pending 에서만.** 계산 결과·게이트·관측 원장 계약은 불변. 상세 CHANGELOG 60차, `docs/risk/risk-and-exit.md`.
+> **2026-10-10 — 60차 수량 추적·거절 기록(PR 대기·운영 미배포):** 10월8일 005490 수량 0 의 구성(gap 운영 예산 5% 80.9만 → 손실 반감 ×0.5 → ATR×soft-reject 배율 0.4675 → 변동성 타게팅 ×0.754 = 142,499원, 로그값 일치 → 20만 클램프 → 3주 보정 예산 초과)을 재현했고, `_calculate_position_size` 가 단계별 `size_trace` 를 메타에 남기며 수량 0 거절이 `signal_events` 에 `G3_size` 로 기록된다. G3 거절·수량 0 행에 `signal_id`(관측 원장 조인 키)와 쿨다운 소진 사실을 적는다. **쿨다운 의미 확정: 스크리너 30분·일일 2회는 큐 삽입 시 소진(신호 시도), 엔진 30초는 수량 0·pending 에서만.** 계산 결과·게이트·관측 원장 계약은 불변. 상세 CHANGELOG 60차, `docs/risk/risk-and-exit.md`.
 
 > **2026-10-10 21:57 KST — 59차 배포 완료:** 사용자 승인으로 main `0907faa`(PR #160)를 `local_deploy.sh`로 배포했다(verify 4697 passed/2 skipped/2 xfailed, 롤백 없음). **PID 752297**/NRestarts 0·기준자본 확정·새 PID 오류 0·pending `[]`·실행 원장 ready·override/매수 중지 보존. 옛 `engine_daily_stats.json`을 복원했으므로 다음 거래일 `일일 통계 초기화` 전까지 거부 사유는 `전략 귀속 미측정`이 정상(점검 항목 monitoring-checkpoints 59차). 소비된 10월8일 drop-in(`entry-capture.conf`, once 창 경과·영수증 소비)은 그대로이며 일반 기동으로 확인됐다. 다음은 58차 2번(실제 매수 가능 후보 판별).
 

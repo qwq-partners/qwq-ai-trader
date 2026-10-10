@@ -1602,20 +1602,33 @@ class RiskManager:
     # ─────────────────────────────────────────────────────────────
     _sig_log_consecutive_failures: int = 0  # 연속 실패 카운터 (클래스 변수)
 
-    def _size_block_record(self, event: SignalEvent) -> tuple:
-        """수량 0 거절을 신호 원장에 남길 (사유, 메타) — 60차.
+    # 큐 삽입 직후 스크리너 30분 쿨다운(_screening_signal_cooldown)을 갱신하는 발행 경로 (kr_scheduler).
+    # live_screening 은 종목당 일일 진입 횟수(_daily_entry_count)도 함께 소진한다.
+    _SCREENER_COOLDOWN_SOURCES = frozenset({"live_screening", "intraday_quality", "sector_surge"})
 
-        사유는 ``size_zero:<size_trace.stop>`` 이고 메타에는 단계별 trace 와 쿨다운 소진 사실을 적는다.
-        수량 0 경로는 엔진 30초 쿨다운을 소진하고, live_screening 신호는 큐 삽입 시점에 스크리너
-        30분 쿨다운·일일 진입 횟수를 이미 소진했다(주문 성공과 무관).
+    def _rejection_metadata(self, event: SignalEvent, requested_quantity: Optional[int] = None,
+                            *, engine_cooldown_consumed: bool) -> Dict[str, Any]:
+        """신호 뒤 거절(수량 0·G3) 행에 공통으로 붙이는 메타 — 60차.
+
+        size_trace 와 요청 수량, 그리고 이 거절이 어떤 쿨다운을 소진했는지를 적는다. 스크리너 쿨다운은
+        발행 경로가 큐 삽입 시점에 이미 소진한 사실(주문 성공과 무관)이고, 엔진 30초 쿨다운은 수량 0 과
+        pending 생성에서만 소진된다(G3 거절은 미소진).
         """
+        return {
+            "size_trace": (event.metadata or {}).get("size_trace"),
+            "requested_quantity": requested_quantity,
+            "engine_cooldown_consumed": engine_cooldown_consumed,
+            "screening_cooldown_consumed": event.source in self._SCREENER_COOLDOWN_SOURCES,
+            "daily_entry_count_consumed": event.source == "live_screening",
+        }
+
+    def _size_block_record(self, event: SignalEvent) -> tuple:
+        """수량 0 거절을 신호 원장에 남길 (사유, 메타) — 60차. 사유는 ``size_zero:<size_trace.stop>``."""
         trace = (event.metadata or {}).get("size_trace") or {}
         reason = f"size_zero:{trace.get('stop', 'quantity_zero')}"
-        return reason, {
-            "size_trace": trace,
-            "engine_cooldown_consumed": True,
-            "screening_cooldown_consumed": event.source == "live_screening",
-        }
+        meta = self._rejection_metadata(event, 0, engine_cooldown_consumed=True)
+        meta["size_trace"] = trace
+        return reason, meta
 
     def _log_sig(
         self, event: SignalEvent, *,
@@ -1651,6 +1664,8 @@ class RiskManager:
         _meta_extra = {
             # 60차: 관측 원장 `signal` 레코드(candidate_id↔signal_id)와 조인하는 키
             "signal_id": getattr(event, "id", None),
+            # 60차: 수량 계산 단계 추적 — passed 행에도 남아 체결/미체결과 무관하게 사이징 근거가 보존된다
+            "size_trace": meta.get("size_trace"),
             "reason": getattr(event, "reason", ""),
             "indicators": meta.get("indicators", {}),
             # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
@@ -2267,11 +2282,8 @@ class RiskManager:
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
                                   block_reason=reason,
-                                  metadata={"size_trace": (event.metadata or {}).get("size_trace"),
-                                            "requested_quantity": order.quantity,
-                                            # 60차: G3 거절은 엔진 30초 쿨다운을 소진하지 않는다(pending 미생성)
-                                            "engine_cooldown_consumed": False,
-                                            "screening_cooldown_consumed": event.source == "live_screening"})
+                                  metadata=self._rejection_metadata(
+                                      event, order.quantity, engine_cooldown_consumed=False))
                     self.engine._pending_sector_map.pop(order.symbol, None)
                     return None
 
@@ -2288,7 +2300,9 @@ class RiskManager:
             if not can_trade:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
                 self._log_sig(event, event_type="blocked", block_gate="G3_risk",
-                              block_reason=reason)
+                              block_reason=reason,
+                              metadata=self._rejection_metadata(
+                                  event, order.quantity, engine_cooldown_consumed=False))
                 self.engine._pending_sector_map.pop(order.symbol, None)
                 return None
 
