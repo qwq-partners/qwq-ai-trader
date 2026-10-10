@@ -1602,6 +1602,34 @@ class RiskManager:
     # ─────────────────────────────────────────────────────────────
     _sig_log_consecutive_failures: int = 0  # 연속 실패 카운터 (클래스 변수)
 
+    # 큐 삽입 직후 스크리너 30분 쿨다운(_screening_signal_cooldown)을 갱신하는 발행 경로 (kr_scheduler).
+    # live_screening 은 종목당 일일 진입 횟수(_daily_entry_count)도 함께 소진한다.
+    _SCREENER_COOLDOWN_SOURCES = frozenset({"live_screening", "intraday_quality", "sector_surge"})
+
+    def _rejection_metadata(self, event: SignalEvent, requested_quantity: Optional[int] = None,
+                            *, engine_cooldown_consumed: bool) -> Dict[str, Any]:
+        """신호 뒤 거절(수량 0·G3) 행에 공통으로 붙이는 메타 — 60차.
+
+        size_trace 와 요청 수량, 그리고 이 거절이 어떤 쿨다운을 소진했는지를 적는다. 스크리너 쿨다운은
+        발행 경로가 큐 삽입 시점에 이미 소진한 사실(주문 성공과 무관)이고, 엔진 30초 쿨다운은 수량 0 과
+        pending 생성에서만 소진된다(G3 거절은 미소진).
+        """
+        return {
+            "size_trace": (event.metadata or {}).get("size_trace"),
+            "requested_quantity": requested_quantity,
+            "engine_cooldown_consumed": engine_cooldown_consumed,
+            "screening_cooldown_consumed": event.source in self._SCREENER_COOLDOWN_SOURCES,
+            "daily_entry_count_consumed": event.source == "live_screening",
+        }
+
+    def _size_block_record(self, event: SignalEvent) -> tuple:
+        """수량 0 거절을 신호 원장에 남길 (사유, 메타) — 60차. 사유는 ``size_zero:<size_trace.stop>``."""
+        trace = (event.metadata or {}).get("size_trace") or {}
+        reason = f"size_zero:{trace.get('stop', 'quantity_zero')}"
+        meta = self._rejection_metadata(event, 0, engine_cooldown_consumed=True)
+        meta["size_trace"] = trace
+        return reason, meta
+
     def _log_sig(
         self, event: SignalEvent, *,
         event_type: str,
@@ -1634,6 +1662,10 @@ class RiskManager:
         _adj_score = float(adjusted_score) if adjusted_score is not None else _event_score
         _regime = regime if regime else getattr(self.engine, "_market_regime", "")
         _meta_extra = {
+            # 60차: 관측 원장 `signal` 레코드(candidate_id↔signal_id)와 조인하는 키
+            "signal_id": getattr(event, "id", None),
+            # 60차: 수량 계산 단계 추적 — passed 행에도 남아 체결/미체결과 무관하게 사이징 근거가 보존된다
+            "size_trace": meta.get("size_trace"),
             "reason": getattr(event, "reason", ""),
             "indicators": meta.get("indicators", {}),
             # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
@@ -2162,6 +2194,10 @@ class RiskManager:
                 f"[리스크] 포지션 크기 0: {event.symbol} "
                 f"(자산={equity:,.0f}, 현금={cash:,.0f}, 가격={event.price})"
             )
+            if event.side == OrderSide.BUY:
+                _reason, _meta = self._size_block_record(event)
+                self._log_sig(event, event_type="blocked", block_gate="G3_size",
+                              block_reason=_reason, metadata=_meta)
             self._last_signal_time[event.symbol] = datetime.now()
             return None
 
@@ -2245,7 +2281,9 @@ class RiskManager:
                             )
                     logger.warning(f"주문 거부 (리스크 검증): {order.symbol} - {reason}")
                     self._log_sig(event, event_type="blocked", block_gate="G3_risk",
-                                  block_reason=reason)
+                                  block_reason=reason,
+                                  metadata=self._rejection_metadata(
+                                      event, order.quantity, engine_cooldown_consumed=False))
                     self.engine._pending_sector_map.pop(order.symbol, None)
                     return None
 
@@ -2262,7 +2300,9 @@ class RiskManager:
             if not can_trade:
                 logger.warning(f"주문 거부: {order.symbol} - {reason}")
                 self._log_sig(event, event_type="blocked", block_gate="G3_risk",
-                              block_reason=reason)
+                              block_reason=reason,
+                              metadata=self._rejection_metadata(
+                                  event, order.quantity, engine_cooldown_consumed=False))
                 self.engine._pending_sector_map.pop(order.symbol, None)
                 return None
 
@@ -2920,7 +2960,25 @@ class RiskManager:
         return base_pct, max_pct, pool_equity
 
     def _calculate_position_size(self, signal: SignalEvent) -> int:
-        """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)"""
+        """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)
+
+        2026-10-10 60차: 단계별 값·배율·중단 사유를 ``signal.metadata["size_trace"]`` 에 남긴다(측정 전용,
+        계산 결과 불변). 10/8 005490 이 어느 배율로 2,910,664→142,499원이 됐는지 로그로는 알 수 없었다.
+        """
+        trace: Dict[str, Any] = {}
+        if signal.metadata is None:
+            signal.metadata = {}
+        signal.metadata["size_trace"] = trace
+
+        def _rec(**kw) -> None:
+            for _k, _v in kw.items():
+                trace[_k] = str(_v) if isinstance(_v, Decimal) else _v
+
+        def _stop(reason: str) -> int:
+            trace["stop"] = reason
+            trace["quantity"] = 0
+            return 0
+
         equity = self.engine.portfolio.total_equity
         price = signal.price or Decimal("0")
 
@@ -2929,7 +2987,7 @@ class RiskManager:
                 f"[리스크] price/equity 체크 실패: {signal.symbol} "
                 f"(price={price}, equity={equity})"
             )
-            return 0
+            return _stop("price_or_equity_invalid")
 
         _is_core = (signal.strategy == StrategyType.CORE_HOLDING)
 
@@ -2962,7 +3020,7 @@ class RiskManager:
                 logger.warning(
                     f"[리스크] {signal.symbol} {signal.strategy} 비활성 전략 → 포지션 0% 차단"
                 )
-                return 0
+                return _stop("strategy_inactive")
             base_pct = strat_pct / 100
             max_pct = self.config.max_position_pct / 100
             # 코어 예산 예약: 비코어 전략은 코어 점유분 제외한 풀에서 계산
@@ -2982,7 +3040,9 @@ class RiskManager:
                         f"[리스크] 코어 점유로 가용 풀 없음: {signal.symbol} "
                         f"(equity={equity:,.0f}, core={core_actual:,.0f})"
                     )
-                    return 0
+                    return _stop("core_pool_exhausted")
+
+        _rec(equity=equity, price=price, pool_equity=pool_equity, is_core=_is_core)
 
         # 신호 강도에 따른 조정 (2천만원 규모: 과잉 집중 방지)
         multiplier = {
@@ -3004,11 +3064,14 @@ class RiskManager:
         if not _is_core:
             available -= self._get_core_reserve()
         if available <= 0:
-            return 0
+            _rec(available=available)
+            return _stop("no_available_cash")
 
         # 전략별 비율 기반 포지션 금액 (전략별 상한 존중)
         max_value = equity * Decimal(str(self.config.max_position_pct / 100))
         position_value = min(pct_value, max_value, available)
+        _rec(strength_multiplier=multiplier, pct_value=pct_value, available=available,
+             max_value=max_value, base_value=position_value)
 
         # 위험 기반 사이징 (2026-09-13 리뷰 권고 ③ — 백테스트 A/B에서 두 윈도우 모두 게이트를 통과한
         # 유일한 축, docs/research/exit-policy-ab-2026-09.md). 건당 자본 위험 = risk_per_trade_pct.
@@ -3034,17 +3097,19 @@ class RiskManager:
                     f"[리스크] {signal.symbol} risk 모드 진입 손절 해석기 미배선 → 신규 매수 거부 "
                     f"(fail-closed, nominal 자동 복귀 없음)"
                 )
-                return 0
+                return _stop("entry_stop_resolver_missing")
             try:
                 _stop_decision = _resolver(signal.strategy.value if signal.strategy else None)
             except Exception as _stop_err:
                 # 실제 SL 까지 무효(0·음수·NaN)면 주문을 만들지 않는다 — pending 미생성
                 logger.error(f"[리스크] {signal.symbol} 진입 손절 해석 실패 → 신규 매수 거부: {_stop_err}")
-                return 0
+                return _stop("entry_stop_resolve_failed")
             _risk_stop = _stop_decision.stop_pct
             _risk_value = equity * Decimal(str(self.config.risk_per_trade_pct)) / _risk_stop
             max_value = min(max_value, equity * Decimal(str(self.config.risk_max_position_pct / 100)))
             position_value = min(_risk_value, max_value, available)
+            _rec(risk_stop_pct=float(_risk_stop), risk_value=_risk_value, risk_max_value=max_value,
+                 after_risk_sizing=position_value)
             if signal.signal is not None:
                 # canary 계측 태그 — signal_events/trades 메타로 risk 모드 체결을 골라내 원장 R·초과수익 판정
                 # (T3 가 entry_risk 스냅샷으로 확장 예정 — 키 충돌 없음)
@@ -3071,11 +3136,14 @@ class RiskManager:
                 _current = (self.engine.portfolio.get_strategy_allocation(_strat_name)
                             + self._pending_strategy_notional(_strat_name))
                 _remaining = _budget_cap - _current
+                _rec(strategy_budget_cap=_budget_cap, strategy_current=_current,
+                     strategy_remaining=_remaining)
                 if _remaining <= 0:
-                    return 0
+                    return _stop("strategy_budget_exhausted")
                 if position_value > _remaining:
                     position_value = _remaining
                 _strategy_remaining = _remaining
+                _rec(after_strategy_budget=position_value)
 
         # 하락장 포지션 축소 (일일 손실 한도 50% 도달 시 포지션 50% 축소)
         effective_pnl = self.engine.portfolio.effective_daily_pnl
@@ -3084,9 +3152,12 @@ class RiskManager:
             half_limit = -self.config.daily_max_loss_pct / 2
             if daily_pnl_pct <= half_limit:
                 position_value *= Decimal("0.5")
+            _rec(daily_loss_pct=round(daily_pnl_pct, 3),
+                 daily_loss_half_applied=daily_pnl_pct <= half_limit)
 
         # 배율 적용 전 값 보존 (2026-08-05 P2: min_position_value 바닥 클램프 판단용)
         _pre_mult_value = position_value
+        _rec(pre_multiplier_value=_pre_mult_value)
 
         # 전략별 포지션 배율
         position_multiplier = 1.0
@@ -3105,6 +3176,7 @@ class RiskManager:
                 position_value * Decimal(str(position_multiplier)), max_value
             )
 
+        _rec(position_multiplier=float(position_multiplier), after_position_multiplier=position_value)
         # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
         try:
             from ..utils.calendar_seasonality import calendar_multiplier
@@ -3113,6 +3185,7 @@ class RiskManager:
                 position_value = min(
                     position_value * Decimal(str(_cal_mult)), max_value
                 )
+            _rec(calendar_multiplier=float(_cal_mult), after_calendar=position_value)
         except Exception as _cal_err:
             logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
 
@@ -3126,6 +3199,7 @@ class RiskManager:
             )
             if _vt_mult < 1.0:
                 position_value = position_value * Decimal(str(_vt_mult))
+            _rec(vol_targeting_multiplier=float(_vt_mult), after_vol_targeting=position_value)
         except Exception as _vt_err:
             logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
 
@@ -3138,6 +3212,7 @@ class RiskManager:
                 position_value = min(
                     position_value * Decimal(str(_tc_mult)), max_value
                 )
+            _rec(team_multiplier=float(_tc_mult), after_team=position_value)
         except Exception as _tc_err:
             logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
 
@@ -3145,6 +3220,7 @@ class RiskManager:
         # (2026-08-20 Codex P1 — max_value만 재적용하면 부스트가 전략 캡을 초과)
         if _strategy_remaining is not None and position_value > _strategy_remaining:
             position_value = _strategy_remaining
+        _rec(after_overlays=position_value)
 
         # 최소 포지션 금액 체크
         min_val = Decimal(str(self.config.min_position_value))
@@ -3159,12 +3235,15 @@ class RiskManager:
                     f"({position_value:,.0f} < {min_val:,.0f}) → 최소 금액으로 클램프"
                 )
                 position_value = min_val
+                _rec(min_position_value=min_val, min_clamped=True)
             else:
-                return 0
+                _rec(min_position_value=min_val, min_clamped=False)
+                return _stop("below_min_position_value")
 
         # 수량 계산 (시장가 주문 시 상한가 +30% 증거금 고려)
         quantity = int(position_value / price)
         max_qty_for_market = int(available / (price * Decimal("1.3")))
+        _rec(position_value=position_value, quantity_raw=quantity, max_qty_for_market=max_qty_for_market)
         if max_qty_for_market < quantity:
             quantity = max_qty_for_market
 
@@ -3177,10 +3256,11 @@ class RiskManager:
                     and cost_for_min <= available and cost_for_min <= max_value
                     and (_strategy_remaining is None or cost_for_min <= _strategy_remaining)):
                 quantity = MIN_QTY_FOR_PARTIAL_EXIT
+                _rec(min3_applied=True)
             elif quantity >= 1:
                 pass
             else:
-                return 0
+                return _stop("quantity_below_one")
 
         # 위험 모드 최종 불변조건 (2026-09-14 T2): 모든 오버레이(강도·전략 배율·캘린더·변동성·팀)·
         # 최소금액·최소 3주 보정이 끝난 뒤 planned_risk(q) = (price×q + 매수수수료) × net SL% ≤ equity × 위험%.
@@ -3198,12 +3278,13 @@ class RiskManager:
                     f"net SL {float(_stop_decision.stop_pct):.2f}%, 매수수수료 포함)"
                 )
                 quantity = _q_cap
+                _rec(risk_quantity_cap=_q_cap)
                 if quantity * price < min_val:
                     logger.info(
                         f"[리스크] {signal.symbol} 위험 상한 축소 후 최소 금액 미달 "
                         f"({quantity * price:,.0f} < {min_val:,.0f}) → 매수 거부"
                     )
-                    return 0
+                    return _stop("risk_cap_below_min_position_value")
 
         # 진입 위험 스냅샷 (2026-09-14 T3/F4) — 최종 수량이 확정된 뒤 event.metadata 와
         # event.signal.metadata **양쪽 별개 복사본**에 넣는다. 주문 캐시(_pending_signal_cache)는
@@ -3230,6 +3311,7 @@ class RiskManager:
                     signal.signal.metadata = {}
                 signal.signal.metadata["entry_risk"] = dict(_snapshot)
 
+        _rec(quantity=max(quantity, 0))
         return max(quantity, 0)
 
     def _entry_risk_config_hash(self) -> str:

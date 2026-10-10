@@ -50,7 +50,8 @@ DEFAULT_LOOKBACK_DAYS = 90    # 조회 범위 (달력일)
 MIN_SAMPLES_PER_GATE = 30     # 게이트별 최소 표본 — 고유 symbol-day 기준 (2026-09-13: 5는 n=6에도 판정을 냈음)
 STOP_CLIP_PCT = -5.0          # '회피한 손실'은 손절 구조상 이 아래로 실현되지 않는다 — 클립 수익률로 판정
 BENCH_SYMBOL = "069500"       # KODEX200 — 절대수익 대신 초과수익으로 판정 (베타 혼동 방지)
-CAPACITY_GATES = ("G5_",)     # 예산·현금 게이트는 선별이 아니라 용량 제약 — 판정 대상 아님
+# 예산·현금 게이트와 수량 0(G3_size, 2026-10-10 60차: 자본·정수 수량 제약)은 선별이 아니라 용량 제약 — 판정 대상 아님
+CAPACITY_GATES = ("G5_", "G3_size")
 # 점수 조정 후 통과(penalized) 버킷 — 차단 게이트가 아니라 완화/강화 판정 대상 아님 (2026-09-29, `|wiki` 접미사 포함)
 ADJUSTED_PASS_PREFIXES = ("BOOST_", "PEN_")
 

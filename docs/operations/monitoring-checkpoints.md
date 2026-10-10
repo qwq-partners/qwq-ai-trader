@@ -1,5 +1,14 @@
 # 모니터링 체크포인트
 
+## 60차 — 수량 추적·거절 기록 (PR 대기, 운영 미배포)
+
+정본: CHANGELOG 60차 · `docs/risk/risk-and-exit.md` "신호 뒤 수량·리스크 거절의 기록" 절. 계산 결과·게이트 불변, 기록만 추가.
+
+- [x] 10월8일 005490 수량 0 재현 시험(반감 ×0.5·soft-reject ×0.5·20만 클램프 → `quantity_below_one`) 통과.
+- [ ] 배포 뒤 첫 BUY 신호: `signal_events` 최신 행 메타에 `signal_id`·`size_trace`(quantity 또는 stop) 가 있는지 1건 확인.
+- [ ] 수량 0 또는 G3 거절 발생 시 `block_gate` 가 `G3_size`/`G3_risk` 이고 `engine_cooldown_consumed`·`screening_cooldown_consumed` 값이 문서 의미와 맞는지 확인.
+- [ ] 다음 관측 판독에서 신호 trace 의 계좌 수준 값(`available`·`max_value`)으로 비신호 후보의 '자본 상한만으로 1주 불가' 를 확정해 분모를 보고한다(필요조건, 전략 예산은 같은 전략에만 적용).
+
 ## 59차 — 전략 귀속 일일 손익 측정 (PR #160, 10월10일 21:57 배포 · PID 752297)
 
 정본: CHANGELOG 59차 · `docs/risk/risk-and-exit.md` 일일 한도 절. 10월8일 신호 2건 차단의 원인(수동 보유 087010 당일 -24.7%)을 전략 귀속 손익으로 분리해 **기록만** 한다. 게이트 판정 불변.
