@@ -147,6 +147,10 @@ class EquityTracker:
         # 포지션 수익률순 정렬 (높은->낮은)
         positions_list.sort(key=lambda x: x.get('pnl_pct', 0), reverse=True)
 
+        # 59차: 전략 귀속 손익 — None(미측정)은 그대로 None, 0 은 0 (falsy 혼동 금지)
+        _strategy_pnl = getattr(portfolio, "strategy_effective_daily_pnl", None)
+        strategy_pnl = float(_strategy_pnl) if _strategy_pnl is not None else None
+
         snapshot = EquitySnapshot(
             date=today,
             total_equity=total_equity,
@@ -159,10 +163,7 @@ class EquityTracker:
             win_rate=round(win_rate, 1),
             positions=positions_list,
             timestamp=now.isoformat(),
-            strategy_effective_daily_pnl=(
-                float(_strategy_pnl) if (_strategy_pnl := getattr(
-                    portfolio, "strategy_effective_daily_pnl", None)) is not None else None
-            ),
+            strategy_effective_daily_pnl=strategy_pnl,
         )
 
         # JSON 파일 저장

@@ -948,13 +948,16 @@ class UnifiedEngine:
                 "date": date.today().isoformat(),
                 "daily_pnl": str(self.portfolio.daily_pnl),
                 "daily_start_unrealized_pnl": str(self.portfolio.daily_start_unrealized_pnl),
-                "daily_start_unrealized_by_symbol": {
-                    s: str(v) for s, v in self.portfolio.daily_start_unrealized_by_symbol.items()
-                },
                 "daily_trades": self.portfolio.daily_trades,
                 # 2026-08-05 P2: 재시작 시 부분체결 중복 카운트 방지 세트도 복원 대상
                 "counted_buy_order_ids": sorted(self._counted_buy_order_ids),
             }
+            # 59차 귀속 기준선 — 미확보(None)면 키를 쓰지 않아 복원 시에도 None 으로 남는다
+            if self.portfolio.daily_start_unrealized_by_symbol is not None:
+                data["daily_start_unrealized_by_symbol"] = {
+                    s: str(v) for s, v in self.portfolio.daily_start_unrealized_by_symbol.items()
+                }
+                data["daily_start_manual_symbols"] = sorted(self.portfolio.daily_start_manual_symbols)
             # 원자적 쓰기 (2026-08-04 P0) — 쓰기 도중 크래시로 파손된 파일이
             # 재시작 시 "장중 풀 리셋"을 트리거하던 경로 차단
             _tmp = self._DAILY_STATS_PATH.with_suffix(".tmp")
@@ -978,14 +981,28 @@ class UnifiedEngine:
                 return
             self.portfolio.daily_pnl = Decimal(data["daily_pnl"])
             self.portfolio.daily_start_unrealized_pnl = Decimal(data["daily_start_unrealized_pnl"])
-            # 옛 파일에는 없음 → {} 유지 → strategy_effective_daily_pnl 이 None(미측정)으로 남는다
-            self.portfolio.daily_start_unrealized_by_symbol = {
-                s: Decimal(v) for s, v in (data.get("daily_start_unrealized_by_symbol") or {}).items()
-            }
             self.portfolio.daily_trades = int(data.get("daily_trades", 0))
             # 같은 날짜일 때만 복원 (위에서 날짜 불일치 시 이미 return)
             self._counted_buy_order_ids = set(data.get("counted_buy_order_ids", []))
             self._daily_stats_restored = True  # 기준선 백필(restore_daily_pnl_from_db) 스킵 플래그
+            # 59차 귀속 기준선(측정 전용)은 핵심 복원과 분리 — 이 필드가 파손돼도 위 게이트 기준선·복원
+            # 완료 상태를 건드리지 않는다(파손이 DB 백필을 유발해 기준선을 덮어쓰면 게이트가 바뀜).
+            self.portfolio.daily_start_unrealized_by_symbol = None
+            self.portfolio.daily_start_manual_symbols = set()
+            try:
+                _by_sym = data.get("daily_start_unrealized_by_symbol")
+                if isinstance(_by_sym, dict):
+                    _parsed = {str(s): Decimal(str(v)) for s, v in _by_sym.items()}
+                    if any(not v.is_finite() for v in _parsed.values()):
+                        raise ValueError("non-finite baseline")
+                    self.portfolio.daily_start_unrealized_by_symbol = _parsed
+                    self.portfolio.daily_start_manual_symbols = {
+                        str(s) for s in (data.get("daily_start_manual_symbols") or [])
+                    }
+            except Exception as _ae:
+                self.portfolio.daily_start_unrealized_by_symbol = None
+                self.portfolio.daily_start_manual_symbols = set()
+                logger.warning(f"[DailyStats] 귀속 기준선 복원 실패 → 미측정으로 유지: {_ae}")
             logger.info(
                 f"[DailyStats] 복원 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원, "
                 f"시작미실현={self.portfolio.daily_start_unrealized_pnl:+,.0f}원, "

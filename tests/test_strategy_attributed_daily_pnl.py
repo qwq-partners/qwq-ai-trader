@@ -1,7 +1,7 @@
 """59차(2026-10-10) — manual 보유의 당일 변동을 뺀 '전략 귀속 일일 손익' 측정.
 
-10/8 관측: 사용자 수동 보유 087010 이 -24.7% 로 출발해 신규 전략 신호 3건이 모두
-일일 손실 한도(-27.6%)에 막혔다. 게이트 판정은 계좌 전체 그대로 두고(한도 완화 없음),
+10/8 관측: 사용자 수동 보유 087010 이 -24.7% 로 출발해 신규 전략 신호 3건 중 2건이
+일일 손실 한도(-27.6%)에 막혔다(나머지 1건은 수량 0). 게이트 판정은 계좌 전체 그대로 두고(한도 완화 없음),
 거부 사유·자산 스냅샷에 전략 귀속 손익을 함께 남긴다.
 """
 import json
@@ -54,10 +54,31 @@ def test_no_manual_positions_equals_effective():
 def test_legacy_total_only_baseline_is_unmeasured():
     """옛 engine_daily_stats.json(총합 기준선만) 복원 상태 — 귀속 불가는 None 이어야 한다(0 금지)."""
     pf = _pf(manual_now="-5000000", manual_start="-1000000")
-    pf.daily_start_unrealized_by_symbol = {}
+    pf.daily_start_unrealized_by_symbol = None
     assert pf.daily_start_unrealized_pnl == Decimal("-1000000")
     assert pf.manual_daily_unrealized_delta is None
     assert pf.strategy_effective_daily_pnl is None
+
+
+def test_legacy_baseline_with_zero_total_is_still_unmeasured():
+    """리뷰 P2: 시작 manual +100만 / 전략 -100만 = 총합 0 — 총합 0 을 '확보' 로 추론하면 안 된다."""
+    pf = _pf(manual_now="1000000", manual_start="1000000",
+             strat_now="-1000000", strat_start="-1000000")
+    assert pf.daily_start_unrealized_pnl == Decimal("0")
+    pf.daily_start_unrealized_by_symbol = None          # 옛 파일 복원 상태
+    pf.daily_start_manual_symbols = set()
+    assert pf.effective_daily_pnl == Decimal("0")
+    assert pf.strategy_effective_daily_pnl is None       # 가격 불변인데 -100만 으로 표시되면 결함
+
+
+def test_manual_sold_by_user_intraday_keeps_its_baseline():
+    """리뷰 P2: 시작 미실현 -100만 manual 종목을 사용자가 수동 매도 → 동기화가 포지션 제거.
+    effective_daily_pnl 은 +100만 으로 뛰지만(기존 한계) 전략 귀속은 0 이어야 한다."""
+    pf = _pf(manual_now="-1000000", manual_start="-1000000")
+    del pf.positions["087010"]
+    assert pf.effective_daily_pnl == Decimal("1000000")
+    assert pf.manual_daily_unrealized_delta == Decimal("1000000")
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
 
 
 def test_manual_position_opened_today_counts_fully():
@@ -86,7 +107,7 @@ def test_gate_reason_marks_unmeasured_on_legacy_baseline(monkeypatch, tmp_path):
     risk = RiskManager(RiskConfig(daily_max_loss_pct=5.0), Decimal("20000000"), market="KR")
     risk.set_cash_verification(True)
     pf = _pf(manual_now="-5000000", manual_start="-1000000")
-    pf.daily_start_unrealized_by_symbol = {}
+    pf.daily_start_unrealized_by_symbol = None
     allowed, reason = risk.can_open_position(
         "005930", OrderSide.BUY, 10, Decimal("70000"), pf, strategy_type="sepa_trend")
     assert not allowed and "전략 귀속 미측정" in reason
@@ -100,12 +121,45 @@ def test_daily_stats_roundtrip_keeps_per_symbol_baseline(tmp_path):
     saved = json.loads(fake._DAILY_STATS_PATH.read_text())
     assert {k: Decimal(v) for k, v in saved["daily_start_unrealized_by_symbol"].items()} == {
         "087010": Decimal("-1000000"), "005930": Decimal("0")}
+    assert saved["daily_start_manual_symbols"] == ["087010"]
 
     fresh = SimpleNamespace(portfolio=Portfolio(), _counted_buy_order_ids=set(),
                             _DAILY_STATS_PATH=fake._DAILY_STATS_PATH, _daily_stats_restored=False)
     UnifiedEngine.restore_daily_stats(fresh)
     assert fresh.portfolio.daily_start_unrealized_by_symbol == {
         "087010": Decimal("-1000000"), "005930": Decimal("0")}
+    assert fresh.portfolio.daily_start_manual_symbols == {"087010"}
+
+
+def test_unmeasured_baseline_is_not_written_and_restores_as_none(tmp_path):
+    pf = Portfolio(daily_start_unrealized_pnl=Decimal("-1000000"))   # 옛 파일에서 복원된 상태 가정
+    fake = SimpleNamespace(portfolio=pf, _counted_buy_order_ids=set(),
+                           _DAILY_STATS_PATH=tmp_path / "engine_daily_stats.json")
+    UnifiedEngine._save_daily_stats(fake)
+    assert "daily_start_unrealized_by_symbol" not in json.loads(fake._DAILY_STATS_PATH.read_text())
+    fresh = SimpleNamespace(portfolio=Portfolio(), _counted_buy_order_ids=set(),
+                            _DAILY_STATS_PATH=fake._DAILY_STATS_PATH, _daily_stats_restored=False)
+    UnifiedEngine.restore_daily_stats(fresh)
+    assert fresh.portfolio.daily_start_unrealized_by_symbol is None
+
+
+def test_corrupt_attribution_field_does_not_break_core_restore(tmp_path):
+    """리뷰 P1: 귀속 필드 파손(null 값)이 핵심 복원·복원 완료 플래그를 깨면 DB 백필이 총합
+    기준선(유효한 0)을 덮어써 게이트가 바뀐다 — 귀속만 미측정으로 떨어져야 한다."""
+    from datetime import date
+    path = tmp_path / "engine_daily_stats.json"
+    path.write_text(json.dumps({"date": date.today().isoformat(), "daily_pnl": "-50000",
+                                "daily_start_unrealized_pnl": "0", "daily_trades": 3,
+                                "counted_buy_order_ids": ["o1"],
+                                "daily_start_unrealized_by_symbol": {"087010": None}}))
+    fresh = SimpleNamespace(portfolio=Portfolio(), _counted_buy_order_ids=set(),
+                            _DAILY_STATS_PATH=path, _daily_stats_restored=False)
+    UnifiedEngine.restore_daily_stats(fresh)
+    assert fresh._daily_stats_restored is True
+    assert fresh.portfolio.daily_pnl == Decimal("-50000")
+    assert fresh.portfolio.daily_start_unrealized_pnl == Decimal("0")
+    assert fresh.portfolio.daily_trades == 3 and fresh._counted_buy_order_ids == {"o1"}
+    assert fresh.portfolio.daily_start_unrealized_by_symbol is None
 
 
 def test_restore_without_per_symbol_key_leaves_empty_dict(tmp_path):
@@ -118,4 +172,4 @@ def test_restore_without_per_symbol_key_leaves_empty_dict(tmp_path):
                             _DAILY_STATS_PATH=path, _daily_stats_restored=False)
     UnifiedEngine.restore_daily_stats(fresh)
     assert fresh.portfolio.daily_start_unrealized_pnl == Decimal("-1000000")
-    assert fresh.portfolio.daily_start_unrealized_by_symbol == {}
+    assert fresh.portfolio.daily_start_unrealized_by_symbol is None

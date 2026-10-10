@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum, auto
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Set
 import uuid
 
 
@@ -340,7 +340,10 @@ class Portfolio:
     daily_start_unrealized_pnl: Decimal = Decimal("0")  # 당일 시작 시점 미실현 손익
     # 종목별 당일 시작 미실현 (2026-10-10 59차) — strategy=manual 보유의 당일 변동을
     # 전략 귀속 손익에서 분리하기 위한 기준선. 게이트 판정은 여전히 총합을 쓴다.
-    daily_start_unrealized_by_symbol: Dict[str, Decimal] = field(default_factory=dict)
+    # None = 기준선 미확보(옛 파일 복원·미기록). {} 는 '보유 없이 시작' 이라는 확보된 사실이다.
+    daily_start_unrealized_by_symbol: Optional[Dict[str, Decimal]] = None
+    # 시작 시점에 manual 이었던 종목 — 당일 사용자가 수동 매도해 포지션이 사라져도 그 기준선을 귀속에 남긴다.
+    daily_start_manual_symbols: Set[str] = field(default_factory=set)
 
     MANUAL_STRATEGY = "manual"  # 사용자 수동 보유 — 초과수익 원장의 manual_entry 제외 기준과 같다
 
@@ -388,12 +391,20 @@ class Portfolio:
         당일 새로 생긴 manual 보유는 기준선 0 → 미실현 전체가 당일 변동으로 잡힌다.
         """
         manual = [p for p in self.positions.values() if p.strategy == self.MANUAL_STRATEGY]
-        if not manual:
-            return Decimal("0")
-        if not self.daily_start_unrealized_by_symbol and self.daily_start_unrealized_pnl != 0:
-            return None
         starts = self.daily_start_unrealized_by_symbol
-        return sum((p.unrealized_pnl - starts.get(p.symbol, Decimal("0")) for p in manual), Decimal("0"))
+        if starts is None:
+            # 기준선 미확보: manual 보유가 있으면 귀속 불가(None). 없으면 0 — 시작 뒤 사라진 manual 은
+            # 이 상태에서 알 수 없으므로 분리하지 않는다(effective_daily_pnl 과 같은 한계).
+            return None if manual else Decimal("0")
+        total = Decimal("0")
+        for p in manual:
+            total += p.unrealized_pnl - starts.get(p.symbol, Decimal("0"))
+        # 시작엔 manual 이었는데 지금 없는 종목(사용자 수동 매도 → 동기화 제거): effective_daily_pnl 의
+        # 총합 기준선에는 여전히 들어 있으므로 같은 몫(0 − 시작 미실현)을 manual 귀속으로 뺀다.
+        for sym in self.daily_start_manual_symbols:
+            if sym not in self.positions:
+                total -= starts.get(sym, Decimal("0"))
+        return total
 
     @property
     def strategy_effective_daily_pnl(self) -> Optional[Decimal]:
@@ -411,6 +422,9 @@ class Portfolio:
         self.daily_start_unrealized_pnl = self.total_unrealized_pnl
         self.daily_start_unrealized_by_symbol = {
             s: p.unrealized_pnl for s, p in self.positions.items()
+        }
+        self.daily_start_manual_symbols = {
+            s for s, p in self.positions.items() if p.strategy == self.MANUAL_STRATEGY
         }
 
     @property
