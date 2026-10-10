@@ -51,3 +51,14 @@ def test_thin_control_avoidance_mark_uses_absolute_return_not_excess():
     assert "절대 기준 회피 구간(절대 -4.00%" in lines["G_dn_abs"], lines["G_dn_abs"]
     assert "절대 기준 회피 구간(절대 -3.00%" in lines["G_edge"], lines["G_edge"]
     assert "절대 기준 회피 구간" not in lines["G_above"], lines["G_above"]
+
+
+def test_size_zero_gate_is_capacity_not_selection():
+    """60차: 수량 0(G3_size, |wiki 포함)은 자본·정수 수량 제약이라 '게이트 완화 검토' 대상이 아니다 — G3_risk 는 그대로."""
+    ga = GatePerformanceAnalyzer.__new__(GatePerformanceAnalyzer)
+    ga.horizon_days = 20
+    gates = {"PASSED(대조군)": _g(1.0), "G3_size": _g(10.0), "G3_size|wiki": _g(10.0), "G3_risk": _g(10.0)}
+    lines = {v.split(":")[0].lstrip("⚠️✅➖ "): v for v in ga._build_verdicts(gates) if not v.startswith("[")}
+    for b in ("G3_size", "G3_size|wiki"):
+        assert "용량 게이트" in lines[b] and "완화" not in lines[b], lines[b]
+    assert "완화" in lines["G3_risk"], lines["G3_risk"]

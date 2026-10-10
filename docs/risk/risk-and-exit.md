@@ -220,7 +220,7 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
 
 **쿨다운·횟수의 의미(동작 변경 없음, 기록만).** live_screening·intraday_quality·sector_surge 는 큐에 넣는 순간 공유 `_screening_signal_cooldown`(30분)을 소진하고, live_screening 은 `_daily_entry_count`(종목당 기본 2회, 약세 조건 1회)도 소진한다 — 주문 성공이 아니라 신호 시도의 소진이다(`screening_cooldown_consumed`·`daily_entry_count_consumed`). 엔진 `_SIGNAL_COOLDOWN_SECONDS`(30초)는 수량 0(`engine_cooldown_consumed=True`)과 pending 생성에서 소진되고 G3 리스크 거절(`False`)에서는 소진되지 않는다. 거절 뒤 같은 스캔 창 안 재검토를 허용하려면 중복 억제를 같이 설계해 단일 변경으로 비교한다.
 
-**매수 가능 분모(오프라인, 필요조건 검사).** 같은 스캔에서 신호가 난 후보의 trace 가 `available`·`max_value`·`strategy_remaining`·`min_position_value` 를 담으므로, 비신호 후보에 대해 `price > min(available/1.3, max_value, strategy_remaining)` 이면 **자본 상한만으로 1주 불가**로 확정해 분모에 남긴다. 반대 방향은 성립하지 않는다 — 상한 이하라도 반감·배율·최소금액·3주 보정으로 0주가 될 수 있고(10월8일 005490 이 그 예), 전략 예산·배율은 후보별로 다르다. 실제 가능 여부는 후보별 사이징·게이트를 재현해야 하며 이 검사는 '확실히 불가능한 후보'를 걸러내는 하한이다. 신호가 없는 스캔은 미판정.
+**매수 가능 분모(오프라인, 필요조건 검사).** 같은 스캔에서 신호가 난 후보의 trace 가 담은 값 중 **계좌 수준 값만**(`available`·`max_value`) 다른 후보에 옮길 수 있다. 비신호 후보에 대해 `price > min(available/1.3, max_value)` 이면 자본 상한만으로 1주 불가로 확정해 분모에 남긴다. `strategy_remaining` 은 전략별 값이라 **같은 전략의 후보에만** 쓰고, 다른 전략이면 그 항을 빼거나 미판정으로 둔다(gap 잔여 50만으로 60만짜리 SEPA 후보를 불가로 분류하면 오류). 반대 방향은 성립하지 않는다 — 상한 이하라도 반감·배율·최소금액·3주 보정으로 0주가 될 수 있고(10월8일 005490 이 그 예), 배율은 후보별로 다르다. 실제 가능 여부는 후보별 사이징·게이트를 재현해야 하며 이 검사는 '확실히 불가능한 후보'를 걸러내는 하한이다. 신호가 없는 스캔은 미판정.
 
 ### 스마트 사이드카 (일일 손실 구간별)
 | 구간 | 동작 |
