@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-11 — 61차 거절 뒤 재검토 정책 결정(문서만):** 10월8일 쿨다운 차단 20건은 전부 09:53 창 밖에서 거절된 3종목의 재시도, 일일 횟수 차단 0. 횟수/쿨다운 미소진 변경은 order_ready 를 못 바꾸고 LLM 호출만 늘려 **코드 변경 보류**. 재검토 조건(일시적 거절 사유 뒤 `daily_count`/`cooldown` 차단으로 기회가 실제로 사라진 날)과 다음 관측 창 메모(첫 신호 라운드 전에 열기)는 [문서](docs/research/rejection-retry-policy-2026-10-11.md). 58차 다음 순서 2번 완료, 다음은 3번(선정 또는 진입 가설 하나의 비용 후 검증).
+
 > **2026-10-11 01:01 KST — 60차 배포 완료:** 사용자 승인으로 main `83be6ac`(PR #162)를 `local_deploy.sh`로 배포했다(운영 verify 4705 passed/2 skipped/2 xfailed, 롤백 없음). **PID 787781**/NRestarts 0·기준자본 확정·새 PID 오류 0·pending `[]`·실행 원장 ready·override/매수 중지 보존. 이제부터 모든 BUY 신호 원장 행에 `size_trace`·`signal_id` 가 남고 수량 0 은 `G3_size` 로 기록된다(점검 monitoring-checkpoints 60차). 다음은 다음 관측 판독에서 분모 보고, 거절 뒤 재검토 허용은 중복 억제와 함께 별도 단일 변경.
 
 > **2026-10-10 — 60차 수량 추적·거절 기록(PR #162, 10월11일 01:01 배포):** 10월8일 005490 수량 0 의 구성(gap 운영 예산 5% 80.9만 → 손실 반감 ×0.5 → ATR×soft-reject 배율 0.4675 → 변동성 타게팅 ×0.754 = 142,499원, 로그값 일치 → 20만 클램프 → 3주 보정 예산 초과)을 재현했고, `_calculate_position_size` 가 단계별 `size_trace` 를 메타에 남기며 수량 0 거절이 `signal_events` 에 `G3_size` 로 기록된다. G3 거절·수량 0 행에 `signal_id`(관측 원장 조인 키)와 쿨다운 소진 사실을 적는다. **쿨다운 의미 확정: 스크리너 30분·일일 2회는 큐 삽입 시 소진(신호 시도), 엔진 30초는 수량 0·pending 에서만.** 계산 결과·게이트·관측 원장 계약은 불변. 상세 CHANGELOG 60차, `docs/risk/risk-and-exit.md`.
