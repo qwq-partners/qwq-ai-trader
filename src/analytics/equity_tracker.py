@@ -30,6 +30,9 @@ class EquitySnapshot:
     win_rate: float                    # 당일 승률 (%)
     positions: List[Dict[str, Any]] = field(default_factory=list)  # 보유 종목 상세
     timestamp: str = ""                # ISO 타임스탬프
+    # 2026-10-10 59차: 엔진 실효 손익에서 manual 보유 당일 변동을 뺀 전략 귀속 손익(원).
+    # daily_pnl(전일 스냅샷 대비 자산 변동)과 정의가 다르며, 측정 불가(옛 기준선)면 None.
+    strategy_effective_daily_pnl: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -156,6 +159,10 @@ class EquityTracker:
             win_rate=round(win_rate, 1),
             positions=positions_list,
             timestamp=now.isoformat(),
+            strategy_effective_daily_pnl=(
+                float(_strategy_pnl) if (_strategy_pnl := getattr(
+                    portfolio, "strategy_effective_daily_pnl", None)) is not None else None
+            ),
         )
 
         # JSON 파일 저장

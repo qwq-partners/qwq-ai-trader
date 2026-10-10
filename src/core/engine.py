@@ -923,8 +923,8 @@ class UnifiedEngine:
 
     def reset_daily_stats(self):
         """일일 통계 초기화"""
-        # 미실현 손익 기준선 기록 (전일 보유 포지션의 미실현 손익을 기준점으로)
-        self.portfolio.daily_start_unrealized_pnl = self.portfolio.total_unrealized_pnl
+        # 미실현 손익 기준선 기록 (전일 보유 포지션의 미실현 손익을 기준점으로, 종목별 포함)
+        self.portfolio.mark_daily_start()
         self.portfolio.daily_pnl = Decimal("0")
         self.portfolio.daily_trades = 0
         self._counted_buy_order_ids.clear()
@@ -948,6 +948,9 @@ class UnifiedEngine:
                 "date": date.today().isoformat(),
                 "daily_pnl": str(self.portfolio.daily_pnl),
                 "daily_start_unrealized_pnl": str(self.portfolio.daily_start_unrealized_pnl),
+                "daily_start_unrealized_by_symbol": {
+                    s: str(v) for s, v in self.portfolio.daily_start_unrealized_by_symbol.items()
+                },
                 "daily_trades": self.portfolio.daily_trades,
                 # 2026-08-05 P2: 재시작 시 부분체결 중복 카운트 방지 세트도 복원 대상
                 "counted_buy_order_ids": sorted(self._counted_buy_order_ids),
@@ -975,6 +978,10 @@ class UnifiedEngine:
                 return
             self.portfolio.daily_pnl = Decimal(data["daily_pnl"])
             self.portfolio.daily_start_unrealized_pnl = Decimal(data["daily_start_unrealized_pnl"])
+            # 옛 파일에는 없음 → {} 유지 → strategy_effective_daily_pnl 이 None(미측정)으로 남는다
+            self.portfolio.daily_start_unrealized_by_symbol = {
+                s: Decimal(v) for s, v in (data.get("daily_start_unrealized_by_symbol") or {}).items()
+            }
             self.portfolio.daily_trades = int(data.get("daily_trades", 0))
             # 같은 날짜일 때만 복원 (위에서 날짜 불일치 시 이미 return)
             self._counted_buy_order_ids = set(data.get("counted_buy_order_ids", []))
@@ -1029,7 +1036,7 @@ class UnifiedEngine:
                 and self.portfolio.positions):
             _baseline = self.portfolio.total_unrealized_pnl
             if _baseline != Decimal("0"):
-                self.portfolio.daily_start_unrealized_pnl = _baseline
+                self.portfolio.mark_daily_start()
                 logger.info(
                     f"[DailyStats] 미실현 기준선 백필: {_baseline:+,.0f}원 "
                     f"(JSON 미복원 → 일일손실 게이트 오염 방지)"

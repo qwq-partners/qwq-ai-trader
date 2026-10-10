@@ -338,6 +338,11 @@ class Portfolio:
     daily_pnl: Decimal = Decimal("0")
     daily_trades: int = 0
     daily_start_unrealized_pnl: Decimal = Decimal("0")  # 당일 시작 시점 미실현 손익
+    # 종목별 당일 시작 미실현 (2026-10-10 59차) — strategy=manual 보유의 당일 변동을
+    # 전략 귀속 손익에서 분리하기 위한 기준선. 게이트 판정은 여전히 총합을 쓴다.
+    daily_start_unrealized_by_symbol: Dict[str, Decimal] = field(default_factory=dict)
+
+    MANUAL_STRATEGY = "manual"  # 사용자 수동 보유 — 초과수익 원장의 manual_entry 제외 기준과 같다
 
     @property
     def total_position_value(self) -> Decimal:
@@ -376,6 +381,39 @@ class Portfolio:
         return self.daily_pnl + (self.total_unrealized_pnl - self.daily_start_unrealized_pnl)
 
     @property
+    def manual_daily_unrealized_delta(self) -> Optional[Decimal]:
+        """strategy=manual 보유의 당일 미실현 변동 (측정 전용).
+
+        종목별 기준선이 없는 옛 상태(총합 기준선만 복원)에서는 귀속이 불가능하므로 None.
+        당일 새로 생긴 manual 보유는 기준선 0 → 미실현 전체가 당일 변동으로 잡힌다.
+        """
+        manual = [p for p in self.positions.values() if p.strategy == self.MANUAL_STRATEGY]
+        if not manual:
+            return Decimal("0")
+        if not self.daily_start_unrealized_by_symbol and self.daily_start_unrealized_pnl != 0:
+            return None
+        starts = self.daily_start_unrealized_by_symbol
+        return sum((p.unrealized_pnl - starts.get(p.symbol, Decimal("0")) for p in manual), Decimal("0"))
+
+    @property
+    def strategy_effective_daily_pnl(self) -> Optional[Decimal]:
+        """실효 일일 손익에서 manual 보유의 당일 변동을 뺀 전략 귀속 손익.
+
+        일일 손실 게이트는 이 값을 쓰지 않는다(계좌 전체 한도 유지). 거부 사유·자산
+        스냅샷에 함께 기록해 "보유 손실이 신규 전략을 막은 날"을 셀 수 있게 한다.
+        manual 보유의 당일 실현 손익은 분리하지 않는다(봇은 그 보유를 청산하지 않는다).
+        """
+        delta = self.manual_daily_unrealized_delta
+        return None if delta is None else self.effective_daily_pnl - delta
+
+    def mark_daily_start(self) -> None:
+        """당일 시작 미실현 기준선(총합+종목별)을 현재 값으로 기록. reset·재시작 백필 공용."""
+        self.daily_start_unrealized_pnl = self.total_unrealized_pnl
+        self.daily_start_unrealized_by_symbol = {
+            s: p.unrealized_pnl for s, p in self.positions.items()
+        }
+
+    @property
     def cash_ratio(self) -> float:
         """현금 비율"""
         if self.total_equity == 0:
@@ -386,7 +424,7 @@ class Portfolio:
         """일일 통계 초기화 (장 시작 시 호출)"""
         self.daily_pnl = Decimal("0")
         self.daily_trades = 0
-        self.daily_start_unrealized_pnl = self.total_unrealized_pnl
+        self.mark_daily_start()
 
     def get_strategy_allocation(self, strategy: str) -> Decimal:
         """특정 전략의 현재 총 배분 금액 (보유 포지션 시장가치 합계)"""
