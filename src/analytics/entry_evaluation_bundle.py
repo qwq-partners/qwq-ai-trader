@@ -40,7 +40,7 @@ def load_json_bytes(raw):
     return json.loads(raw, object_pairs_hook=unique, parse_constant=constant)
 
 
-def _reviewed_quotes(review, context, records, binding):
+def _reviewed_quotes(review, context, records, binding, *, analysis_as_of=None):
     if review is None:
         return {}
     if (not isinstance(review, dict) or set(review) != {'version', 'dataset_kind', 'binding', 'quotes'}
@@ -76,6 +76,8 @@ def _reviewed_quotes(review, context, records, binding):
         start = _timestamp(item['valid_from'], 'valid_from')
         end = _timestamp(item['valid_until'], 'valid_until')
         reviewed = _timestamp(item['reviewed_at'], 'reviewed_at')
+        if analysis_as_of is not None and reviewed > _timestamp(analysis_as_of, 'analysis_as_of'):
+            raise ValueError('session review after analysis_as_of')
         if (not start <= received <= observed < end or reviewed <= observed
                 or len({t.astimezone(KST).date() for t in (start, received, observed, end)}) != 1):
             raise ValueError('session evidence interval/review time mismatch')
@@ -93,7 +95,8 @@ def _quote_task(quote, reviewed):
             'reviewed_assertion': deepcopy(evidence)}
 
 
-def build_evaluation_bundle(study_bytes, observations, *, study_sha256, session_review=None):
+def build_evaluation_bundle(study_bytes, observations, *, study_sha256, session_review=None,
+                            analysis_as_of=None):
     """Preserve the original cohort, select first quotes, then reuse existing evaluators.
 
 The original study bytes are verified and decoded here, including for direct callers.
@@ -113,9 +116,9 @@ No session assertion is inferred from clock time, channel or hour code.
                'capture_id': _text(journal.get('capture_id'), 'capture_id'),
                'evaluation_epoch': context['evaluation_epoch']}
     # Reuse validation of original IDs, sequence, population, study and epoch.
-    prepare_input(context, observations, [])
+    prepare_input(context, observations, [], analysis_as_of=analysis_as_of)
     records = observations['records']
-    reviewed = _reviewed_quotes(session_review, context, records, binding)
+    reviewed = _reviewed_quotes(session_review, context, records, binding, analysis_as_of=analysis_as_of)
     policy = MarkoutPolicy.from_dict(context['markout_policy'])
     fixed_at = max(policy.fixed_at, _timestamp(context['capital_policy']['fixed_at'], 'capital.fixed_at'))
     quotes = [r for r in records if r['kind'] == 'ws_quote']
@@ -161,13 +164,13 @@ No session assertion is inferred from clock time, channel or hour code.
             tasks.append(task)
             if 'quote_session' in item or 'markout_session' in item:
                 inputs.append(item)
-    original = prepare_input(context, observations, inputs)
+    original = prepare_input(context, observations, inputs, analysis_as_of=analysis_as_of)
     variants = []
     for bps in (0, 10, 30):
         derived = deepcopy(context)
         derived['policy'].update(entry_slippage_bps=str(bps), exit_slippage_bps=str(bps))
         variants.append({'slippage_bps_each': bps, 'derived_context_sha256': _digest(derived),
-                         'result': prepare_input(derived, observations, inputs)})
+                         'result': prepare_input(derived, observations, inputs, analysis_as_of=analysis_as_of)})
     reports = [original['report']] + [v['result']['report'] for v in variants]
     pairs = [r['counts']['paired_outcomes'] for r in reports]
     status = ('no_comparable_pairs' if min(pairs) == 0 else
@@ -175,6 +178,7 @@ No session assertion is inferred from clock time, channel or hour code.
                                                for r in reports) else 'partial_price_diagnostic')
     from .selection_basis import build_selection_report
     return {'version': 'entry-evaluation-bundle-v1', 'dataset_kind': context['dataset_kind'],
+            'analysis_as_of': original['analysis_as_of'],
             'binding': binding, 'review_tasks': tasks, 'evaluation_inputs': inputs,
             'selection_basis': build_selection_report(observations),
             'original': original, 'sensitivity': variants,

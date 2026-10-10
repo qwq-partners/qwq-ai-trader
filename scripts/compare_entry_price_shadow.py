@@ -43,7 +43,10 @@ def main(argv=None) -> int:
     parser.add_argument("--study", type=Path, help="수집 시 지문을 고정한 context JSON")
     parser.add_argument("--evaluation-inputs", type=Path, help="후보별 명시 보충자료 JSON 배열")
     parser.add_argument("--max-journal-bytes", type=int, help="원장 읽기 상한(바이트)")
+    parser.add_argument("--analysis-as-of", help="aware audit timestamp for received observations only")
     args = parser.parse_args(argv)
+    if args.input is not None and args.analysis_as_of is not None:
+        parser.error("--analysis-as-of requires --observations or --journal")
     supplements = (args.study, args.evaluation_inputs, args.max_journal_bytes)
     if args.journal is not None and any(v is None for v in supplements):
         parser.error("--journal에는 --study, --evaluation-inputs, --max-journal-bytes가 모두 필요")
@@ -57,14 +60,15 @@ def main(argv=None) -> int:
                                           object_pairs_hook=_unique_keys)
             observations = read_observation_journal(args.journal, max_bytes=args.max_journal_bytes,
                 expected_study_sha256=hashlib.sha256(study_bytes).hexdigest())
-            result = prepare_input(context, observations, evaluation_inputs)
+            result = prepare_input(context, observations, evaluation_inputs, analysis_as_of=args.analysis_as_of)
             result["journal"] = observations["journal"]
         else:
             path = args.input if args.input is not None else args.observations
             payload = json.loads(path.read_text(encoding="utf-8"),
                                  parse_constant=_reject_constant, object_pairs_hook=_unique_keys)
             if args.observations is not None:
-                result = prepare_input(payload["context"], payload["observations"], payload["evaluation_inputs"])
+                result = prepare_input(payload["context"], payload["observations"], payload["evaluation_inputs"],
+                                       analysis_as_of=args.analysis_as_of)
             else:
                 result = build_report(payload)
         output = json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)

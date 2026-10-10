@@ -147,14 +147,16 @@ def _scenario(base, evaluation, context, quotes, reviewed, fixed_at, max_gap, sl
                         'complete_stop_minus_hold_net_pnl': str(known_delta) if known and known == len(rows) else None}}
 
 
-def build_exit_comparison(study_bytes, observations, *, study_sha256, comparison_policy, session_review=None):
+def build_exit_comparison(study_bytes, observations, *, study_sha256, comparison_policy, session_review=None,
+                          analysis_as_of=None):
     """Build a fail-closed initial-stop diagnostic for the original full cohort."""
     base = build_evaluation_bundle(study_bytes, observations, study_sha256=study_sha256,
-                                   session_review=session_review)
+                                   session_review=session_review, analysis_as_of=analysis_as_of)
     context = _mapping(load_json_bytes(study_bytes), 'study')
     markout = MarkoutPolicy.from_dict(context['markout_policy'])
     fixed_at, max_gap = _policy(comparison_policy, study_sha256, Decimal(markout.horizon_seconds))
-    reviewed = _reviewed_quotes(session_review, context, observations['records'], base['binding'])
+    reviewed = _reviewed_quotes(session_review, context, observations['records'], base['binding'],
+                                analysis_as_of=analysis_as_of)
     quotes = [record for record in observations['records'] if record.get('kind') == 'ws_quote']
     original = _scenario(base, base['original'], context, quotes, reviewed, fixed_at, max_gap)
     sensitivity = []
@@ -167,6 +169,7 @@ def build_exit_comparison(study_bytes, observations, *, study_sha256, comparison
             'binding': {**deepcopy(base['binding']), 'comparison_policy': deepcopy(comparison_policy),
                         'comparison_policy_sha256': _digest(comparison_policy),
                         'session_review_sha256': base['session_review_sha256']},
+            'analysis_as_of': base['analysis_as_of'],
             'original': original, 'sensitivity': sensitivity,
             'source_authenticity_verified': False, 'production_eligible': False,
             'profitability_established': False, 'account_return': None,

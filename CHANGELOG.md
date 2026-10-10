@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-10 — 10월8일 관측 판독·오프라인 분석 시각 분리(58차)
+
+- 08:55 활성화/11:10 봉인·누락0·9스캔279후보 발생/40종목·KIS호가22,177·신호3·order_ready0을 확인했다. 신호 이후 수동로그 대조는 손실제한2/정수수량0 종료1이며 신규신호와 기존집중보유의 영향을 구분했다.
+- 정상 종료 후 봉인을 경제성 cutoff와 비교하던 오류를 `analysis_as_of`로 분리했다. prepare/bundle/exit/window 경로와 CLI에 전달하며 원래 study·경제성시각을 보존하고 window 종료 이후레코드는 거부한다. 인자 미지정은기존검증을 유지한다.
+- 실제 bundle은279 unknown(신호없음276/주문준비없음3),비교쌍0·순손익차null이다. 미리 정한 수량/자본이 없으므로 호가만으로 수익을 만들지 않는다. 원본·계좌정보는Git밖에보존하고익명집계만기록했다.
+- 통합 전체4683 passed/2 skipped/2 known xfailed·문법/비밀정보 검사·격리0,독립322검사/P0·P1·P2 없음.
+- [전체 PDS·검증·다음 최적화 순서](docs/research/current-engine-signal-result-2026-10-10.md), [수정 계획](docs/superpowers/plans/2026-10-10-observation-audit-clock.md). 운영1d45704/PID621030·설정·매수중지를 유지하며 이번 배포·재시작·새예약은없다.
+
 ## 2026-10-07 — 신호 관측 용량·배포·예약 완료(57차)
 
 - base11.6만/stress23.2만 호가 누락0·strict readback 완전, buffer 초과는30만 행 보존/2,413누락·불완전 봉인으로 검증했다. 12스캔·300k buffer·384MiB 프로필을 고정했다.

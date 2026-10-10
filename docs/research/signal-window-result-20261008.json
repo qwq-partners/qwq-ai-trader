@@ -1,0 +1,316 @@
+{
+  "schema": "signal-capture-aggregate-review-v1",
+  "capture_date": "2026-10-08",
+  "review_date": "2026-10-10",
+  "study_sha256": "d2fcbbf28aa9957c0402497b982fc8d83c935f7a9853ffbd410e6969af801bb1",
+  "journal_sha256": "0d2229602be0be6432f9993daa224b9bb0e3622da764d23221e911a870c7cea8",
+  "journal_bytes": 14657340,
+  "source_complete": true,
+  "incomplete_reasons": [],
+  "dropped_records": 0,
+  "record_counts": {
+    "quote_subscription": 22,
+    "ws_quote": 22177,
+    "scan": 9,
+    "selection_basis": 279,
+    "rest_quote": 14,
+    "entry_gate_trace": 279,
+    "signal": 3,
+    "emit_result": 3
+  },
+  "scan_count": 9,
+  "candidate_occurrences": 279,
+  "distinct_symbols": 40,
+  "quote_symbols": 4,
+  "selection_counts": {
+    "accounted": 279,
+    "cache_fallback": 0,
+    "candidates": 279,
+    "disabled": 0,
+    "expected": 279,
+    "missing_records": 0,
+    "recorded": 279,
+    "unavailable": 0
+  },
+  "source_term_count_distribution": {
+    "3": 5,
+    "2": 35,
+    "1": 239
+  },
+  "source_contribution_counts": {
+    "kis_institutional_buying": 180,
+    "kis_foreign_buying": 133,
+    "theme_news": 5,
+    "kis_fluctuation_rank": 6
+  },
+  "signals": [
+    {
+      "alias": "S1",
+      "signal_at": "2026-10-08T01:25:19.737536+00:00",
+      "quote_count_after_signal": 1881,
+      "first_quote_delay_seconds": 0.208399,
+      "quote_900s_after_first_exists": true,
+      "horizon_delay_seconds": 3.75788,
+      "source_terms": [
+        "kis_institutional_buying",
+        "kis_foreign_buying"
+      ],
+      "final_score": 100.0
+    },
+    {
+      "alias": "S2",
+      "signal_at": "2026-10-08T01:25:20.171351+00:00",
+      "quote_count_after_signal": 2684,
+      "first_quote_delay_seconds": 0.209244,
+      "quote_900s_after_first_exists": true,
+      "horizon_delay_seconds": 0.270699,
+      "source_terms": [
+        "kis_institutional_buying",
+        "kis_foreign_buying"
+      ],
+      "final_score": 90.23531638382437
+    },
+    {
+      "alias": "S3",
+      "signal_at": "2026-10-08T01:25:20.765190+00:00",
+      "quote_count_after_signal": 5779,
+      "first_quote_delay_seconds": 0.482909,
+      "quote_900s_after_first_exists": true,
+      "horizon_delay_seconds": 0.055123,
+      "source_terms": [
+        "kis_institutional_buying",
+        "kis_foreign_buying"
+      ],
+      "final_score": 76.52577124471642
+    }
+  ],
+  "signal_clock_diagnostics_are_economic_pairs": false,
+  "production_eligible": false,
+  "gate_counts": {
+    "blocked": 276,
+    "not_reached": 0,
+    "recorded": 279,
+    "signal_created": 3,
+    "total": 279,
+    "unavailable": 0,
+    "unknown": 0
+  },
+  "gate_stage_counts": {
+    "atr": {
+      "not_reached": 267,
+      "pass": 12
+    },
+    "batch_limit": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "broker": {
+      "pass": 279
+    },
+    "cash": {
+      "pass": 279
+    },
+    "chase": {
+      "fail": 9,
+      "not_reached": 267,
+      "pass": 3
+    },
+    "cooldown": {
+      "fail": 20,
+      "not_reached": 245,
+      "pass": 14
+    },
+    "daily_count": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "early_supply": {
+      "not_applicable": 12,
+      "not_reached": 267
+    },
+    "enabled": {
+      "pass": 279
+    },
+    "engine": {
+      "pass": 279
+    },
+    "entry_time": {
+      "pass": 279
+    },
+    "excluded": {
+      "not_reached": 245,
+      "pass": 34
+    },
+    "momentum_strength": {
+      "not_applicable": 12,
+      "not_reached": 267
+    },
+    "momentum_volume": {
+      "not_applicable": 12,
+      "not_reached": 267
+    },
+    "news": {
+      "not_reached": 267,
+      "pass": 12
+    },
+    "open_price": {
+      "not_reached": 267,
+      "pass": 12
+    },
+    "quote_fetch": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "quote_price": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "regime": {
+      "pass": 279
+    },
+    "risk_reward": {
+      "not_reached": 267,
+      "pass": 12
+    },
+    "rsi": {
+      "not_applicable": 12,
+      "not_reached": 267
+    },
+    "rt_max_change": {
+      "not_reached": 267,
+      "pass": 12
+    },
+    "rt_min_change": {
+      "fail": 2,
+      "not_reached": 265,
+      "pass": 12
+    },
+    "scan_change": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "score": {
+      "fail": 245,
+      "pass": 34
+    },
+    "sector": {
+      "not_applicable": 14,
+      "not_reached": 265
+    },
+    "session": {
+      "pass": 279
+    },
+    "signal_created": {
+      "not_reached": 276,
+      "pass": 3
+    },
+    "signal_limit": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "strategy": {
+      "not_reached": 265,
+      "pass": 14
+    },
+    "volume": {
+      "not_reached": 267,
+      "pass": 12
+    }
+  },
+  "post_signal_causes": {
+    "loss_guard_rejected": 2,
+    "zero_integer_quantity": 1,
+    "correlation": "manual symbol/time log join; not event-id-complete"
+  },
+  "economic_evaluation": {
+    "analysis_as_of": "2026-10-10T11:35:00+00:00",
+    "economic_as_of": "2026-10-08T02:10:00+00:00",
+    "counts": {
+      "allow": 0,
+      "baseline_cash": 0,
+      "cash": 0,
+      "in_scope": 279,
+      "out_of_scope": 0,
+      "paired_outcomes": 0,
+      "total": 279,
+      "unknown": 279
+    },
+    "summary": {
+      "complete_delta_net_pnl": null,
+      "known_avoided_loss": null,
+      "known_missed_gain": null,
+      "known_pair_delta_net_pnl": null
+    },
+    "readiness": {
+      "minimum_paired_outcomes_across_scenarios": 0,
+      "missing_required_session_evidence_candidates": 279,
+      "original_cohort_count": 279,
+      "profitability_pass": false,
+      "status": "no_comparable_pairs"
+    },
+    "review_task_blockers": {
+      "MISSING_OR_AMBIGUOUS_SIGNAL": 276,
+      "MISSING_OR_AMBIGUOUS_ORDER_READY": 3
+    },
+    "all_quote_review_tasks_empty": true,
+    "scenarios": [
+      {
+        "slippage_bps_each": 0,
+        "counts": {
+          "allow": 0,
+          "baseline_cash": 0,
+          "cash": 0,
+          "in_scope": 279,
+          "out_of_scope": 0,
+          "paired_outcomes": 0,
+          "total": 279,
+          "unknown": 279
+        },
+        "summary": {
+          "complete_delta_net_pnl": null,
+          "known_avoided_loss": null,
+          "known_missed_gain": null,
+          "known_pair_delta_net_pnl": null
+        }
+      },
+      {
+        "slippage_bps_each": 10,
+        "counts": {
+          "allow": 0,
+          "baseline_cash": 0,
+          "cash": 0,
+          "in_scope": 279,
+          "out_of_scope": 0,
+          "paired_outcomes": 0,
+          "total": 279,
+          "unknown": 279
+        },
+        "summary": {
+          "complete_delta_net_pnl": null,
+          "known_avoided_loss": null,
+          "known_missed_gain": null,
+          "known_pair_delta_net_pnl": null
+        }
+      },
+      {
+        "slippage_bps_each": 30,
+        "counts": {
+          "allow": 0,
+          "baseline_cash": 0,
+          "cash": 0,
+          "in_scope": 279,
+          "out_of_scope": 0,
+          "paired_outcomes": 0,
+          "total": 279,
+          "unknown": 279
+        },
+        "summary": {
+          "complete_delta_net_pnl": null,
+          "known_avoided_loss": null,
+          "known_missed_gain": null,
+          "known_pair_delta_net_pnl": null
+        }
+      }
+    ]
+  }
+}

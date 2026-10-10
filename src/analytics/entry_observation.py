@@ -445,11 +445,23 @@ def observation_population(records):
     return {"population_scope": "returned_screen_candidates"}
 
 
-def prepare_input(context: Mapping, observations: Mapping, evaluation_inputs: list) -> dict:
+def analysis_time(context: Mapping, analysis_as_of=None):
+    """Resolve an audit clock without changing the study's economic cutoff."""
+    cutoff = _timestamp(context.get("as_of"), "as_of")
+    audit = cutoff if analysis_as_of is None else _timestamp(analysis_as_of, "analysis_as_of")
+    if audit < cutoff:
+        raise ValueError("analysis_as_of precedes study.as_of")
+    return audit
+
+
+def prepare_input(context: Mapping, observations: Mapping, evaluation_inputs: list, *,
+                  analysis_as_of=None) -> dict:
     """후보 분모와 명시적 평가 입력을 ID로만 결합. 관측으로 승인/시각/수량을 추정하지 않는다."""
     if context.get("data_basis") == "received_snapshot":
         from .received_entry_input import prepare_received_input
-        return prepare_received_input(context, observations, evaluation_inputs)
+        return prepare_received_input(context, observations, evaluation_inputs, analysis_as_of=analysis_as_of)
+    if analysis_as_of is not None:
+        raise ValueError("analysis_as_of requires received_snapshot observations")
     payload = deepcopy(dict(context))
     payload["opportunities"] = []
     build_report(payload)  # 전역 비용·시점·정책 누락을 임의 기본값으로 채우지 않는다.
