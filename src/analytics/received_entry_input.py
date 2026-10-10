@@ -88,8 +88,11 @@ def _subscription_stream_complete(records, report_at):
         return False
 
 
-def prepare_received_input(context: Mapping, observations: Mapping, evaluation_inputs: list) -> dict:
+def prepare_received_input(context: Mapping, observations: Mapping, evaluation_inputs: list, *,
+                           analysis_as_of=None) -> dict:
     """관측 수량/손절과 명시 규약 연결. 자본은 명시 예산 또는 opt-in 관측 한도."""
+    from .entry_observation import analysis_time
+    audit_at = analysis_time(context, analysis_as_of)
     payload = deepcopy(dict(context))
     payload["opportunities"] = []
     if payload.get("data_basis") != "received_snapshot":
@@ -122,7 +125,7 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
     from .entry_gate_trace import SCAN_FIELDS as GATE_SCAN_FIELDS
     if any(isinstance(r,dict) and (r.get('kind')=='entry_gate_trace' or GATE_SCAN_FIELDS & set(r)) for r in records):
         from .entry_gate_report import build_gate_report
-        build_gate_report(observations,as_of=payload['as_of'])
+        build_gate_report(observations, as_of=audit_at.isoformat())
     capture = payload.get('capture', {})
     journal = observations.get('journal', {})
     if ((isinstance(capture, dict) and (capture.get('version') == 'runner-first-scan-v4'
@@ -133,7 +136,7 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
             or any(isinstance(r, dict) and 'frame_diagnostic' in r for r in records)):
         from .kis_frame_diagnostics import build_frame_report, validate_study_binding
         validate_study_binding(observations, payload)
-        build_frame_report(observations, as_of=payload['as_of'])
+        build_frame_report(observations, as_of=audit_at.isoformat())
     subscription_gap = not _subscription_stream_complete(records, report_at)
     # 정렬해서 자료를 복구하지 않는다. 원래 버퍼의 연속 순서가 없으면 연결 불가다.
     for seq, record in enumerate(records, 1):
@@ -296,7 +299,7 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
             row["assembly_reason"] = str(exc)
         payload["opportunities"].append(row)
     report = build_report(payload)
-    return {"payload": payload, "capture_complete": complete,
+    return {"payload": payload, "capture_complete": complete, "analysis_as_of": audit_at.isoformat(),
             **population,
             "ready_opportunities": report["counts"]["allow"] + report["counts"]["cash"],
             "missing_evaluation_inputs": len(candidates) - len(supplements), "report": report,

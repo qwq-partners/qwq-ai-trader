@@ -70,6 +70,11 @@ def validate_window_contract(context, observations=None):
             or capital.configuration_ref != s.get('configuration_ref')):
         raise ValueError('window time/capital policy binding mismatch')
     if observations is not None:
+        # Seal/audit time may be later; it never extends the captured market window.
+        # Prestart subscription ACKs remain valid evidence of an existing connection.
+        for record in observations['records']:
+            if _timestamp(record.get('observed_at'), 'window record observed_at') > end:
+                raise ValueError('window record observed_at after capture.end_at')
         if len(scans) > s['max_scans']:
             raise ValueError('window scan count exceeds study bound')
         for r in scans:

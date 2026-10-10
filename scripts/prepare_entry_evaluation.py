@@ -42,6 +42,7 @@ def main(argv=None):
     parser.add_argument('--session-review', type=Path)
     parser.add_argument('--exit-policy', type=Path,
                         help='strict same-entry initial-stop comparison policy JSON')
+    parser.add_argument('--analysis-as-of', help='aware audit timestamp; preserves study economic cutoff')
     args = parser.parse_args(argv)
     try:
         study_bytes, _ = _read_json(args.study)
@@ -49,12 +50,12 @@ def main(argv=None):
         observations = read_observation_journal(args.journal, max_bytes=args.max_journal_bytes,
                                                 expected_study_sha256=sha)
         review = _read_json(args.session_review)[1] if args.session_review is not None else None
-        result = build_evaluation_bundle(study_bytes, observations, study_sha256=sha, session_review=review)
+        result = build_evaluation_bundle(study_bytes, observations, study_sha256=sha, session_review=review, analysis_as_of=args.analysis_as_of)
         if args.exit_policy is not None:
             comparison_policy = _read_json(args.exit_policy)[1]
             result['exit_comparison'] = build_exit_comparison(
                 study_bytes, observations, study_sha256=sha, comparison_policy=comparison_policy,
-                session_review=review)
+                session_review=review, analysis_as_of=args.analysis_as_of)
         output = json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
     except (OSError, ValueError, UnicodeError, KeyError, TypeError, AttributeError, RecursionError) as exc:
         print(f'[평가입력 준비] 입력 오류: {exc}', file=sys.stderr)

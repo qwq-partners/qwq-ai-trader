@@ -63,7 +63,7 @@ def _bundle(day, *, unknown=False, empty=False, policy="policy-1"):
 def _install(monkeypatch, *, unknown=False, empty_dates=()):
     import src.analytics.entry_window_evaluation as mod
 
-    def fake(study, observations, *, study_sha256, session_review=None):
+    def fake(study, observations, *, study_sha256, session_review=None, analysis_as_of=None):
         day = observations["day"]
         return _bundle(day, unknown=unknown, empty=day in empty_dates)
 

@@ -339,20 +339,20 @@ def build_window_report(protocol: Mapping[str, Any], days: list[Mapping[str, Any
             and observations.get("incomplete_reasons") == [] and close_date_ok
         if not quality_ok:
             quality_failures.append(day_text)
-        bundle = build_evaluation_bundle(raw, observations, study_sha256=study_hash,
-                                         session_review=session_review)
-        if not isinstance(bundle, Mapping) or bundle.get("version") != "entry-evaluation-bundle-v1":
-            raise ValueError("invalid evaluation bundle")
-        binding = bundle.get("binding")
-        if bundle.get("dataset_kind") != dataset_kind or not isinstance(binding, Mapping) \
-                or binding.get("evaluation_epoch") != protocol["evaluation_epoch"]:
-            raise ValueError("bundle dataset/epoch mismatch")
         if session_review is not None:
             if not isinstance(session_review, Mapping) or not isinstance(session_review.get("quotes"), list):
                 raise ValueError("session review schema")
             if any(_aware(item.get("reviewed_at"), "session_review.reviewed_at") > report_at
                    for item in session_review["quotes"] if isinstance(item, Mapping)):
                 raise ValueError("session review after report as_of")
+        bundle = build_evaluation_bundle(raw, observations, study_sha256=study_hash,
+                                         session_review=session_review, analysis_as_of=report_at.isoformat())
+        if not isinstance(bundle, Mapping) or bundle.get("version") != "entry-evaluation-bundle-v1":
+            raise ValueError("invalid evaluation bundle")
+        binding = bundle.get("binding")
+        if bundle.get("dataset_kind") != dataset_kind or not isinstance(binding, Mapping) \
+                or binding.get("evaluation_epoch") != protocol["evaluation_epoch"]:
+            raise ValueError("bundle dataset/epoch mismatch")
         identity = _effective_policy(context, fixed_at, day_text, study_as_of)
         if common_policy is None:
             common_policy = identity
