@@ -210,6 +210,18 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
 
 **전략 귀속 일일 손익 병기 (2026-10-10 59차, 측정 전용).** 10월8일 신호 3건 중 2건이 -27.6% 하드스탑에 막혔는데, 그 손실은 전부 사용자 수동 보유 087010(`strategy=manual`, 자동매도 금지)의 당일 급락이었고 봇 전략 포지션은 0건이었다. `Portfolio.mark_daily_start()` 가 총합과 **종목별** 당일 시작 미실현 기준선(`daily_start_unrealized_by_symbol`, `engine_daily_stats.json` 저장)을 함께 기록하고, `Portfolio.strategy_effective_daily_pnl` = `effective_daily_pnl` − manual 보유의 당일 미실현 변동을 계산한다. `RiskManager.can_open_position` 의 거부 사유는 `일일 손실 한도 초과 (-27.6%, 전략 귀속 +0.0%) - 전면 차단` 형태로 바뀌어 신호 원장 `block_reason` 에 남고, 16:00 자산 스냅샷에 `strategy_effective_daily_pnl` 필드가 추가된다. **판정은 계좌 전체 `effective_daily_pnl ÷ total_equity` 그대로다** — 한도 완화·분모 변경·청산 예외 변경이 아니다. 종목별 기준선은 `None`(미확보)과 `{}`(보유 없이 시작)를 구분하며, 시작 시 manual 종목 집합(`daily_start_manual_symbols`)도 저장해 당일 사용자가 수동 매도한 종목의 기준선 몫을 귀속에 남긴다. 옛 파일로 복원되면 값은 `None` 이고 사유는 `전략 귀속 미측정` 이다(0 으로 대체하지 않음). 귀속 필드가 파손돼도 실현손익·총합 기준선·복원 완료 플래그는 그대로 복원된다. manual 보유의 당일 실현 손익은 분리하지 않는다. 측정이 쌓인 뒤 게이트 분모·귀속 정책을 바꿀지는 사용자 결정이다. 시험 `tests/test_strategy_attributed_daily_pnl.py`.
 
+### 신호 뒤 수량·리스크 거절의 기록과 쿨다운 소진 의미 (2026-10-10 60차, 측정 전용)
+
+`RiskManager._calculate_position_size` 는 호출마다 `event.metadata["size_trace"]` 에 단계별 값을 남긴다: `equity/price/pool_equity` → `available/max_value/base_value` → (risk 모드) `risk_stop_pct/risk_value/after_risk_sizing` → `strategy_budget_cap/strategy_current/strategy_remaining/after_strategy_budget` → `daily_loss_pct/daily_loss_half_applied` → `pre_multiplier_value` → `position_multiplier/after_position_multiplier` → `calendar_multiplier/after_calendar` → `vol_targeting_multiplier/after_vol_targeting` → `team_multiplier/after_team` → `after_overlays`(전략 예산 재클램프 뒤) → `min_position_value/min_clamped` → `position_value/quantity_raw/max_qty_for_market` → `min3_applied` → `risk_quantity_cap` → `quantity`. 중단은 `stop` 에 사유(`price_or_equity_invalid`·`strategy_inactive`·`core_pool_exhausted`·`no_available_cash`·`entry_stop_resolver_missing`·`entry_stop_resolve_failed`·`strategy_budget_exhausted`·`below_min_position_value`·`quantity_below_one`·`risk_cap_below_min_position_value`)를 적는다. Decimal 은 문자열. 계산 결과는 바뀌지 않는다.
+
+10월8일 005490 재현: 위험 사이징 2,910,664원 → 전략 잔여 예산 클램프(로그의 142,499원을 설명하는 값은 약 570,000원 — trace 가 없어 추정) → 일일 손실 -27.6% 반감 ×0.5 → LLM soft-reject `position_multiplier` 0.5 → 142,499원 → 최소금액 200,000원 클램프 → 313,000원 1주 미달 → 3주 보정 비용 94만도 잔여 예산 초과 → `quantity_below_one`. 최소금액 상향으로 풀지 않는다(예산 한도 초과). 다음부터는 trace 가 각 단계 값을 기록하므로 추정이 필요 없다.
+
+**원장 기록.** 수량 0 은 `signal_events` 에 `event_type=blocked, block_gate=G3_size, block_reason=size_zero:<stop>` 로, G3 리스크 거절은 기존 `G3_risk` 행에 `size_trace`·`requested_quantity` 를 더해 남긴다. 모든 BUY 행 메타에 `signal_id` 가 있어 관측 원장 `signal` 레코드(`candidate_id`↔`signal_id`)와 조인한다. 관측 원장 스키마(봉인 계약)는 바꾸지 않는다.
+
+**쿨다운·횟수의 의미(동작 변경 없음, 기록만).** live_screening 은 큐에 넣는 순간 `_screening_signal_cooldown`(30분)과 `_daily_entry_count`(종목당 2회)를 소진한다 — 주문 성공이 아니라 신호 시도의 소진이다(`screening_cooldown_consumed=True`). 엔진 `_SIGNAL_COOLDOWN_SECONDS`(30초)는 수량 0(`engine_cooldown_consumed=True`)과 pending 생성에서 소진되고 G3 리스크 거절(`False`)에서는 소진되지 않는다. 거절 뒤 같은 스캔 창 안 재검토를 허용하려면 중복 억제를 같이 설계해 단일 변경으로 비교한다.
+
+**매수 가능 분모(오프라인 도출).** 같은 스캔에서 신호가 난 후보의 trace 가 `available`·`max_value`·`strategy_remaining`·`min_position_value` 를 담으므로, 비신호 후보는 `price ≤ min(available/1.3, max_value, strategy_remaining)` 이면 1주 가능으로 보고 불가능 후보도 분모에 남긴다. 신호가 없는 스캔은 미판정.
+
 ### 스마트 사이드카 (일일 손실 구간별)
 | 구간 | 동작 |
 |------|------|
