@@ -72,10 +72,15 @@ manifest/study는4MiB, 하루 원장은 최대512MiB, 세션 검토는 최대256
 | 원장 수집 |73.070초|357,457,920B|누락0·봉인/fsync 완료|
 | 별도 엄격 판독 |52.147초|819,073,024B|338,175행·계약 검증 완료|
 | 별도 판독→기존 bundle |181.243초|1,113,010,176B|1,400후보/민감도3개 처리 완료|
+| 별도 판독→새 H1 다일 연결기 |153.108초|1,124,536,320B|14스캔/1,400후보/배정5개·20일 결과 출력|
 
 기존 수집 용량 fixture는 합성 신호7개와 gate의 signal_id/outcome이 서로 맞지 않아 최초 bundle 호출이 거절됐다. 수집 소스를 바꾸지 않고 임시 fixture에서 그7개 trace를 실제 합성 신호에 맞추고, 나머지 unknown trace의 signal_created 단계를 제거했다. 원장 시작/종료 시각도 합성 START 직전/END로 고정했다. 실패 자료를 보존한 뒤 수정 fixture에서 같은 한도로 재검증했다.
 
 세션 검토를 의도적으로 주지 않았으므로 이 대용량 자료의 비교쌍은0, 경제성은 미판정이다. **용량 확인은 순손익 증거가 아니다.** 근거는 `/tmp/qwq-h1-multiday66-capacity-probe/`의 `probe.py`, `full-report.json`(초기 거절), `corrected-full-report.json`(수정 fixture)이며 사용한 기존 fixture 소스는 `scripts/qualify_order_ready_window_capacity.py`다. 실제 호가 빈도·동시 운영 부하·전체20일 원장을 실측한 것은 아니다.
+
+새 H1 연결기도 별도 자식에서 전체 원장을 처리하고 종료코드0으로 완료했다. 임시 메모리에서 합성 study의 quote age만5→1초로 맞추고 원장 study 해시를 새 study에 연결했으며, 원본 파일/소스는 변경하지 않았다.20일 중19일을 의도적으로 누락했고 첫 합성일도 경제성 관측 완전성에 미달하여 **quality failures20·비교쌍0·손익null·suppressed**가 나왔다. 이를 완전한 경제성 원장 처리나20일 수익 실증으로 표현하지 않는다.
+
+해당 검증의 첫 시도는 종료 오류를 보존하지 못해 판정 불가다. 다음 시도에서는 평가기 반환 뒤 보조 요약기가 존재하지 않는 `status` 키를 읽어 실패했다. 요약 코드를 수정하고 **반환 원본부터 저장**하도록 한 최종 새 실행만 통과 근거로 쓴다. `/tmp/qwq-h1-multiday66-capacity-probe/h1-wrapper-final-report.json`, `h1-wrapper-final.exit`(0), `h1-wrapper-raw-report.json`에 보존했다. 원본 결과 SHA256은 `f086da57427b32bbe7f2de0e8f524e62c5159dce35f9ba863764a00ad9feec55`다. 마지막 세 실행은 평가기 소스 수정 없이 검증 도구만 보완했다.
 
 리뷰 역할은 코디네이터 통합, Terra/high 요청의 장부 구현·용량 측정, Sol/high 요청의 독립 검토로 분리했다. 원본 base는 `0dbcdca`, 구현자는 분리된 worktree를 사용했다. native 도구가 실제 모델/유효 effort를 노출하지 않아 실제 값은 미확인이다. 별도 공급자 검토로 표기하지 않는다.
 
