@@ -5,6 +5,8 @@
 거부 사유·자산 스냅샷에 전략 귀속 손익을 함께 남긴다.
 """
 import json
+import pytest
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,9 +205,9 @@ def test_restore_without_per_symbol_key_leaves_empty_dict(tmp_path):
     assert fresh.portfolio.daily_start_unrealized_by_symbol is None
 
 
-def test_manual_sold_then_rebought_as_strategy_keeps_baseline_on_manual():
+def test_manual_to_strategy_without_creation_identity_is_unmeasured():
     """62차(Codex 인계 재검토 지적 1): 시작 manual -100만 → 사용자 매도 → 봇이 같은 종목을 전략으로 재매수(미실현 0).
-    사라진 manual 몫 +100만은 manual 에, 새 전략 포지션은 전략에 — 전략 귀속은 0."""
+    진입 시각만으로는 재생성을 증명하지 못하므로 귀속을 미측정으로 둔다."""
     from datetime import datetime as _dt
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
@@ -216,14 +218,14 @@ def test_manual_sold_then_rebought_as_strategy_keeps_baseline_on_manual():
                                  current_price=Decimal("100000"), strategy="sepa_trend",
                                  entry_time=_dt.now(KST))                      # 기준선 뒤 재생성
     assert pf.effective_daily_pnl == Decimal("1000000")
-    assert pf.manual_daily_unrealized_delta == Decimal("1000000")
-    assert pf.strategy_effective_daily_pnl == Decimal("0")
-    pf.positions["X"].current_price = Decimal("90000")           # 새 전략 포지션의 -5만은 전략 몫
-    assert pf.strategy_effective_daily_pnl == Decimal("-50000")
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
+    pf.positions["X"].current_price = Decimal("90000")           # 가격이 변해도 소유 전환의 근거는 부족
+    assert pf.strategy_effective_daily_pnl is None
 
 
-def test_strategy_sold_then_rebought_as_manual_keeps_baseline_on_strategy():
-    """반대 방향: 시작 sepa +50만 → 봇 매도(실현 +50만) → 사용자가 같은 종목 manual 재매수(미실현 0) → 전략 귀속 0."""
+def test_strategy_to_manual_without_creation_identity_is_unmeasured():
+    """반대 방향: 시작 sepa +50만 → 봇 매도(실현 +50만) → 사용자가 같은 종목 manual 재매수(미실현 0) → 생성 identity가 없으므로 귀속 미측정."""
     from datetime import datetime as _dt
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["Y"] = Position(symbol="Y", quantity=10, avg_price=Decimal("100000"),
@@ -235,32 +237,34 @@ def test_strategy_sold_then_rebought_as_manual_keeps_baseline_on_strategy():
                                  current_price=Decimal("150000"), strategy="manual",
                                  entry_time=_dt.now(KST))                      # 기준선 뒤 재생성
     assert pf.effective_daily_pnl == Decimal("0")
-    assert pf.manual_daily_unrealized_delta == Decimal("0")
-    assert pf.strategy_effective_daily_pnl == Decimal("0")
-    pf.positions["Y"].current_price = Decimal("140000")           # 새 manual 포지션의 -3만은 manual 몫
-    assert pf.manual_daily_unrealized_delta == Decimal("-30000")
-    assert pf.strategy_effective_daily_pnl == Decimal("0")
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
+    pf.positions["Y"].current_price = Decimal("140000")           # 가격이 변해도 귀속을 추정하지 않음
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
 
 
-def test_in_place_tag_change_follows_start_tag():
-    """재생성 없이 태그만 바뀐 보유(entry_time 과거/None)는 시작 태그를 따른다 — 누적 미실현이 당일 손익으로 튀지 않는다."""
+def test_tag_change_does_not_assign_ownership_without_lot_provenance():
+    """이전 진입 시각도 종목의 소유 전환 내역을 증명하지 않는다."""
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
                                  current_price=Decimal("100000"), strategy="manual")
     pf.positions["Y"] = Position(symbol="Y", quantity=10, avg_price=Decimal("100000"),
                                  current_price=Decimal("150000"), strategy="sepa_trend")
     pf.mark_daily_start()
+    for position in pf.positions.values():
+        position.entry_time = pf.daily_start_marked_at - timedelta(days=1)
     pf.positions["X"].strategy = "sepa_trend"
     pf.positions["Y"].strategy = "manual"
-    assert pf.strategy_effective_daily_pnl == Decimal("0")
-    pf.positions["X"].current_price = Decimal("90000")            # 시작 manual 종목의 변동 → manual 몫
-    pf.positions["Y"].current_price = Decimal("160000")           # 시작 전략 종목의 변동 → 전략 몫
-    assert pf.manual_daily_unrealized_delta == Decimal("-100000")
-    assert pf.strategy_effective_daily_pnl == Decimal("100000")
+    assert pf.strategy_effective_daily_pnl is None
+    pf.positions["X"].current_price = Decimal("90000")
+    pf.positions["Y"].current_price = Decimal("160000")
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
 
 
-def test_same_day_entry_then_backfill_then_tag_change_is_not_recreation():
-    """재리뷰 P2: 당일 진입(entry_time 오늘) 뒤 장중 재시작 백필이 기준선을 만들고 태그만 바뀜 — 재생성이 아니다."""
+def test_same_day_entry_before_backfilled_baseline_does_not_prove_ownership():
+    """당일 진입 뒤 장중 백필이 기준선을 만들어도 태그 전환의 귀속은 미측정이다."""
     from datetime import datetime as _dt, timedelta
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
@@ -268,12 +272,11 @@ def test_same_day_entry_then_backfill_then_tag_change_is_not_recreation():
                                  entry_time=_dt.now(KST) - timedelta(minutes=30))   # 오늘 진입, 기준선보다 앞
     pf.mark_daily_start()
     pf.positions["X"].strategy = "sepa_trend"
-    assert pf.strategy_effective_daily_pnl == Decimal("0")          # 누적 -100만이 전략 손익으로 튀면 결함
+    assert pf.strategy_effective_daily_pnl is None                  # 시각만으로 소유 전환을 확정하지 않음
 
 
-def test_recreation_detection_is_timezone_aware():
-    """재리뷰 P2: 기준선·진입 시각을 고정해 비교한다 — aware(UTC) 는 절대 시각, naive 는 호스트 로컬(Fill.timestamp 계약).
-    날짜 문자열이 다른 같은 절대 시각(KST 10/12 08:45 = UTC 10/11 23:45)도 올바르게 판정해야 한다."""
+def test_tag_change_is_unmeasured_for_naive_and_aware_entry_times():
+    """진입 시각은 호스트 로컬 Fill 또는 KST DB 복원값일 수 있다. 어느 쪽도 생성 identity를 증명하지 않는다."""
     from datetime import datetime as _dt, timedelta, timezone
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
@@ -288,14 +291,14 @@ def test_recreation_detection_is_timezone_aware():
         return pf.strategy_effective_daily_pnl
 
     after_utc = _dt(2026, 10, 11, 23, 45, tzinfo=timezone.utc)              # = KST 10/12 08:45 > 기준선
-    assert _rebuy(after_utc) == Decimal("-50000")                           # 재생성 → 새 전략 포지션 -5만
+    assert _rebuy(after_utc) is None
     before_utc = _dt(2026, 10, 11, 23, 15, tzinfo=timezone.utc)             # = KST 10/12 08:15 < 기준선
-    assert _rebuy(before_utc) == Decimal("0")                               # 기존 보유의 태그 전환 → 시작 태그 manual 이 변동 전부
-    # naive = 호스트 로컬(Fill.timestamp 와 같은 생성 경로) — UTC/KST 어느 호스트에서도 같은 절대 시각으로 비교
+    assert _rebuy(before_utc) is None
+    # Fill과 같은 호스트 로컬 naive 값도 결과를 측정 가능으로 바꾸지 않는다.
     after_local_naive = (pf.daily_start_marked_at + timedelta(hours=1)).astimezone().replace(tzinfo=None)
-    assert _rebuy(after_local_naive) == Decimal("-50000")
+    assert _rebuy(after_local_naive) is None
     before_local_naive = (pf.daily_start_marked_at - timedelta(hours=1)).astimezone().replace(tzinfo=None)
-    assert _rebuy(before_local_naive) == Decimal("0")
+    assert _rebuy(before_local_naive) is None
 
 
 def test_tag_change_without_marked_at_is_unmeasured():
@@ -322,3 +325,104 @@ def test_daily_stats_roundtrip_keeps_marked_at(tmp_path):
                             _DAILY_STATS_PATH=fake._DAILY_STATS_PATH, _daily_stats_restored=False)
     UnifiedEngine.restore_daily_stats(fresh)
     assert fresh.portfolio.daily_start_marked_at == pf.daily_start_marked_at
+
+
+@pytest.mark.parametrize("start_strategy,end_strategy", [
+    ("manual", "sepa_trend"), ("sepa_trend", "manual"),
+])
+@pytest.mark.parametrize("known_baseline_time", [True, False])
+def test_tag_change_without_entry_time_is_unmeasured(start_strategy, end_strategy, known_baseline_time):
+    """Missing entry provenance cannot distinguish relabeling from same-symbol re-entry."""
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["SYNTHETIC"] = Position(
+        symbol="SYNTHETIC", quantity=10, avg_price=Decimal("200000"),
+        current_price=Decimal("100000"), strategy=start_strategy, entry_time=None,
+    )
+    pf.mark_daily_start()
+    if not known_baseline_time:
+        pf.daily_start_marked_at = None
+    pf.positions["SYNTHETIC"].strategy = end_strategy
+    pf.positions["SYNTHETIC"].current_price = Decimal("90000")
+    assert pf.effective_daily_pnl == Decimal("-100000")
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
+
+
+@pytest.mark.parametrize("start_strategy", ["manual", "sepa_trend"])
+def test_unchanged_tag_without_entry_time_preserves_measurement(start_strategy):
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["SYNTHETIC"] = Position(
+        symbol="SYNTHETIC", quantity=10, avg_price=Decimal("200000"),
+        current_price=Decimal("100000"), strategy=start_strategy, entry_time=None,
+    )
+    pf.mark_daily_start()
+    pf.positions["SYNTHETIC"].current_price = Decimal("90000")
+    expected = Decimal("0") if start_strategy == "manual" else Decimal("-100000")
+    assert pf.strategy_effective_daily_pnl == expected
+
+
+def test_partial_fill_timestamp_backfill_cannot_prove_recreation():
+    pf = Portfolio(cash=Decimal("1000000"))
+    position = Position(symbol="SYNTHETIC", quantity=10, avg_price=Decimal("200000"),
+                        current_price=Decimal("100000"), strategy="manual", entry_time=None)
+    pf.positions[position.symbol] = position
+    pf.mark_daily_start()
+    # The existing holding survives a partial fill; engine.on_fill can fill this missing timestamp.
+    position.quantity = 9
+    position.strategy = "sepa_trend"
+    position.entry_time = pf.daily_start_marked_at + timedelta(seconds=1)
+    pf.daily_pnl = Decimal("-100000")
+    assert pf.positions[position.symbol] is position
+    assert pf.effective_daily_pnl == Decimal("0")
+    assert pf.strategy_effective_daily_pnl is None
+
+
+def test_unknown_ownership_keeps_account_loss_gate_blocked(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    risk = RiskManager(RiskConfig(daily_max_loss_pct=5.0), Decimal("20000000"), market="KR")
+    risk.set_cash_verification(True)
+    pf = _pf(manual_now="-5000000", manual_start="-1000000")
+    before_allowed, before_reason = risk.can_open_position(
+        "SYNTHETIC", OrderSide.BUY, 10, Decimal("70000"), pf, strategy_type="sepa_trend")
+    original_effective = pf.effective_daily_pnl
+    pf.positions["087010"].strategy = "sepa_trend"
+    pf.positions["087010"].entry_time = pf.daily_start_marked_at + timedelta(seconds=1)
+    after_allowed, after_reason = risk.can_open_position(
+        "SYNTHETIC", OrderSide.BUY, 10, Decimal("70000"), pf, strategy_type="sepa_trend")
+    assert not before_allowed and not after_allowed
+    assert "전면 차단" in before_reason and "전면 차단" in after_reason
+    assert "전략 귀속 미측정" in after_reason
+    assert pf.effective_daily_pnl == original_effective
+
+
+@pytest.mark.parametrize("include_manual", [False, True])
+def test_nonmanual_strategy_retag_preserves_measurement(include_manual):
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["STRATEGY"] = Position(
+        symbol="STRATEGY", quantity=10, avg_price=Decimal("200000"),
+        current_price=Decimal("100000"), strategy="sepa_trend",
+    )
+    if include_manual:
+        pf.positions["MANUAL"] = Position(
+            symbol="MANUAL", quantity=10, avg_price=Decimal("100000"),
+            current_price=Decimal("100000"), strategy="manual",
+        )
+    pf.mark_daily_start()
+    pf.positions["STRATEGY"].strategy = "core_holding"
+    pf.positions["STRATEGY"].current_price = Decimal("90000")
+    if include_manual:
+        pf.positions["MANUAL"].current_price = Decimal("95000")
+    expected_manual = Decimal("-50000") if include_manual else Decimal("0")
+    assert pf.manual_daily_unrealized_delta == expected_manual
+    assert pf.strategy_effective_daily_pnl == Decimal("-100000")
+
+
+def test_one_ambiguous_symbol_makes_whole_attribution_unmeasured():
+    pf = _pf(manual_now="-1000000", manual_start="-1000000",
+             strat_now="-100000", strat_start="0")
+    assert pf.strategy_effective_daily_pnl == Decimal("-100000")
+    pf.positions["005930"].strategy = "manual"
+    # The unchanged manual holding cannot make the other symbol's ownership known.
+    assert pf.manual_daily_unrealized_delta is None
+    assert pf.strategy_effective_daily_pnl is None
+    assert pf.effective_daily_pnl == Decimal("-100000")
