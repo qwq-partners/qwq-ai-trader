@@ -201,3 +201,57 @@ def test_restore_without_per_symbol_key_leaves_empty_dict(tmp_path):
     UnifiedEngine.restore_daily_stats(fresh)
     assert fresh.portfolio.daily_start_unrealized_pnl == Decimal("-1000000")
     assert fresh.portfolio.daily_start_unrealized_by_symbol is None
+
+
+def test_manual_sold_then_rebought_as_strategy_keeps_baseline_on_manual():
+    """62차(Codex 인계 재검토 지적 1): 시작 manual -100만 → 사용자 매도 → 봇이 같은 종목을 전략으로 재매수(미실현 0).
+    사라진 manual 몫 +100만은 manual 에, 새 전략 포지션은 전략에 — 전략 귀속은 0."""
+    from datetime import datetime as _dt
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
+                                 current_price=Decimal("100000"), strategy="manual")
+    pf.mark_daily_start()
+    del pf.positions["X"]
+    pf.positions["X"] = Position(symbol="X", quantity=5, avg_price=Decimal("100000"),
+                                 current_price=Decimal("100000"), strategy="sepa_trend", entry_time=_dt.now())
+    assert pf.effective_daily_pnl == Decimal("1000000")
+    assert pf.manual_daily_unrealized_delta == Decimal("1000000")
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
+    pf.positions["X"].current_price = Decimal("90000")           # 새 전략 포지션의 -5만은 전략 몫
+    assert pf.strategy_effective_daily_pnl == Decimal("-50000")
+
+
+def test_strategy_sold_then_rebought_as_manual_keeps_baseline_on_strategy():
+    """반대 방향: 시작 sepa +50만 → 봇 매도(실현 +50만) → 사용자가 같은 종목 manual 재매수(미실현 0) → 전략 귀속 0."""
+    from datetime import datetime as _dt
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["Y"] = Position(symbol="Y", quantity=10, avg_price=Decimal("100000"),
+                                 current_price=Decimal("150000"), strategy="sepa_trend")
+    pf.mark_daily_start()
+    del pf.positions["Y"]
+    pf.daily_pnl = Decimal("500000")
+    pf.positions["Y"] = Position(symbol="Y", quantity=3, avg_price=Decimal("150000"),
+                                 current_price=Decimal("150000"), strategy="manual", entry_time=_dt.now())
+    assert pf.effective_daily_pnl == Decimal("0")
+    assert pf.manual_daily_unrealized_delta == Decimal("0")
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
+    pf.positions["Y"].current_price = Decimal("140000")           # 새 manual 포지션의 -3만은 manual 몫
+    assert pf.manual_daily_unrealized_delta == Decimal("-30000")
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
+
+
+def test_in_place_tag_change_follows_start_tag():
+    """재생성 없이 태그만 바뀐 보유(entry_time 과거/None)는 시작 태그를 따른다 — 누적 미실현이 당일 손익으로 튀지 않는다."""
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
+                                 current_price=Decimal("100000"), strategy="manual")
+    pf.positions["Y"] = Position(symbol="Y", quantity=10, avg_price=Decimal("100000"),
+                                 current_price=Decimal("150000"), strategy="sepa_trend")
+    pf.mark_daily_start()
+    pf.positions["X"].strategy = "sepa_trend"
+    pf.positions["Y"].strategy = "manual"
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
+    pf.positions["X"].current_price = Decimal("90000")            # 시작 manual 종목의 변동 → manual 몫
+    pf.positions["Y"].current_price = Decimal("160000")           # 시작 전략 종목의 변동 → 전략 몫
+    assert pf.manual_daily_unrealized_delta == Decimal("-100000")
+    assert pf.strategy_effective_daily_pnl == Decimal("100000")

@@ -396,14 +396,29 @@ class Portfolio:
             # 기준선 미확보(옛 파일 복원·미기록): 시작 뒤 사라진 manual 도 알 수 없으므로 보유 유무와
             # 무관하게 미측정(None). 0 으로 추론하지 않는다.
             return None
+        # 귀속 규칙(2026-10-11 62차): 시작 시 존재한 종목은 **시작 태그**로, 당일 새로 생긴 포지션
+        # (entry_time 이 오늘)은 **현재 태그**로 귀속한다. 같은 종목을 당일 매도한 뒤 반대 태그로 재매수하면
+        # 기준선 몫은 시작 태그에, 새 포지션의 미실현은 현재 태그에 간다. 태그만 바뀐 포지션(재생성 아님)은
+        # 시작 태그를 따른다. 사용자 수동 매도로 사라진 manual 종목은 (0 − 시작 미실현)이 manual 몫이다.
+        today = datetime.now().date()
+
+        def _recreated_today(p: "Position") -> bool:
+            return p.entry_time is not None and p.entry_time.date() == today
+
         total = Decimal("0")
-        for p in manual:
-            total += p.unrealized_pnl - starts.get(p.symbol, Decimal("0"))
-        # 시작엔 manual 이었는데 지금 없는 종목(사용자 수동 매도 → 동기화 제거): effective_daily_pnl 의
-        # 총합 기준선에는 여전히 들어 있으므로 같은 몫(0 − 시작 미실현)을 manual 귀속으로 뺀다.
         for sym in self.daily_start_manual_symbols:
-            if sym not in self.positions:
-                total -= starts.get(sym, Decimal("0"))
+            start = starts.get(sym, Decimal("0"))
+            p = self.positions.get(sym)
+            if p is None or (p.strategy != self.MANUAL_STRATEGY and _recreated_today(p)):
+                total -= start                      # manual 몫은 사라졌고, 새 전략 포지션은 전략 몫
+            else:
+                total += p.unrealized_pnl - start   # 같은 manual 보유(또는 태그만 바뀐 보유)
+        for p in manual:
+            if p.symbol in self.daily_start_manual_symbols:
+                continue
+            if p.symbol in starts and not _recreated_today(p):
+                continue                            # 시작엔 전략이었고 태그만 바뀜 → 시작 태그(전략) 유지
+            total += p.unrealized_pnl               # 당일 새 manual 포지션(기준선 없음 또는 전략 몫은 실현에 남음)
         return total
 
     @property
