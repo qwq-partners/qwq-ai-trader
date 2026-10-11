@@ -958,6 +958,8 @@ class UnifiedEngine:
                     s: str(v) for s, v in self.portfolio.daily_start_unrealized_by_symbol.items()
                 }
                 data["daily_start_manual_symbols"] = sorted(self.portfolio.daily_start_manual_symbols)
+                if self.portfolio.daily_start_marked_at is not None:
+                    data["daily_start_marked_at"] = self.portfolio.daily_start_marked_at.isoformat()
             # 원자적 쓰기 (2026-08-04 P0) — 쓰기 도중 크래시로 파손된 파일이
             # 재시작 시 "장중 풀 리셋"을 트리거하던 경로 차단
             _tmp = self._DAILY_STATS_PATH.with_suffix(".tmp")
@@ -989,6 +991,7 @@ class UnifiedEngine:
             # 완료 상태를 건드리지 않는다(파손이 DB 백필을 유발해 기준선을 덮어쓰면 게이트가 바뀜).
             self.portfolio.daily_start_unrealized_by_symbol = None
             self.portfolio.daily_start_manual_symbols = set()
+            self.portfolio.daily_start_marked_at = None
             try:
                 _by_sym = data.get("daily_start_unrealized_by_symbol")
                 if isinstance(_by_sym, dict):
@@ -1000,11 +1003,19 @@ class UnifiedEngine:
                     if (not isinstance(_manual, list)
                             or any(not isinstance(s, str) or s not in _parsed for s in _manual)):
                         raise ValueError(f"manual symbols invalid: {type(_manual).__name__}")
+                    _marked = data.get("daily_start_marked_at")
+                    _marked_dt = None
+                    if _marked is not None:
+                        _marked_dt = datetime.fromisoformat(str(_marked))
+                        if _marked_dt.tzinfo is None:
+                            raise ValueError("daily_start_marked_at must be timezone-aware")
                     self.portfolio.daily_start_unrealized_by_symbol = _parsed
                     self.portfolio.daily_start_manual_symbols = set(_manual)
+                    self.portfolio.daily_start_marked_at = _marked_dt   # 없으면 None → 태그 전환 시 미측정
             except Exception as _ae:
                 self.portfolio.daily_start_unrealized_by_symbol = None
                 self.portfolio.daily_start_manual_symbols = set()
+                self.portfolio.daily_start_marked_at = None
                 logger.warning(f"[DailyStats] 귀속 기준선 복원 실패 → 미측정으로 유지: {_ae}")
             logger.info(
                 f"[DailyStats] 복원 완료 → 실현PnL={self.portfolio.daily_pnl:+,.0f}원, "

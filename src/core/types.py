@@ -7,6 +7,9 @@ KR(ai-trader-v2) + US(ai-trader-us) 도메인 객체 및 열거형 통합.
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 from decimal import Decimal
 from enum import Enum, auto
 from typing import Optional, Dict, Any, List, Set
@@ -344,6 +347,9 @@ class Portfolio:
     daily_start_unrealized_by_symbol: Optional[Dict[str, Decimal]] = None
     # 시작 시점에 manual 이었던 종목 — 당일 사용자가 수동 매도해 포지션이 사라져도 그 기준선을 귀속에 남긴다.
     daily_start_manual_symbols: Set[str] = field(default_factory=set)
+    # 기준선을 기록한 시각(KST aware). 보유의 entry_time 이 이 시각보다 뒤면 기준선 이후 재생성된 포지션이다.
+    # None(옛 파일) 이면 같은 종목의 태그 전환을 재생성과 구별할 수 없어 그 경우 귀속을 미측정으로 둔다.
+    daily_start_marked_at: Optional[datetime] = None
 
     MANUAL_STRATEGY = "manual"  # 사용자 수동 보유 — 초과수익 원장의 manual_entry 제외 기준과 같다
 
@@ -396,14 +402,47 @@ class Portfolio:
             # 기준선 미확보(옛 파일 복원·미기록): 시작 뒤 사라진 manual 도 알 수 없으므로 보유 유무와
             # 무관하게 미측정(None). 0 으로 추론하지 않는다.
             return None
+        # 귀속 규칙(2026-10-11 63차): 기준선 시각에 존재한 종목은 **시작 태그**로, 기준선 이후 생긴 포지션
+        # (entry_time > daily_start_marked_at)은 **현재 태그**로 귀속한다. 같은 종목을 매도한 뒤 반대 태그로
+        # 재매수하면 기준선 몫은 시작 태그에, 새 포지션의 미실현은 현재 태그에 간다. 재생성 없이 태그만 바뀐
+        # 보유는 시작 태그를 따른다. 재생성 여부를 알 수 없으면(옛 파일: marked_at None) 미측정(None).
+        # 사용자 수동 매도로 사라진 manual 종목은 (0 − 시작 미실현)이 manual 몫이다.
+        def _recreated(p: "Position") -> Optional[bool]:
+            if p.entry_time is None:
+                return False                        # 시각 유실 → 기존 보유로 본다(문서화된 한계)
+            if self.daily_start_marked_at is None:
+                return None                         # 기준선 시각 없음 → 구별 불가
+            entry = p.entry_time
+            if entry.tzinfo is None:
+                # naive entry_time 은 Fill.timestamp(datetime.now(), 호스트 로컬)에서 온다 — 호스트 로컬로 해석
+                entry = entry.astimezone()
+            return entry > self.daily_start_marked_at
+
         total = Decimal("0")
-        for p in manual:
-            total += p.unrealized_pnl - starts.get(p.symbol, Decimal("0"))
-        # 시작엔 manual 이었는데 지금 없는 종목(사용자 수동 매도 → 동기화 제거): effective_daily_pnl 의
-        # 총합 기준선에는 여전히 들어 있으므로 같은 몫(0 − 시작 미실현)을 manual 귀속으로 뺀다.
         for sym in self.daily_start_manual_symbols:
-            if sym not in self.positions:
-                total -= starts.get(sym, Decimal("0"))
+            start = starts.get(sym, Decimal("0"))
+            p = self.positions.get(sym)
+            if p is None:
+                total -= start                      # 수동 매도로 사라진 manual 몫
+                continue
+            if p.strategy != self.MANUAL_STRATEGY:
+                rec = _recreated(p)
+                if rec is None:
+                    return None
+                if rec:
+                    total -= start                  # manual 몫은 사라졌고, 새 전략 포지션은 전략 몫
+                    continue
+            total += p.unrealized_pnl - start       # 같은 manual 보유(또는 태그만 바뀐 보유)
+        for p in manual:
+            if p.symbol in self.daily_start_manual_symbols:
+                continue
+            if p.symbol in starts:
+                rec = _recreated(p)
+                if rec is None:
+                    return None
+                if not rec:
+                    continue                        # 시작엔 전략이었고 태그만 바뀜 → 시작 태그(전략) 유지
+            total += p.unrealized_pnl               # 기준선 이후 생긴 manual 포지션
         return total
 
     @property
@@ -426,6 +465,7 @@ class Portfolio:
         self.daily_start_manual_symbols = {
             s for s, p in self.positions.items() if p.strategy == self.MANUAL_STRATEGY
         }
+        self.daily_start_marked_at = datetime.now(KST)
 
     @property
     def cash_ratio(self) -> float:
