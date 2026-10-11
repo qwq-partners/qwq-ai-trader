@@ -50,7 +50,7 @@ def main(argv=None):
         out=build_gate_report(obs,as_of=args.as_of)
         if out['references']:
             capture=study.get('capture',{})
-            if capture.get('version') not in ('runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):raise ValueError('gate trace requires v3/v4 study')
+            if capture.get('version') not in ('runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):raise ValueError('gate trace requires v3/v4/window study')
             settings=validate_settings(capture.get('entry_gate_trace'))
             if any(len(r['candidates']) > settings['max_candidates'] for r in obs['records'] if r.get('kind') == 'scan'):
                 raise ValueError('trace exceeds declared study candidate bound')

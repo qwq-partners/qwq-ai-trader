@@ -192,7 +192,7 @@ H1 감사는 현재 계산기가 ‘첫 호가에서 진입/생략’만 비교�
 
 새 버전 `runner-order-ready-window-v1`은 기록된 live_screening/gap BUY의 order_ready 순서로 최초5개 양의 정수 수량 신호를 고른다. 과거 signal_created v1의 결과/직렬화는 그대로다. signal_id와 order_id를 함께 보존해 같은 신호/주문의 중복은 추가 슬롯을 쓰지 않고, 같은 종목의 다른 신호는 별도 identity로 남긴다. 물리 호가 채널은 공유할 수 있다.
 
-접수는 [09:00,10:05), 수집은 [09:00,10:21) 초안이다. max_scans14는 상한이며 실제14개 스캔 발생을 보장하지 않는다. 호가 요청은 동기 훅에서 유한 비동기 작업만 등록하고 송신/잠금을 기다리지 않는다. core engine은 변경하지 않았다. 종료 후 대기 작업은 후보 lease를 되살리지 못하며, 실패는 관측의 불완전으로 남긴다. 신규 계좌 위험 허용이나 주문 발행은 하지 않는다.
+접수는 KST [09:00,10:05), 수집은 KST [09:00,10:21) 초안이다. max_scans14는 상한이며 실제14개 스캔 발생을 보장하지 않는다. 호가 요청은 동기 훅에서 유한 비동기 작업만 등록하고 송신/잠금을 기다리지 않는다. core engine은 변경하지 않았다. 종료 후 대기 작업은 후보 lease를 되살리지 못하며, 실패는 관측의 불완전으로 남긴다. 신규 계좌 위험 허용이나 주문 발행은 하지 않는다.
 
 운영 채널이26개이면 여유10개를 남기고 H1의 서로 다른5개 BOOK을 수용할 수 있다.27개이면4개만 배정되며 나머지 이유와 불완전을 남긴다. 이는 등록41·외부 예약0의 산술로, 실제 채널 재고 인증이나 호가 수신/체결 보장이 아니다.
 
@@ -205,11 +205,13 @@ H1 감사는 현재 계산기가 ‘첫 호가에서 진입/생략’만 비교�
 ### SEE — 완료한 검증만 기록
 
 - 기준 d79b359의 기존 런타임/신호창/구독147 passed. 최초 구현 관련297 passed, 최초 통합238 passed(UTC/KST). 리뷰에서 실제 gap의 엄격 판독 거절·종료 시 미완료 누락·직접 잘못된 시각 예외·조기 lease 만료4건과 가격 비교 연결기2건의 RED를 확인하고 수정했다. 보완 뒤 구현자 관련306 passed, 코디네이터 관련258 passed(KST), 용량 도구6 passed. 운영 상태·외부 네트워크 접근0.
-- 합성 스트레스:81분/14스캔·335,340호가+메타2,814+제어21=**338,175행**, 누락0·fsync/봉인/독립 엄격 재판독 통과. 실제 첫 호가09:00:00·마지막10:20:59, 시간 순서 유지·요청 유량 rolling60 최대4,140. 40만 버퍼/512MiB 저장 중213,920,690바이트 사용, capture RSS357,650,432/별도 reader RSS819,716,096바이트(각 주소 공간1.25GiB 상한). 저장45.10초·판독27.18초. 실제81분을 기다린 시험이나 실시간 콜백 지연 보장은 아니다. 기존30만 버퍼/70분 시험을 새 창의 근거로 재사용하지 않았다.
-- 상한 초과 시험:402,836행 시도 중400,000행 저장·2,836행 누락을 정확히 불완전 봉인했다. 저장 유실0, 별도 reader도 동일 건수/불완전 확인. RSS 저장414,904,320/판독960,282,624바이트. 이 경우 원장 구조/해시/봉인은 검사하지만 의미 계약 전체는 미검증(`records_contract_validated=false`)으로 표시한다. [스트레스 원본](order-ready-window-capacity-20261011/stress.json) · [상한 초과 원본](order-ready-window-capacity-20261011/overflow.json). 시험 CLI는 `scripts/qualify_order_ready_window_capacity.py --case stress`와 `--case overflow`이며 임시 원장은 자동 제거한다.
+- 합성 스트레스:81분/14스캔·335,340호가+메타2,814+제어21=**338,175행**, 누락0·fsync/봉인/독립 엄격 재판독 통과. 실제 첫 호가 KST 09:00:00·마지막10:20:59, 시간 순서 유지·요청 유량 rolling60 최대4,140. 40만 버퍼/512MiB 저장 중213,920,690바이트 사용, capture RSS357,650,432/별도 reader RSS819,716,096바이트(각 주소 공간1.25GiB 상한). 저장45.10초·판독27.18초. 실제81분을 기다린 시험이나 실시간 콜백 지연 보장은 아니다. 기존30만 버퍼/70분 시험을 새 창의 근거로 재사용하지 않았다.
+- 상한 초과 시험:402,836행 시도 중400,000행 저장·2,836행 누락을 정확히 불완전 봉인했다. 저널 쓰기 단계 추가 유실0(`persistence_dropped_records=0`), 별도 reader도 동일 건수/불완전 확인. RSS 저장414,904,320/판독960,282,624바이트. 이 경우 원장 구조/해시/봉인은 검사하지만 의미 계약 전체는 미검증(`records_contract_validated=false`)으로 표시한다. [스트레스 원본](order-ready-window-capacity-20261011/stress.json) · [상한 초과 원본](order-ready-window-capacity-20261011/overflow.json). 시험 CLI는 `scripts/qualify_order_ready_window_capacity.py --case stress`와 `--case overflow`이며 임시 원장은 자동 제거한다.
 - 용량 도구 독립 리뷰는 차단 지적 없음으로 승인됐다. 초기 검토에서 지적한 저장/판독 프로세스 분리·유량 시간 순서·100후보 메타데이터·고유 호가ID·실제 마지막 저장 시각을 수정했다. 콜백 수로 실제 채널 성공을 주장하지 않는다.
 - 배포 전 읽기 점검: 운영83be6ac/PID787781/NRestarts0, 로컬 pending0, 복구ready·journal_pending0. 실제 수집 활성화 예약은 없고 과거 보존 타이머만 있다. 10월8일 drop-in의 시작 창은 지났으며 기존 once/영수증/매수 중지/설정14경로 지문을 별도 보존했다. 로컬 pending0은 증권사 전체 미체결 대사가 아니다.
 
-- 최종 전체 `verify.sh`: **UTC·Asia/Seoul 각각4771 passed / 2 skipped / 2 known xfailed**,146.41/146.89초, 기존 pykrx 경고1개. Python 문법·비밀정보 검사 통과, 운영 상태·외부 네트워크 접근0. 명령은 `TZ=UTC` 또는 `TZ=Asia/Seoul` 및 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`.
+- 첫 전체 `verify.sh`: **UTC·Asia/Seoul 각각4771 passed / 2 skipped / 2 known xfailed**,146.41/146.89초, 기존 pykrx 경고1개. Python 문법·비밀정보 검사 통과, 운영 상태·외부 네트워크 접근0. 명령은 `TZ=UTC` 또는 `TZ=Asia/Seoul` 및 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`.
+
+추가 리뷰에서 채널 부족의 엄격 재판독5개 검증을 통과했고, 숫자/None 후보 identity의 오류 분류3개 RED 뒤 타입 검증을 보완했다. 배정 카운트는 기록 성공 뒤에만 증가한다. gate CLI는 기존에도 `validate_window_contract`를 호출하므로 검증 누락 지적은 해당하지 않았고 오류 문구만 현재 버전에 맞췄다. monotonic 만료가 선언한 wall-clock 종료보다 빠르면 실제 lease가 먼저 사라지므로 불완전 처리를 유지한다. 이 보수적 판정은 작은 시계 차이에서도 표본을 제외할 수 있다.
 
 코드 PR 작성 시점에는 최종 독립 소스 리뷰가 진행 중이며 운영83be6ac 유지·미배포다. 최종 리뷰/필수 CI 뒤 고정 SHA를 배포하고 실제 결과를 후속 문서에 기록한다. 새 수집 시작과 비용 후 수익 우위는 이 코드 배포의 완료 조건과 구분한다.

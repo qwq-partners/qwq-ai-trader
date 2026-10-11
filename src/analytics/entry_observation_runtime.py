@@ -176,7 +176,8 @@ def _validate_ready_records(records, start, admission, end):
 def _ready_reason(record, signal, candidates, seen, admitted, start, admission):
     if record.get('signal_id') in seen or ('order', record.get('order_id')) in seen:
         return 'order_ready_duplicate'
-    if (signal.get('strategy') != 'gap_and_go' or record.get('strategy') != 'gap_and_go'
+    if (not isinstance(signal.get('candidate_id'), str)
+            or signal.get('strategy') != 'gap_and_go' or record.get('strategy') != 'gap_and_go'
             or candidates.get(signal.get('candidate_id')) != 'live_screening'
             or not signal.get('candidate_id', '').endswith(':' + str(record.get('symbol')))):
         return 'order_ready_outside_scope'
@@ -393,8 +394,6 @@ class _WindowBuffer(EntryObservationBuffer):
                                self._ready_admitted, self.start_at, self.admission_end)
         self._ready_seen.add(record.get('signal_id'))
         self._ready_seen.add(('order', record.get('order_id')))
-        if reason == 'order_ready_admitted':
-            self._ready_admitted += 1
         admission = dict(kind='order_ready_admission', observed_at=record['observed_at'],
             status='admitted' if reason == 'order_ready_admitted' else 'unallocated',
             reason=reason, signal_id=record.get('signal_id'), order_id=record.get('order_id'),
@@ -405,6 +404,7 @@ class _WindowBuffer(EntryObservationBuffer):
             return
         if reason != 'order_ready_admitted':
             return
+        self._ready_admitted += 1
         try:
             if self.order_ready_quote_submit is None:
                 self.mark_incomplete('order_ready_enrollment_unavailable')

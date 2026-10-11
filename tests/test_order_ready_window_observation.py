@@ -155,13 +155,14 @@ async def test_duplicate_signal_and_order_identity_never_add_lease(tmp_path, mon
 
 @pytest.mark.asyncio
 async def test_ready_channel_capacity_failure_is_incomplete(tmp_path, monkeypatch):
-    _, _, b, q, _ = setup(tmp_path, monkeypatch)
+    _, context, b, q, _ = setup(tmp_path, monkeypatch)
     q._operational = [('H0STCNT0', str(900100+i)) for i in range(31)]
     scan = obs.capture_scan(b, [stock()], 'regular')
     signal(b, scan, 'capacity'); ready(b, 'capacity')
     await asyncio.gather(*q._tasks)
     assert not b.capture_status()['complete']
     assert 'order_ready_channel_capacity' in b.capture_status()['incomplete_reasons']
+    validate_window_contract(context, b.export())
 
 
 @pytest.mark.asyncio
@@ -216,7 +217,7 @@ async def test_ready_real_hook_buy_scope_and_sealed_strict_binding(tmp_path, mon
 @pytest.mark.parametrize('operational,allocated', [(26,5), (27,4)])
 async def test_ready_channel_headroom_respects_actual_operational_demand(tmp_path, monkeypatch,
                                                                        operational, allocated):
-    _, _, b, q, _ = setup(tmp_path, monkeypatch)
+    _, context, b, q, _ = setup(tmp_path, monkeypatch)
     q._operational = [('H0STCNT0', str(900100+i)) for i in range(operational)]
     symbols = [str(900001+i) for i in range(5)]
     scan = obs.capture_scan(b, [stock(s) for s in symbols], 'regular')
@@ -229,6 +230,7 @@ async def test_ready_channel_headroom_respects_actual_operational_demand(tmp_pat
     assert len(q._desired()) == operational + allocated
     assert b.capture_status()['complete'] is (allocated == 5)
     assert sum(r.get('reason') == 'channel_capacity' for r in b.export()['records']) == 5-allocated
+    validate_window_contract(context, b.export())
 
 
 @pytest.mark.parametrize('kind', ['ws_quote', 'signal', 'order_ready', 'quote_subscription'])
@@ -416,3 +418,19 @@ def test_ready_offline_contract_rejects_missing_epoch_and_short_lease(tmp_path, 
     if defect == 'missing_epoch': context.pop('evaluation_epoch')
     else: context['capture']['channels']['lease_seconds'] = 1
     with pytest.raises(ValueError): validate_window_contract(context)
+
+
+@pytest.mark.parametrize('candidate_id', [None, 1, False])
+def test_ready_reader_rejects_non_text_candidate_identity(tmp_path, monkeypatch, candidate_id):
+    _, context, b, _, _ = setup(tmp_path, monkeypatch)
+    b.order_ready_quote_submit = lambda admission: None
+    scan = obs.capture_scan(b, [stock()], 'regular')
+    signal(b, scan, 'bad-identity'); ready(b, 'bad-identity')
+    data = b.export()
+    for record in data['records']:
+        if record['kind'] == 'scan':
+            record['candidates'][0]['candidate_id'] = candidate_id
+        elif record['kind'] in ('signal', 'order_ready_admission'):
+            record['candidate_id'] = candidate_id
+    with pytest.raises(ValueError):
+        validate_window_contract(context, data)
