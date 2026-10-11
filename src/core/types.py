@@ -414,7 +414,8 @@ class Portfolio:
                 return None                         # 기준선 시각 없음 → 구별 불가
             entry = p.entry_time
             if entry.tzinfo is None:
-                entry = entry.replace(tzinfo=KST)   # naive entry_time 은 KST 로 계약한다
+                # naive entry_time 은 Fill.timestamp(datetime.now(), 호스트 로컬)에서 온다 — 호스트 로컬로 해석
+                entry = entry.astimezone()
             return entry > self.daily_start_marked_at
 
         total = Decimal("0")

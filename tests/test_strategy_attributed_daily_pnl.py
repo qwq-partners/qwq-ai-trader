@@ -272,18 +272,30 @@ def test_same_day_entry_then_backfill_then_tag_change_is_not_recreation():
 
 
 def test_recreation_detection_is_timezone_aware():
-    """재리뷰 P2: UTC aware entry_time 도 기준선 시각(KST aware)과 절대 시각으로 비교한다."""
-    from datetime import datetime as _dt, timezone
+    """재리뷰 P2: 기준선·진입 시각을 고정해 비교한다 — aware(UTC) 는 절대 시각, naive 는 호스트 로컬(Fill.timestamp 계약).
+    날짜 문자열이 다른 같은 절대 시각(KST 10/12 08:45 = UTC 10/11 23:45)도 올바르게 판정해야 한다."""
+    from datetime import datetime as _dt, timedelta, timezone
     pf = Portfolio(cash=Decimal("1000000"))
     pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
                                  current_price=Decimal("100000"), strategy="manual")
     pf.mark_daily_start()
+    pf.daily_start_marked_at = _dt(2026, 10, 12, 8, 30, tzinfo=KST)        # 고정 기준선 시각
     del pf.positions["X"]
-    pf.positions["X"] = Position(symbol="X", quantity=5, avg_price=Decimal("100000"),
-                                 current_price=Decimal("90000"), strategy="sepa_trend",
-                                 entry_time=_dt.now(timezone.utc))                 # 기준선 뒤, UTC 표기
-    assert pf.manual_daily_unrealized_delta == Decimal("1000000")
-    assert pf.strategy_effective_daily_pnl == Decimal("-50000")
+
+    def _rebuy(entry_time):
+        pf.positions["X"] = Position(symbol="X", quantity=5, avg_price=Decimal("100000"),
+                                     current_price=Decimal("90000"), strategy="sepa_trend", entry_time=entry_time)
+        return pf.strategy_effective_daily_pnl
+
+    after_utc = _dt(2026, 10, 11, 23, 45, tzinfo=timezone.utc)              # = KST 10/12 08:45 > 기준선
+    assert _rebuy(after_utc) == Decimal("-50000")                           # 재생성 → 새 전략 포지션 -5만
+    before_utc = _dt(2026, 10, 11, 23, 15, tzinfo=timezone.utc)             # = KST 10/12 08:15 < 기준선
+    assert _rebuy(before_utc) == Decimal("0")                               # 기존 보유의 태그 전환 → 시작 태그 manual 이 변동 전부
+    # naive = 호스트 로컬(Fill.timestamp 와 같은 생성 경로) — UTC/KST 어느 호스트에서도 같은 절대 시각으로 비교
+    after_local_naive = (pf.daily_start_marked_at + timedelta(hours=1)).astimezone().replace(tzinfo=None)
+    assert _rebuy(after_local_naive) == Decimal("-50000")
+    before_local_naive = (pf.daily_start_marked_at - timedelta(hours=1)).astimezone().replace(tzinfo=None)
+    assert _rebuy(before_local_naive) == Decimal("0")
 
 
 def test_tag_change_without_marked_at_is_unmeasured():
