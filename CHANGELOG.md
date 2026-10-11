@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-11 — H1 주문 준비 호가 배정과 일반 모드 배포 준비(65차)
+
+- `runner-order-ready-window-v1`/`quote_admission=order_ready` 추가. 기존 signal_created v1은 유지하고 기록된 live_screening/gap BUY 양의 정수 수량·최초5개 identity를 비동기로 배정한다. 같은 신호/주문 중복·접수 마감·범위 밖/수량 불가·한도 초과를 원장에 남긴다.
+- 같은 종목의 다른 신호는 별도 lease와 signal_id/order_id를 보존한다. 물리 BOOK은 공유하며 채널 상한41/운영 여유10을 유지한다. 잠금 대기 중 종료된 작업이 lease를 되살리지 못한다.
+- 대상 선정은 별도 `order_ready_admission` 행으로 남겨 실제 구독/ACK 기록과 구별한다. 종료 전 미완료 요청·조기 만료는 불완전으로 봉인하며, 기존 가격 비교 연결기까지 새 행을 검증한다.
+- 새 버전의 strict 판독은 순서·identity·반개구간 시각·배정 사유를 재계산한다. 종료 시각과 같은 레코드도 새 모드에서는 거절한다. 기존 engine 주문 훅과 사이징·청산·매수 중지 정책 변경 없음.
+- [계획](docs/superpowers/plans/2026-10-11-h1-order-ready-observation.md) · [검증·배포 정본](docs/research/next-observation-design-2026-10-11.md#65차--주문-준비-호가-배정과-운영-배포). 날짜별 새 수집 활성화와 여러 날짜/자본/벤치마크 평가는 별도다.
+
 ## 2026-10-11 — 귀속 전환의 불명 처리와 H1 계약(64차, 운영 미배포)
 
 - 최신 PR #166을 검토해 진입 시각의 두 한계(naive KST DB 복원을 호스트 로컬로 오해, 기존 보유의 시각을 부분 체결에서 보충)를 확인했다. 시각 없음도 기존 보유의 증거가 아니다.

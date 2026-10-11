@@ -1,5 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
+> [65차 주문 준비 호가 배정·배포](research/next-observation-design-2026-10-11.md#65차--주문-준비-호가-배정과-운영-배포): 실제 order_ready 최초5개 identity의 비동기 배정과 엄격 판독. [구현 계획](superpowers/plans/2026-10-11-h1-order-ready-observation.md). 새 수집 일정·실제 비용 후 수익은 미확정이며 배포 상태는 정본의 완료 근거를 따른다.
 > [64차 귀속 검증](research/next-observation-design-2026-10-11.md#64차--후속-귀속-검증과-h1-계약) · [H1 첫 호가 가격 조건 계약](research/h1-entry-price-contract-2026-10-11.md): 소유 전환을 진입 시각으로 확정하지 않고 귀속 미측정으로 남긴다. H1 선택/규칙은 고정, 다음은 order_ready 전용 호가 배정 구현/검증이다. 소스 운영 미배포·새 관측 미예약, 실제 수익 검증 미완료. 아래 기록은 당시 이력이다.
 
 > [62차 인계 재검토·다음 관측 설계](research/next-observation-design-2026-10-11.md): 첫4스캔 cooldown9건·5번째 신호3건·이후11건으로 정정하고, 추가 신호/LLM/효과0 단정을 철회했다. 소유 전환의 귀속 표시 P2는 재현·수정안 기록 단계이며 소스 미수정이다. 초기 상태/호가 배정/자본 조건을 포함한 다음 창과 판독 표5개, 가설 후보/기준을 제시했다. 운영83be6ac·매수 중지 유지, 새 예약/가설 검증 미착수. [61차 정정 정본](research/rejection-retry-policy-2026-10-11.md).

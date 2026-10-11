@@ -16,6 +16,10 @@ from .entry_observation_journal import ObservationJournal, MAX_LINE_BYTES, _uniq
 from .entry_price_shadow import build_report, _timestamp, KST
 
 
+READY_VERSION = 'runner-order-ready-window-v1'
+WINDOW_VERSIONS = ('runner-signal-window-v1', READY_VERSION)
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -46,14 +50,31 @@ def validate_window_contract(context, observations=None):
     s = context.get('capture', {})
     scans = ([r for r in observations['records'] if r.get('kind') == 'scan']
              if observations is not None else [])
-    if s.get('version') != 'runner-signal-window-v1':
+    if observations is not None and s.get('version') != READY_VERSION:
+        if any(r.get('kind') == 'order_ready_admission' or (r.get('kind') == 'quote_subscription'
+                and ('signal_id' in r or 'order_id' in r
+                or str(r.get('reason', '')).startswith('order_ready_'))) for r in observations['records']):
+            raise ValueError('order-ready identity requires explicit study version')
+    if s.get('version') not in WINDOW_VERSIONS:
         if any(r.get('population_scope') == 'window_returned_scan_candidates' for r in scans):
             raise ValueError('window population requires explicit window study')
         return
     if (type(s.get('max_scans')) is not int or not 1 <= s['max_scans'] <= 100
-            or s.get('quote_admission') != 'signal_created'
+            or s.get('quote_admission') != ('order_ready' if s.get('version') == READY_VERSION else 'signal_created')
             or context.get('outcome_basis') != 'fixed_horizon_bid_markout'):
         raise ValueError('bounded signal-window contract required')
+    if s.get('version') == READY_VERSION:
+        channels = s.get('channels', {})
+        channel_fields = set(('registration_cap external_reserved operational_headroom '
+                              'max_candidates lease_seconds evidence_ref').split())
+        if type(channels) is not dict or set(channels) != channel_fields:
+            raise ValueError('H1 bounded channel contract required')
+        from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
+        QuoteSubscriptionCoordinator(EntryObservationBuffer(evaluation_epoch=context.get('evaluation_epoch'), capacity=1),
+                                     **channels)
+        if (channels.get('max_candidates') != 5 or type(channels.get('max_candidates')) is not int
+                or channels.get('registration_cap') != 41 or channels.get('operational_headroom') != 10):
+            raise ValueError('H1 order-ready requires first five / 41 channels / 10 headroom')
     from .entry_capital_limits import CapitalPolicy
     from .entry_markout import MarkoutPolicy
     from .entry_gate_trace import validate_settings as gate_settings, scan_fields
@@ -69,11 +90,17 @@ def validate_window_contract(context, observations=None):
             or capital.source_version_ref != s.get('source_version_ref')
             or capital.configuration_ref != s.get('configuration_ref')):
         raise ValueError('window time/capital policy binding mismatch')
+    if s.get('version') == READY_VERSION and s['channels']['lease_seconds'] < (end - start).total_seconds():
+        raise ValueError('order-ready lease must span capture window')
     if observations is not None:
         # Seal/audit time may be later; it never extends the captured market window.
         # Prestart subscription ACKs remain valid evidence of an existing connection.
         for record in observations['records']:
-            if _timestamp(record.get('observed_at'), 'window record observed_at') > end:
+            observed = _timestamp(record.get('observed_at'), 'window record observed_at')
+            if s.get('version') == READY_VERSION and (observed >= end or (observed < start
+                    and record.get('kind') != 'quote_subscription')):
+                raise ValueError('order-ready record outside half-open capture window')
+            if observed > end:
                 raise ValueError('window record observed_at after capture.end_at')
         if len(scans) > s['max_scans']:
             raise ValueError('window scan count exceeds study bound')
@@ -86,6 +113,81 @@ def validate_window_contract(context, observations=None):
                     or r.get('selection_basis_max_candidates') != selection['max_candidates']
                     or r.get('selection_basis_max_terms') != selection['max_source_terms']):
                 raise ValueError('window population/time binding mismatch')
+        if s.get('version') == READY_VERSION:
+            _validate_ready_records(observations['records'], start, admission, end)
+
+
+def _validate_ready_records(records, start, admission, end):
+    """배정 순서를 원장으로 다시 계산하며 호가 가격은 사용하지 않는다."""
+    candidates, signals, admitted, seen = {}, {}, {}, set()
+    pending = None
+    for record in records:
+        kind = record.get('kind')
+        if pending is not None:
+            expected, reason, signal = pending
+            if (kind != 'order_ready_admission' or record.get('reason') != reason
+                    or record.get('status') != ('admitted' if reason == 'order_ready_admitted' else 'unallocated')
+                    or any(record.get(k) != expected.get(k) for k in ('signal_id', 'order_id', 'symbol', 'observed_at'))
+                    or record.get('candidate_id') != signal.get('candidate_id')
+                    or record.get('tr_id') != 'H0STASP0'
+                    or _timestamp(record.get('expires_at'), 'admission expiry') != end):
+                raise ValueError('order-ready admission identity/order mismatch')
+            if reason == 'order_ready_admitted':
+                admitted[record['signal_id']] = record
+            pending = None
+            continue
+        if kind == 'scan':
+            for candidate in record.get('candidates', []):
+                candidates[candidate['candidate_id']] = record.get('route_origin')
+        elif kind == 'signal':
+            sid = record.get('signal_id')
+            if not isinstance(sid, str) or not sid or record.get('candidate_id') not in candidates:
+                raise ValueError('order-ready signal identity missing')
+            if sid in signals and any(signals[sid].get(k) != record.get(k) for k in (
+                    'candidate_id', 'strategy', 'price', 'signal_target_price', 'signal_stop_price', 'event_timestamp')):
+                raise ValueError('order-ready conflicting signal identity')
+            signals.setdefault(sid, {k: v for k, v in record.items() if k != 'sequence'})
+        elif kind == 'order_ready':
+            signal = signals.get(record.get('signal_id'))
+            if (signal is None or not isinstance(record.get('order_id'), str) or not record['order_id']
+                    or _timestamp(signal.get('observed_at'), 'signal') > _timestamp(record.get('observed_at'), 'ready')):
+                raise ValueError('order-ready missing prior signal/order identity')
+            reason = _ready_reason(record, signal, candidates, seen, len(admitted), start, admission)
+            seen.add(record['signal_id'])
+            seen.add(('order', record.get('order_id')))
+            pending = record, reason, signal
+        elif kind == 'order_ready_admission':
+            raise ValueError('order-ready admission without preceding order')
+        elif kind == 'quote_subscription':
+            if record.get('status') == 'admitted':
+                raise ValueError('order-ready admission without preceding order')
+            if record.get('candidate_id') is not None or 'signal_id' in record or 'order_id' in record:
+                identity = admitted.get(record.get('signal_id'))
+                if (identity is None or any(record.get(k) != identity.get(k)
+                        for k in ('candidate_id', 'signal_id', 'order_id', 'symbol', 'tr_id'))
+                        or _timestamp(record.get('observed_at'), 'lease') < _timestamp(identity['observed_at'], 'admitted')
+                        or (record.get('expires_at') is not None
+                            and _timestamp(record['expires_at'], 'lease expiry') != end)):
+                    raise ValueError('order-ready lease identity/time mismatch')
+    if pending is not None:
+        raise ValueError('order-ready admission record missing')
+
+
+def _ready_reason(record, signal, candidates, seen, admitted, start, admission):
+    if record.get('signal_id') in seen or ('order', record.get('order_id')) in seen:
+        return 'order_ready_duplicate'
+    if (not isinstance(signal.get('candidate_id'), str)
+            or signal.get('strategy') != 'gap_and_go' or record.get('strategy') != 'gap_and_go'
+            or candidates.get(signal.get('candidate_id')) != 'live_screening'
+            or not signal.get('candidate_id', '').endswith(':' + str(record.get('symbol')))):
+        return 'order_ready_outside_scope'
+    if type(record.get('requested_quantity')) is not int or record['requested_quantity'] <= 0:
+        return 'order_ready_invalid_quantity'
+    if not start <= _timestamp(record.get('observed_at'), 'order_ready') < admission:
+        return 'order_ready_admission_closed'
+    if admitted >= 5:
+        return 'order_ready_limit'
+    return 'order_ready_admitted'
 
 
 @dataclass(frozen=True)
@@ -142,21 +244,21 @@ class CapturePlan:
             'source_version_ref configuration_ref fee_evidence_ref capital_evidence_ref capacity_evidence_ref '
             'journal_path buffer_capacity queue_capacity batch_size max_bytes max_record_bytes '
             'open_timeout_seconds close_timeout_seconds channels').split())
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             expected.add('selection_basis')
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             expected.add('entry_gate_trace')
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             expected.add('frame_diagnostics')
-        if type(s) is dict and s.get('version') == 'runner-signal-window-v1':
+        if type(s) is dict and s.get('version') in WINDOW_VERSIONS:
             expected.update(('max_scans', 'quote_admission'))
         if (type(s) is not dict or set(s) != expected
-                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1')):
+                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1')):
             raise ValueError('지원하지 않는 capture 계약/필드')
-        if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1'):
+        if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             from .kis_frame_diagnostics import validate_settings as validate_frame_settings
             validate_frame_settings(s['frame_diagnostics'])
-        if s['version'] == 'runner-signal-window-v1':
+        if s['version'] in WINDOW_VERSIONS:
             validate_window_contract(context)
         for key in ('study_ref', 'scan_admission_ref', 'source_version_ref', 'configuration_ref',
                     'fee_evidence_ref', 'capital_evidence_ref', 'capacity_evidence_ref'):
@@ -185,14 +287,14 @@ class CapturePlan:
                 raise ValueError('자원 한도는 양의 정수 필요')
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
-        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
+        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             from .selection_basis import validate_settings
             selection = validate_settings(s['selection_basis'])
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
             record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
-            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1'):
+            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
                 from .entry_gate_trace import validate_settings as validate_gate_settings
                 gate = validate_gate_settings(s['entry_gate_trace'])
                 if (gate['source_version_ref'] != s['source_version_ref']
@@ -201,7 +303,7 @@ class CapturePlan:
                     raise ValueError('진입 관측 소스/설정/후보 범위 불일치')
                 burst += gate['max_candidates']
                 record_minimum = 65536
-            metadata_records = burst * (s['max_scans'] if s['version'] == 'runner-signal-window-v1' else 1)
+            metadata_records = burst * (s['max_scans'] if s['version'] in WINDOW_VERSIONS else 1)
             if (s['buffer_capacity'] < metadata_records or s['queue_capacity'] < burst
                     or s['max_record_bytes'] < record_minimum
                     or s['max_bytes'] < metadata_records * (s['max_record_bytes'] + 2048) + 2048):
@@ -224,11 +326,17 @@ class _WindowBuffer(EntryObservationBuffer):
     def __init__(self, plan, now):
         s = plan.settings
         super().__init__(evaluation_epoch=plan.context['evaluation_epoch'], capacity=s['buffer_capacity'],
-                         scan_scope='window' if s['version'] == 'runner-signal-window-v1' else 'first',
+                         scan_scope='window' if s['version'] in WINDOW_VERSIONS else 'first',
                          max_scans=s.get('max_scans'), scan_admission_ref=s['scan_admission_ref'],
                          selection_basis_settings=s.get('selection_basis'),
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
                          frame_diagnostics_settings=s.get('frame_diagnostics'))
+        self.order_ready_admission = s['version'] == READY_VERSION
+        self.order_ready_quote_submit = None
+        self._ready_signals = {}
+        self._ready_candidates = {}
+        self._ready_seen = set()
+        self._ready_admitted = 0
         self._now = now
         self.start_at, self.end_at = plan.start_at, plan.end_at
         self.admission_end = _timestamp(s['admission_end_at'], 'admission_end_at')
@@ -265,7 +373,45 @@ class _WindowBuffer(EntryObservationBuffer):
         if self.scan_scope == 'window' and now < self.start_at and record.get('kind') == 'ws_quote':
             return False
         # Original first-scan contracts retain their preparation-stage quotes.
-        return super().publish(record)
+        recorded = super().publish(record)
+        if recorded and self.order_ready_admission:
+            try:
+                if record.get('kind') == 'scan':
+                    for candidate in record.get('candidates', []):
+                        self._ready_candidates[candidate['candidate_id']] = record.get('route_origin')
+                elif record.get('kind') == 'signal':
+                    self._ready_signals.setdefault(record['signal_id'], dict(record))
+                elif record.get('kind') == 'order_ready':
+                    self._admit_order_ready(record)
+            except Exception:
+                self.mark_incomplete('order_ready_admission_failed')
+        return recorded
+
+    def _admit_order_ready(self, record):
+        # 저장된 준비 이벤트의 순서로만 예약한다. 호가/미래 가격은 읽지 않는다.
+        signal = self._ready_signals.get(record.get('signal_id'), {})
+        reason = _ready_reason(record, signal, self._ready_candidates, self._ready_seen,
+                               self._ready_admitted, self.start_at, self.admission_end)
+        self._ready_seen.add(record.get('signal_id'))
+        self._ready_seen.add(('order', record.get('order_id')))
+        admission = dict(kind='order_ready_admission', observed_at=record['observed_at'],
+            status='admitted' if reason == 'order_ready_admitted' else 'unallocated',
+            reason=reason, signal_id=record.get('signal_id'), order_id=record.get('order_id'),
+            candidate_id=signal.get('candidate_id'), symbol=record.get('symbol'), tr_id='H0STASP0',
+            expires_at=self.end_at.isoformat())
+        if not self.publish(admission):
+            self.mark_incomplete('order_ready_admission_not_recorded')
+            return
+        if reason != 'order_ready_admitted':
+            return
+        self._ready_admitted += 1
+        try:
+            if self.order_ready_quote_submit is None:
+                self.mark_incomplete('order_ready_enrollment_unavailable')
+            else:
+                self.order_ready_quote_submit(admission)
+        except Exception:
+            self.mark_incomplete('order_ready_enrollment_failed')
 
 
 class ObservationRuntime:
@@ -300,7 +446,9 @@ class ObservationRuntime:
             if now() >= plan.start_at or _read(plan.study_path) != plan.study_bytes:
                 raise ValueError('원장 준비 중 시작 시각/연구 지문 변경')
             feed.enable_quote_observation(self.buffer, **s['channels'])
-            if self.buffer.scan_scope == 'window':
+            if self.buffer.order_ready_admission:
+                self.buffer.order_ready_quote_submit = feed._quote_subscription_owner.submit_order_ready
+            elif self.buffer.scan_scope == 'window':
                 self.buffer.signal_quote_submit = feed._quote_subscription_owner.submit
             bot._entry_price_observer = self.buffer
             bot._entry_observation_runtime = self
