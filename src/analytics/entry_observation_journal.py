@@ -35,7 +35,8 @@ FIELDS = {
     "emit_result": "candidate_id signal_id observed_at emitted",
     "order_ready": "signal_id symbol order_id observed_at requested_quantity order_reference_price order_type risk_stop_pct effective_stop_pct base_stop_source effective_stop_source crash_cap_applied is_core strategy stop_snapshot_ref capital_budget capital_snapshot capital_snapshot_ref capital_snapshot_status stop_basis stop_resolved_at_stage fill_applied transport_status",
     "ws_quote": "quote_id symbol observed_at ask bid ask_size bid_size provenance",
-    "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic",
+    "order_ready_admission": "observed_at status candidate_id signal_id order_id tr_id symbol reason expires_at",
+    "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic signal_id order_id",
 }
 FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))

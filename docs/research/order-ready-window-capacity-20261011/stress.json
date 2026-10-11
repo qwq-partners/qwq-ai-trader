@@ -1,0 +1,118 @@
+{
+  "admissions": {
+    "accepted": 5,
+    "attempted": 7,
+    "callback_count": 5,
+    "max_candidates": 5,
+    "rejected": 2
+  },
+  "capture": {
+    "accepted_records": 338175,
+    "complete": true,
+    "dropped_records": 0,
+    "journal": {
+      "error": null,
+      "fsync_confirmed": true,
+      "persisted_records": 338175,
+      "sealed": true
+    }
+  },
+  "capture_contract": {
+    "channels": {
+      "external_reserved": 0,
+      "lease_seconds": 5100,
+      "max_candidates": 5,
+      "operational_headroom": 10,
+      "registration_cap": 41
+    },
+    "quote_admission": "order_ready",
+    "version": "runner-order-ready-window-v1",
+    "window": {
+      "admission_end_at": "2026-10-01T01:05:00+00:00",
+      "end_at": "2026-10-01T01:21:00+00:00",
+      "seconds": 4860,
+      "start_at": "2026-10-01T00:00:00+00:00"
+    }
+  },
+  "case": "stress",
+  "channel_allocation_exercised": false,
+  "counts": {
+    "attempted_records": 338175,
+    "control_attempted": 21,
+    "expected_accepted_records": 338175,
+    "expected_dropped_records": 0,
+    "metadata_attempted": 2814
+  },
+  "disk": {
+    "journal_bytes": 213920690,
+    "journal_max_bytes": 536870912,
+    "remaining_bytes": 322950222
+  },
+  "pacing": {
+    "batch_records": 256,
+    "max_drain_seconds": 2.0,
+    "meaning": "paced drain; not live callback latency",
+    "queue_low_water_fraction": 0.5,
+    "sleep_seconds": 0.001
+  },
+  "production_eligible": false,
+  "profitability": false,
+  "qualifier": "order-ready-window-capacity-v1",
+  "quotes": {
+    "accepted": 335340,
+    "rejected": 0,
+    "requested": 335340,
+    "schema": "ws_quote/H0STASP0/synthetic-six-digit-symbol"
+  },
+  "readback": {
+    "address_space_limit_bytes": 1342177280,
+    "complete": true,
+    "dropped_records": 0,
+    "persistence_dropped_records": 0,
+    "reader_cpu_seconds": 26.986576,
+    "reader_peak_rss_bytes": 819716096,
+    "reader_wall_seconds": 27.179679,
+    "record_count": 338175,
+    "records_contract_validated": true,
+    "sealed": true,
+    "strict_reader": true
+  },
+  "resource": {
+    "address_space_limit_bytes": 1342177280,
+    "capture_cpu_seconds": 39.862356,
+    "capture_peak_rss_bytes": 357650432,
+    "capture_wall_seconds": 45.099877,
+    "rss_scope": "capture process lifetime"
+  },
+  "result": {
+    "expectations_met": true,
+    "limitations": [
+      "synthetic records only; no feed, broker, account, or network input",
+      "the callback count proves buffer admission only; it does not claim channel registration or lease success",
+      "generated synthetic shapes are bounded by actual rows, not a guarantee that every production row is max_record_bytes",
+      "paced drain is explicit and is not a live callback latency or throughput claim",
+      "historical basis: 1,035 quotes/60 seconds on five channels; ten channels scaled 2x for 4,860 seconds = 335,340 quotes; this is an assumption, not a future guarantee"
+    ],
+    "overflow_fail_closed": false
+  },
+  "schema_version": 1,
+  "synthetic": true,
+  "target_profile": {
+    "batch_size": 256,
+    "buffer_capacity": 400000,
+    "candidates_per_scan": 100,
+    "max_bytes": 536870912,
+    "max_record_bytes": 65536,
+    "queue_capacity": 8192,
+    "scans": 14
+  },
+  "timestamps": {
+    "first_quote_at": "2026-10-01T00:00:00+00:00",
+    "last_quote_at": "2026-10-01T01:20:59+00:00",
+    "record_timestamps_monotonic": true,
+    "requested_last_quote_at": "2026-10-01T01:20:59+00:00",
+    "rolling_60_quote_peak": 4140,
+    "rolling_60_scope": "requested synthetic schedule, including dropped quotes",
+    "scan_records": 14
+  }
+}

@@ -94,16 +94,23 @@ class QuoteSubscriptionCoordinator:
         self._last_send = float("-inf")
         self._candidate_status: dict[str, str] = {}
         self._observation_ended = False
+        self._ready_requests: dict[str, dict] = {}
+        self._ready_unresolved: set[str] = set()
 
     def _record(self, status, key=None, *, candidate_id=None, reason=None, expires_at=None, frame_diagnostic=None):
-        record = {"kind": "quote_subscription", "observed_at": datetime.now(timezone.utc).isoformat(),
+        record = {"kind": "quote_subscription", "observed_at": (self.observer.current_time().isoformat()
+                  if getattr(self.observer, "order_ready_admission", False) else datetime.now(timezone.utc).isoformat()),
                   "status": status, "generation": self.generation,
                   "connection_id": self.connection_id, "candidate_id": candidate_id,
                   "tr_id": key[0] if key else None, "symbol": key[1] if key else None,
                   "reason": reason, "expires_at": expires_at}
+        identity = self._ready_requests.get(candidate_id)
+        if identity is not None:
+            record.update(candidate_id=identity['candidate_id'], signal_id=identity['signal_id'],
+                          order_id=identity['order_id'])
         if frame_diagnostic is not None:
             record["frame_diagnostic"] = frame_diagnostic
-        # 정해진 버퍼는 publish 실패를 dropped_records로 보존한다.
+        # 창 안의 용량 실패는 dropped_records, 창 밖의 기록은 의도적 제외다.
         self.observer.publish(record)
 
     def _gap(self, reason, *, frame_diagnostic=None):
@@ -152,6 +159,8 @@ class QuoteSubscriptionCoordinator:
 
     def end_observation(self):
         """관측 후보 수요만 종료. 운영 등록·미확인 슬롯은 유지한다."""
+        if self._ready_unresolved:
+            self.observer.mark_incomplete('order_ready_enrollment_unresolved')
         self._observation_ended = True
         self._leases.clear()
 
@@ -170,6 +179,65 @@ class QuoteSubscriptionCoordinator:
                                               requested_at=self.clock()))
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
+
+    def _ready_live(self):
+        if self._observation_ended:
+            return False
+        if self.observer.current_time() >= self.observer.end_at or self.observer.ended:
+            self.end_observation()
+            return False
+        return True
+
+    def submit_order_ready(self, admission):
+        """준비 identity당 유한 예약만 한다. 주문 호출자는 송신/lock을 기다리지 않는다."""
+        if not self._ready_live():
+            self.observer.mark_incomplete('order_ready_enrollment_unresolved')
+            return
+        sid = admission['signal_id']
+        if not isinstance(sid, str) or not sid:
+            self._gap('order_ready_invalid_identity')
+            return
+        if sid in self._ready_requests:
+            return
+        if len(self._ready_requests) >= self.max_candidates:
+            self._record('unallocated', reason='order_ready_limit')
+            self._gap('order_ready_limit')
+            return
+        self._ready_requests[sid] = dict(admission)
+        if len(self._tasks) >= 8:
+            self._record('unallocated', (BOOK, admission['symbol']), candidate_id=sid,
+                         reason='enrollment_queue_full')
+            self._gap('enrollment_queue_full')
+            return
+        remaining = (self.observer.end_at - self.observer.current_time()).total_seconds()
+        deadline = self.clock() + min(self.lease_seconds, max(0, remaining))
+        self._ready_unresolved.add(sid)
+        task = asyncio.create_task(self._enroll_order_ready(sid, deadline))
+        self._tasks.add(task)
+        task.add_done_callback(self._task_done)
+
+    async def _enroll_order_ready(self, sid, deadline):
+        try:
+            async with self._lock:
+                if not self._ready_live():
+                    return
+                admission = self._ready_requests[sid]
+                symbol = admission['symbol']
+                if (deadline <= self.clock() or not isinstance(symbol, str) or len(symbol) != 6
+                        or not symbol.isascii() or not symbol.isdigit()):
+                    self._record('unallocated', (BOOK, symbol), candidate_id=sid,
+                                 reason='invalid_or_full_or_expired')
+                    self._gap('order_ready_enrollment_failed')
+                    return
+                self._leases[sid] = Lease(symbol, deadline, self.observer.end_at.isoformat())
+                self._record('desired', (BOOK, symbol), candidate_id=sid,
+                             expires_at=self.observer.end_at.isoformat())
+                await self._reconcile()
+        except (Exception, asyncio.CancelledError):
+            self.observer.mark_incomplete('order_ready_enrollment_failed')
+            raise
+        finally:
+            self._ready_unresolved.discard(sid)
 
     def _task_done(self, task):
         self._tasks.discard(task)
@@ -208,11 +276,15 @@ class QuoteSubscriptionCoordinator:
     def _expire(self):
         for cid, lease in list(self._leases.items()):
             if lease.deadline <= self.clock():
+                if cid in self._ready_requests and self.observer.current_time() < self.observer.end_at:
+                    self.observer.mark_incomplete('order_ready_lease_expired_early')
                 self._record("expired", (BOOK, lease.symbol), candidate_id=cid, expires_at=lease.expires_at)
                 del self._leases[cid]
                 self._candidate_status.pop(cid, None)
 
     def _desired(self):
+        if getattr(self.observer, 'order_ready_admission', False):
+            self._ready_live()
         if self._observation_ended:
             self._leases.clear()
         desired = list(self._operational)
@@ -227,6 +299,8 @@ class QuoteSubscriptionCoordinator:
         return desired
 
     async def _request(self, action, key):
+        if getattr(self.observer, 'order_ready_admission', False):
+            self._ready_live()
         if action == "subscribe" and self._observation_ended and key not in self._operational:
             return
         if action == "subscribe":
@@ -243,6 +317,8 @@ class QuoteSubscriptionCoordinator:
             delay = self.interval - (self.clock() - self._last_send)
             if delay > 0:
                 await asyncio.sleep(delay)
+            if getattr(self.observer, 'order_ready_admission', False):
+                self._ready_live()
             if action == "subscribe" and self._observation_ended and key not in self._operational:
                 # 아직 송신하지 않은 로컬 예약만 제거. 이미 송신 중인 슬롯은 불명으로 보존.
                 if self._states.get(key) is state:
@@ -278,6 +354,8 @@ class QuoteSubscriptionCoordinator:
             status = ("shared_operational" if key in self._operational else "allocated") if key in desired else "unallocated"
             if self._candidate_status.get(cid) != status:
                 self._candidate_status[cid] = status
+                if status == 'unallocated' and cid in self._ready_requests:
+                    self.observer.mark_incomplete('order_ready_channel_capacity')
                 self._record(status, key, candidate_id=cid, reason=None if key in desired else "channel_capacity")
 
     async def maintain(self):

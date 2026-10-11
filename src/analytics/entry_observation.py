@@ -155,7 +155,8 @@ class EntryObservationBuffer:
                 self._journal_sink.offer(copied)
             except Exception:
                 self.mark_incomplete("journal_offer_failed")
-        if self.scan_scope == 'window' and kind == 'signal':
+        if (self.scan_scope == 'window' and kind == 'signal'
+                and not getattr(self, 'order_ready_admission', False)):
             try:
                 if self.signal_quote_submit is None:
                     self.mark_incomplete('signal_enrollment_unavailable')

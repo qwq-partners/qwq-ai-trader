@@ -179,6 +179,9 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         elif kind == "quote_subscription":
             # 상태 기록은 후보 승인이나 호가의 대체 자료가 아니다.
             subscription_gap |= record.get("status") == "connection_gap"
+        elif kind == 'order_ready_admission':
+            # 위의 명시 버전/identity 검증만 적용한다. 배정은 연결 승인/가격 증거가 아니다.
+            pass
         elif kind == 'entry_gate_trace':
             # Validated above. Actual pre-signal checks do not establish order eligibility.
             pass
