@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.core.engine import UnifiedEngine
-from src.core.types import OrderSide, Portfolio, Position, RiskConfig
+from src.core.types import KST, OrderSide, Portfolio, Position, RiskConfig
 from src.risk.manager import RiskManager
 
 
@@ -213,7 +213,8 @@ def test_manual_sold_then_rebought_as_strategy_keeps_baseline_on_manual():
     pf.mark_daily_start()
     del pf.positions["X"]
     pf.positions["X"] = Position(symbol="X", quantity=5, avg_price=Decimal("100000"),
-                                 current_price=Decimal("100000"), strategy="sepa_trend", entry_time=_dt.now())
+                                 current_price=Decimal("100000"), strategy="sepa_trend",
+                                 entry_time=_dt.now(KST))                      # 기준선 뒤 재생성
     assert pf.effective_daily_pnl == Decimal("1000000")
     assert pf.manual_daily_unrealized_delta == Decimal("1000000")
     assert pf.strategy_effective_daily_pnl == Decimal("0")
@@ -231,7 +232,8 @@ def test_strategy_sold_then_rebought_as_manual_keeps_baseline_on_strategy():
     del pf.positions["Y"]
     pf.daily_pnl = Decimal("500000")
     pf.positions["Y"] = Position(symbol="Y", quantity=3, avg_price=Decimal("150000"),
-                                 current_price=Decimal("150000"), strategy="manual", entry_time=_dt.now())
+                                 current_price=Decimal("150000"), strategy="manual",
+                                 entry_time=_dt.now(KST))                      # 기준선 뒤 재생성
     assert pf.effective_daily_pnl == Decimal("0")
     assert pf.manual_daily_unrealized_delta == Decimal("0")
     assert pf.strategy_effective_daily_pnl == Decimal("0")
@@ -255,3 +257,56 @@ def test_in_place_tag_change_follows_start_tag():
     pf.positions["Y"].current_price = Decimal("160000")           # 시작 전략 종목의 변동 → 전략 몫
     assert pf.manual_daily_unrealized_delta == Decimal("-100000")
     assert pf.strategy_effective_daily_pnl == Decimal("100000")
+
+
+def test_same_day_entry_then_backfill_then_tag_change_is_not_recreation():
+    """재리뷰 P2: 당일 진입(entry_time 오늘) 뒤 장중 재시작 백필이 기준선을 만들고 태그만 바뀜 — 재생성이 아니다."""
+    from datetime import datetime as _dt, timedelta
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
+                                 current_price=Decimal("100000"), strategy="manual",
+                                 entry_time=_dt.now(KST) - timedelta(minutes=30))   # 오늘 진입, 기준선보다 앞
+    pf.mark_daily_start()
+    pf.positions["X"].strategy = "sepa_trend"
+    assert pf.strategy_effective_daily_pnl == Decimal("0")          # 누적 -100만이 전략 손익으로 튀면 결함
+
+
+def test_recreation_detection_is_timezone_aware():
+    """재리뷰 P2: UTC aware entry_time 도 기준선 시각(KST aware)과 절대 시각으로 비교한다."""
+    from datetime import datetime as _dt, timezone
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
+                                 current_price=Decimal("100000"), strategy="manual")
+    pf.mark_daily_start()
+    del pf.positions["X"]
+    pf.positions["X"] = Position(symbol="X", quantity=5, avg_price=Decimal("100000"),
+                                 current_price=Decimal("90000"), strategy="sepa_trend",
+                                 entry_time=_dt.now(timezone.utc))                 # 기준선 뒤, UTC 표기
+    assert pf.manual_daily_unrealized_delta == Decimal("1000000")
+    assert pf.strategy_effective_daily_pnl == Decimal("-50000")
+
+
+def test_tag_change_without_marked_at_is_unmeasured():
+    """옛 파일(기준선 시각 없음)에서 태그가 바뀐 종목은 재생성과 구별할 수 없어 None."""
+    from datetime import datetime as _dt
+    pf = Portfolio(cash=Decimal("1000000"))
+    pf.positions["X"] = Position(symbol="X", quantity=10, avg_price=Decimal("200000"),
+                                 current_price=Decimal("100000"), strategy="manual", entry_time=_dt.now(KST))
+    pf.mark_daily_start()
+    pf.daily_start_marked_at = None
+    pf.positions["X"].strategy = "sepa_trend"
+    assert pf.strategy_effective_daily_pnl is None
+    pf.positions["X"].strategy = "manual"                             # 태그 불변이면 측정 가능
+    assert pf.strategy_effective_daily_pnl == Decimal("0")
+
+
+def test_daily_stats_roundtrip_keeps_marked_at(tmp_path):
+    pf = _pf(manual_now="-5000000", manual_start="-1000000")
+    assert pf.daily_start_marked_at is not None and pf.daily_start_marked_at.tzinfo is not None
+    fake = SimpleNamespace(portfolio=pf, _counted_buy_order_ids=set(),
+                           _DAILY_STATS_PATH=tmp_path / "engine_daily_stats.json")
+    UnifiedEngine._save_daily_stats(fake)
+    fresh = SimpleNamespace(portfolio=Portfolio(), _counted_buy_order_ids=set(),
+                            _DAILY_STATS_PATH=fake._DAILY_STATS_PATH, _daily_stats_restored=False)
+    UnifiedEngine.restore_daily_stats(fresh)
+    assert fresh.portfolio.daily_start_marked_at == pf.daily_start_marked_at
