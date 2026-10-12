@@ -54,10 +54,12 @@ P1 준비 정적 감사에서 `kis_websocket.py`의 체결 파서는 거래소 �
 KIS 공개 가이드가 자체적으로 읽는 `/api/apis/public/detail`을 **인증·계좌 API 없이** 조회했다. 검색에 노출된 샘플의 열 이름에 의존하지 않고 공급자의 값 설명을 확인했다.
 
 - [체결 정의 H0STCNT0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STCNT0): `NEW_MKOP_CLS_CODE`는 두 자리 구성이며 앞자리2가 장중, 뒷자리0이 보통이다. `TRHT_YN`은 Y/N 정지 여부다. `HOUR_CLS_CODE`는0/A/B/C/D를 구분하고 C는09시 이후 예상/VI를 포함한다. 이 값들만으로 모든 시점의 연속매매가 증명되는 것은 아니다.
-- [호가 정의 H0STASP0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STASP0): 같은 hour code 설명이 있으며 마지막 `STCK_DEAL_CLS_CODE`는 삭제된 미사용 값이다. 이 열을 새 정상장 증거로 쓰지 않는다.
+- [호가 정의 H0STASP0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STASP0): 같은 hour code 설명이 있으며59번째 `STCK_DEAL_CLS_CODE`는 삭제된 미사용 값이다. 이 열을 새 정상장 증거로 쓰지 않는다.63번째 `MARKET_CLS_CODE`는 프리/정규/애프터/종가를 구분하며 정규값은2다. 공식 샘플의 `asking_price_krx`도63열로 일치한다. 현재 파서는40열 이상에서 기존 상위 호가만 읽어 추가 열을 보존하지 않는다. 따라서 추가 채널 없이 이 원문과 실제 필드 수를 저장하는 것을 먼저 구현하되, 옛59열이나 시장·형식 불일치에는 값이 없다고 기록한다. 정규 구분만으로 VI·단일가 부재까지 확정하지 않는다.
 - [장운영 정의 H0STMKO0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STMKO0): `MKOP_CLS_CODE`112는 개장,121은 마감 동시호가 시작 등 사건 코드다. 종목 상태58/59는 거래정지/단기과열 분류다. 문서는 VI 발생/해제 때 수신한다고 설명하므로 구독 직후의 정상 초기값 또는 모든 예외의 완전한 통지가 보장됐다고 볼 수 없다. 단일가 관련 일부 코드는 원문에도 `???`이며, `VI_CLS_CODE`의 적용 여부를 활성 구간 판정으로 바로 바꾸지 않는다.
 
 원문 응답 바이트·수집 시각·SHA256 색인은 Git 밖 `/home/ubuntu/.local/share/qwq-research/public-kis-status-20261012/index.json`에 보존했다. 체결/호가/장운영 응답 SHA는 각각 `833b105418e98807d3e24753f97ed008e0f5f6972a0937a1a0f40d252543624d`, `a22543dd4a1c64c01210eef281203771da0d1d58e2e7d4c08643c35a3fc60ff3`, `4c76c54995ff112312ecf9e98f4f194d6edfe2f0749300b8639c10ff0d40c3f5`다. 상위 문서 수정일과 개별 필드 수정일은 다르므로 응답 원문/지문을 기준으로 고정한다. 다음 구현은 이 근거의 원문 보존·연결이며, 자동 정상 판정 및 실제 한 쌍 확보는 아직 미완료다.
+
+공개 스냅샷의 독립 문서 대조(Sol/high 요청, 실제 모델 미노출)는 초기 상태·유효 구간을 과장하지 않았음을 확인했다. 지적된 열 위치 표현은59번째로 고쳤고 조정자가 공식 샘플과 추가63열을 직접 대조했다. 코드 변경 없이 근거 문서만 보완했다.
 
 ## 매일 볼 결과와 수정 규칙
 
