@@ -231,3 +231,17 @@ def test_cli_rejects_bad_original_or_review_files(journal_files, tmp_path, defec
     assert r.returncode == 2
     assert not r.stdout
     assert '[평가입력 준비]' in r.stderr
+
+
+def test_official_regular_market_code_alone_stays_unreviewed():
+    c, o, sha = fixture()
+    for q in o['records']:
+        if q['kind'] == 'ws_quote':
+            q['provenance'].update(raw_field_count=63, market_class_code='2',
+                market_state_schema='H0STASP0-63-v1', market_state_status='raw_observed',
+                market_state_source_sha256='a22543dd4a1c64c01210eef281203771da0d1d58e2e7d4c08643c35a3fc60ff3')
+    out = build(c, o, sha)
+    assert out['readiness']['status'] == 'no_comparable_pairs'
+    assert out['original']['report']['counts']['paired_outcomes'] == 0
+    quotes = [t['entry_quote'] for t in out['review_tasks'] if t['entry_quote'] is not None]
+    assert quotes and all(q['review_status'] == 'UNREVIEWED' for q in quotes)

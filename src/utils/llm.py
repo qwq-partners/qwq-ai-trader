@@ -27,6 +27,7 @@ import aiohttp
 from loguru import logger
 
 from .llm_pricing import rate_quote
+from .llm_budget import MonthlyBudgetLedger, BudgetBlocked, BudgetStateError
 
 
 class LLMProvider(str, Enum):
@@ -97,6 +98,8 @@ class LLMConfig:
 
     # 비용 관리
     daily_budget_usd: float = 5.0  # 일일 예산
+    monthly_budget_usd: Optional[float] = None  # Explicit activation only.
+    budget_state_path: Optional[str] = None
 
     def __post_init__(self):
         if (isinstance(self.daily_budget_usd, bool)
@@ -104,6 +107,15 @@ class LLMConfig:
                 or not math.isfinite(self.daily_budget_usd)
                 or self.daily_budget_usd < 0):
             raise ValueError("llm.daily_budget must be a finite nonnegative USD number")
+        if self.monthly_budget_usd is not None and (
+                isinstance(self.monthly_budget_usd, bool)
+                or not isinstance(self.monthly_budget_usd, (int, float))
+                or not math.isfinite(self.monthly_budget_usd) or self.monthly_budget_usd < 0):
+            raise ValueError("llm.monthly_budget must be a finite nonnegative USD number")
+        if self.monthly_budget_usd is not None and self.budget_state_path is not None:
+            if (not isinstance(self.budget_state_path, str) or not self.budget_state_path.strip()
+                    or not Path(self.budget_state_path).expanduser().is_absolute()):
+                raise ValueError("llm.budget_state_path must be an explicit absolute or home-relative path")
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -131,6 +143,8 @@ class LLMConfig:
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
+            monthly_budget_usd=llm_cfg.get("monthly_budget"),
+            budget_state_path=llm_cfg.get("budget_state_path"),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
@@ -205,6 +219,7 @@ class LLMResponse:
     provider_error_code: Optional[str] = None
     provider_error_type: Optional[str] = None
     provider_error_status: Optional[str] = None
+    budget_block_reason: Optional[str] = None
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -674,6 +689,18 @@ class LLMManager:
         self.audit_dir = Path(audit_dir) if audit_dir is not None else None
         self._audit_log_date: Optional[str] = None
         self.config = config or LLMConfig.from_env()
+        self.monthly_budget: Optional[MonthlyBudgetLedger] = None
+        self._monthly_budget_error: Optional[str] = None
+        if self.config.monthly_budget_usd is not None:
+            try:
+                if not isinstance(self.config.budget_state_path, str) or not self.config.budget_state_path.strip():
+                    raise BudgetStateError("missing_budget_state_path")
+                self.monthly_budget = MonthlyBudgetLedger(
+                    self.config.budget_state_path, self.config.monthly_budget_usd
+                )
+            except BudgetBlocked as exc:
+                self._monthly_budget_error = exc.reason
+                logger.error("[LLM] monthly budget storage unavailable; paid calls blocked")
         self._shadow_tasks: set[asyncio.Task] = set()
         self._closing = False
         self.configuration_warnings = []
@@ -771,6 +798,12 @@ class LLMManager:
                 request_sent=False, usage_known=False, billing_status="not_sent"
             )
 
+        if self.config.monthly_budget_usd is not None and self.config.manus_enabled:
+            self.stats["error_count"] += 1
+            return self._monthly_blocked_response(
+                LLMProvider.OPENAI, "", "unsupported_billing_provider"
+            )
+
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
         # 배치 작업을 Manus 에이전트로 처리한다. 실패하면 아래 API 경로로 그대로 폴백한다.
         # 실시간 태스크는 config에 잘못 넣어도 아래 allowlist가 막는다 (주석은 강제력이 없다).
@@ -797,6 +830,11 @@ class LLMManager:
         if response.success:
             self.stats["success_count"] += 1
             self._maybe_fire_shadow(prompt, system, task, kwargs, response)
+            return response
+
+        if response.budget_block_reason:
+            self.stats["error_count"] += 1
+            self.stats["fallback_skipped_monthly_budget"] = self.stats.get("fallback_skipped_monthly_budget", 0) + 1
             return response
 
         if not self._check_budget():
@@ -944,15 +982,88 @@ class LLMManager:
 
         return response
 
+    def _monthly_blocked_response(self, provider: LLMProvider, model: str, reason: str) -> LLMResponse:
+        return LLMResponse("", model, provider, success=False,
+                           error=f"Monthly budget blocked: {reason}", requested_model=model,
+                           request_sent=False, usage_known=False, billing_status="not_sent",
+                           budget_block_reason=reason)
+
+    def get_monthly_budget_status(self) -> Dict[str, Any]:
+        if self.config.monthly_budget_usd is None:
+            return {"enabled": False}
+        if self._monthly_budget_error is None and self.monthly_budget is not None:
+            try:
+                return {"enabled": True, **self.monthly_budget.status()}
+            except BudgetBlocked as exc:
+                self._monthly_budget_error = exc.reason
+        return {"enabled": True, "blocked": True, "block_reason": self._monthly_budget_error,
+                "spent_usd": None, "reserved_usd": None, "available_usd": None,
+                "monthly_limit_usd": self.config.monthly_budget_usd}
+
+    def _settle_monthly(self, token: Optional[str], response: LLMResponse, model: str) -> None:
+        if token is None or self.monthly_budget is None:
+            return
+        try:
+            if not response.request_sent:
+                self.monthly_budget.settle(token, outcome="not_sent")
+            elif response.billing_status == "rejected_before_generation":
+                self.monthly_budget.settle(token, outcome="rejected")
+            elif response.usage_known:
+                quote = rate_quote(model, response.input_tokens, response.output_tokens,
+                                   on_date=self.monthly_budget.today())
+                if quote is None:
+                    self.monthly_budget.settle(token, outcome="unknown")
+                else:
+                    self.monthly_budget.settle(token, outcome="known", actual_cost_usd=quote.cost_usd)
+            else:
+                self.monthly_budget.settle(token, outcome="unknown")
+        except (BudgetBlocked, ValueError, TypeError) as exc:
+            self._monthly_budget_error = exc.reason if isinstance(exc, BudgetBlocked) else "invalid_usage"
+            # A settlement failure must not keep an abandoned reservation looking live.
+            self.monthly_budget.close()
+            logger.error("[LLM] monthly budget settlement failed; paid calls blocked")
+
     async def _complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                 _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
+        provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+        token = None
+        if self.config.monthly_budget_usd is not None:
+            try:
+                if self._monthly_budget_error is not None or self.monthly_budget is None:
+                    raise BudgetStateError(self._monthly_budget_error or "storage_unavailable")
+                output_limit = kwargs.get("max_tokens")
+                if output_limit is None:
+                    output_limit = self.config.max_output_tokens
+                token = self.monthly_budget.reserve(_model, _prompt, _system, output_limit)
+            except BudgetBlocked as exc:
+                response = self._monthly_blocked_response(provider, _model, exc.reason)
+                self._account_attempt(response, _task, _role)
+                return response
         try:
             response = await _client.complete(_prompt, _system, model=_model, **kwargs)
         except asyncio.CancelledError as exc:
             response = getattr(exc, "_llm_response", None)
+            if response is None and token is not None:
+                response = LLMResponse("", _model, provider, success=False,
+                                       error="Request cancelled", usage_known=False, billing_status="unknown")
             if response is not None:
+                self._settle_monthly(token, response, _model)
                 self._account_attempt(response, _task, _role)
             raise
+        except ValueError:
+            # Client control validation occurs before HTTP, and preserves its public exception contract.
+            if token is not None:
+                unsent = self._monthly_blocked_response(provider, _model, "invalid_local_controls")
+                self._settle_monthly(token, unsent, _model)
+            raise
+        except Exception:
+            if token is not None:
+                unknown = LLMResponse("", _model, provider, success=False,
+                                      error="Provider invocation failed", usage_known=False, billing_status="unknown")
+                self._settle_monthly(token, unknown, _model)
+                self._account_attempt(unknown, _task, _role)
+            raise
+        self._settle_monthly(token, response, _model)
         self._account_attempt(response, _task, _role)
         return response
 
@@ -1001,6 +1112,7 @@ class LLMManager:
                 "finish_reason": response.finish_reason, "elapsed_ms": response.latency_ms,
                 "request_sent": response.request_sent, "usage_known": response.usage_known,
                 "billing_status": response.billing_status,
+                "budget_block_reason": response.budget_block_reason,
                 "http_status": response.http_status,
                 "provider_error_code": response.provider_error_code,
                 "provider_error_type": response.provider_error_type,
@@ -1060,6 +1172,8 @@ class LLMManager:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         self._shadow_tasks.difference_update(pending)
+        if self.monthly_budget is not None:
+            self.monthly_budget.close()
         for client in (self.openai, self.gemini):
             if client._session is not None and not client._session.closed:
                 await client._session.close()
@@ -1231,6 +1345,7 @@ class LLMManager:
             "budget_scope": "process_local_post_usage",
             "audit_enabled": self.audit_dir is not None,
             "configuration_warnings": list(self.configuration_warnings),
+            "monthly_budget": self.get_monthly_budget_status(),
             "stats": self.stats,
         }
 
@@ -1257,3 +1372,18 @@ def get_llm_manager() -> LLMManager:
     if _llm_manager is None:
         _llm_manager = LLMManager(config=_pending_config)
     return _llm_manager
+
+
+async def close_llm_manager() -> None:
+    """Close an existing singleton only; shutdown must not initialize paid clients."""
+    global _llm_manager
+    manager = _llm_manager
+    if manager is not None:
+        await manager.close()
+        _llm_manager = None
+
+
+def unmetered_paid_calls_allowed() -> bool:
+    """Read current/pending policy without initializing a manager or ledger."""
+    config = _llm_manager.config if _llm_manager is not None else _pending_config
+    return config is None or config.monthly_budget_usd is None

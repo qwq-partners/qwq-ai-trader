@@ -1817,6 +1817,13 @@ class UnifiedTradingBot:
                 except Exception as e:
                     logger.error(f"KR WebSocket 종료 실패: {e}")
 
+            # Existing LLM singleton only: cancel/account shadow calls before sessions close.
+            try:
+                from src.utils.llm import close_llm_manager
+                await close_llm_manager()
+            except Exception as e:
+                logger.error(f"LLM 종료 실패: {type(e).__name__}")
+
             # 토큰 매니저 정리
             if self._token_manager:
                 try:
@@ -2281,6 +2288,25 @@ def load_entry_observation_plan(args):
     return CapturePlan.load(manifest)
 
 
+def configure_llm_from_app(config):
+    """Production startup must not silently lose the explicitly enabled budget."""
+    from src.utils.llm import LLMConfig, set_llm_config
+    raw = getattr(config, "raw", None)
+    llm = raw.get("llm") if isinstance(raw, dict) else None
+    if (not isinstance(llm, dict) or llm.get("monthly_budget") is None
+            or not isinstance(llm.get("budget_state_path"), str)
+            or not llm["budget_state_path"].strip()):
+        raise ValueError("운영 LLM 월 예산과 영속 원장 경로가 필요합니다")
+    configured = LLMConfig.from_config(raw)
+    set_llm_config(configured)
+    logger.info(
+        f"[LLM] 월 예산 ${configured.monthly_budget_usd:g} (KST), "
+        f"OpenAI heavy={configured.openai_model_heavy}, light={configured.openai_model_light}, "
+        f"Gemini heavy={configured.gemini_model_heavy}, light={configured.gemini_model_light}"
+    )
+    return configured
+
+
 async def main():
     """메인 함수"""
     args = parse_args()
@@ -2301,45 +2327,13 @@ async def main():
         # 로거 미구현 시 기본 loguru 사용
         logger.info("기본 loguru 로거 사용")
 
-    # 설정 로드
-    try:
-        from src.utils.config import AppConfig
-        config = AppConfig.load(
-            config_path=args.config,
-            dotenv_path=str(project_root / ".env")
-        )
-        # 2026-06-16: LLM 모델명 config override 주입 (GPT-5 deprecation 대비)
-        try:
-            from src.utils.llm import LLMConfig as _LLMConfig, set_llm_config
-            _llm_cfg = _LLMConfig.from_config(config.raw if hasattr(config, "raw") else {})
-            set_llm_config(_llm_cfg)
-            _shadow_tag = (
-                f", shadow={_llm_cfg.openai_model_light_shadow}"
-                if _llm_cfg.openai_model_light_shadow else ", shadow=비활성"
-            )
-            logger.info(
-                f"[LLM] 모델 설정: openai_heavy={_llm_cfg.openai_model_heavy}, "
-                f"openai_light={_llm_cfg.openai_model_light}{_shadow_tag}, "
-                f"gemini_heavy={_llm_cfg.gemini_model_heavy}, "
-                f"gemini_light={_llm_cfg.gemini_model_light}"
-            )
-        except Exception as _llm_err:
-            logger.warning(f"[LLM] 모델명 config 주입 실패 (기본값 사용): {_llm_err}")
-    except ImportError:
-        # AppConfig 미구현 시 빈 설정 사용
-        logger.warning("AppConfig 미구현 — 빈 설정으로 시작")
-
-        class _MockConfig:
-            trading = TradingConfig()
-            raw = {}
-            def get(self, *args, **kwargs):
-                return kwargs.get('default', {})
-            def get_kr_config(self):
-                return self.trading
-            def get_us_config(self):
-                return self.trading
-
-        config = _MockConfig()
+    # Configuration errors are startup failures; unbudgeted fallback is prohibited.
+    from src.utils.config import AppConfig
+    config = AppConfig.load(
+        config_path=args.config,
+        dotenv_path=str(project_root / ".env"),
+    )
+    configure_llm_from_app(config)
 
     # 프로세스 중복 체크
     if not acquire_singleton_lock():

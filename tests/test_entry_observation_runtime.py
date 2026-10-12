@@ -502,3 +502,14 @@ def test_once_bad_manifest_consumed_before_any_bot_initialization(tmp_path, monk
     with pytest.raises(FileNotFoundError): asyncio.run(m.main())
     assert receipt.is_file()
     assert startup.claim_once_manifest(request, now=moment) is None
+
+
+@pytest.mark.asyncio
+async def test_runner_shutdown_closes_existing_llm_without_creating_new_one(monkeypatch):
+    from src.utils import llm
+    events=[]
+    async def close():events.append('llm_closed')
+    monkeypatch.setattr(llm, 'close_llm_manager', close, raising=False)
+    b=fake_bot()
+    await b.shutdown()
+    assert events == ['llm_closed']

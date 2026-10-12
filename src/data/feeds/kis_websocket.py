@@ -30,6 +30,24 @@ from src.utils.token_manager import get_token_manager
 from src.utils.session import KRSession
 
 
+# Official public H0STASP0 detail snapshot, captured 2026-10-12 UTC.
+# Exact KRX 63-field schema only; NXT/integrated tails have different offsets.
+_KRX_BOOK_STATE_SOURCE_SHA256 = "a22543dd4a1c64c01210eef281203771da0d1d58e2e7d4c08643c35a3fc60ff3"
+
+
+def _orderbook_state_provenance(tr_id, fields):
+    exact = tr_id == "H0STASP0" and len(fields) == 63
+    code = fields[62] if exact else None
+    return {
+        "raw_field_count": len(fields),
+        "market_class_code": code,
+        "market_state_schema": "H0STASP0-63-v1" if exact else None,
+        "market_state_source_sha256": _KRX_BOOK_STATE_SOURCE_SHA256 if exact else None,
+        "market_state_status": ("raw_observed" if code in {"1", "2", "3", "5"}
+                                else "invalid_code") if exact else "unsupported_schema",
+    }
+
+
 class KISWebSocketType(str, Enum):
     """WebSocket 구독 타입"""
     PRICE = "H0STCNT0"          # 실시간 체결가 (정규장)
@@ -1220,6 +1238,7 @@ class KISWebSocketFeed:
                 ask_size=ask_size,
                 metadata={
                     "tr_id": tr_id, "exchange_time": fields[1], "hour_class_code": fields[2],
+                    **_orderbook_state_provenance(tr_id, fields),
                     "received_at": received_at if received_at is not None else datetime.now(timezone.utc).isoformat(),
                     "message_count": count,
                     # 원문 HHMMSS에는 거래일이 없다. 수신일로 원천 날짜를 추정하지 않는다.

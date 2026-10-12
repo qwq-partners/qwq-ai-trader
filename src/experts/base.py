@@ -152,6 +152,10 @@ class ExpertAgent(ABC):
         """Perplexity Sonar 검색 (실패 시 빈 문자열)"""
         if not self.perplexity_key:
             return ""
+        from src.utils.llm import unmetered_paid_calls_allowed
+        if not unmetered_paid_calls_allowed():
+            logger.info(f"[{self.name}] Perplexity 문맥 결측: 월 예산 원장 미연결")
+            return ""
 
         import aiohttp
         try:
