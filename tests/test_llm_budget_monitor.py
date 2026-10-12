@@ -22,9 +22,11 @@ def _payload(**overrides):
 
 class FakeLedger:
     def __init__(
-        self, notice=None, *, status_error=None, claim_error=None, finish_error=None
+        self, notice=None, *, status=None, status_error=None,
+        claim_error=None, finish_error=None
     ):
         self.notice = notice
+        self.status = status
         self.status_error = status_error
         self.claim_error = claim_error
         self.finish_error = finish_error
@@ -34,7 +36,7 @@ class FakeLedger:
         self.events.append(("status",))
         if self.status_error:
             raise self.status_error
-        return _payload()
+        return self.status or _payload()
 
     def claim_policy_notice(self, lease_seconds=120):
         self.events.append(("claim", lease_seconds))
@@ -66,19 +68,21 @@ def _notice(payload=None):
 def test_formatter_reports_cost_reservations_thresholds_and_trading_boundary():
     from src.utils.llm_budget_monitor import format_budget_policy_notice
 
-    text = format_budget_policy_notice(_payload())
+    text = format_budget_policy_notice(_payload(), event_id="evt-visible")
 
     assert "LLM 월 예산 정책 전환" in text
     assert "2026-10 (KST)" in text
     assert "2026-10-12T23:10:00+09:00" in text
     assert (
-        "확정 비용 $79.2500 + 예약 $1.0000 = 관리 합계 $80.2500 "
+        "정산 추정 $79.2500 + 예약 추정 $1.0000 = 관리 합계 $80.2500 "
         "/ 월 한도 $100.0000 (80.2%)"
     ) in text
+    assert "이벤트 ID: evt-visible" in text
     assert "절약 모드 (80% 이상)" in text
+    assert "공개 단가·토큰 사용량 추정이며 공급자 청구서 확정액이 아닙니다" in text
     assert "절약 80% → 필수 95% → 유료 중지 100%" in text
     assert "위험 중요 판단 모델은 자동 하향하지 않습니다" in text
-    assert "규칙 기반 매매와 보호 청산은 계속됩니다" in text
+    assert "기존 매매 규칙·매수 중지 설정과 보호 청산은 유지됩니다" in text
 
 
 @pytest.mark.parametrize(
@@ -107,13 +111,42 @@ def test_month_reset_reports_previous_month_and_does_not_clear_unresolved_usage(
         reserved_usd=0.0,
         policy_mode="normal",
         policy_reason="kst_month_reset",
-        previous_month={"month": "2026-10", "spent_usd": 94.0, "reserved_usd": 0.5},
+        previous_month={
+            "month": "2026-10",
+            "spent_usd": 94.0,
+            "reserved_usd": 0.5,
+            "unresolved_count": 2,
+        },
     ))
 
     assert "KST 달력월 전환" in text
-    assert "이전 월 2026-10: 확정 $94.0000 + 예약 $0.5000" in text
+    assert (
+        "이전 월 2026-10 (월 경계 시점 잠정값): "
+        "정산 추정 $94.0000 + 예약 추정 $0.5000"
+    ) in text
+    assert "미확인 전체 건수: 2건" in text
     assert "새 월 2026-11" in text
     assert "미확인 비용과 원장 이상은 월 전환으로 초기화되지 않습니다" in text
+
+
+def test_blocked_month_reset_does_not_claim_normal_policy_restored():
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+
+    text = format_budget_policy_notice(_payload(
+        kind="month_reset",
+        month="2026-11",
+        policy_mode="blocked",
+        policy_reason="unresolved_usage",
+        previous_month={
+            "month": "2026-10",
+            "spent_usd": 94.0,
+            "reserved_usd": 0.0,
+            "unresolved_count": 1,
+        },
+    ))
+
+    assert "차단 상태는 유지됩니다" in text
+    assert "새 월 예산으로 전환합니다" not in text
 
 
 @pytest.mark.asyncio
@@ -130,12 +163,32 @@ async def test_tick_observes_policy_claims_one_notice_and_acks_success():
 
     assert await budget_monitor_tick(FakeManager(ledger), send=send) is True
     assert len(sent) == 1
+    assert "이벤트 ID: evt-1" in sent[0]
     assert ledger.events == [
         ("status",),
         ("claim", 120),
         ("send",),
         ("finish", "evt-1", "claim-1", True),
     ]
+
+
+@pytest.mark.asyncio
+async def test_tick_distinguishes_queued_event_policy_from_delivery_policy():
+    from src.utils.llm_budget_monitor import budget_monitor_tick
+
+    ledger = FakeLedger(
+        _notice(_payload(month="2026-10", policy_mode="economy")),
+        status=_payload(month="2026-11", policy_mode="normal"),
+    )
+    sent = []
+
+    async def send(text):
+        sent.append(text)
+        return True
+
+    assert await budget_monitor_tick(FakeManager(ledger), send=send) is True
+    assert "기록 시점 정책: <b>절약 모드 (80% 이상)</b>" in sent[0]
+    assert "발송 시점 정책: <b>기본 모드 (80% 미만)</b> (2026-11 KST)" in sent[0]
 
 
 @pytest.mark.asyncio

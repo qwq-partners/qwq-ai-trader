@@ -69,8 +69,8 @@ def _cost_line(payload: Mapping[str, Any]) -> str:
     limit = _number(payload.get("monthly_limit_usd"))
     if spent is None or reserved is None or limit is None:
         return (
-            f"비용: 확정 비용 {_money(payload.get('spent_usd'))} + "
-            f"예약 {_money(payload.get('reserved_usd'))} / "
+            f"비용: 정산 추정 {_money(payload.get('spent_usd'))} + "
+            f"예약 추정 {_money(payload.get('reserved_usd'))} / "
             f"월 한도 {_money(payload.get('monthly_limit_usd'))}"
         )
     total = spent + reserved
@@ -80,12 +80,17 @@ def _cost_line(payload: Mapping[str, Any]) -> str:
         else total / limit * 100
     )
     return (
-        f"비용: 확정 비용 ${spent:.4f} + 예약 ${reserved:.4f} = "
+        f"비용: 정산 추정 ${spent:.4f} + 예약 추정 ${reserved:.4f} = "
         f"관리 합계 ${total:.4f} / 월 한도 ${limit:.4f} ({ratio:.1f}%)"
     )
 
 
-def format_budget_policy_notice(payload: Mapping[str, Any]) -> str:
+def format_budget_policy_notice(
+    payload: Mapping[str, Any],
+    *,
+    event_id: Optional[str] = None,
+    current_status: Optional[Mapping[str, Any]] = None,
+) -> str:
     """Return a deterministic Korean notification for a durable policy event."""
     kind = payload.get("kind")
     mode = str(payload.get("policy_mode") or "")
@@ -101,6 +106,7 @@ def format_budget_policy_notice(payload: Mapping[str, Any]) -> str:
 
     lines = [
         title,
+        *([f"이벤트 ID: {_safe_text(event_id)}"] if event_id is not None else []),
         f"이벤트 시각: {event_at}",
         f"기준 월: {month} (KST)",
     ]
@@ -108,27 +114,43 @@ def format_budget_policy_notice(payload: Mapping[str, Any]) -> str:
         previous = payload.get("previous_month")
         if isinstance(previous, Mapping):
             lines.append(
-                f"이전 월 {_safe_text(previous.get('month'))}: "
-                f"확정 {_money(previous.get('spent_usd'))} + "
-                f"예약 {_money(previous.get('reserved_usd'))}"
+                f"이전 월 {_safe_text(previous.get('month'))} "
+                f"(월 경계 시점 잠정값): "
+                f"정산 추정 {_money(previous.get('spent_usd'))} + "
+                f"예약 추정 {_money(previous.get('reserved_usd'))}"
             )
+            unresolved = previous.get("unresolved_count")
+            if isinstance(unresolved, int) and not isinstance(unresolved, bool) and unresolved >= 0:
+                lines.append(f"미확인 전체 건수: {unresolved}건")
         lines.append(f"새 월 {month}: {_cost_line(payload).removeprefix('비용: ')}")
     else:
         lines.append(_cost_line(payload))
+    lines.append("비용 기준: 공개 단가·토큰 사용량 추정이며 공급자 청구서 확정액이 아닙니다.")
 
     lines.extend([
-        f"현재 정책: <b>{mode_label}</b>",
+        f"기록 시점 정책: <b>{mode_label}</b>",
         "정책 단계: 절약 80% → 필수 95% → 유료 중지 100%",
         f"정책 사유: {_safe_text(payload.get('policy_reason'))}",
         f"정책 버전: {_safe_text(payload.get('policy_version'))}",
-        action,
-        "규칙 기반 매매와 보호 청산은 계속됩니다.",
+        f"기록 시점 조치: {action}",
+        "기존 매매 규칙·매수 중지 설정과 보호 청산은 유지됩니다.",
     ])
+    if isinstance(current_status, Mapping) and current_status.get("policy_mode"):
+        current_mode = str(current_status["policy_mode"])
+        current_label = _MODE_LABELS.get(
+            current_mode,
+            f"알 수 없는 정책 모드 ({_safe_text(current_mode)})",
+        )
+        lines.append(
+            f"발송 시점 정책: <b>{current_label}</b> "
+            f"({_safe_text(current_status.get('month'))} KST)"
+        )
     if kind == "month_reset":
-        lines.extend([
-            "KST 달력월 기준 새 월 예산으로 전환합니다.",
-            "미확인 비용과 원장 이상은 월 전환으로 초기화되지 않습니다.",
-        ])
+        if mode in {"paused", "blocked"}:
+            lines.append("KST 달력월은 전환됐지만 차단 상태는 유지됩니다.")
+        else:
+            lines.append("KST 달력월 기준 새 월 예산으로 전환합니다.")
+        lines.append("미확인 비용과 원장 이상은 월 전환으로 초기화되지 않습니다.")
     return "\n".join(lines)
 
 
@@ -156,7 +178,7 @@ async def budget_monitor_tick(
         return None
 
     try:
-        ledger.policy_status()
+        current_status = ledger.policy_status()
     except Exception:
         _log_bounded(
             "policy_status",
@@ -178,7 +200,11 @@ async def budget_monitor_tick(
     try:
         event_id = notice["event_id"]
         claim_token = notice["claim_token"]
-        text = format_budget_policy_notice(notice["payload"])
+        text = format_budget_policy_notice(
+            notice["payload"],
+            event_id=event_id,
+            current_status=current_status,
+        )
     except Exception:
         _log_bounded(
             "notice_payload",
