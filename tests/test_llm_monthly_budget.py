@@ -393,3 +393,193 @@ async def test_close_singleton_closes_existing_without_constructing_another(monk
     await module.close_llm_manager()
     assert existing.closed
     assert module._llm_manager is None
+
+
+@pytest.mark.asyncio
+async def test_failed_settlement_does_not_abandon_other_inflight_request(tmp_path, monkeypatch):
+    from src.utils.llm_budget import BudgetStateError
+    m = manager(tmp_path)
+    started, finish = asyncio.Event(), asyncio.Event()
+    async def pending_success():
+        started.set()
+        await finish.wait()
+        return response()
+    m.openai = FakeClient([pending_success, response()])
+    original = m.monthly_budget.settle
+    failed_once = False
+    def fail_first(token, **kwargs):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise BudgetStateError('storage_unavailable')
+        return original(token, **kwargs)
+    monkeypatch.setattr(m.monthly_budget, 'settle', fail_first)
+    a = asyncio.create_task(m.complete_with('A', LLMProvider.OPENAI))
+    await started.wait()
+    await m.complete_with('B', LLMProvider.OPENAI)
+    finish.set()
+    assert (await a).success
+    status = manager(tmp_path).get_monthly_budget_status()
+    assert status['unresolved_count'] == 1
+    assert status['settled_count'] == 1
+    assert status['spent_usd'] == pytest.approx(0.0000225)
+
+
+@pytest.mark.asyncio
+async def test_close_drains_nonshadow_known_completion_and_blocks_new_attempts(tmp_path):
+    m = manager(tmp_path)
+    started = asyncio.Event()
+    async def pending_success():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return response()  # Provider already has a completed known response.
+    m.openai = FakeClient([pending_success, response()])
+    task = asyncio.create_task(m.complete_with('p', LLMProvider.OPENAI))
+    await started.wait()
+    await asyncio.wait_for(m.close(), timeout=1)
+    assert task.done()
+    assert (await task).success
+    assert manager(tmp_path).get_monthly_budget_status()['settled_count'] == 1
+    assert manager(tmp_path).get_monthly_budget_status()['unresolved_count'] == 0
+    assert not (await m.complete_with('new', LLMProvider.OPENAI)).success
+    assert m.openai.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_close_from_active_attempt_does_not_deadlock_or_lose_known_charge(tmp_path):
+    m = manager(tmp_path)
+    async def closes_itself():
+        await m.close()
+        return response()
+    m.openai = FakeClient([closes_itself])
+    assert (await asyncio.wait_for(m.complete_with('p', LLMProvider.OPENAI), timeout=1)).success
+    status = manager(tmp_path).get_monthly_budget_status()
+    assert status['settled_count'] == 1
+    assert status['unresolved_count'] == 0
+
+
+@pytest.mark.parametrize('config', [None, LLMConfig()])
+def test_global_get_requires_explicit_monthly_policy(monkeypatch, config):
+    import src.utils.llm as module
+    monkeypatch.setattr(module, '_llm_manager', None)
+    monkeypatch.setattr(module, '_pending_config', config)
+    with pytest.raises(RuntimeError, match='monthly budget'):
+        module.get_llm_manager()
+    assert module._llm_manager is None
+
+
+def test_unmetered_no_config_is_closed(monkeypatch):
+    import src.utils.llm as module
+    monkeypatch.setattr(module, '_llm_manager', None)
+    monkeypatch.setattr(module, '_pending_config', None)
+    assert not module.unmetered_paid_calls_allowed()
+
+
+@pytest.mark.asyncio
+async def test_manus_enabled_does_not_block_other_tasks(tmp_path):
+    m = manager(tmp_path)
+    m.config.manus_enabled = True
+    m.gemini = FakeClient([response(provider=LLMProvider.GEMINI)])
+    assert (await m.complete('p', task=LLMTask.QUICK_CLASSIFY)).success
+    assert m.gemini.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_status_read_failure_does_not_permanently_disable_requests(tmp_path, monkeypatch):
+    from src.utils.llm_budget import BudgetStateError
+    m = manager(tmp_path)
+    original = m.monthly_budget.status
+    def fail_read():
+        raise BudgetStateError('storage_unavailable')
+    monkeypatch.setattr(m.monthly_budget, 'status', fail_read)
+    assert m.get_monthly_budget_status()['blocked']
+    monkeypatch.setattr(m.monthly_budget, 'status', original)
+    m.openai = FakeClient([response()])
+    assert (await m.complete_with('p', LLMProvider.OPENAI)).success
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('budgeted', [False, True])
+async def test_shadow_generic_exception_is_accounted_once(tmp_path, budgeted):
+    m = manager(tmp_path) if budgeted else LLMManager(LLMConfig(openai_api_key='fake'))
+    m.audit_dir = tmp_path / 'audit'
+    m._SHADOW_LOG_DIR = tmp_path / 'shadow'
+    async def broken():
+        raise RuntimeError('private failure')
+    m.openai = FakeClient([broken])
+    await m._fire_shadow('p', '', LLMTask.QUICK_CLASSIFY, {}, response(), 'gpt-5-mini')
+    assert m.daily_usage.unknown_usage_requests == 1
+    rows = [line for path in m.audit_dir.glob('*.jsonl') for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert 'private failure' not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_unbudgeted_generic_exception_is_accounted_and_reraised(tmp_path):
+    m = LLMManager(LLMConfig(openai_api_key='fake'), audit_dir=tmp_path)
+    async def broken():
+        raise RuntimeError('private failure')
+    m.openai = FakeClient([broken])
+    with pytest.raises(RuntimeError):
+        await m.complete_with('p', LLMProvider.OPENAI)
+    assert m.daily_usage.unknown_usage_requests == 1
+
+
+@pytest.mark.asyncio
+async def test_sqlite_contention_is_bounded_before_http(tmp_path):
+    import time
+    m = manager(tmp_path)
+    m.openai = FakeClient([response()])
+    with sqlite3.connect(tmp_path / 'budget.sqlite3') as blocker:
+        blocker.execute('BEGIN IMMEDIATE')
+        started = time.monotonic()
+        result = await m.complete_with('p', LLMProvider.OPENAI)
+        elapsed = time.monotonic() - started
+    assert result.budget_block_reason == 'storage_unavailable'
+    assert m.openai.calls == 0
+    assert elapsed < 1.0
+
+
+def test_gemini_reservation_has_explicit_thought_headroom(tmp_path):
+    ledger = new_ledger(tmp_path)
+    token = ledger.reserve('gemini-3.1-pro-preview', 'p', '', 1000)
+    assert ledger.status()['reserved_usd'] > 0.024
+    ledger.settle(token, outcome='known', actual_cost_usd=0.024)
+    assert not ledger.status()['bound_breach']
+
+
+@pytest.mark.asyncio
+async def test_unbudgeted_cancel_without_transport_metadata_is_accounted_once(tmp_path):
+    m = LLMManager(LLMConfig(openai_api_key='fake'), audit_dir=tmp_path)
+    async def pending():
+        await asyncio.Event().wait()
+    m.openai = FakeClient([pending])
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(m.complete_with('p', LLMProvider.OPENAI), timeout=0.01)
+    assert m.daily_usage.unknown_usage_requests == 1
+    assert len([line for path in tmp_path.glob('*.jsonl') for line in path.read_text().splitlines()]) == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_local_validation_has_one_unsent_audit_row(tmp_path):
+    m = manager(tmp_path)
+    m.audit_dir = tmp_path / 'audit'
+    m._SHADOW_LOG_DIR = tmp_path / 'shadow'
+    await m._fire_shadow('p', '', LLMTask.QUICK_CLASSIFY, {'reasoning_effort': 'unsupported'}, response(), 'gpt-5-mini')
+    rows = [json.loads(line) for path in m.audit_dir.glob('*.jsonl') for line in path.read_text().splitlines()]
+    assert len(rows) == 1
+    assert not rows[0]['request_sent']
+    assert m.daily_usage.unknown_usage_requests == 0
+    assert m.get_monthly_budget_status()['reserved_usd'] == 0
+
+
+@pytest.mark.asyncio
+async def test_closed_manager_cannot_enter_legacy_manus_path(monkeypatch):
+    m = LLMManager(LLMConfig(manus_enabled=True))
+    await m.close()
+    async def forbidden(*args, **kwargs):
+        pytest.fail('Closing must reject every paid path')
+    monkeypatch.setattr(m, '_try_manus', forbidden)
+    assert not (await m.complete('p', task=LLMTask.TRADE_REVIEW)).success

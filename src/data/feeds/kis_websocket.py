@@ -30,7 +30,9 @@ from src.utils.token_manager import get_token_manager
 from src.utils.session import KRSession
 
 
-# Official public H0STASP0 detail snapshot, captured 2026-10-12 UTC.
+# Official source: https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STASP0
+# Snapshot: ~/.local/share/qwq-research/public-kis-status-20261012/H0STASP0.json
+# Retrieved 2026-10-12T12:13:17.407642+00:00; SHA rederived from its 40,219 raw bytes.
 # Exact KRX 63-field schema only; NXT/integrated tails have different offsets.
 _KRX_BOOK_STATE_SOURCE_SHA256 = "a22543dd4a1c64c01210eef281203771da0d1d58e2e7d4c08643c35a3fc60ff3"
 

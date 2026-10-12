@@ -11,12 +11,13 @@
 3. KRX H0STASP0의 공식63필드 원문에서 MARKET_CLS_CODE와 스키마/출처 해시를 보존한다. 기존59필드·NXT·알 수 없는 길이는 상태 미확인으로 남긴다. 호가·잔량·구독·주문 동작을 바꾸지 않는다. 장중 코드만으로 연속매매/VI 부재를 인증하지 않는다.
 4. 봇 종료 때 이미 생성된 LLMManager의 shadow 취소/집계와 세션 종료를 연결한다. 새로운 manager를 종료 경로에서 생성하지 않는다.
 5. 예산 밖 Perplexity/Manus 유료 호출은 월 제한 활성화 중 보류한다. Perplexity 기존 Sonar 동기 호출은 공급자 측 Agent API로 변환되므로 옛 고정 단가를 쓰지 않는다. 검색 문맥 결측은 로그에 표시하고 소스/비용을 검증해 별도 복구한다.
-6. 관련/전체/시간대/비밀 검사와 독립 중요 변경 리뷰, CI 후 고정 커밋을 기존 배포기로 운영 적용한다. 매수 중지·기존 override·관측 원본·예약을 보존하고 운영 상태를 대조한다.
+6. 미확인 비용의 수동 대사는 근거 SHA/활성화 시각/검토자/미리보기 상태 지문을 결합하고, 알려진 비용/원래 월/한도를 낮추지 않는다. 자동 복구·API·재시작은 없다.
+7. 관련/전체/시간대/비밀 검사와 독립 중요 변경 리뷰, CI 후 고정 커밋을 기존 배포기로 운영 적용한다. 매수 중지·기존 override·관측 원본·예약을 보존하고 운영 상태를 대조한다.
 
 ## 인터페이스·소유권
 
 - Astra/high worker: `src/utils/llm.py`, `src/utils/llm_budget.py`, 해당 예산/전송 테스트. config `llm.monthly_budget`, `llm.budget_state_path`; 직접 dataclass 기본은 비활성. 운영 경로는 `~/.local/state/qwq-ai-trader/llm-budget.sqlite3`이고 pytest에서 해당 영역 접근을 차단한다. `close_llm_manager()`는 기존 singleton만 종료.
-- coordinator: `config/default.yml`, runner 종료 연결, KIS 호가 metadata와 관측 whitelist 및 테스트, 문서·통합·배포.
+- coordinator: `config/default.yml`, runner 종료 연결, KIS 호가 metadata와 관측 whitelist 및 테스트, 문서·통합·배포 및 `llm_budget_reconciliation.py`/명시 복구 CLI·테스트.
 - Sol/high: 읽기 전용 우회 호출/설정/종료 감사. 최종 중요 변경 리뷰는 구현자가 아닌 검증된 Claude Opus5/xhigh에 제한된 소스를 제공한다.
 - 모든 작성자는 동일 base d4b1e3053cf45a044d1fb1fde96be1e903877c39의 별도 worktree. worker fanout/운영 접근 없음.
 

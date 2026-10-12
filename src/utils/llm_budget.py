@@ -73,7 +73,7 @@ class MonthlyBudgetLedger:
         self.path.stat()
         mode = 'ro' if readonly else 'rw'
         connection = sqlite3.connect(self.path.as_uri() + '?mode=' + mode, uri=True,
-                                     timeout=5, isolation_level=None)
+                                     timeout=0.1, isolation_level=None)
         connection.row_factory = sqlite3.Row
         try:
             connection.execute('PRAGMA synchronous=FULL')
@@ -214,7 +214,7 @@ class MonthlyBudgetLedger:
     def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int) -> str:
         """Conservative admission estimate: twice UTF-8 bytes plus 256 overhead.
 
-        Output reserve includes the requested full output limit (reasoning too).
+        OpenAI reserves its completion cap; Gemini gets 2x output headroom.
         Month attribution is admission time, not a provider billing promise.
         """
         if (not isinstance(model, str) or not isinstance(prompt, str) or not isinstance(system, str)
@@ -231,7 +231,13 @@ class MonthlyBudgetLedger:
                 # Capture admission once: pricing, budget and row month cannot
                 # straddle midnight and charge a different month than checked.
                 now = self._now()
-                quote = rate_quote(model, input_estimate, max_output_tokens, on_date=now.date())
+                # 2026-10-12: combined limits are documented at
+                # https://ai.google.dev/gemini-api/docs/thinking#token-limits-and-max_output_tokens
+                # but that current guide targets Interactions, not the deployed
+                # 3.1 generateContent path. Reserve 2x as an explicit uncertainty
+                # margin; do not change the payload or claim an invoice guarantee.
+                output_reserve = max_output_tokens * (2 if model.startswith('gemini-') else 1)
+                quote = rate_quote(model, input_estimate, output_reserve, on_date=now.date())
                 if quote is None:
                     raise BudgetBlocked('unpriced_model')
                 units = _units(quote.cost_usd)
@@ -291,17 +297,20 @@ class MonthlyBudgetLedger:
         except (OSError, sqlite3.Error, TypeError, ValueError):
             raise BudgetStateError('storage_unavailable') from None
         finally:
-            fd = self.active_reservations.pop(token, None)
-            if fd is not None:
-                os.close(fd)
+            self.abandon(token)
             if committed:
                 try:
                     (self.lock_dir / (token + '.lock')).unlink()
                 except OSError:
                     pass
 
+    def abandon(self, token: str):
+        """Drop ownership of only this attempt; leave its uncertain row intact."""
+        fd = self.active_reservations.pop(token, None)
+        if fd is not None:
+            os.close(fd)
+
     def close(self):
         """Lose ownership only; unfinished attempts remain uncertain, never freed."""
-        for fd in self.active_reservations.values():
-            os.close(fd)
-        self.active_reservations.clear()
+        for token in tuple(self.active_reservations):
+            self.abandon(token)
