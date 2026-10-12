@@ -22,7 +22,7 @@ def fixture(tmp_path):
     evidence = tmp_path/'evidence.txt'; evidence.write_text('synthetic provider cost record')
     review = {'version':'llm-budget-reconciliation-v1','activated_at':ledger.status()['activated_at'],
         'reviewer_ref':'synthetic-operator','evidence_sha256':hashlib.sha256(evidence.read_bytes()).hexdigest(),
-        'adjustments':[{'token':token,'actual_cost_usd':0.1}], 'clear_bound_breach':False}
+        'adjustments':[{'token':token,'actual_cost_usd':0.0001}], 'clear_bound_breach':False}
     return ledger,evidence,review
 
 
@@ -31,7 +31,7 @@ def test_dry_run_never_changes_budget_or_creates_audit_table(tmp_path):
     before=ledger.path.read_bytes()
     out=reconcile(ledger.path,100,review,evidence)
     assert not out['applied'] and out['adjustment_count']==1
-    assert out['new_cost_usd']==0.1
+    assert out['new_cost_usd']==0.0001
     assert ledger.path.read_bytes()==before and ledger.status()['blocked']
 
 
@@ -42,7 +42,7 @@ def test_apply_requires_exact_dry_run_state_and_preserves_origin(tmp_path):
                       expected_state_sha256=preview['state_sha256'])
     assert applied['applied']
     status=ledger.status()
-    assert not status['blocked'] and status['spent_usd']==0.1
+    assert not status['blocked'] and status['spent_usd']==0.0001
     assert status['activated_at']==review['activated_at']
     with sqlite3.connect(ledger.path) as db:
         row=db.execute('SELECT evidence_sha256,reviewer_ref FROM reconciliations').fetchone()
@@ -85,7 +85,7 @@ def test_unknown_cost_above_limit_is_recorded_but_does_not_reopen_budget(tmp_pat
     preview=reconcile(ledger.path,100,review,evidence)
     reconcile(ledger.path,100,review,evidence,apply=True,expected_state_sha256=preview['state_sha256'])
     assert ledger.status()['spent_usd']==101
-    assert ledger.status()['block_reason']=='monthly_limit_exceeded'
+    assert ledger.status()['blocked'] and ledger.status()['bound_breach']
 
 
 def test_breach_acknowledgment_keeps_known_charge_and_requires_no_unresolved(tmp_path):
@@ -95,7 +95,36 @@ def test_breach_acknowledgment_keeps_known_charge_and_requires_no_unresolved(tmp
     review['clear_bound_breach']=True
     preview=reconcile(ledger.path,100,review,evidence)
     reconcile(ledger.path,100,review,evidence,apply=True,expected_state_sha256=preview['state_sha256'])
-    assert not ledger.status()['bound_breach'] and ledger.status()['spent_usd']==0.1
+    assert not ledger.status()['bound_breach'] and ledger.status()['spent_usd']==0.0001
+
+
+def test_reconciliation_preserves_new_reservation_breach_below_monthly_limit(tmp_path):
+    ledger,evidence,review=fixture(tmp_path)
+    review['adjustments'][0]['actual_cost_usd']=0.5
+    preview=reconcile(ledger.path,100,review,evidence)
+    assert preview['new_bound_breach_count']==1
+    assert not ledger.status()['bound_breach']
+    reconcile(ledger.path,100,review,evidence,apply=True,expected_state_sha256=preview['state_sha256'])
+    assert ledger.status()['spent_usd']==0.5
+    assert ledger.status()['block_reason']=='reservation_bound_breach'
+    # A distinct review of the newly discovered breach is required to acknowledge it.
+    review['adjustments']=[]
+    review['clear_bound_breach']=True
+    preview=reconcile(ledger.path,100,review,evidence)
+    reconcile(ledger.path,100,review,evidence,apply=True,expected_state_sha256=preview['state_sha256'])
+    assert ledger.status()['spent_usd']==0.5 and not ledger.status()['blocked']
+
+
+def test_existing_breach_acknowledgment_cannot_hide_new_overrun(tmp_path):
+    ledger,evidence,review=fixture(tmp_path)
+    with sqlite3.connect(ledger.path) as db:
+        db.execute('UPDATE settings SET bound_breach=1')
+    review['adjustments'][0]['actual_cost_usd']=0.5
+    review['clear_bound_breach']=True
+    before=ledger.path.read_bytes()
+    with pytest.raises(ValueError,match='new reservation breach'):
+        reconcile(ledger.path,100,review,evidence)
+    assert ledger.path.read_bytes()==before
 
 
 def test_missing_ledger_is_never_initialized_by_reconciliation(tmp_path):
@@ -134,6 +163,23 @@ def test_cli_defaults_to_preview_and_requires_state_for_apply(tmp_path):
     assert json.loads(completed.stdout)['applied'] is False
     refused=subprocess.run(args+['--apply'],capture_output=True,text=True)
     assert refused.returncode!=0 and 'expected-state-sha256' in refused.stderr
+    assert ledger.path.read_bytes()==before
+
+
+@pytest.mark.parametrize('defect',['json','limit','negative'])
+def test_cli_reports_invalid_review_without_traceback_or_mutation(tmp_path,defect):
+    import json,subprocess,sys
+    from pathlib import Path
+    ledger,evidence,review=fixture(tmp_path)
+    if defect=='negative':review['adjustments'][0]['actual_cost_usd']=-1
+    review_path=tmp_path/'review.json'
+    review_path.write_text('{' if defect=='json' else json.dumps(review))
+    script=Path(__file__).resolve().parents[1]/'scripts/reconcile_llm_budget.py'
+    before=ledger.path.read_bytes()
+    out=subprocess.run([sys.executable,str(script),'--ledger',str(ledger.path),
+        '--limit-usd','99' if defect=='limit' else '100','--review',str(review_path),
+        '--evidence',str(evidence)],capture_output=True,text=True)
+    assert out.returncode==2 and 'error:' in out.stderr and 'Traceback' not in out.stderr
     assert ledger.path.read_bytes()==before
 
 

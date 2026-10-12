@@ -216,15 +216,16 @@ async def test_local_validation_releases_reservation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_monthly_cap_refuses_manus_bypass(tmp_path, monkeypatch):
+async def test_monthly_cap_skips_manus_and_uses_metered_provider(tmp_path, monkeypatch):
     m = manager(tmp_path)
     m.config.manus_enabled = True
     async def forbidden(*args, **kwargs):
         pytest.fail('Manus must not bypass monthly cap')
     monkeypatch.setattr(m, '_try_manus', forbidden)
+    m.openai = FakeClient([response()])
     result = await m.complete('p', task=LLMTask.TRADE_REVIEW)
-    assert not result.success
-    assert result.budget_block_reason == 'unsupported_billing_provider'
+    assert result.success
+    assert m.get_monthly_budget_status()['settled_count'] == 1
 
 
 @pytest.mark.asyncio
@@ -428,6 +429,7 @@ async def test_failed_settlement_does_not_abandon_other_inflight_request(tmp_pat
 @pytest.mark.asyncio
 async def test_close_drains_nonshadow_known_completion_and_blocks_new_attempts(tmp_path):
     m = manager(tmp_path)
+    m._CLOSE_GRACE_SECONDS = 0.01
     started = asyncio.Event()
     async def pending_success():
         started.set()
@@ -583,3 +585,203 @@ async def test_closed_manager_cannot_enter_legacy_manus_path(monkeypatch):
         pytest.fail('Closing must reject every paid path')
     monkeypatch.setattr(m, '_try_manus', forbidden)
     assert not (await m.complete('p', task=LLMTask.TRADE_REVIEW)).success
+
+
+@pytest.mark.asyncio
+async def test_close_allows_natural_completion_and_caller_bookkeeping(tmp_path):
+    m = manager(tmp_path)
+    started, finish, bookkeeping = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def pending_success():
+        started.set()
+        await finish.wait()
+        return response()
+    m.openai = FakeClient([pending_success])
+    async def caller():
+        result = await m.complete_with('p', LLMProvider.OPENAI)
+        bookkeeping.set()
+        return result
+    application = asyncio.create_task(caller())
+    await started.wait()
+    asyncio.get_running_loop().call_later(0.02, finish.set)
+    await asyncio.wait_for(m.close(), 1)
+    assert (await application).success
+    assert bookkeeping.is_set()
+    status = manager(tmp_path).get_monthly_budget_status()
+    assert status['settled_count'] == 1
+    assert status['unresolved_count'] == 0
+
+
+@pytest.mark.asyncio
+async def test_forced_close_returns_failure_without_cancelling_application(tmp_path):
+    m = manager(tmp_path)
+    m._CLOSE_GRACE_SECONDS = 0.01
+    started, bookkeeping = asyncio.Event(), asyncio.Event()
+    async def pending():
+        started.set()
+        await asyncio.Event().wait()
+    m.openai = FakeClient([pending])
+    async def caller():
+        result = await m.complete_with('p', LLMProvider.OPENAI)
+        bookkeeping.set()
+        return result
+    application = asyncio.create_task(caller())
+    await started.wait()
+    await asyncio.wait_for(m.close(), 1)
+    result = await application
+    assert not result.success
+    assert result.request_sent and not result.usage_known
+    assert bookkeeping.is_set()
+    assert application.cancelling() == 0
+    assert manager(tmp_path).get_monthly_budget_status()['unresolved_count'] == 1
+
+
+@pytest.mark.asyncio
+async def test_close_does_not_wait_for_caller_work_after_response(tmp_path):
+    m = manager(tmp_path)
+    m._CLOSE_GRACE_SECONDS = 0.01
+    started, finish_tail = asyncio.Event(), asyncio.Event()
+    async def pending_success():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            return response()
+    m.openai = FakeClient([pending_success])
+    async def caller():
+        result = await m.complete_with('p', LLMProvider.OPENAI)
+        await finish_tail.wait()
+        return result
+    application = asyncio.create_task(caller())
+    try:
+        await started.wait()
+        await asyncio.wait_for(m.close(), 0.2)
+        assert not application.done()
+        assert application.cancelling() == 0
+    finally:
+        finish_tail.set()
+        await asyncio.gather(application, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_close_is_bounded_when_request_ignores_cancel_and_keeps_ownership(tmp_path):
+    m = manager(tmp_path)
+    m._CLOSE_GRACE_SECONDS = 0.01
+    m._CLOSE_FORCE_SECONDS = 0.01
+    started, finish = asyncio.Event(), asyncio.Event()
+    async def stubborn():
+        started.set()
+        while not finish.is_set():
+            try:
+                await finish.wait()
+            except asyncio.CancelledError:
+                pass
+        return response()
+    m.openai = FakeClient([stubborn])
+    application = asyncio.create_task(m.complete_with('p', LLMProvider.OPENAI))
+    await started.wait()
+    closing = asyncio.create_task(m.close())
+    try:
+        done, _ = await asyncio.wait({closing}, timeout=0.2)
+        assert closing in done
+        assert m.monthly_budget.active_reservations
+        status = manager(tmp_path).get_monthly_budget_status()
+        assert status['reserved_usd'] > 0
+        assert status['unresolved_count'] == 0
+    finally:
+        finish.set()
+        await asyncio.gather(application, closing, return_exceptions=True)
+    status = manager(tmp_path).get_monthly_budget_status()
+    assert status['settled_count'] == 1
+    assert status['unresolved_count'] == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_survives_one_waiter_cancel_and_closes_once(tmp_path):
+    m = manager(tmp_path)
+    started, finish = asyncio.Event(), asyncio.Event()
+    class Session:
+        closed = False
+        closes = 0
+        async def close(self):
+            self.closes += 1
+            await asyncio.sleep(0)
+            self.closed = True
+    session = Session()
+    async def pending_success():
+        started.set()
+        await finish.wait()
+        return response()
+    m.openai = FakeClient([pending_success])
+    m.openai._session = session
+    application = asyncio.create_task(m.complete_with('p', LLMProvider.OPENAI))
+    await started.wait()
+    first = asyncio.create_task(m.close())
+    second = asyncio.create_task(m.close())
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    finish.set()
+    await asyncio.wait_for(second, 1)
+    assert (await application).success
+    await m.close()
+    assert session.closed and session.closes == 1
+    assert manager(tmp_path).get_monthly_budget_status()['unresolved_count'] == 0
+
+
+@pytest.mark.asyncio
+async def test_close_resource_wait_is_bounded(tmp_path):
+    m = manager(tmp_path)
+    m._CLOSE_RESOURCE_SECONDS = 0.01
+    finish, finished = asyncio.Event(), asyncio.Event()
+    class Session:
+        closed = False
+        async def close(self):
+            await finish.wait()
+            self.closed = True
+            finished.set()
+    session = Session()
+    m.openai._session = session
+    try:
+        await asyncio.wait_for(m.close(), 0.2)
+        assert not session.closed
+    finally:
+        finish.set()
+        await asyncio.wait_for(finished.wait(), 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('sent', [False, True])
+async def test_forced_close_preserves_actual_transport_dispatch_evidence(tmp_path, monkeypatch, sent):
+    m = manager(tmp_path)
+    m._CLOSE_GRACE_SECONDS = 0.01
+    started = asyncio.Event()
+    class PendingReply:
+        async def __aenter__(self):
+            started.set()
+            await asyncio.Event().wait()
+        async def __aexit__(self, *args):
+            pass
+    class PendingSession:
+        closed = False
+        def post(self, *args, **kwargs):
+            return PendingReply()
+        async def close(self):
+            self.closed = True
+    if sent:
+        m.openai._session = PendingSession()
+    else:
+        async def pending_session():
+            started.set()
+            await asyncio.Event().wait()
+        monkeypatch.setattr(m.openai, '_get_session', pending_session)
+    application = asyncio.create_task(m.complete_with('p', LLMProvider.OPENAI))
+    await started.wait()
+    await asyncio.wait_for(m.close(), 1)
+    result = await application
+    assert not result.success
+    assert result.request_sent == sent
+    assert result.http_status is None
+    status = manager(tmp_path).get_monthly_budget_status()
+    assert status['unresolved_count'] == int(sent)
+    assert status['reserved_usd'] == 0

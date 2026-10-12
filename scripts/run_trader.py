@@ -1817,10 +1817,10 @@ class UnifiedTradingBot:
                 except Exception as e:
                     logger.error(f"KR WebSocket 종료 실패: {e}")
 
-            # Existing LLM singleton only: cancel/account shadow calls before sessions close.
+            # Existing singleton only: bounded graceful drain before sessions close.
             try:
                 from src.utils.llm import close_llm_manager
-                await close_llm_manager()
+                await asyncio.wait_for(close_llm_manager(), timeout=10.0)
             except Exception as e:
                 logger.error(f"LLM 종료 실패: {type(e).__name__}")
 

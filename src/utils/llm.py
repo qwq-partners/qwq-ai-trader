@@ -682,6 +682,9 @@ class LLMManager:
     # LLM 응답 로그 경로
     _LLM_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_responses"
     _LLM_LOG_RETENTION_DAYS = 7
+    _CLOSE_GRACE_SECONDS = 5.0
+    _CLOSE_FORCE_SECONDS = 1.0
+    _CLOSE_RESOURCE_SECONDS = 1.0
     # 2026-06-17 Phase 3: Shadow A/B 비교 로그 (light 후속 모델 마이그레이션)
     _SHADOW_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_shadow"
 
@@ -702,7 +705,9 @@ class LLMManager:
                 self._monthly_budget_error = exc.reason
                 logger.error("[LLM] monthly budget storage unavailable; paid calls blocked")
         self._shadow_tasks: set[asyncio.Task] = set()
-        self._attempt_tasks: Dict[asyncio.Task, int] = {}
+        self._attempt_tasks: set[asyncio.Task] = set()
+        self._close_task: Optional[asyncio.Task] = None
+        self._resource_close_task: Optional[asyncio.Task] = None
         self._closing = False
         self.configuration_warnings = []
         for field_name in ("openai_model_heavy", "openai_model_light", "gemini_model_heavy",
@@ -804,17 +809,10 @@ class LLMManager:
                 request_sent=False, usage_known=False, billing_status="not_sent"
             )
 
-        if (self.config.monthly_budget_usd is not None and self.config.manus_enabled
-                and task.value in self.config.manus_tasks and task.value in MANUS_ALLOWED_TASKS):
-            self.stats["error_count"] += 1
-            return self._monthly_blocked_response(
-                LLMProvider.OPENAI, "", "unsupported_billing_provider"
-            )
-
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
         # 배치 작업을 Manus 에이전트로 처리한다. 실패하면 아래 API 경로로 그대로 폴백한다.
         # 실시간 태스크는 config에 잘못 넣어도 아래 allowlist가 막는다 (주석은 강제력이 없다).
-        if (self.config.manus_enabled
+        if (self.config.monthly_budget_usd is None and self.config.manus_enabled
                 and task.value in self.config.manus_tasks
                 and task.value in MANUS_ALLOWED_TASKS):
             manus_resp = await self._try_manus(prompt, system, task, kwargs)
@@ -1041,20 +1039,34 @@ class LLMManager:
             response.error = "LLM manager closing"
             self._account_attempt(response, _task, _role)
             return response
-        task = asyncio.current_task()
-        if task is not None:
-            self._attempt_tasks[task] = self._attempt_tasks.get(task, 0) + 1
+        # 호출자 전체가 아니라 이 요청의 전송·정산 수명만 소유한다.
+        attempt = asyncio.create_task(self._run_complete_attempt(
+            _client, _prompt, _system, _model, _task, _role, **kwargs
+        ))
+        self._attempt_tasks.add(attempt)
+        attempt.add_done_callback(self._attempt_done)
         try:
-            return await self._run_complete_attempt(_client, _prompt, _system, _model, _task, _role, **kwargs)
-        finally:
-            if task is not None:
-                remaining = self._attempt_tasks[task] - 1
-                if remaining:
-                    self._attempt_tasks[task] = remaining
-                else:
-                    self._attempt_tasks.pop(task)
-            if self._closing and not self._attempt_tasks:
-                await self._close_resources()
+            return await attempt
+        except asyncio.CancelledError as exc:
+            caller = asyncio.current_task()
+            if (not self._closing or _role == "shadow"
+                    or (caller is not None and caller.cancelling())):
+                # 호출자 취소/timeout 계약은 유지한다.
+                raise
+            # manager가 소유 요청만 취소한 경우 호출자의 후처리는 계속한다.
+            response = getattr(exc, "_llm_response", None)
+            if response is None:
+                # 시작 전 취소는 예약/전송이 없고, 시작 후 취소는 아래 경계가 기록한다.
+                provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+                response = self._monthly_blocked_response(provider, _model, "manager_closing")
+            response.budget_block_reason = "manager_closing"
+            return response
+
+    def _attempt_done(self, task: asyncio.Task) -> None:
+        self._attempt_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()  # 호출자 종료 후 남은 요청의 예외도 회수한다.
+        self._start_resource_close()
 
     async def _run_complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
@@ -1082,6 +1094,7 @@ class LLMManager:
             if response is not None:
                 self._settle_monthly(token, response, _model)
                 self._account_attempt(response, _task, _role)
+            exc._llm_response = response
             raise
         except ValueError as exc:
             # Transport validation errors are local and retain their public raise contract.
@@ -1199,19 +1212,47 @@ class LLMManager:
             logger.warning("[LLM] shadow task failed")
 
     async def close(self) -> None:
-        """Stop admission, cancel/drain every owned attempt, then release resources."""
+        """신규 요청을 막고 정상 완료를 기다린 뒤 소유 요청만 제한 시간 내 취소한다."""
         self._closing = True
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._drain_and_close())
         current = asyncio.current_task()
-        pending = (set(self._shadow_tasks) | set(self._attempt_tasks)) - {current}
-        for task in pending:
-            task.cancel()
+        if (current in self._attempt_tasks or current in self._shadow_tasks
+                or current is self._close_task or current is self._resource_close_task):
+            # 요청 내부 재진입은 자신을 기다리지 않고 완료 callback에 정리를 맡긴다.
+            return
+        await asyncio.shield(self._close_task)
+
+    async def _drain_and_close(self) -> None:
+        pending = set(self._attempt_tasks) | set(self._shadow_tasks)
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        self._shadow_tasks.difference_update(pending)
-        # If called by an attempt itself, its finally block closes resources
-        # after its response has been settled. Never await or abandon itself.
-        if not self._attempt_tasks:
-            await self._close_resources()
+            _, pending = await asyncio.wait(pending, timeout=self._CLOSE_GRACE_SECONDS)
+        if pending:
+            # shadow wrapper를 함께 취소하면 같은 요청에 취소가 중복 전달된다.
+            for task in self._attempt_tasks.copy():
+                if not task.done():
+                    task.cancel()
+            _, pending = await asyncio.wait(pending, timeout=self._CLOSE_FORCE_SECONDS)
+        if pending:
+            logger.warning("[LLM] 종료 유예 초과: 진행 중 요청의 정산 소유권을 유지합니다")
+        self._start_resource_close()
+        if self._resource_close_task is not None:
+            done, _ = await asyncio.wait(
+                {self._resource_close_task}, timeout=self._CLOSE_RESOURCE_SECONDS
+            )
+            if not done:
+                logger.warning("[LLM] HTTP 정리 유예 초과: 백그라운드 정리를 유지합니다")
+
+    def _start_resource_close(self) -> None:
+        # 취소를 무시하는 요청도 정산 전에는 lock/HTTP 세션을 해제하지 않는다.
+        if self._closing and not self._attempt_tasks and self._resource_close_task is None:
+            self._resource_close_task = asyncio.create_task(self._close_resources())
+            self._resource_close_task.add_done_callback(self._resource_close_done)
+
+    @staticmethod
+    def _resource_close_done(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("[LLM] 자원 정리 실패")
 
     async def _close_resources(self) -> None:
         if self.monthly_budget is not None:

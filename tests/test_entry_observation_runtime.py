@@ -513,3 +513,26 @@ async def test_runner_shutdown_closes_existing_llm_without_creating_new_one(monk
     b=fake_bot()
     await b.shutdown()
     assert events == ['llm_closed']
+
+
+@pytest.mark.asyncio
+async def test_runner_llm_shutdown_timeout_still_closes_token_manager(monkeypatch):
+    from src.utils import llm
+    events=[]
+    async def close():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            events.append('llm_cancelled')
+    real_wait_for=asyncio.wait_for
+    async def short_wait_for(coro,timeout):
+        assert timeout==10.0
+        events.append('bounded')
+        return await real_wait_for(coro,timeout=0.01)
+    async def close_token():events.append('token_closed')
+    monkeypatch.setattr(llm,'close_llm_manager',close)
+    monkeypatch.setattr(runner().asyncio,'wait_for',short_wait_for)
+    b=fake_bot()
+    b._token_manager=SimpleNamespace(close=close_token)
+    await real_wait_for(b.shutdown(),timeout=1)
+    assert events==['bounded','llm_cancelled','token_closed']

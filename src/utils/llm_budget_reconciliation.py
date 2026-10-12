@@ -70,11 +70,16 @@ def reconcile_budget(path, limit, review, evidence_path, *, apply=False, expecte
                     unresolved.add(row['token'])
             if set(costs)-unresolved:
                 raise ValueError('only unresolved reservations may be reconciled')
+            new_breaches = {token for token, units in costs.items()
+                            if units > by_token[token]['reserved_units']}
+            if review['clear_bound_breach'] and new_breaches:
+                raise ValueError('new reservation breach requires a separate acknowledgment review')
             if review['clear_bound_breach'] and (not settings['bound_breach'] or unresolved-set(costs)):
                 raise ValueError('breach acknowledgment requires existing breach and all costs resolved')
             result = {'applied':bool(apply),'state_sha256':identity,'review_sha256':_digest(review),
                       'adjustment_count':len(costs),'new_cost_usd':sum(costs.values())/_SCALE,
                       'remaining_unresolved_count':len(unresolved-set(costs)),
+                      'new_bound_breach_count':len(new_breaches),
                       'clear_bound_breach':review['clear_bound_breach']}
             if apply:
                 now = ledger._now().isoformat()
@@ -86,6 +91,8 @@ def reconcile_budget(path, limit, review, evidence_path, *, apply=False, expecte
                 for token, units in costs.items():
                     db.execute("UPDATE reservations SET state='settled',actual_units=?,finished_at=? WHERE token=?",
                                (units,now,token))
+                if new_breaches:
+                    db.execute('UPDATE settings SET bound_breach=1 WHERE id=1')
                 if review['clear_bound_breach']:
                     db.execute('UPDATE settings SET bound_breach=0 WHERE id=1')
                 db.execute('INSERT INTO reconciliations VALUES (NULL,?,?,?,?,?,?,?)',
