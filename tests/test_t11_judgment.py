@@ -298,7 +298,11 @@ def test_research_team_ledger_records_prompt_version_and_real_reasoning_effort()
     assert row["prompt_version"] == PROMPT_VERSION == "debate-v2-2026-09-15"
     assert row["params"]["reasoning_effort"] == REASONING_EFFORT == "minimal"   # "low" 하드코딩 버그 수정
     assert row["params"]["seed"] == DEBATE_SEED
-    assert row["params"]["temperature"] == DEBATE_TEMPERATURE
+    assert "temperature" not in row["params"]
+    bear_row = next(item for item in rows if item["role"] == "bear")
+    assert "reasoning_effort" not in bear_row["params"]
+    assert "seed" not in bear_row["params"]
+    assert bear_row["params"]["temperature"] == DEBATE_TEMPERATURE
 
 
 # ══════════════════════════════════════════════════════════════════════════

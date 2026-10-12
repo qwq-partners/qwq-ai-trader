@@ -278,7 +278,15 @@
   (실패 시 빈 문자열, 브리핑에서 섹션 생략). 매매 판단 경로에 연결 금지
   (T+1 데이터). 출처 표기 조건부 라이선스 — 브리핑에 출처 명시함
 
-## LLM — OpenAI (GPT-5.4)
+## LLM — OpenAI / Gemini 호출 계약 (2026-10-12)
+
+기본은 OpenAI heavy `gpt-5.6-sol`/light `gpt-5-mini`, Gemini heavy `gemini-3.1-pro-preview`/light `gemini-3.1-flash-lite-preview`다. 실제 라우팅은 `LLMManager.TASK_CONFIG`이며 `llm.primary`/`fallback`은 기존 설명용 설정으로 이를 덮어쓰지 않는다. 모델은 이번에 변경하지 않았다.
+
+`reasoning_effort`(OpenAI), `thinking_level`(Gemini)은 지원하는 모델·값 조합만 명시 전달한다. 다른 공급자의 옵션이나 미지원 조합은 전송 전에 실패하며 임의 번역하지 않는다. GPT-5/6에는 temperature를 보내지 않고 max_completion_tokens를 사용한다. Gemini3.8에도 temperature를 보내지 않는다. 옵션 미지정은 공급자 기본값 요청이며 유효 추론 강도를 관측한 것이 아니다.
+
+응답의 `.model`은 호환을 위해 요청 이름을 유지하고 `requested_model`/`resolved_model`(서버 보고 시만)·요청 추론 옵션·reasoning_tokens·finish_reason·latency를 별도로 보존한다. OpenAI output에는 추론이 이미 포함되고, Gemini output은 candidates+thoughts다. 비용은 `llm_pricing.rate_quote`의 공개 표준 요율 추정이며 미확인 모델은 unpriced다. Flash-Lite preview의 계열 참조 가격은 실제 청구 alias 인증이 아니다.
+
+`LLMManager(..., audit_dir=명시경로)`만 메타데이터 감사를 쓰고 기본은 미기록이다. 프롬프트/응답 본문·키·계좌·원본 오류를 넣지 않는다. 날짜별 보존을 제한한다. 기존 본문 로그와 별개이며 현재 운영에서 새 감사가 켜졌다는 의미가 아니다. 단계별 범위/비용/실측 계획은 [68차 정본](../research/llm-and-observation-priorities-2026-10-12.md)을 따른다.
 
 ### 용도 (heavy 작업)
 | 태스크 | 용도 |
@@ -289,7 +297,8 @@
 
 ### 한도
 - 이중검증: 10회/일
-- 일일 예산: $5
+- 기본 예산: $5, `llm.daily_budget`의 유한 비음수 USD를 읽는다.0이면 차단한다. 빈 응답/재시도/fallback/shadow의 각 시도를 집계한다. **프로세스 내 사후 집계**이므로 동시 요청·재시작·미상 청구를 포함하는 엄격한 전역 일일 상한이 아니다. 미상 단가/전송 후 미상 사용량이면 후속 유료 요청을 보류한다.
+- 외부 timeout에 의한 전송 후 취소도 미상 사용량으로 정확히 한 번 기록하고 원래 취소를 전달한다. 생성 전4xx의 명확한 오류 구조(usage/output 부재)만 별도 비과금 추정으로 분리해 fallback을 허용한다. 감사 비용은None이며 청구0확정이 아니다.5xx/취소/불완전 응답은 이 예외가 아니므로 후속 LLM 가용성에 영향을 준다.
 
 ## LLM — Gemini Flash
 

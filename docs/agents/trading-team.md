@@ -2,6 +2,8 @@
 
 > 2026-08-02 신설. TradingAgents(TauricResearch) 구조 참고 + harness 아키텍처 패턴으로 정리.
 
+> 2026-10-12 호출 호환성: ResearchTeam은 OpenAI에만 reasoning_effort/minimal과seed를, Gemini에만temperature를 명시한다. Gemini에 무시되던 OpenAI옵션을 넘기지 않아 강화된 호출 검증에서도 양측이 정상 요청된다. 원장 params는 각 공급자에 명시한 옵션만 보존하며 Gemini의 기본 추론 강도를 추정하지 않는다. 모델·프롬프트 버전·합의/매매 정책은 유지한다. [68차 검증](../research/llm-and-observation-priorities-2026-10-12.md).
+
 ## 왜 만들었나
 
 기존 `src/experts/`의 도메인 전문가 8명은 **시장·섹터 레벨**만 판단한다
