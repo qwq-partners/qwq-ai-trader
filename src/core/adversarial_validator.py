@@ -133,20 +133,9 @@ class AdversarialValidator:
     def _build_context(self, symbol: str, strategy: str, score: float,
                        indicators: dict, market_regime: str, sector: str,
                        extra_context: str = "") -> str:
-        ind = indicators or {}
-        foreign = ind.get("foreign_net_buy")
-        foreign_sign = "+" if (foreign if foreign is not None else 0) > 0 else "-"
-        return (
-            f"종목 {symbol}, 전략 {strategy}, 전략점수 {score:.0f}/100.\n"
-            f"시장 체제: {market_regime}."
-            + (f" 섹터: {sector}." if sector else "") + "\n"
-            f"지표: RSI={ind.get('rsi_14', 'N/A')}, "
-            f"ATR={ind.get('atr_14', 'N/A')}%, "
-            f"MA200거리={ind.get('ma200_distance_pct', 'N/A')}%, "
-            f"PER={ind.get('per', 'N/A')}, "
-            f"수급={foreign_sign}.\n"
-            + (f"{extra_context}\n" if extra_context else "")
-        )
+        from .entry_llm_context import build_entry_context
+        return build_entry_context(symbol, strategy, score, indicators,
+                                   market_regime, sector, extra_context)
 
     async def _ask_bull(self, context: str):
         from ..utils.llm import LLMProvider
@@ -191,6 +180,7 @@ class AdversarialValidator:
         market_regime: str,
         sector: str = "",
         extra_context: str = "",
+        common_context: Optional[str] = None,
     ) -> AdversarialResult:
         """
         Bull/Bear 교차 검증을 수행한다.
@@ -204,8 +194,9 @@ class AdversarialValidator:
             self.stats["failed"] += 1
             return AdversarialResult(True, 0.0, "LLM 매니저 없음 — 검증 생략", failed=True)
 
-        context = self._build_context(symbol, strategy, score, indicators,
-                                      market_regime, sector, extra_context)
+        context = (common_context if common_context is not None else
+                   self._build_context(symbol, strategy, score, indicators,
+                                       market_regime, sector, extra_context))
 
         try:
             bull_resp, bear_resp = await asyncio.wait_for(
