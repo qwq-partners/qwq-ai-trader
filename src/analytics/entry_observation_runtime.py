@@ -234,6 +234,10 @@ class CapturePlan:
                 or _read(self.study_path) != self.study_bytes):
             raise ValueError('설치 전 연구 파일 변경')
         context = self.context
+        from .market_state_pilot import PILOT_VERSION, validate_pilot_context
+        if isinstance(context.get('capture'), dict) and context['capture'].get('version') == PILOT_VERSION:
+            validate_pilot_context(context, study_path=self.study_path, now=now)
+            return
         if 'opportunities' in context and (type(context['opportunities']) is not list or context['opportunities']):
             raise ValueError('미래 수집 연구에는 기존 결과를 넣지 않는다')
         build_report({**context, 'opportunities': []})
@@ -440,7 +444,9 @@ class ObservationRuntime:
         plan.validate(now=now())
         self = cls()
         self.bot, self.plan, self._now = bot, plan, now
-        self.buffer = _WindowBuffer(plan, now)
+        from .market_state_pilot import PILOT_VERSION, PilotBuffer
+        pilot = plan.settings['version'] == PILOT_VERSION
+        self.buffer = PilotBuffer(plan, now) if pilot else _WindowBuffer(plan, now)
         self.task = self._close_task = None
         self.result = None
         s = plan.settings
@@ -458,6 +464,26 @@ class ObservationRuntime:
             if now() >= plan.start_at or _read(plan.study_path) != plan.study_bytes:
                 raise ValueError('원장 준비 중 시작 시각/연구 지문 변경')
             feed.enable_quote_observation(self.buffer, **s['channels'])
+            if pilot:
+                # Feed is stopped: this updates local demand only, with no socket/API.
+                await feed._apply_subscriptions()
+                if not feed._quote_subscription_owner.install_static_lease(
+                        s['pilot_symbol'], expires_at=plan.end_at):
+                    # Optional technical capture cannot stop holding management.
+                    for name, value in before.items():
+                        if value is sentinel:
+                            if hasattr(feed, name):
+                                delattr(feed, name)
+                        else:
+                            if name in sets:
+                                value.clear()
+                                value.update(sets[name])
+                            setattr(feed, name, value)
+                    self.buffer.mark_incomplete('pilot_channel_capacity')
+                    self.buffer.ended = True
+                    self.result = await self.journal.close(timeout_seconds=s['close_timeout_seconds'])
+                    bot._entry_observation_close_result = self.result
+                    return None
             if self.buffer.order_ready_admission:
                 self.buffer.order_ready_quote_submit = feed._quote_subscription_owner.submit_order_ready
             elif self.buffer.scan_scope == 'window':

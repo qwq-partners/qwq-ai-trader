@@ -984,6 +984,8 @@ class KRAPIHandler:
             'capture_id': runtime.journal._header['capture_id'],
             'scan_scope': runtime.buffer.scan_scope,
             'capture_closed': closed,
+            **({'pilot': runtime.bot.ws_feed._quote_subscription_owner.pilot_snapshot()}
+               if runtime.buffer.scan_scope == 'pilot' else {}),
         }, headers={'Cache-Control': 'no-store'})
 
     async def get_entry_anchors(self, request):

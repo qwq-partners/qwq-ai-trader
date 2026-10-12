@@ -1563,7 +1563,8 @@ class UnifiedTradingBot:
             return
         from src.analytics.entry_observation_runtime import ObservationRuntime
         runtime = await ObservationRuntime.install(self, plan)
-        runtime.start()
+        if runtime is not None:
+            runtime.start()
 
     async def _close_entry_observation(self, reason):
         runtime = getattr(self, "_entry_observation_runtime", None)
