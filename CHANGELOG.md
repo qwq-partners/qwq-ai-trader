@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-12 — LLM 호출·비용·전략 목표 정비와 일별 개선 순서(68차)
+
+- 공용 `llm.py`: GPT-6 추론 옵션/Gemini thinkingLevel 전달과 지원 조합 검증, 요청/서버 모델·추론 토큰·종료 사유·단조 시계 지연 기록. Gemini 과금 출력은 visible+thought이며 OpenAI 추론은 중복 합산하지 않는다.
+- `llm_pricing.py`: 공개 표준 요율/장문·한시 가격/미상 단가를 구분한다. `daily_budget`0을 보존하고 잘못된 설정은 거절한다. 빈 응답·재시도·fallback·shadow·전송 후 취소를 시도별 집계한다. 명확한 생성 전4xx거절은 비과금 추정으로 분리하며 청구0을 단정하지 않는다. 비용 불명이면 후속 요청을 보류하는 프로세스 내 사후 제한이다.
+- `LLMStrategist`: 거래 수익률을 계좌 일수익으로 바꾸던 산식과 일1%/거래 횟수 할당량을 제거한다. 계좌 성과는 자료 부족으로 미측정이며 LLM 실패의 임의 손절 축소/진입 기준 상향 제안은 기권으로 교체한다. 응답 스키마와 기존 하위 검증기는 유지한다.
+- `ResearchTeam`: OpenAI전용 옵션을 Gemini에 넘기던 호출을 공급자별로 분리하고 원장 params도 맞췄다. 강화된 검증으로 Bear가 조용히 실패하는 반례를 실제 transport/가짜HTTP로 고정했으며 토론 프롬프트/모델/판정 정책은 유지한다.
+- 새 metadata-only audit는 명시 audit_dir 주입 시만 활성화한다. 기존 모델/라우팅·운영 설정·매수 중지·관측 예약을 변경하지 않았다. 신규 모델 실측/운영 배포/순수익 입증은 별도다.
+- 최종 관련UTC/KST 각205·전체4999 passed/2 skipped/2 known xfailed, 문법·비밀정보·격리 확인. 실제 Claude Opus5 독립 재리뷰와 마지막 연결 실패/비용 소계 delta 리뷰 모두 승인했다.
+- 후속 P1 준비: KIS 공개 문서 원문에서 체결/호가/장운영 코드값 설명을 확보·지문 보존했다. 삭제된 호가 열과 설명 미완성 코드를 정상 상태로 해석하지 않으며 초기 상태/연결 공백·실측 검증은 남긴다.
+- [PDS·검증·API 비용·다음 우선순위](docs/research/llm-and-observation-priorities-2026-10-12.md) · [설계](docs/superpowers/specs/2026-10-12-live-learning-readiness-design.md) · [계획](docs/superpowers/plans/2026-10-12-llm-readiness.md). 매일 오류/자료 품질을 개선하고 경제성 변경은 단일 버전 코호트로 검증한다. 기존 H1의20일/최소 표본 규칙을 대기 의무나 자동 승격으로 해석하지 않는다.
+
 ## 2026-10-12 — H1 관측 입력 준비와 수집 전 공백 확인(67차)
 
 - 동일 template과 명시20일 달력에서 study/manifest/once60파일의 바이트·SHA·제안 프로토콜·날짜 색인을 만드는 오프라인 준비 도구를 추가했다. H1 고정 프로필과 정책 동일성을 확인하며 실제 설치·예약·재시작 기능은 없다.

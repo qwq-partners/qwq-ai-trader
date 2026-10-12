@@ -179,17 +179,23 @@ class ResearchTeam:
         """
         LLM 1회 호출.
 
-        문자열만 반환하면 **실제 응답 모델 ID와 지연이 유실**된다.
-        재현성 원장은 "무슨 모델이 답했는가"가 핵심이므로 메타를 함께 돌려준다
-        (폴백으로 모델이 바뀌었을 수 있어 요청 모델과 응답 모델이 다를 수 있다).
+        문자열만 반환하면 요청 모델 이름과 지연이 유실되므로 메타를 함께 돌려준다.
+        기존 원장의 model은 요청 이름이다. 서버 보고 모델 확정은 공용 응답의
+        resolved_model을 사용해야 하며 이름만으로 실제 스냅샷을 단정하지 않는다.
         """
+        from ..utils.llm import LLMProvider
+        # Provider-specific controls: Gemini formerly ignored the OpenAI knob.
+        # None means unspecified, preserving its existing thinking default.
+        controls = {
+            "reasoning_effort": REASONING_EFFORT if provider == LLMProvider.OPENAI else None,
+            "seed": DEBATE_SEED if provider == LLMProvider.OPENAI else None,
+            "temperature": DEBATE_TEMPERATURE if provider == LLMProvider.GEMINI else None,
+        }
         resp = await self._llm.complete_with(
             prompt, provider=provider, weight="light",
             system=system, max_tokens=MAX_TOKENS,
-            reasoning_effort=REASONING_EFFORT,
             retry_on_empty=EMPTY_RETRY,
-            seed=DEBATE_SEED,
-            temperature=DEBATE_TEMPERATURE,
+            **controls,
         )
         ok = bool(getattr(resp, "success", False))
         return {
@@ -200,6 +206,8 @@ class ResearchTeam:
             "latency_ms": float(getattr(resp, "latency_ms", 0.0) or 0.0),
             "success": ok,
             "error": getattr(resp, "error", None),
+            "params": {"max_tokens": MAX_TOKENS, "weight": "light",
+                       **{key: value for key, value in controls.items() if value is not None}},
         }
 
     # ── 토론 ───────────────────────────────────────────────
@@ -297,9 +305,7 @@ class ResearchTeam:
                         response=_meta.get("text", ""),
                         provider=_meta.get("provider", ""),
                         model=_meta.get("model", ""),
-                        params={"max_tokens": MAX_TOKENS,
-                                "reasoning_effort": REASONING_EFFORT, "weight": "light",
-                                "seed": DEBATE_SEED, "temperature": DEBATE_TEMPERATURE},
+                        params=_meta.get("params", {}),
                         prompt_version=PROMPT_VERSION,
                         verdict=_v,
                         input_snapshot=input_snapshot,

@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -23,6 +25,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 import aiohttp
 from loguru import logger
+
+from .llm_pricing import rate_quote
 
 
 class LLMProvider(str, Enum):
@@ -94,6 +98,13 @@ class LLMConfig:
     # 비용 관리
     daily_budget_usd: float = 5.0  # 일일 예산
 
+    def __post_init__(self):
+        if (isinstance(self.daily_budget_usd, bool)
+                or not isinstance(self.daily_budget_usd, (int, float))
+                or not math.isfinite(self.daily_budget_usd)
+                or self.daily_budget_usd < 0):
+            raise ValueError("llm.daily_budget must be a finite nonnegative USD number")
+
     @classmethod
     def from_env(cls) -> "LLMConfig":
         return cls(
@@ -109,7 +120,9 @@ class LLMConfig:
         코드 수정 없이 evolved_overrides.yml에서 교체 가능하게 함.
 
         cfg는 default.yml/evolved_overrides 머지된 dict 또는 그 안의 `llm:` 섹션.
-        키가 없거나 빈 문자열이면 dataclass 기본값 유지.
+        모델 키가 없거나 빈 문자열이면 dataclass 기본값 유지.
+        daily_budget is USD; primary/fallback are legacy informational labels,
+        not overrides for TASK_CONFIG routes.
         """
         llm_cfg = cfg or {}
         if "llm" in llm_cfg and isinstance(llm_cfg["llm"], dict):
@@ -117,6 +130,7 @@ class LLMConfig:
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+            daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
@@ -145,26 +159,25 @@ class LLMUsage:
     output_tokens: int = 0
     estimated_cost_usd: float = 0.0
 
-    def add(self, input_tokens: int, output_tokens: int, model: str):
-        """사용량 추가"""
+    cost_missing: bool = False
+    unpriced_requests: int = 0
+    unknown_usage_requests: int = 0
+    inferred_nonbillable_rejections: int = 0
+
+    def add(self, input_tokens: int, output_tokens: int, model: str,
+            *, usage_known: bool = True):
+        """Add every sent attempt. Known subtotal stays a float, never a full bill."""
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
-
-        # 비용 추정 (대략적)
-        if "gpt-5-mini" in model:
-            self.estimated_cost_usd += (input_tokens * 0.0004 + output_tokens * 0.0016) / 1000
-        elif "gpt-5" in model:
-            self.estimated_cost_usd += (input_tokens * 0.003 + output_tokens * 0.015) / 1000
-        elif "gpt-4" in model:
-            self.estimated_cost_usd += (input_tokens * 0.01 + output_tokens * 0.03) / 1000
-        elif "gpt-3.5" in model:
-            self.estimated_cost_usd += (input_tokens * 0.0005 + output_tokens * 0.0015) / 1000
-        elif "gemini" in model:
-            # gemini-3-flash-preview, gemini-2.5-pro 등
-            if "pro" in model:
-                self.estimated_cost_usd += (input_tokens * 0.00125 + output_tokens * 0.005) / 1000
-            else:
-                self.estimated_cost_usd += (input_tokens * 0.000075 + output_tokens * 0.0003) / 1000
+        quote = rate_quote(model, input_tokens, output_tokens)
+        if quote is None:
+            self.unpriced_requests += 1
+            self.cost_missing = True
+        elif usage_known:
+            self.estimated_cost_usd += quote.cost_usd
+        if not usage_known:
+            self.unknown_usage_requests += 1
+            self.cost_missing = True
 
 
 @dataclass
@@ -178,6 +191,151 @@ class LLMResponse:
     latency_ms: float = 0.0
     success: bool = True
     error: Optional[str] = None
+    requested_model: Optional[str] = None
+    resolved_model: Optional[str] = None  # Only provider-reported model/modelVersion.
+    requested_reasoning_effort: Optional[str] = None
+    requested_thinking_level: Optional[str] = None
+    reasoning_tokens: Optional[int] = None
+    visible_output_tokens: Optional[int] = None
+    finish_reason: Optional[str] = None
+    usage_known: bool = True  # Legacy manually constructed responses remain compatible.
+    request_sent: bool = True
+    billing_status: str = "reported_usage"
+    http_status: Optional[int] = None
+    provider_error_code: Optional[str] = None
+    provider_error_type: Optional[str] = None
+    provider_error_status: Optional[str] = None
+
+
+def _billing_status(data: dict, status: int, usage_known: bool) -> str:
+    if usage_known:
+        return "reported_usage"
+    # Explicit availability policy inference, NOT provider-reported billed zero.
+    # A present malformed usage/output field invalidates the rejection inference.
+    if (status in {400, 401, 403, 404, 413, 422, 429}
+            and isinstance(data.get("error"), dict) and data["error"]
+            and not any(key in data for key in
+                        ("usage", "usageMetadata", "choices", "candidates", "output", "content"))):
+        return "rejected_before_generation"
+    return "unknown"
+
+
+# Validated 2026-10-12 against https://developers.openai.com/api/docs/models
+# and https://developers.openai.com/api/docs/guides/reasoning
+_OPENAI_EFFORTS = {
+    "gpt-5-mini": {"minimal", "low", "medium", "high"},
+    "gpt-5.6-sol": {"none", "low", "medium", "high", "xhigh", "max"},
+    "gpt-6-astra": {"low", "medium", "high", "xhigh", "max"},
+    "gpt-6.1-sol": {"low", "medium", "high", "xhigh", "max"},
+}
+# Validated 2026-10-12: https://ai.google.dev/gemini-api/docs/generate-content/gemini-3
+# Gemini 3.8: https://ai.google.dev/gemini-api/docs/generate-content/latest-model
+_GEMINI_LEVELS = {
+    "gemini-3.1-pro-preview": {"low", "medium", "high"},
+    "gemini-3.1-flash-lite": {"minimal", "low", "medium", "high"},
+    "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
+    "gemini-3.8-flash": {"low", "medium", "high"},
+}
+
+
+def _validate_controls(model: str, provider: LLMProvider, controls: dict) -> None:
+    # Public contract: invalid explicit controls raise ValueError before any HTTP.
+    effort, level = controls.get("reasoning_effort"), controls.get("thinking_level")
+    seed = controls.get("seed")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)
+                             or not -(2 ** 63) <= seed < 2 ** 63):
+        raise ValueError("seed must be a signed 64-bit integer")
+    if any(controls.get(key) is not None for key in ("thinking_budget", "thinkingConfig", "thinking_config")):
+        raise ValueError("Unsupported thinking control; use explicit thinking_level")
+    if provider == LLMProvider.OPENAI:
+        if level is not None:
+            raise ValueError("thinking_level is not supported by OpenAI transport")
+        if effort is not None and (not isinstance(effort, str) or effort not in _OPENAI_EFFORTS.get(model, set())):
+            raise ValueError("Unsupported reasoning_effort for requested OpenAI model")
+    else:
+        if effort is not None:
+            raise ValueError("reasoning_effort is not supported by Gemini transport")
+        if level is not None and (not isinstance(level, str) or level not in _GEMINI_LEVELS.get(model, set())):
+            raise ValueError("Unsupported thinking_level for requested Gemini model")
+
+
+def _valid_token_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _token_count(value: Any) -> int:
+    return value if _valid_token_count(value) else 0
+
+
+def _known_usage(usage: dict, input_key: str, output_key: str) -> bool:
+    return _valid_token_count(usage.get(input_key)) and _valid_token_count(usage.get(output_key))
+
+
+_PROVIDER_ERROR_LABELS = frozenset({
+    "invalid_api_key", "insufficient_quota", "rate_limit_exceeded", "model_not_found",
+    "invalid_request_error", "authentication_error", "rate_limit_error", "server_error",
+    "permission_error", "context_length_exceeded", "content_policy_violation",
+    "INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED", "NOT_FOUND",
+    "RESOURCE_EXHAUSTED", "FAILED_PRECONDITION", "INTERNAL", "UNAVAILABLE",
+    "DEADLINE_EXCEEDED",
+})
+
+
+def _provider_errors(data: dict) -> dict:
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return {}
+    result = {}
+    for key in ("code", "type", "status"):
+        value = error.get(key)
+        if value is not None:
+            result[f"provider_error_{key}"] = (
+                value if isinstance(value, str) and value in _PROVIDER_ERROR_LABELS
+                else "unknown_provider_error"
+            )
+    return result
+
+
+def _gemini_usage(data: dict, usage: dict) -> dict:
+    """Proto3 int32 omits zeros; infer them only with an evidenced response shape.
+
+    2026-10-12: https://ai.google.dev/api/generate-content#UsageMetadata
+    totalTokenCount = prompt + candidates + thoughts. Malformed present values
+    never become zero and contradictory totals leave accounting incomplete.
+    """
+    candidates = data.get("candidates") or []
+    no_visible_parts = isinstance(candidates, list)
+    for candidate in candidates if isinstance(candidates, list) else []:
+        if not isinstance(candidate, dict) or not isinstance(candidate.get("content", {}), dict):
+            no_visible_parts = False
+            break
+        parts = candidate.get("content", {}).get("parts", [])
+        if not isinstance(parts, list) or any(
+                not isinstance(part, dict) or (not part.get("thought") and bool(part.get("text")))
+                for part in parts):
+            no_visible_parts = False
+    feedback = data.get("promptFeedback") or {}
+    block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+    blocked = (not candidates and isinstance(block_reason, str) and block_reason in {
+        "SAFETY", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY",
+    })
+    valid_present = all(_valid_token_count(usage[key]) for key in
+                        ("promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount")
+                        if key in usage)
+    prompt_valid = _valid_token_count(usage.get("promptTokenCount"))
+    visible_known = ("candidatesTokenCount" in usage or
+                     (no_visible_parts and ("thoughtsTokenCount" in usage or blocked)))
+    known = prompt_valid and valid_present and visible_known
+    input_count = _token_count(usage.get("promptTokenCount"))
+    visible = _token_count(usage.get("candidatesTokenCount"))
+    thoughts = _token_count(usage.get("thoughtsTokenCount"))
+    if "totalTokenCount" in usage and usage["totalTokenCount"] != input_count + visible + thoughts:
+        known = False
+    return {
+        "usage_known": known,
+        "visible_output_tokens": visible if known else usage.get("candidatesTokenCount"),
+        "reasoning_tokens": thoughts if known else usage.get("thoughtsTokenCount"),
+    }
 
 
 def _extract_json(text: str) -> dict:
@@ -232,96 +390,92 @@ class OpenAIClient(BaseLLMClient):
         max_tokens: Optional[int] = None,
         **kwargs
     ) -> LLMResponse:
-        """텍스트 생성"""
-        if not self.api_key:
-            return LLMResponse(
-                content="", model="", provider=LLMProvider.OPENAI,
-                success=False, error="OpenAI API key not configured"
-            )
-
+        """Construct the actual request; reject unsupported explicit controls locally."""
         model = model if model is not None else self.config.openai_model_light
-        max_tokens = max_tokens if max_tokens is not None else self.config.max_output_tokens
-
-        messages = []
+        effort = kwargs.get("reasoning_effort")
+        _validate_controls(model, LLMProvider.OPENAI, kwargs)
+        metadata = dict(requested_model=model, requested_reasoning_effort=effort,
+                        usage_known=False, request_sent=False, billing_status="not_sent")
+        if not self.api_key:
+            return LLMResponse("", model, LLMProvider.OPENAI, success=False,
+                               error="OpenAI API key not configured", **metadata)
+        body = {"model": model, "messages": [],
+                "max_completion_tokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
         if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        start_time = datetime.now()
-
+            body["messages"].append({"role": "system", "content": system})
+        body["messages"].append({"role": "user", "content": prompt})
+        if not model.startswith(("gpt-5", "gpt-6")):
+            body["temperature"] = temperature
+        if effort is not None:
+            body["reasoning_effort"] = effort
+        if kwargs.get("seed") is not None:
+            body["seed"] = int(kwargs["seed"])
+        start_time = time.perf_counter()
+        input_count = output_count = 0
         try:
             session = await self._get_session()
-
-            # GPT-5 시리즈 모두 max_completion_tokens 사용 (OpenAI API v2 정책)
-            # GPT-5 전체(gpt-5-mini 포함)가 temperature 커스텀 미지원 (기본값 1만 허용)
-            is_gpt5 = model.startswith("gpt-5")
-            is_thinking_no_temp = is_gpt5
-
-            body = {"model": model, "messages": messages}
-            # OpenAI API 최신 권장: 모든 모델에서 max_completion_tokens 사용
-            body["max_completion_tokens"] = max_tokens
-
-            if not is_thinking_no_temp:
-                body["temperature"] = temperature
-
-            # 추론 강도 (gpt-5 계열 전용).
-            # gpt-5는 추론 토큰을 max_completion_tokens 안에서 소비하므로,
-            # 판정(YES/NO)처럼 단순한 작업에 기본 추론 강도를 쓰면
-            # 토큰을 추론에만 다 쓰고 본문이 빈 문자열로 온다 (success=True, content='').
-            # 짧은 판정 작업은 reasoning_effort="minimal"로 호출할 것.
-            reasoning_effort = kwargs.get("reasoning_effort")
-            if is_gpt5 and reasoning_effort:
-                body["reasoning_effort"] = reasoning_effort
-
-            # 샘플링 시드 — 같은 입력에 같은 판정을 얻기 위한 유일한 수단이다.
-            #   gpt-5 계열은 temperature 커스텀을 막아놨으므로 seed가 아니면
-            #   동일 입력에도 판정이 뒤집힌다 (실측: seed 없이 6회 중 1회 반전,
-            #   seed=42로 6회 전부 일치).
-            #   OpenAI 문서상 best-effort라 100% 보장은 아니지만 실측 개선폭이 크다.
-            seed = kwargs.get("seed")
-            if seed is not None:
-                body["seed"] = int(seed)
-
+            metadata["request_sent"] = True
+            metadata["billing_status"] = "unknown"
             async with session.post(
                 f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                 json=body,
             ) as resp:
+                metadata["http_status"] = resp.status
                 data = await resp.json()
-
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    return LLMResponse(
-                        content="", model=model, provider=LLMProvider.OPENAI,
-                        success=False, error=error_msg
-                    )
-
-                content = data["choices"][0]["message"]["content"]
-                usage = data.get("usage", {})
-
-                latency = (datetime.now() - start_time).total_seconds() * 1000
-
-                return LLMResponse(
-                    content=content,
-                    model=model,
-                    provider=LLMProvider.OPENAI,
-                    input_tokens=usage.get("prompt_tokens", 0),
-                    output_tokens=usage.get("completion_tokens", 0),
-                    latency_ms=latency,
+                if not isinstance(data, dict):
+                    raise ValueError("Provider response must be an object")
+                metadata.update(_provider_errors(data))
+                usage = data.get("usage") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
+                input_count = _token_count(usage.get("prompt_tokens"))
+                output_count = _token_count(usage.get("completion_tokens"))
+                details = usage.get("completion_tokens_details")
+                reasoning_tokens = details.get("reasoning_tokens") if isinstance(details, dict) else None
+                metadata.update(
+                    resolved_model=data.get("model"),
+                    usage_known=_known_usage(usage, "prompt_tokens", "completion_tokens"),
+                    reasoning_tokens=reasoning_tokens if _valid_token_count(reasoning_tokens) else None,
                 )
-
-        except asyncio.TimeoutError:
-            return LLMResponse(
-                content="", model=model, provider=LLMProvider.OPENAI,
-                success=False, error="Request timeout"
+                metadata["billing_status"] = _billing_status(data, resp.status, metadata["usage_known"])
+                choices = data.get("choices") or []
+                choice = choices[0] if choices else {}
+                metadata["finish_reason"] = choice.get("finish_reason")
+                content = (choice.get("message") or {}).get("content") or ""
+                if not isinstance(content, str):
+                    raise ValueError("Provider content must be text")
+                success = resp.status == 200 and bool(choices)
+                return LLMResponse(
+                    content, model, LLMProvider.OPENAI,
+                    input_tokens=_token_count(usage.get("prompt_tokens")),
+                    output_tokens=_token_count(usage.get("completion_tokens")),
+                    latency_ms=(time.perf_counter() - start_time) * 1000,
+                    success=success,
+                    error=None if success else f"OpenAI HTTP {resp.status} or missing choices",
+                    **metadata,
+                )
+        except asyncio.CancelledError as exc:
+            # Preserve the original exception type: asyncio.timeout checks it exactly.
+            exc._llm_response = LLMResponse(
+                "", model, LLMProvider.OPENAI, success=False,
+                input_tokens=input_count, output_tokens=output_count,
+                error="Request cancelled",
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                **metadata,
             )
-        except Exception as e:
+            raise
+        except Exception as exc:
+            # Connector errors prove that no connection was established. Generic
+            # socket errors, response loss and cancellation can follow a send.
+            if isinstance(exc, aiohttp.ClientConnectorError) and metadata.get("http_status") is None:
+                metadata.update(request_sent=False, billing_status="not_sent")
             return LLMResponse(
-                content="", model=model, provider=LLMProvider.OPENAI,
-                success=False, error=str(e)
+                "", model, LLMProvider.OPENAI, success=False,
+                input_tokens=input_count, output_tokens=output_count,
+                error="Request timeout" if isinstance(exc, asyncio.TimeoutError) else "OpenAI transport failure",
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                **metadata,
             )
 
     async def complete_json(
@@ -367,80 +521,81 @@ class GeminiClient(BaseLLMClient):
         max_tokens: Optional[int] = None,
         **kwargs
     ) -> LLMResponse:
-        """텍스트 생성"""
-        if not self.api_key:
-            return LLMResponse(
-                content="", model="", provider=LLMProvider.GEMINI,
-                success=False, error="Gemini API key not configured"
-            )
-
+        """Gemini output billing includes candidate and thought tokens separately."""
         model = model if model is not None else self.config.gemini_model_light
-        max_tokens = max_tokens if max_tokens is not None else self.config.max_output_tokens
-
-        # 시스템 프롬프트를 사용자 프롬프트에 통합
+        _validate_controls(model, LLMProvider.GEMINI, kwargs)
+        level = kwargs.get("thinking_level")
+        metadata = dict(requested_model=model, requested_thinking_level=level,
+                        usage_known=False, request_sent=False, billing_status="not_sent")
+        if not self.api_key:
+            return LLMResponse("", model, LLMProvider.GEMINI, success=False,
+                               error="Gemini API key not configured", **metadata)
+        generation = {"temperature": temperature,
+                      "maxOutputTokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
+        if model == "gemini-3.8-flash":
+            generation.pop("temperature")
+        if level is not None:
+            generation["thinkingConfig"] = {"thinkingLevel": level}
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
-
-        start_time = datetime.now()
-
+        start_time = time.perf_counter()
+        input_count = output_count = 0
         try:
             session = await self._get_session()
-
-            url = f"{self.base_url}/models/{model}:generateContent?key={self.api_key}"
-
+            metadata["request_sent"] = True
+            metadata["billing_status"] = "unknown"
             async with session.post(
-                url,
+                f"{self.base_url}/models/{model}:generateContent?key={self.api_key}",
                 headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": full_prompt}]}],
-                    "generationConfig": {
-                        "temperature": temperature,
-                        "maxOutputTokens": max_tokens,
-                    }
-                }
+                json={"contents": [{"parts": [{"text": full_prompt}]}], "generationConfig": generation},
             ) as resp:
+                metadata["http_status"] = resp.status
                 data = await resp.json()
-
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    return LLMResponse(
-                        content="", model=model, provider=LLMProvider.GEMINI,
-                        success=False, error=error_msg
-                    )
-
-                # 응답 추출
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    return LLMResponse(
-                        content="", model=model, provider=LLMProvider.GEMINI,
-                        success=False, error="No candidates in response"
-                    )
-
-                parts = candidates[0].get("content", {}).get("parts", [])
-                content = parts[0].get("text", "") if parts else ""
-
-                # 토큰 사용량 (Gemini는 usageMetadata 제공)
-                usage = data.get("usageMetadata", {})
-
-                latency = (datetime.now() - start_time).total_seconds() * 1000
-
+                if not isinstance(data, dict):
+                    raise ValueError("Provider response must be an object")
+                metadata.update(_provider_errors(data))
+                usage = data.get("usageMetadata") or {}
+                if not isinstance(usage, dict):
+                    usage = {}
+                input_count = _token_count(usage.get("promptTokenCount"))
+                output_count = (_token_count(usage.get("candidatesTokenCount"))
+                                + _token_count(usage.get("thoughtsTokenCount")))
+                metadata.update(_gemini_usage(data, usage))
+                metadata["resolved_model"] = data.get("modelVersion")
+                candidates = data.get("candidates") or []
+                candidate = candidates[0] if candidates else {}
+                metadata["finish_reason"] = candidate.get("finishReason")
+                parts = (candidate.get("content") or {}).get("parts") or []
+                content = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+                metadata["billing_status"] = _billing_status(data, resp.status, metadata["usage_known"])
+                success = resp.status == 200 and bool(candidates)
                 return LLMResponse(
-                    content=content,
-                    model=model,
-                    provider=LLMProvider.GEMINI,
-                    input_tokens=usage.get("promptTokenCount", 0),
-                    output_tokens=usage.get("candidatesTokenCount", 0),
-                    latency_ms=latency,
+                    content, model, LLMProvider.GEMINI,
+                    input_tokens=_token_count(usage.get("promptTokenCount")),
+                    output_tokens=output_count,
+                    latency_ms=(time.perf_counter() - start_time) * 1000,
+                    success=success,
+                    error=None if success else f"Gemini HTTP {resp.status} or missing candidates",
+                    **metadata,
                 )
-
-        except asyncio.TimeoutError:
-            return LLMResponse(
-                content="", model=model, provider=LLMProvider.GEMINI,
-                success=False, error="Request timeout"
+        except asyncio.CancelledError as exc:
+            # Preserve the original exception type: asyncio.timeout checks it exactly.
+            exc._llm_response = LLMResponse(
+                "", model, LLMProvider.GEMINI, success=False,
+                input_tokens=input_count, output_tokens=output_count,
+                error="Request cancelled",
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                **metadata,
             )
-        except Exception as e:
+            raise
+        except Exception as exc:
+            if isinstance(exc, aiohttp.ClientConnectorError) and metadata.get("http_status") is None:
+                metadata.update(request_sent=False, billing_status="not_sent")
             return LLMResponse(
-                content="", model=model, provider=LLMProvider.GEMINI,
-                success=False, error=str(e)
+                "", model, LLMProvider.GEMINI, success=False,
+                input_tokens=input_count, output_tokens=output_count,
+                error="Request timeout" if isinstance(exc, asyncio.TimeoutError) else "Gemini transport failure",
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+                **metadata,
             )
 
     async def complete_json(
@@ -515,8 +670,28 @@ class LLMManager:
     # 2026-06-17 Phase 3: Shadow A/B 비교 로그 (light 후속 모델 마이그레이션)
     _SHADOW_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_shadow"
 
-    def __init__(self, config: Optional[LLMConfig] = None):
+    def __init__(self, config: Optional[LLMConfig] = None, *, audit_dir: Optional[Path] = None):
+        self.audit_dir = Path(audit_dir) if audit_dir is not None else None
+        self._audit_log_date: Optional[str] = None
         self.config = config or LLMConfig.from_env()
+        self._shadow_tasks: set[asyncio.Task] = set()
+        self._closing = False
+        self.configuration_warnings = []
+        for field_name in ("openai_model_heavy", "openai_model_light", "gemini_model_heavy",
+                           "gemini_model_light", "openai_model_light_shadow"):
+            model = getattr(self.config, field_name)
+            if field_name == "openai_model_light_shadow" and model == "":
+                continue
+            if not isinstance(model, str) or not model.strip():
+                warning = f"{field_name}:invalid_model"
+            elif rate_quote(model, 0, 0) is None:
+                warning = f"{field_name}:unpriced_model"
+            elif model not in (_OPENAI_EFFORTS if field_name.startswith("openai_") else _GEMINI_LEVELS):
+                warning = f"{field_name}:unsupported_provider_controls"
+            else:
+                continue
+            self.configuration_warnings.append(warning)
+            logger.warning(f"[LLM] configuration preflight: {warning}")
 
         self.openai = OpenAIClient(self.config)
         self.gemini = GeminiClient(self.config)
@@ -555,14 +730,19 @@ class LLMManager:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
 
     def _check_budget(self) -> bool:
-        """일일 예산 체크"""
+        """Process-local post-usage gate, not a strict global spending cap.
+
+        Concurrent/in-flight calls, unknown timeout charges and process restarts
+        prevent strict enforcement. Unknown cost blocks subsequent paid attempts.
+        """
         # 날짜가 바뀌면 리셋
         today = datetime.now().date()
         if today > self._usage_reset_date:
             self.daily_usage = LLMUsage()
             self._usage_reset_date = today
 
-        return self.daily_usage.estimated_cost_usd < self.config.daily_budget_usd
+        return (not self.daily_usage.cost_missing
+                and self.daily_usage.estimated_cost_usd < self.config.daily_budget_usd)
 
     async def complete(
         self,
@@ -580,13 +760,15 @@ class LLMManager:
             system: 시스템 프롬프트
         """
         self.stats["total_requests"] += 1
+        attempt_role = kwargs.pop("_attempt_role", "primary")
 
         # 예산 체크
         if not self._check_budget():
             logger.warning("일일 LLM 예산 초과")
             return LLMResponse(
                 content="", model="", provider=LLMProvider.OPENAI,
-                success=False, error="Daily budget exceeded"
+                success=False, error="Daily budget exceeded",
+                request_sent=False, usage_known=False, billing_status="not_sent"
             )
 
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
@@ -608,12 +790,20 @@ class LLMManager:
         primary_client = self._get_client(primary_provider)
         primary_model = self._get_model(primary_provider, primary_weight)
 
-        response = await primary_client.complete(prompt, system, model=primary_model, **kwargs)
+        response = await self._complete_attempt(
+            primary_client, prompt, system, primary_model, task.value, attempt_role, **kwargs
+        )
 
         if response.success:
             self.stats["success_count"] += 1
-            self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
             self._maybe_fire_shadow(prompt, system, task, kwargs, response)
+            return response
+
+        if not self._check_budget():
+            self.stats["error_count"] += 1
+            reason = ("fallback_skipped_unknown_cost" if self.daily_usage.cost_missing
+                      else "fallback_skipped_budget")
+            self.stats[reason] = self.stats.get(reason, 0) + 1
             return response
 
         # Fallback 시도
@@ -624,11 +814,12 @@ class LLMManager:
         fallback_client = self._get_client(fallback_provider)
         fallback_model = self._get_model(fallback_provider, fallback_weight)
 
-        response = await fallback_client.complete(prompt, system, model=fallback_model, **kwargs)
+        response = await self._complete_attempt(
+            fallback_client, prompt, system, fallback_model, task.value, "fallback", **kwargs
+        )
 
         if response.success:
             self.stats["success_count"] += 1
-            self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
             self._maybe_fire_shadow(prompt, system, task, kwargs, response)
         else:
             self.stats["error_count"] += 1
@@ -721,32 +912,112 @@ class LLMManager:
             logger.warning("일일 LLM 예산 초과")
             return LLMResponse(
                 content="", model="", provider=provider,
-                success=False, error="Daily budget exceeded"
+                success=False, error="Daily budget exceeded",
+                request_sent=False, usage_known=False, billing_status="not_sent"
             )
 
         client = self._get_client(provider)
         model = self._get_model(provider, weight)
 
-        response = await client.complete(prompt, system, model=model, **kwargs)
+        response = await self._complete_attempt(
+            client, prompt, system, model, "complete_with", "primary", **kwargs
+        )
         attempts = 0
         while (retry_on_empty > attempts
                and response.success
-               and not (response.content or "").strip()):
+               and not (response.content or "").strip()
+               and self._check_budget()):
             attempts += 1
             self.stats["empty_retry"] = self.stats.get("empty_retry", 0) + 1
             logger.warning(
                 f"[LLM] {model} 빈 응답 (success=True, content='') "
                 f"— 재시도 {attempts}/{retry_on_empty}"
             )
-            response = await client.complete(prompt, system, model=model, **kwargs)
+            response = await self._complete_attempt(
+                client, prompt, system, model, "complete_with", "empty_retry", **kwargs
+            )
 
         if response.success:
             self.stats["success_count"] += 1
-            self.daily_usage.add(response.input_tokens, response.output_tokens, response.model)
         else:
             self.stats["error_count"] += 1
 
         return response
+
+    async def _complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
+                                _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
+        try:
+            response = await _client.complete(_prompt, _system, model=_model, **kwargs)
+        except asyncio.CancelledError as exc:
+            response = getattr(exc, "_llm_response", None)
+            if response is not None:
+                self._account_attempt(response, _task, _role)
+            raise
+        self._account_attempt(response, _task, _role)
+        return response
+
+    def _account_attempt(self, response: LLMResponse, task: str, role: str) -> None:
+        """Record known usage even for empty/error responses before another attempt."""
+        if response.billing_status == "rejected_before_generation":
+            self.daily_usage.inferred_nonbillable_rejections += 1
+        elif response.request_sent:
+            self.daily_usage.add(response.input_tokens, response.output_tokens,
+                                 response.requested_model or response.model,
+                                 usage_known=response.usage_known)
+        self._audit_attempt(response, task, role)
+
+    def _audit_attempt(self, response: LLMResponse, task: str, role: str) -> None:
+        """Metadata-only audit; no prompts, content, free-text errors, keys or raw payload."""
+        if self.audit_dir is None:
+            return
+        now = datetime.now()
+        today = now.strftime("%Y%m%d")
+        try:
+            self.audit_dir.mkdir(parents=True, exist_ok=True)
+            if self._audit_log_date != today:
+                cutoff = (now - timedelta(days=self._LLM_LOG_RETENTION_DAYS)).strftime("%Y%m%d")
+                try:
+                    for path in self.audit_dir.glob("llm-audit-*.jsonl"):
+                        date_part = path.stem.removeprefix("llm-audit-")
+                        if re.fullmatch(r"\d{8}", date_part) and date_part < cutoff:
+                            try:
+                                path.unlink()
+                            except OSError:
+                                logger.warning("[LLM] metadata audit retention failed")
+                except OSError:
+                    logger.warning("[LLM] metadata audit retention scan failed")
+                self._audit_log_date = today
+            model = response.requested_model or response.model
+            quote = rate_quote(model, response.input_tokens, response.output_tokens)
+            row = {
+                "ts": now.isoformat(), "task": task, "provider": response.provider.value,
+                "requested_model": model, "resolved_model": response.resolved_model,
+                "requested_reasoning_effort": response.requested_reasoning_effort,
+                "requested_thinking_level": response.requested_thinking_level,
+                "input_tokens": response.input_tokens if response.usage_known else None,
+                "output_tokens": response.output_tokens if response.usage_known else None,
+                "reasoning_tokens": response.reasoning_tokens,
+                "visible_output_tokens": response.visible_output_tokens,
+                "finish_reason": response.finish_reason, "elapsed_ms": response.latency_ms,
+                "request_sent": response.request_sent, "usage_known": response.usage_known,
+                "billing_status": response.billing_status,
+                "http_status": response.http_status,
+                "provider_error_code": response.provider_error_code,
+                "provider_error_type": response.provider_error_type,
+                "provider_error_status": response.provider_error_status,
+                "cost_basis": ("pre_generation_rejection_inference_not_invoice_proof"
+                               if response.billing_status == "rejected_before_generation"
+                               else "reported_tokens_estimate" if response.usage_known else "unknown"),
+                "outcome": ("error" if not response.success else
+                            "success" if (response.content or "").strip() else "empty"),
+                "attempt_role": role,
+                "estimated_cost_usd": quote.cost_usd if quote and response.usage_known else None,
+                "price_basis": quote.basis if quote else "unpriced",
+            }
+            with (self.audit_dir / f"llm-audit-{today}.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.warning("[LLM] metadata audit write failed")
 
     def _maybe_fire_shadow(
         self,
@@ -762,16 +1033,36 @@ class LLMManager:
         fire-and-forget — 본 응답은 즉시 반환됨.
         """
         shadow_model = self.config.openai_model_light_shadow
-        if not shadow_model:
+        if not shadow_model or self._closing:
             return
         if primary_response.model != self.config.openai_model_light:
             return
         try:
-            asyncio.create_task(
+            shadow_task = asyncio.create_task(
                 self._fire_shadow(prompt, system, task, kwargs, primary_response, shadow_model)
             )
+            self._shadow_tasks.add(shadow_task)
+            shadow_task.add_done_callback(self._shadow_done)
         except Exception as e:
             logger.debug(f"[LLM-Shadow] 스케줄 실패: {e}")
+
+    def _shadow_done(self, task: asyncio.Task) -> None:
+        self._shadow_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.warning("[LLM] shadow task failed")
+
+    async def close(self) -> None:
+        """Cancel and account outstanding shadow calls before closing HTTP sessions."""
+        self._closing = True
+        pending = tuple(self._shadow_tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._shadow_tasks.difference_update(pending)
+        for client in (self.openai, self.gemini):
+            if client._session is not None and not client._session.closed:
+                await client._session.close()
 
     async def _fire_shadow(
         self,
@@ -783,20 +1074,25 @@ class LLMManager:
         shadow_model: str,
     ) -> None:
         """Shadow 호출 + 비교 로그 기록."""
+        if not self._check_budget():
+            return
         import time
         import uuid
         pair_id = uuid.uuid4().hex[:12]
-        t0 = time.time()
+        t0 = time.perf_counter()
         try:
-            shadow_resp = await self.openai.complete(
-                prompt, system, model=shadow_model, **kwargs
+            shadow_resp = await self._complete_attempt(
+                self.openai, prompt, system, shadow_model, task.value, "shadow", **kwargs
             )
         except Exception as e:
             shadow_resp = LLMResponse(
                 content="", model=shadow_model, provider=LLMProvider.OPENAI,
-                success=False, error=str(e)[:200],
+                success=False, error="Shadow invocation failed",
+                request_sent=not isinstance(e, ValueError), usage_known=False,
+                billing_status="not_sent" if isinstance(e, ValueError) else "unknown",
             )
-        latency_ms = int((time.time() - t0) * 1000)
+            self._account_attempt(shadow_resp, task.value, "shadow")
+        latency_ms = int((time.perf_counter() - t0) * 1000)
         try:
             self._SHADOW_LOG_DIR.mkdir(parents=True, exist_ok=True)
             today = datetime.now().strftime("%Y%m%d")
@@ -836,7 +1132,9 @@ class LLMManager:
         **kwargs
     ) -> Dict[str, Any]:
         """JSON 응답 생성 (Invalid JSON 시 최대 1회 재시도)"""
-        response = await self.complete(prompt, task, system, **kwargs)
+        response = await self.complete(
+            prompt, task, system, _attempt_role="json_retry" if _retry else "primary", **kwargs
+        )
 
         if not response.success:
             self._log_llm_response(
@@ -924,7 +1222,15 @@ class LLMManager:
             "input_tokens": self.daily_usage.input_tokens,
             "output_tokens": self.daily_usage.output_tokens,
             "estimated_cost_usd": round(self.daily_usage.estimated_cost_usd, 4),
-            "budget_remaining_usd": round(self.config.daily_budget_usd - self.daily_usage.estimated_cost_usd, 4),
+            "budget_remaining_usd": (None if self.daily_usage.cost_missing else
+                                     round(self.config.daily_budget_usd - self.daily_usage.estimated_cost_usd, 4)),
+            "cost_missing": self.daily_usage.cost_missing,
+            "unpriced_requests": self.daily_usage.unpriced_requests,
+            "unknown_usage_requests": self.daily_usage.unknown_usage_requests,
+            "inferred_nonbillable_rejections": self.daily_usage.inferred_nonbillable_rejections,
+            "budget_scope": "process_local_post_usage",
+            "audit_enabled": self.audit_dir is not None,
+            "configuration_warnings": list(self.configuration_warnings),
             "stats": self.stats,
         }
 
