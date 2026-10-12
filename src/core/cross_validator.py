@@ -816,20 +816,16 @@ class CrossStrategyValidator:
             if panel_risks:
                 risk_guide = "위 매크로 리스크가 해당 종목/전략에 직접 영향 가능 시 보수적으로 NO. "
 
+            from .entry_llm_context import build_entry_context
+            common_context = build_entry_context(
+                symbol, strategy, score, indicators, market_regime, sector,
+                combined_market_regime=panel_combined_regime,
+                context_sources={"memory": mem_context, "wiki": wiki_context,
+                                 "symbol_wiki": symbol_wiki, "disclosure": disclosure_ctx,
+                                 "panel_risks": panel_risks},
+            )
             prompt = (
-                f"종목 {symbol}, 전략 {strategy}, 점수 {score:.0f}.\n"
-                f"시장 체제: {market_regime} (LLM+패널 결합={panel_combined_regime})."
-                + (f" 섹터: {sector}." if sector else "") + "\n"
-                f"지표: RSI={indicators.get('rsi_14', 'N/A')}, "
-                f"ATR={indicators.get('atr_14', 'N/A')}%, "
-                f"MA200거리={indicators.get('ma200_distance_pct', 'N/A')}%, "
-                f"PER={indicators.get('per', 'N/A')}, "
-                f"수급={'+' if (indicators.get('foreign_net_buy') if indicators.get('foreign_net_buy') is not None else 0) > 0 else '-'}.\n"
-                + (f"최근 유사 거래 기억: {mem_context}\n" if mem_context else "")
-                + (f"위키 교훈: {wiki_context}\n" if wiki_context else "")
-                + (f"종목 노트 (과거 거래·최근 리서치):\n{symbol_wiki}\n" if symbol_wiki else "")
-                + (f"최근 공시 (보조 참고): {disclosure_ctx}\n" if disclosure_ctx else "")
-                + (f"주간 매크로 리스크 (전문가 패널): {panel_risks}\n" if panel_risks else "")
+                common_context
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 + risk_guide
                 + "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
@@ -839,16 +835,10 @@ class CrossStrategyValidator:
             #   Bear는 "문제 없음" 답변이 금지되어 반증 책임을 진다 → 확증 편향 완화.
             #   실패 시 아래 단일 LLM 경로로 폴백한다.
             if self._adversarial is not None:
-                extra_ctx = "\n".join(filter(None, [
-                    f"최근 유사 거래 기억: {mem_context}" if mem_context else "",
-                    f"위키 교훈: {wiki_context}" if wiki_context else "",
-                    f"최근 공시 (보조 참고): {disclosure_ctx}" if disclosure_ctx else "",
-                    f"주간 매크로 리스크: {panel_risks}" if panel_risks else "",
-                ]))
                 adv = await self._adversarial.validate(
                     symbol=symbol, strategy=strategy, score=score,
                     indicators=indicators, market_regime=market_regime,
-                    sector=sector, extra_context=extra_ctx,
+                    sector=sector, common_context=common_context,
                 )
                 # 적대검증은 Bull+Bear로 LLM을 2회 호출한다.
                 # 위에서 이미 1회를 세었으므로 1회를 더 반영해야 한도가 실제 호출 수와 맞는다.
