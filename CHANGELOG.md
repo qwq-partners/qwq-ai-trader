@@ -8,6 +8,7 @@
 - `ResearchTeam`: OpenAI전용 옵션을 Gemini에 넘기던 호출을 공급자별로 분리하고 원장 params도 맞췄다. 강화된 검증으로 Bear가 조용히 실패하는 반례를 실제 transport/가짜HTTP로 고정했으며 토론 프롬프트/모델/판정 정책은 유지한다.
 - 새 metadata-only audit는 명시 audit_dir 주입 시만 활성화한다. 기존 모델/라우팅·운영 설정·매수 중지·관측 예약을 변경하지 않았다. 신규 모델 실측/운영 배포/순수익 입증은 별도다.
 - 최종 관련UTC/KST 각205·전체4999 passed/2 skipped/2 known xfailed, 문법·비밀정보·격리 확인. 실제 Claude Opus5 독립 재리뷰와 마지막 연결 실패/비용 소계 delta 리뷰 모두 승인했다.
+- 후속 P1 준비: KIS 공개 문서 원문에서 체결/호가/장운영 코드값 설명을 확보·지문 보존했다. 삭제된 호가 열과 설명 미완성 코드를 정상 상태로 해석하지 않으며 초기 상태/연결 공백·실측 검증은 남긴다.
 - [PDS·검증·API 비용·다음 우선순위](docs/research/llm-and-observation-priorities-2026-10-12.md) · [설계](docs/superpowers/specs/2026-10-12-live-learning-readiness-design.md) · [계획](docs/superpowers/plans/2026-10-12-llm-readiness.md). 매일 오류/자료 품질을 개선하고 경제성 변경은 단일 버전 코호트로 검증한다. 기존 H1의20일/최소 표본 규칙을 대기 의무나 자동 승격으로 해석하지 않는다.
 
 ## 2026-10-12 — H1 관측 입력 준비와 수집 전 공백 확인(67차)

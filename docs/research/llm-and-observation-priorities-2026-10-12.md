@@ -47,7 +47,17 @@
 
 P1에서1~3일 정도의 작은 pilot을 **기술 준비 목표**로 삼되 달력 경과만으로 통과하지 않는다. 유효 사례가 없으면 병목을 좁힌다. H1고정20일은 P1수용 후 시작하며 날짜/비용/설정/채널/새 설치기 검증을 거친다. 옛10/13~11/9준비본은 미등록 후보이며 자동 시작하지 않는다. 기존 최소 표본 규칙/BacktestGate를 이 문서로 완화하지 않는다. 자료 기반 소규모 적용안이 마련되면 변경 범위와 중단 조건으로 따로 판단한다.
 
-P1 준비 정적 감사에서 `kis_websocket.py`의 체결 파서는 거래소 시각과 장운영/거래정지 원문을 버리고, 호가 파서는 시각·hour code·연결 identity를 보존하는 것을 확인했다. 후보 배정은 BOOK만 추가하며 체결 구독은 운영 종목에 한정돼 있다. 따라서 체결 metadata 보존만으로 모든 후보의 상태가 확보됐다고 볼 수 없다. [KIS 공식 정의](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_user/domestic_stock/domestic_stock_functions_ws.py)는 상태 필드와 KRX 장운영 채널을 제공하지만 이번에 확인한 자료에는 완전한 값별 코드표·초기 정상 상태·유실 없는 구간의 보장이 없다. 원문 보존은 진행 가능하나 정상 연속매매 자동 판정은 이 근거 확보 뒤에 한다. Sol/high 요청의 읽기 전용 감사이며 실제 모델 메타데이터는 미노출이었다.
+P1 준비 정적 감사에서 `kis_websocket.py`의 체결 파서는 거래소 시각과 장운영/거래정지 원문을 버리고, 호가 파서는 시각·hour code·연결 identity를 보존하는 것을 확인했다. 후보 배정은 BOOK만 추가하며 체결 구독은 운영 종목에 한정돼 있다. 따라서 체결 metadata 보존만으로 모든 후보의 상태가 확보됐다고 볼 수 없다. [KIS 공식 샘플](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_user/domestic_stock/domestic_stock_functions_ws.py)만으로 부족했던 값별 설명은 아래 공개 문서 원문에서 일부 확보했다. 초기 정상 상태·유실 없는 구간은 아직 미확인이다. Sol/high 요청의 읽기 전용 감사이며 실제 모델 메타데이터는 미노출이었다.
+
+### P1 공식 원천 확보 — 2026-10-12 21:13 KST
+
+KIS 공개 가이드가 자체적으로 읽는 `/api/apis/public/detail`을 **인증·계좌 API 없이** 조회했다. 검색에 노출된 샘플의 열 이름에 의존하지 않고 공급자의 값 설명을 확인했다.
+
+- [체결 정의 H0STCNT0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STCNT0): `NEW_MKOP_CLS_CODE`는 두 자리 구성이며 앞자리2가 장중, 뒷자리0이 보통이다. `TRHT_YN`은 Y/N 정지 여부다. `HOUR_CLS_CODE`는0/A/B/C/D를 구분하고 C는09시 이후 예상/VI를 포함한다. 이 값들만으로 모든 시점의 연속매매가 증명되는 것은 아니다.
+- [호가 정의 H0STASP0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STASP0): 같은 hour code 설명이 있으며 마지막 `STCK_DEAL_CLS_CODE`는 삭제된 미사용 값이다. 이 열을 새 정상장 증거로 쓰지 않는다.
+- [장운영 정의 H0STMKO0](https://apiportal.koreainvestment.com/api/apis/public/detail?accessUrl=%2Ftryitout%2FH0STMKO0): `MKOP_CLS_CODE`112는 개장,121은 마감 동시호가 시작 등 사건 코드다. 종목 상태58/59는 거래정지/단기과열 분류다. 문서는 VI 발생/해제 때 수신한다고 설명하므로 구독 직후의 정상 초기값 또는 모든 예외의 완전한 통지가 보장됐다고 볼 수 없다. 단일가 관련 일부 코드는 원문에도 `???`이며, `VI_CLS_CODE`의 적용 여부를 활성 구간 판정으로 바로 바꾸지 않는다.
+
+원문 응답 바이트·수집 시각·SHA256 색인은 Git 밖 `/home/ubuntu/.local/share/qwq-research/public-kis-status-20261012/index.json`에 보존했다. 체결/호가/장운영 응답 SHA는 각각 `833b105418e98807d3e24753f97ed008e0f5f6972a0937a1a0f40d252543624d`, `a22543dd4a1c64c01210eef281203771da0d1d58e2e7d4c08643c35a3fc60ff3`, `4c76c54995ff112312ecf9e98f4f194d6edfe2f0749300b8639c10ff0d40c3f5`다. 상위 문서 수정일과 개별 필드 수정일은 다르므로 응답 원문/지문을 기준으로 고정한다. 다음 구현은 이 근거의 원문 보존·연결이며, 자동 정상 판정 및 실제 한 쌍 확보는 아직 미완료다.
 
 ## 매일 볼 결과와 수정 규칙
 
