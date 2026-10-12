@@ -48,6 +48,10 @@ def _decode(raw):
 def validate_window_contract(context, observations=None):
     """Offline as well as install-time binding; never reopen or amend a study."""
     s = context.get('capture', {})
+    if observations is not None and any(r.get('kind') == 'market_state' for r in observations['records']):
+        channels = s.get('channels', {})
+        if type(channels) is not dict or channels.get('market_state_evidence') is not True:
+            raise ValueError('market-state records require explicit capture contract')
     scans = ([r for r in observations['records'] if r.get('kind') == 'scan']
              if observations is not None else [])
     if observations is not None and s.get('version') != READY_VERSION:
@@ -67,7 +71,7 @@ def validate_window_contract(context, observations=None):
         channels = s.get('channels', {})
         channel_fields = set(('registration_cap external_reserved operational_headroom '
                               'max_candidates lease_seconds evidence_ref').split())
-        if type(channels) is not dict or set(channels) != channel_fields:
+        if type(channels) is not dict or set(channels) - {'market_state_evidence', 'market_state_max_records'} != channel_fields:
             raise ValueError('H1 bounded channel contract required')
         from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
         QuoteSubscriptionCoordinator(EntryObservationBuffer(evaluation_epoch=context.get('evaluation_epoch'), capacity=1),
@@ -287,6 +291,7 @@ class CapturePlan:
                 raise ValueError('자원 한도는 양의 정수 필요')
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
+        metadata_records = 1
         if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
             from .selection_basis import validate_settings
             selection = validate_settings(s['selection_basis'])
@@ -312,12 +317,19 @@ class CapturePlan:
             if type(s[key]) not in (int, float) or not math.isfinite(s[key]) or not 0 < s[key] <= 10:
                 raise ValueError('I/O 대기 한도는 0~10초')
         contract = s['channels']
-        if type(contract) is not dict or set(contract) != set(('registration_cap external_reserved '
+        if type(contract) is not dict or set(contract) - {'market_state_evidence', 'market_state_max_records'} != set(('registration_cap external_reserved '
                 'operational_headroom max_candidates lease_seconds evidence_ref').split()):
             raise ValueError('명시 채널 계약 필요; 해제 ACK 승격은 지원하지 않음')
         from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
         QuoteSubscriptionCoordinator(EntryObservationBuffer(evaluation_epoch=context['evaluation_epoch'], capacity=1),
                                      **contract)
+        if contract.get('market_state_evidence'):
+            # 전체 유한 버퍼가 한 번에 큐에 들어가도 상태 추가 때문에 writer가
+            # 끊기지 않도록 보수적으로 예약한다. 실제 유량 충족은 파일럿 검증이다.
+            if (s['buffer_capacity'] < metadata_records + contract['market_state_max_records']
+                    or s['queue_capacity'] < s['buffer_capacity']
+                    or s['max_bytes'] < s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048):
+                raise ValueError('market-state 유한 메모리/큐/저장 예산 부족')
         if contract['lease_seconds'] < (end-start).total_seconds():
             raise ValueError('관측 종료까지 충분한 lease 필요')
 
@@ -370,7 +382,7 @@ class _WindowBuffer(EntryObservationBuffer):
             return False
         # Window quotes start at the declared boundary; subscription ACKs and
         # gaps before it remain necessary evidence for the existing session.
-        if self.scan_scope == 'window' and now < self.start_at and record.get('kind') == 'ws_quote':
+        if self.scan_scope == 'window' and now < self.start_at and record.get('kind') in ('ws_quote', 'market_state'):
             return False
         # Original first-scan contracts retain their preparation-stage quotes.
         recorded = super().publish(record)

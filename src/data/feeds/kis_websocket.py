@@ -987,6 +987,7 @@ class KISWebSocketFeed:
             return
         received_at = datetime.now(timezone.utc).isoformat()
         self._message_count += 1
+        local_frame_index = self._message_count  # 로컬 수신 순서; 거래소 순번이 아니다.
         self._last_message_time = datetime.now()
 
         try:
@@ -1058,7 +1059,7 @@ class KISWebSocketFeed:
                 return
             if owner is not None and count == 1:
                 symbol = raw_data.split("^", 1)[0]
-                if not owner.accepts((tr_id, symbol), generation):
+                if not owner.accepts_frame((tr_id, symbol), generation):
                     return
 
             # 수신 통계 로깅 (5000건마다)
@@ -1069,14 +1070,22 @@ class KISWebSocketFeed:
             if is_price:
                 if count > 1:
                     await self._handle_price_batch(raw_data, tr_id=tr_id, count=count,
-                                                   socket=socket, generation=generation)
+                                                   socket=socket, generation=generation,
+                                                   received_at=received_at, local_frame_index=local_frame_index)
                 else:
                     await self._handle_price_data(raw_data, tr_id=tr_id, generation=generation,
-                                                  socket=socket)
+                                                  socket=socket, received_at=received_at,
+                                                  local_frame_index=local_frame_index)
+
+            elif tr_id == "H0STMKO0":
+                self._capture_market_state(raw_data.split("^"), tr_id=tr_id,
+                    socket=socket, generation=generation, received_at=received_at,
+                    local_frame_index=local_frame_index, count=count, record_index=1)
 
             elif tr_id in (KISWebSocketType.ORDERBOOK.value, KISWebSocketType.NXT_ORDERBOOK.value):
                 await self._handle_orderbook_data(raw_data, tr_id=tr_id, received_at=received_at,
-                                                count=count, generation=generation, encrypted=encrypted)
+                                                count=count, generation=generation, encrypted=encrypted,
+                                                local_frame_index=local_frame_index)
 
         except Exception as e:
             if owner is not None:
@@ -1084,7 +1093,7 @@ class KISWebSocketFeed:
             logger.error(f"메시지 처리 오류: {e}")
 
     async def _handle_price_batch(self, data: str, *, tr_id: str, count: int,
-                                  socket=None, generation=None):
+                                  socket=None, generation=None, received_at=None, local_frame_index=None):
         """구형 46/현행 47필드 레코드 전체를 검증한 뒤 체결을 전달한다."""
         owner = getattr(self, "_quote_subscription_owner", None)
         try:
@@ -1113,23 +1122,60 @@ class KISWebSocketFeed:
                 owner.frame_gap("unsupported_frame_shape", tr_id=tr_id, count=count, encrypted="0")
             return
 
-        for record in records:
+        for record_index, record in enumerate(records, 1):
             if not self._price_socket_is_current(socket):
                 return
             if owner is not None and (socket is not self._ws or not self._connected
                                       or generation != owner.generation):
                 return
             await self._handle_price_data("^".join(record), tr_id=tr_id,
-                                          generation=generation, socket=socket)
+                                          generation=generation, socket=socket, received_at=received_at,
+                                          local_frame_index=local_frame_index, count=count, record_index=record_index)
+
+    def _capture_market_state(self, fields, *, tr_id, socket, generation, received_at,
+                              local_frame_index, count, record_index):
+        """명시 관측으로만 복사. 저장/파싱 실패가 운영 가격 전달을 막지 않는다."""
+        owner = getattr(self, "_quote_subscription_owner", None)
+        if owner is None or not owner.market_state_evidence:
+            return
+        try:
+            if (socket is not self._ws or not self._price_socket_is_current(socket)
+                    or not fields or not re.fullmatch(r"[0-9]{6}", fields[0])
+                    or type(local_frame_index) is not int or local_frame_index <= 0
+                    or received_at is None
+                    or not owner.accepts_market_state((tr_id, fields[0]), generation)):
+                return
+            from src.analytics.kis_market_state import parse_market_state
+            parsed = parse_market_state(tr_id, fields)
+            if parsed is None:
+                return
+            owner.note_market_state((tr_id, fields[0]), generation)
+            if parsed['market_state_status'] == 'raw_only' and (
+                    tr_id == 'H0STMKO0' or not owner.accepts((tr_id, fields[0]), generation)):
+                self._managed_data_count += 1  # 연결 생존만 확인; 운영 가격 coverage와 별개
+            owner.publish_market_state(dict(parsed, kind="market_state", symbol=fields[0],
+                observed_at=received_at, received_at=received_at, connection_id=owner.connection_id,
+                generation=generation, local_frame_index=local_frame_index,
+                message_count=count, record_index=record_index))
+            if parsed['market_state_status'] != 'raw_only':
+                owner.observer.mark_incomplete('market_state_unqualified_layout_or_values')
+            return True
+        except Exception:
+            owner.observer.mark_incomplete('market_state_capture_failed')
 
     def _price_socket_is_current(self, socket):
         """소켓 미지정 파싱은 허용하고, 실제 수신은 열린 현재 연결로 한정한다."""
         return socket is None or (socket is self._ws and self._connected and not socket.closed)
 
-    async def _handle_price_data(self, data: str, *, tr_id="", generation=None, socket=None):
+    async def _handle_price_data(self, data: str, *, tr_id="", generation=None, socket=None,
+                                received_at=None, local_frame_index=None, count=1, record_index=1):
         """실시간 체결가 처리"""
+        state_observed = False
         try:
             fields = data.split("^")
+            state_observed = self._capture_market_state(fields, tr_id=tr_id, socket=socket, generation=generation,
+                received_at=received_at, local_frame_index=local_frame_index,
+                count=count, record_index=record_index)
 
             if len(fields) < 20:
                 logger.warning(f"[WS] 체결가 필드 부족: {len(fields)}개 (최소 20 필요)")
@@ -1142,6 +1188,8 @@ class KISWebSocketFeed:
 
             # 0원/음수 체결가 필터 (데이터 이상)
             if price <= 0:
+                if state_observed:
+                    self._quote_subscription_owner.observer.mark_incomplete('market_state_price_body_unparsed')
                 return
             change_sign = fields[3]       # 전일대비부호
             change = int(fields[4])       # 전일대비
@@ -1201,10 +1249,12 @@ class KISWebSocketFeed:
                     logger.error(f"데이터 콜백 오류: {e}")
 
         except Exception as e:
+            if state_observed:
+                self._quote_subscription_owner.observer.mark_incomplete('market_state_price_body_unparsed')
             logger.error(f"체결가 처리 오류: {e}")
 
     async def _handle_orderbook_data(self, data: str, *, tr_id: str = "", received_at: Optional[str] = None,
-                                   count: int = 1, generation=None, encrypted=None):
+                                   count: int = 1, generation=None, encrypted=None, local_frame_index=None):
         """실시간 호가 처리"""
         owner = getattr(self, "_quote_subscription_owner", None)
         try:
@@ -1243,6 +1293,7 @@ class KISWebSocketFeed:
                     **_orderbook_state_provenance(tr_id, fields),
                     "received_at": received_at if received_at is not None else datetime.now(timezone.utc).isoformat(),
                     "message_count": count,
+                    "local_frame_index": local_frame_index, "record_index": 1,
                     # 원문 HHMMSS에는 거래일이 없다. 수신일로 원천 날짜를 추정하지 않는다.
                     "source_as_of": None,
                     **({"connection_id": owner.connection_id, "generation": generation} if owner else {}),
