@@ -1146,17 +1146,20 @@ class KISWebSocketFeed:
                     or not owner.accepts_market_state((tr_id, fields[0]), generation)):
                 return
             from src.analytics.kis_market_state import parse_market_state
-            from src.analytics.entry_observation import _publish
             parsed = parse_market_state(tr_id, fields)
             if parsed is None:
                 return
             owner.note_market_state((tr_id, fields[0]), generation)
-            _publish(owner.observer, dict(parsed, kind="market_state", symbol=fields[0],
+            if parsed['market_state_status'] == 'raw_only' and (
+                    tr_id == 'H0STMKO0' or not owner.accepts((tr_id, fields[0]), generation)):
+                self._managed_data_count += 1  # 연결 생존만 확인; 운영 가격 coverage와 별개
+            owner.publish_market_state(dict(parsed, kind="market_state", symbol=fields[0],
                 observed_at=received_at, received_at=received_at, connection_id=owner.connection_id,
                 generation=generation, local_frame_index=local_frame_index,
                 message_count=count, record_index=record_index))
             if parsed['market_state_status'] != 'raw_only':
                 owner.observer.mark_incomplete('market_state_unqualified_layout_or_values')
+            return True
         except Exception:
             owner.observer.mark_incomplete('market_state_capture_failed')
 
@@ -1167,9 +1170,10 @@ class KISWebSocketFeed:
     async def _handle_price_data(self, data: str, *, tr_id="", generation=None, socket=None,
                                 received_at=None, local_frame_index=None, count=1, record_index=1):
         """실시간 체결가 처리"""
+        state_observed = False
         try:
             fields = data.split("^")
-            self._capture_market_state(fields, tr_id=tr_id, socket=socket, generation=generation,
+            state_observed = self._capture_market_state(fields, tr_id=tr_id, socket=socket, generation=generation,
                 received_at=received_at, local_frame_index=local_frame_index,
                 count=count, record_index=record_index)
 
@@ -1184,6 +1188,8 @@ class KISWebSocketFeed:
 
             # 0원/음수 체결가 필터 (데이터 이상)
             if price <= 0:
+                if state_observed:
+                    self._quote_subscription_owner.observer.mark_incomplete('market_state_price_body_unparsed')
                 return
             change_sign = fields[3]       # 전일대비부호
             change = int(fields[4])       # 전일대비
@@ -1243,6 +1249,8 @@ class KISWebSocketFeed:
                     logger.error(f"데이터 콜백 오류: {e}")
 
         except Exception as e:
+            if state_observed:
+                self._quote_subscription_owner.observer.mark_incomplete('market_state_price_body_unparsed')
             logger.error(f"체결가 처리 오류: {e}")
 
     async def _handle_orderbook_data(self, data: str, *, tr_id: str = "", received_at: Optional[str] = None,

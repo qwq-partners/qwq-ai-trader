@@ -45,12 +45,17 @@ class QuoteSubscriptionCoordinator:
                  operational_headroom: int, max_candidates: int, lease_seconds: float,
                  evidence_ref: str, monotonic=time.monotonic, request_interval=0.15,
                  send_timeout=2.0, ack_timeout=15.0, unsubscribe_success_messages=(),
-                 unsubscribe_evidence_ref=None, market_state_evidence=False):
+                 unsubscribe_evidence_ref=None, market_state_evidence=False, market_state_max_records=None):
         if not isinstance(observer, EntryObservationBuffer):
             raise ValueError("동일 평가 세대의 EntryObservationBuffer 필요")
         if type(market_state_evidence) is not bool:
             raise ValueError("market_state_evidence: 명시 boolean 필요")
         self.market_state_evidence = market_state_evidence
+        if ((market_state_evidence and (type(market_state_max_records) is not int or market_state_max_records <= 0))
+                or (not market_state_evidence and market_state_max_records is not None)):
+            raise ValueError("market-state 기록 예산은 활성 계약에 명시한 양의 정수 필요")
+        self.market_state_max_records = market_state_max_records
+        self._market_state_records = 0
         for name, value, minimum in (("registration_cap", registration_cap, 1),
                 ("external_reserved", external_reserved, 0),
                 ("operational_headroom", operational_headroom, 0),
@@ -449,6 +454,19 @@ class QuoteSubscriptionCoordinator:
                 state.observed = True
                 self._record("observed", key)
 
+    def publish_market_state(self, record):
+        """상태가 선언한 몫을 넘겨 뒤의 코호트 기록 공간을 소진하지 않는다."""
+        if not self.market_state_evidence:
+            return False
+        if self._market_state_records >= self.market_state_max_records:
+            self.observer.mark_incomplete('market_state_record_limit')
+            return False
+        from src.analytics.entry_observation import _publish
+        recorded = _publish(self.observer, record)
+        if recorded:
+            self._market_state_records += 1
+        return recorded
+
     def operational_coverage(self):
         return {key[1] for key in self._operational if key[0] in PRICE_IDS
                 and self.accepts(key, self.generation)
@@ -459,6 +477,9 @@ class QuoteSubscriptionCoordinator:
                 "registration_cap": self.cap, "external_reserved": self.reserved,
                 "operational_headroom": self.headroom, "evidence_ref": self.evidence_ref,
                 "market_state_evidence": self.market_state_evidence,
+                "market_state_max_records": self.market_state_max_records,
+                "market_state_records": self._market_state_records,
+                "operational_observed": sum(s.operational_observed for s in self._states.values()),
                 "unsubscribe_evidence_ref": self.unsubscribe_evidence_ref,
                 "unsubscribe_ack_enabled": bool(self.unsubscribe_success_messages),
                 "operational_demand": len(self._operational), "occupied": len(self._states),

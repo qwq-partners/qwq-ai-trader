@@ -14,7 +14,7 @@ PRICE, BOOK, STATUS = 'H0STCNT0', 'H0STASP0', 'H0STMKO0'
 def contract(**kw):
     return dict(registration_cap=41, external_reserved=0, operational_headroom=0,
                 max_candidates=5, lease_seconds=600, evidence_ref='synthetic',
-                request_interval=0, market_state_evidence=True, **kw)
+                request_interval=0, market_state_evidence=True, market_state_max_records=10, **kw)
 
 
 def fields(tr, symbol='005930', width=None):
@@ -100,6 +100,8 @@ async def test_three_channels_share_connection_and_state_only_price_never_enters
         assert all(r['connection_id'] == quote['provenance']['connection_id'] and r['generation'] == q.generation for r in rows)
         assert seen == [] and q.operational_coverage() == set() and not f._subscribed_symbols
         assert q.snapshot()['observed'] == 3
+        assert q.snapshot()['operational_observed'] == 0
+        assert f._managed_data_count == 3  # connection liveness, not REST coverage
         assert 'discard-free-text' not in json.dumps(b.export())
     finally:
         await f.disconnect()
@@ -189,6 +191,8 @@ async def test_state_receipt_cannot_establish_operational_price_coverage():
         invalid = fields(PRICE); invalid[2] = 'bad-price'
         await receive(f, q, f'0|{PRICE}|001|' + '^'.join(invalid))
         assert len(states(b)) == 1
+        assert not b.export()['complete']
+        assert 'market_state_price_body_unparsed' in b.export()['incomplete_reasons']
         await q.set_operational(['005930'], PRICE, BOOK)
         assert q.operational_coverage() == set()
         await receive(f, q, f'0|{PRICE}|001|' + '^'.join(invalid))
@@ -224,7 +228,12 @@ async def test_state_and_quote_provenance_survive_sealed_journal(tmp_path):
 @pytest.mark.parametrize('flag', [True, False, 1, 'true', None])
 def test_explicit_runtime_contract_boolean_only(tmp_path, flag):
     from test_entry_observation_runtime import load
-    def change(c): c['capture']['channels']['market_state_evidence'] = flag
+    def change(c):
+        s = c['capture']
+        s['channels']['market_state_evidence'] = flag
+        if flag is True:
+            s['channels']['market_state_max_records'] = 10
+            s['max_bytes'] = s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048
     if type(flag) is bool:
         plan, _ = load(tmp_path, change)
         assert plan.settings['channels']['market_state_evidence'] is flag
@@ -281,3 +290,84 @@ def test_offline_window_rejects_state_without_explicit_contract(tmp_path):
     with pytest.raises(ValueError, match='market.state'):
         validate_window_contract(context, {'records': [dict(kind='market_state',
             observed_at=context['capture']['start_at'])]})
+
+
+@pytest.mark.asyncio
+async def test_state_quota_preserves_room_for_later_cohort_records(tmp_path):
+    from test_entry_observation_journal import opened, read
+    b, journal, path = await opened(tmp_path, queue_capacity=100)
+    f, _, q = await feed_setup(b, market_state_max_records=2)
+    try:
+        for _ in range(5): await receive(f, q, frame(PRICE))
+        assert len(states(b)) == 2
+        assert 'market_state_record_limit' in b.export()['incomplete_reasons']
+        assert b.publish(dict(kind='order_ready', signal_id='synthetic', observed_at='2026-10-13T01:00:00Z'))
+        assert b.export()['records'][-1]['kind'] == 'order_ready'
+        assert b.export()['dropped_records'] == 0
+        q.end_observation()
+        assert (await journal.close())['sealed']
+        loaded = read(path)
+        assert loaded['records'][-1]['kind'] == 'order_ready'
+        assert loaded['incomplete_reasons'] == ['market_state_record_limit']
+        assert journal.failure_reason is None
+    finally:
+        await journal.close()
+        await f.disconnect()
+
+
+@pytest.mark.parametrize('defect', ['missing', 'bool', 'zero', 'memory', 'queue', 'bytes'])
+def test_opt_in_requires_explicit_sufficient_state_storage_budget(tmp_path, defect):
+    from test_entry_observation_runtime import load
+    def change(c):
+        s = c['capture']; s['channels']['market_state_evidence'] = True
+        s['channels']['market_state_max_records'] = 10
+        s['max_bytes'] = s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048
+        if defect == 'missing': del s['channels']['market_state_max_records']
+        if defect == 'bool': s['channels']['market_state_max_records'] = True
+        if defect == 'zero': s['channels']['market_state_max_records'] = 0
+        if defect == 'memory': s['buffer_capacity'] = 10
+        if defect == 'queue': s['queue_capacity'] = s['buffer_capacity'] - 1
+        if defect == 'bytes': s['max_bytes'] -= 1
+    with pytest.raises(ValueError): load(tmp_path, change)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('operational_count,allocated_count', [(8, 5), (9, 4), (15, 0)])
+async def test_five_candidate_three_channel_capacity_never_shrinks_admitted_population(tmp_path, monkeypatch, operational_count, allocated_count):
+    from src.analytics import entry_observation as obs
+    from src.analytics.entry_observation_runtime import _WindowBuffer, validate_window_contract
+    from test_entry_observation_runtime import load
+    from test_order_ready_window_observation import ready_plan
+    from test_signal_window_observation import stock, event
+    def change(c):
+        ready_plan(c)
+        s = c['capture']
+        s['channels'].update(market_state_evidence=True, market_state_max_records=10)
+        s['queue_capacity'] = s['buffer_capacity']
+        s['max_bytes'] = s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048
+    plan, context = load(tmp_path, change)
+    monkeypatch.setattr(obs, '_now', lambda: plan.start_at.isoformat())
+    b = _WindowBuffer(plan, lambda: plan.start_at)
+    q = QuoteSubscriptionCoordinator(b, **plan.settings['channels'], request_interval=0)
+    b.order_ready_quote_submit = q.submit_order_ready
+    symbols = [f'{900001+i:06}' for i in range(5)]
+    stocks = [stock() for _ in symbols]
+    for item, symbol in zip(stocks, symbols): item.symbol = symbol
+    scan = obs.capture_scan(b, stocks, 'regular')
+    await q.set_operational([f'{i:06}' for i in range(operational_count)], PRICE, BOOK)
+    sent = []
+    async def send(action, key): sent.append((action, key))
+    await q.start(send)
+    for i, symbol in enumerate(symbols):
+        e = event(f's{i}'); e.symbol = symbol
+        obs.capture_signal(b, scan, e)
+        b.publish(dict(kind='order_ready', signal_id=e.id, order_id=f'o{i}', symbol=symbol,
+            strategy='gap_and_go', requested_quantity=1, observed_at=plan.start_at.isoformat()))
+    await asyncio.gather(*q._tasks)
+    rows = b.export()['records']
+    assert sum(r['kind']=='order_ready_admission' and r['status']=='admitted' for r in rows) == 5
+    assert len(q._leases) == 5
+    assert sum(key[1] in symbols for action,key in sent if action=='subscribe') == allocated_count * 3
+    assert sum(r.get('status')=='unallocated' for r in rows) == 5 - allocated_count
+    assert ('order_ready_channel_capacity' in b.export()['incomplete_reasons']) == (allocated_count < 5)
+    validate_window_contract(context, b.export())
