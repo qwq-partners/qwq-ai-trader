@@ -749,8 +749,12 @@ class MarketRegimeAdapter:
     async def _fetch_perplexity_context(self, api_key: str) -> str:
         """Perplexity 실시간 검색 — 오늘 KR 시장 매크로 컨텍스트 수집
 
-        Sonar 모델 사용, 1회 ~$0.005. 실패 시 빈 문자열 반환.
+        월 예산 원장 미연결 또는 실패 시 빈 문자열 반환.
         """
+        from src.utils.llm import unmetered_paid_calls_allowed
+        if not unmetered_paid_calls_allowed():
+            logger.info("[Perplexity] 시장 문맥 결측: 월 예산 원장 미연결")
+            return ""
         try:
             timeout = aiohttp.ClientTimeout(total=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:

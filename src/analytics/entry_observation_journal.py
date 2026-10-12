@@ -44,7 +44,8 @@ FIELDS['entry_gate_trace'] = ' '.join(sorted(TRACE_FIELDS))
 NESTED = {
     "candidates": set("symbol price score screened_at change_pct volume atr_pct candidate_id".split()),
     "quote": set("price open high low volume change_pct".split()),
-    "provenance": set("tr_id exchange_time hour_class_code received_at message_count source_as_of connection_id generation".split()),
+    "provenance": set(("tr_id exchange_time hour_class_code received_at message_count source_as_of connection_id generation "
+                       "raw_field_count market_class_code market_state_schema market_state_source_sha256 market_state_status").split()),
     "capital_snapshot": set(("version basis stage captured_at signal_id order_id symbol strategy requested_quantity "
         "current_order_reservation_included equity cash cash_after_reserve prior_pending_cash_reserved "
         "core_cash_reserved cash_capacity_before strategy_allocation_pct strategy_held_notional "

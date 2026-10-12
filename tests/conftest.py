@@ -35,6 +35,7 @@ BLOCKED_PATH_PREFIXES = tuple(
     str(p) for p in (
         _HOME / ".cache" / "ai_trader",
         _HOME / ".cache" / "ai_trader_us",
+        _HOME / ".local" / "state" / "qwq-ai-trader",
         _HOME / ".gh_token",
     )
 )

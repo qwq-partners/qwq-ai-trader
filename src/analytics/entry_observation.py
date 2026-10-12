@@ -315,7 +315,8 @@ def capture_quote(observer, event):
         return
     try:
         fields = ("tr_id", "exchange_time", "hour_class_code", "received_at", "message_count", "source_as_of",
-                  "connection_id", "generation")
+                  "connection_id", "generation", "raw_field_count", "market_class_code",
+                  "market_state_schema", "market_state_source_sha256", "market_state_status")
         _publish(observer, {"kind": "ws_quote", "quote_id": event.id,
                             "symbol": event.symbol, "observed_at": _now(),
                             "ask": _scalar(event.ask_price), "bid": _scalar(event.bid_price),
