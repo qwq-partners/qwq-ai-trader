@@ -48,6 +48,9 @@ def _decode(raw):
 def validate_window_contract(context, observations=None):
     """Offline as well as install-time binding; never reopen or amend a study."""
     s = context.get('capture', {})
+    if observations is not None and any(r.get('kind') == 'market_state' for r in observations['records']):
+        if s.get('channels', {}).get('market_state_evidence') is not True:
+            raise ValueError('market-state records require explicit capture contract')
     scans = ([r for r in observations['records'] if r.get('kind') == 'scan']
              if observations is not None else [])
     if observations is not None and s.get('version') != READY_VERSION:
@@ -67,7 +70,7 @@ def validate_window_contract(context, observations=None):
         channels = s.get('channels', {})
         channel_fields = set(('registration_cap external_reserved operational_headroom '
                               'max_candidates lease_seconds evidence_ref').split())
-        if type(channels) is not dict or set(channels) != channel_fields:
+        if type(channels) is not dict or set(channels) - {'market_state_evidence'} != channel_fields:
             raise ValueError('H1 bounded channel contract required')
         from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
         QuoteSubscriptionCoordinator(EntryObservationBuffer(evaluation_epoch=context.get('evaluation_epoch'), capacity=1),
@@ -312,7 +315,7 @@ class CapturePlan:
             if type(s[key]) not in (int, float) or not math.isfinite(s[key]) or not 0 < s[key] <= 10:
                 raise ValueError('I/O 대기 한도는 0~10초')
         contract = s['channels']
-        if type(contract) is not dict or set(contract) != set(('registration_cap external_reserved '
+        if type(contract) is not dict or set(contract) - {'market_state_evidence'} != set(('registration_cap external_reserved '
                 'operational_headroom max_candidates lease_seconds evidence_ref').split()):
             raise ValueError('명시 채널 계약 필요; 해제 ACK 승격은 지원하지 않음')
         from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
@@ -370,7 +373,7 @@ class _WindowBuffer(EntryObservationBuffer):
             return False
         # Window quotes start at the declared boundary; subscription ACKs and
         # gaps before it remain necessary evidence for the existing session.
-        if self.scan_scope == 'window' and now < self.start_at and record.get('kind') == 'ws_quote':
+        if self.scan_scope == 'window' and now < self.start_at and record.get('kind') in ('ws_quote', 'market_state'):
             return False
         # Original first-scan contracts retain their preparation-stage quotes.
         recorded = super().publish(record)

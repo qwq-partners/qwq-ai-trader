@@ -37,6 +37,7 @@ FIELDS = {
     "ws_quote": "quote_id symbol observed_at ask bid ask_size bid_size provenance",
     "order_ready_admission": "observed_at status candidate_id signal_id order_id tr_id symbol reason expires_at",
     "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic signal_id order_id",
+    "market_state": "schema_version observed_at received_at connection_id generation symbol tr_id local_frame_index record_index message_count raw_field_count market_state_schema market_state_source_sha256 market_state_status source_sequence state_verdict business_date exchange_time new_mkop_cls_code trht_yn hour_cls_code market_cls_code mkop_cls_code antc_mkop_cls_code mrkt_trtm_cls_code divi_app_cls_code iscd_stat_cls_code vi_cls_code ovtm_vi_cls_code exch_cls_code",
 }
 FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))
@@ -45,7 +46,7 @@ NESTED = {
     "candidates": set("symbol price score screened_at change_pct volume atr_pct candidate_id".split()),
     "quote": set("price open high low volume change_pct".split()),
     "provenance": set(("tr_id exchange_time hour_class_code received_at message_count source_as_of connection_id generation "
-                       "raw_field_count market_class_code market_state_schema market_state_source_sha256 market_state_status").split()),
+                       "raw_field_count market_class_code market_state_schema market_state_source_sha256 market_state_status local_frame_index record_index").split()),
     "capital_snapshot": set(("version basis stage captured_at signal_id order_id symbol strategy requested_quantity "
         "current_order_reservation_included equity cash cash_after_reserve prior_pending_cash_reserved "
         "core_cash_reserved cash_capacity_before strategy_allocation_pct strategy_held_notional "

@@ -18,6 +18,7 @@ from src.analytics.entry_observation import EntryObservationBuffer
 Channel = tuple[str, str]
 BOOK = "H0STASP0"
 PRICE_IDS = {"H0STCNT0", "H0NXCNT0"}
+STATE_CHANNELS = (BOOK, "H0STCNT0", "H0STMKO0")
 
 
 @dataclass
@@ -27,6 +28,7 @@ class Registration:
     status: str = "requested"
     acknowledged: bool = False
     observed: bool = False
+    operational_observed: bool = False
 
 
 @dataclass(frozen=True)
@@ -43,9 +45,12 @@ class QuoteSubscriptionCoordinator:
                  operational_headroom: int, max_candidates: int, lease_seconds: float,
                  evidence_ref: str, monotonic=time.monotonic, request_interval=0.15,
                  send_timeout=2.0, ack_timeout=15.0, unsubscribe_success_messages=(),
-                 unsubscribe_evidence_ref=None):
+                 unsubscribe_evidence_ref=None, market_state_evidence=False):
         if not isinstance(observer, EntryObservationBuffer):
             raise ValueError("동일 평가 세대의 EntryObservationBuffer 필요")
+        if type(market_state_evidence) is not bool:
+            raise ValueError("market_state_evidence: 명시 boolean 필요")
+        self.market_state_evidence = market_state_evidence
         for name, value, minimum in (("registration_cap", registration_cap, 1),
                 ("external_reserved", external_reserved, 0),
                 ("operational_headroom", operational_headroom, 0),
@@ -292,11 +297,15 @@ class QuoteSubscriptionCoordinator:
         for lease in self._leases.values():
             if lease.deadline <= self.clock():
                 continue
-            key = (BOOK, lease.symbol)
-            if key not in desired and spare:
-                desired.append(key)
-                spare -= 1
+            missing = [key for key in self._lease_channels(lease.symbol) if key not in desired]
+            # 논리적 배정은 전체 묶음 단위. 실제 요청/ACK/수신은 별도로 기록한다.
+            if len(missing) <= spare:
+                desired.extend(missing)
+                spare -= len(missing)
         return desired
+
+    def _lease_channels(self, symbol):
+        return [(tr, symbol) for tr in (STATE_CHANNELS if self.market_state_evidence else (BOOK,))]
 
     async def _request(self, action, key):
         if getattr(self.observer, 'order_ready_admission', False):
@@ -351,12 +360,15 @@ class QuoteSubscriptionCoordinator:
                     await self._request("subscribe", key)
         for cid, lease in self._leases.items():
             key = (BOOK, lease.symbol)
-            status = ("shared_operational" if key in self._operational else "allocated") if key in desired else "unallocated"
+            bundle = self._lease_channels(lease.symbol)
+            allocated = all(channel in desired for channel in bundle)
+            shared = all(channel in self._operational for channel in bundle)
+            status = ("shared_operational" if shared else "allocated") if allocated else "unallocated"
             if self._candidate_status.get(cid) != status:
                 self._candidate_status[cid] = status
                 if status == 'unallocated' and cid in self._ready_requests:
                     self.observer.mark_incomplete('order_ready_channel_capacity')
-                self._record(status, key, candidate_id=cid, reason=None if key in desired else "channel_capacity")
+                self._record(status, key, candidate_id=cid, reason=None if allocated else "channel_capacity")
 
     async def maintain(self):
         async with self._lock:
@@ -403,15 +415,35 @@ class QuoteSubscriptionCoordinator:
                 self._record("acknowledged", key)
             await self._reconcile()
 
-    def accepts(self, key, generation):
+    def accepts_frame(self, key, generation):
+        """현재 연결에서 실제 요청한 운영/관측 채널. 엔진 가격 전달과 별개다."""
         state = self._states.get(key)
         return bool(self._send is not None and generation == self.generation and state
                     and state.pending != "unsubscribe" and state.status not in ("unknown", "rejected")
-                    and key in self._desired()
-                    and (key[0] not in PRICE_IDS or key in self._operational))
+                    and key in self._desired())
+
+    def accepts(self, key, generation):
+        return self.accepts_frame(key, generation) and (key[0] not in PRICE_IDS or key in self._operational)
+
+    def accepts_market_state(self, key, generation):
+        if (not self.market_state_evidence or key[0] not in STATE_CHANNELS[1:]
+                or not self.accepts_frame(key, generation)):
+            return False
+        desired = self._desired()
+        return (any(lease.symbol == key[1] and lease.deadline > self.clock() for lease in self._leases.values())
+                and all(channel in desired for channel in self._lease_channels(key[1])))
 
     def note_data(self, key, generation):
         if self.accepts(key, generation):
+            state = self._states[key]
+            if key in self._operational and key[0] in PRICE_IDS:
+                state.operational_observed = True
+            if not state.observed:
+                state.observed = True
+                self._record("observed", key)
+
+    def note_market_state(self, key, generation):
+        if self.accepts_market_state(key, generation):
             state = self._states[key]
             if not state.observed:
                 state.observed = True
@@ -420,12 +452,13 @@ class QuoteSubscriptionCoordinator:
     def operational_coverage(self):
         return {key[1] for key in self._operational if key[0] in PRICE_IDS
                 and self.accepts(key, self.generation)
-                and self._states[key].acknowledged and self._states[key].observed}
+                and self._states[key].acknowledged and self._states[key].operational_observed}
 
     def snapshot(self):
         return {"generation": self.generation, "connection_id": self.connection_id,
                 "registration_cap": self.cap, "external_reserved": self.reserved,
                 "operational_headroom": self.headroom, "evidence_ref": self.evidence_ref,
+                "market_state_evidence": self.market_state_evidence,
                 "unsubscribe_evidence_ref": self.unsubscribe_evidence_ref,
                 "unsubscribe_ack_enabled": bool(self.unsubscribe_success_messages),
                 "operational_demand": len(self._operational), "occupied": len(self._states),
