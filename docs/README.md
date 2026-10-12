@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [67차 H1 입력 준비·장 상태 근거 공백](research/h1-observation-preparation-2026-10-12.md):20일/60파일·정책 SHA의 오프라인 준비. 후보 날짜는 미등록·미예약이다. 다음은 동시점 장 상태 수집과 실제 진입/+900초 호가 한 쌍의 평가 가능성 검증이며, 이후 적용 비용/설정/채널/설치기를 확인하고 새20일을 확정한다.
+
 > [66차 H1 다일·동시 자본 평가](research/h1-multiday-capital-2026-10-12.md): 원본20일·최초5개를 각자 현금/예약/전략 한도로 비교하는 오프라인 기능. [구현 계획](superpowers/plans/2026-10-11-h1-multiday-capital.md). 새 관측 미예약·실수익 미검증. 아래65차 이하는 당시 이력이다.
 
 > [65차 주문 준비 호가 배정·배포](research/next-observation-design-2026-10-11.md#65차--주문-준비-호가-배정과-운영-배포): PR #168/32f52dd·23:32 운영 적용(PID889750). 실제 order_ready 최초5개 identity의 비동기 배정과 엄격 판독. [구현 계획](superpowers/plans/2026-10-11-h1-order-ready-observation.md). 새 수집 일정·실제 비용 후 수익은 미확정이며 배포 상태는 정본의 완료 근거를 따른다.
