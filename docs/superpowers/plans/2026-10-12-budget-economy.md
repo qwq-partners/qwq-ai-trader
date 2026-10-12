@@ -4,7 +4,7 @@ Approved scope: preserve the existing $100 KST monthly ledger and activation; ig
 
 ## Plan
 
-- Coordinator (Astra) owns integration, financial policy, model routing, provenance and runner. Base `52cd9a0`; feature worktree separate from production.
+- Coordinator (Codex; native actual model/effort unexposed) owns integration, financial policy, model routing, provenance and runner. Base `52cd9a0`; feature worktree separate from production.
 - Sol/high worker owns only deterministic notification module/tests in a separate worktree. Sol/high read-only auditor checks callsite classification and policy hazards. Actual native model metadata is unavailable. No fan-out or credentials/API/operations by workers.
 - Final critical review: independent verified Claude Opus5/xhigh with sanitized source, tools disabled, bounded streamed invocation. Maximum coordinator plus three workers.
 
