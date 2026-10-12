@@ -87,7 +87,38 @@ def activation_profile(name):
             datetime(2026,10,7,23,55,tzinfo=timezone.utc),
             datetime(2026,10,7,23,57,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261014-market-state-pilot-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261014-market-state-pilot-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261014-market-state-pilot-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261014-market-state-pilot-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261014-market-state-pilot-v1-entry-capture.conf'),
+            '2026-10-14-market-state-pilot-v1',
+            datetime(2026,10,13,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,13,23,57,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
+
+
+def capture_prepared(cfg, projection):
+    if not cfg.engine_only:
+        return True
+    if cfg.evaluation_epoch != '2026-10-14-market-state-pilot-v1':
+        return projection.get('scan_scope') == 'window'
+    pilot = projection.get('pilot', {})
+    counts = ('operational_demand', 'missing_from_operational', 'registration_cap',
+              'external_reserved', 'operational_headroom', 'generation')
+    if (projection.get('scan_scope') != 'pilot' or type(pilot) is not dict
+            or pilot.get('installed') is not True
+            or any(type(pilot.get(k)) is not int or pilot[k] < 0 for k in counts)):
+        return False
+    fits = (pilot['operational_demand']+pilot['missing_from_operational']+
+            pilot['external_reserved']+pilot['operational_headroom'] <= pilot['registration_cap'] <= 41)
+    # 08:55 preparation precedes the market socket. Reconnected/failed sockets
+    # cannot pass as pristine preparation; ACK readiness is separate evidence.
+    fresh = pilot.get('connected') is False and pilot['generation'] == 0
+    live = pilot.get('connected') is True and pilot.get('stream_ready') is True
+    return fits and (fresh or live)
 
 
 @dataclass(frozen=True)
@@ -438,7 +469,7 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
                         or type(projection.get('capture_id')) is not str
                         or not 1 <= len(projection['capture_id']) <= 120
                         or projection.get('capture_closed') is not False
-                        or (cfg.engine_only and projection.get('scan_scope') != 'window')):
+                        or not capture_prepared(cfg, projection)):
                     raise GuardError()
                 ready = True
                 break
@@ -503,6 +534,8 @@ def main():
             cfg = load_config('20261007-pilot3')
         elif sys.argv[1:] == ['--profile', '20261008-signal-window-v1']:
             cfg = load_config('20261008-signal-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261014-market-state-pilot-v1']:
+            cfg = load_config('20261014-market-state-pilot-v1')
         else:
             raise GuardError()
         result = activate(cfg)

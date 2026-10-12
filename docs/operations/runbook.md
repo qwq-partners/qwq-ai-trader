@@ -1,5 +1,7 @@
 # 운영 매뉴얼 (Runbook)
 
+> **73차 기술 파일럿:** [고정10월14일 설치 경로·실제 예약/배포 상태·남은 작업](../research/market-state-pilot-2026-10-13.md)을 따른다. 준비 완료/ACK/실제 수신을 구분하고 수요 부족이면 관측만 건너뛴다. 만료·실패 영수증을 삭제해 재시도하지 않는다.
+
 > **로컬 평가 도구(40·41·42차):** [관측 용량·KIS 오류 보고 절차](../research/current-engine-capture-and-account-pds-2026-10-02.md), [명시 계좌 순손익/TWR 입력](account-net-return-input.md)을 따른다. 명시 파일 또는 합성 입력만 사용하며 계산 성공을 배포/수집 승인이나 실제 계좌 원천 인증으로 해석하지 않는다.
 
 > **37차(10-02, 운영 미배포):** 식별 KR 체결의 `pending`은 JSON/큐 수락 후 실제 DB 저장 대기, `committed`만 해당 transaction의 commit 확인이다. `unavailable|failed|unknown`은 복구 필요로 남긴다. `lookup_execution_receipt`는 DB 행의 근거를 재조회하지만 runtime 보류를 해제하거나 replay하지 않는다. 현재 session의 `journal_pending_count`는 신규 BUY와 같은 종목 분할 SELL을 보류하며 전량 보호 SELL은 기존 경계 안에서 유지한다. 옛 원장 receipt/DB commit만으로 잔고 포함 시각·실제 계좌 대사 완료를 확정하지 않는다. [검증과 인계](../research/current-engine-integrated-pds-2026-10-02.md#37차-plan--체결-identity와-장부-commit).

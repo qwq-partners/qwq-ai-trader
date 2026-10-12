@@ -106,6 +106,51 @@ class QuoteSubscriptionCoordinator:
         self._observation_ended = False
         self._ready_requests: dict[str, dict] = {}
         self._ready_unresolved: set[str] = set()
+        self._static_lease_id = None
+        self._operational_initialized = False
+
+    def install_static_lease(self, symbol, *, expires_at):
+        """정지 피드의 명시 기술 계약에 한 번만 설치. 운영 수요를 먼저 확인한다."""
+        if (not getattr(self.observer, 'static_pilot', False) or not self.market_state_evidence
+                or self.max_candidates != 1 or self.generation or self._send is not None
+                or self._leases or self._static_lease_id is not None or self._observation_ended
+                or not self._operational_initialized):
+            raise RuntimeError('정지 상태의 한 번뿐인 파일럿 설치 필요')
+        if symbol != self.observer.pilot_symbol or expires_at != self.observer.end_at:
+            raise ValueError('파일럿 symbol/종료 계약 불일치')
+        remaining = (expires_at-self.observer.current_time()).total_seconds()
+        if self.observer.ended or remaining <= 0 or remaining > self.lease_seconds:
+            raise ValueError('파일럿 종료까지 충분한 lease 필요')
+        missing = [k for k in self._lease_channels(symbol) if k not in self._operational]
+        if len(self._operational)+self.reserved+self.headroom+len(missing) > self.cap:
+            return False
+        cid = self._static_lease_id = 'pilot:' + symbol
+        self._leases[cid] = Lease(symbol, self.clock()+remaining, expires_at.isoformat())
+        self._record('desired', (BOOK, symbol), candidate_id=cid, expires_at=expires_at.isoformat())
+        return True
+
+    def pilot_snapshot(self):
+        """논리 설치와 연결/ACK를 구분한다. 무사건 상태를 정상으로 승격하지 않는다."""
+        symbol = getattr(self.observer, 'pilot_symbol', '')
+        bundle = self._lease_channels(symbol)
+        desired = self._desired()
+        installed = (self._static_lease_id in self._leases and self._operational_initialized
+                     and all(k in desired for k in bundle))
+        requested = sum(self.accepts_frame(k, self.generation) for k in bundle)
+        acknowledged = sum(self.accepts_frame(k, self.generation) and self._states[k].acknowledged for k in bundle)
+        operational_missing = sum(not self.accepts(k, self.generation) or not self._states[k].acknowledged
+                                  for k in self._operational)
+        return dict(installed=bool(installed), connected=self._send is not None,
+                    stream_ready=bool(installed and acknowledged == 3 and operational_missing == 0),
+                    requested_channels=requested, acknowledged_channels=acknowledged,
+                    observed_channels=sum(self.accepts_frame(k, self.generation) and self._states[k].observed
+                                          for k in bundle),
+                    missing_from_operational=sum(k not in self._operational for k in bundle),
+                    operational_demand=len(self._operational), operational_missing=operational_missing,
+                    desired_count=len(desired), occupied=len(self._states), registration_cap=self.cap,
+                    external_reserved=self.reserved, operational_headroom=self.headroom,
+                    waiting_for_release=any(s.pending == 'unsubscribe' for s in self._states.values()),
+                    generation=self.generation)
 
     def _record(self, status, key=None, *, candidate_id=None, reason=None, expires_at=None, frame_diagnostic=None):
         record = {"kind": "quote_subscription", "observed_at": (self.observer.current_time().isoformat()
@@ -176,7 +221,7 @@ class QuoteSubscriptionCoordinator:
 
     def submit(self, scan_id, symbols):
         """원래 스크리닝을 기다리게 하지 않는 유한 작업 큐. 후보 분모는 별도 scan에 유지."""
-        if self._observation_ended:
+        if self._observation_ended or getattr(self.observer, 'static_pilot', False):
             return
         if len(self._tasks) >= 8:
             self._record("unallocated", reason="enrollment_queue_full")
@@ -200,6 +245,8 @@ class QuoteSubscriptionCoordinator:
 
     def submit_order_ready(self, admission):
         """준비 identity당 유한 예약만 한다. 주문 호출자는 송신/lock을 기다리지 않는다."""
+        if getattr(self.observer, 'static_pilot', False):
+            return
         if not self._ready_live():
             self.observer.mark_incomplete('order_ready_enrollment_unresolved')
             return
@@ -256,7 +303,7 @@ class QuoteSubscriptionCoordinator:
 
     async def enroll(self, scan_id, symbols, *, requested_at=None):
         async with self._lock:
-            if self._observation_ended:
+            if self._observation_ended or getattr(self.observer, 'static_pilot', False):
                 return
             now = self.clock()
             start = now if requested_at is None else requested_at
@@ -281,11 +328,15 @@ class QuoteSubscriptionCoordinator:
         async with self._lock:
             # 전달 순서: 보유 PRICE → 보유 BOOK → 나머지 PRICE/BOOK.
             self._operational = list(dict.fromkeys((tr, s) for s in symbols for tr in (price_id, book_id)))
+            self._operational_initialized = True
             await self._reconcile()
 
     def _expire(self):
         for cid, lease in list(self._leases.items()):
             if lease.deadline <= self.clock():
+                if cid == self._static_lease_id and self.observer.current_time() < self.observer.end_at:
+                    self.observer.mark_incomplete('pilot_lease_expired_early')
+                    self.observer.ended = True
                 if cid in self._ready_requests and self.observer.current_time() < self.observer.end_at:
                     self.observer.mark_incomplete('order_ready_lease_expired_early')
                 self._record("expired", (BOOK, lease.symbol), candidate_id=cid, expires_at=lease.expires_at)
@@ -293,7 +344,7 @@ class QuoteSubscriptionCoordinator:
                 self._candidate_status.pop(cid, None)
 
     def _desired(self):
-        if getattr(self.observer, 'order_ready_admission', False):
+        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
             self._ready_live()
         if self._observation_ended:
             self._leases.clear()
@@ -313,7 +364,7 @@ class QuoteSubscriptionCoordinator:
         return [(tr, symbol) for tr in (STATE_CHANNELS if self.market_state_evidence else (BOOK,))]
 
     async def _request(self, action, key):
-        if getattr(self.observer, 'order_ready_admission', False):
+        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
             self._ready_live()
         if action == "subscribe" and self._observation_ended and key not in self._operational:
             return
@@ -331,7 +382,7 @@ class QuoteSubscriptionCoordinator:
             delay = self.interval - (self.clock() - self._last_send)
             if delay > 0:
                 await asyncio.sleep(delay)
-            if getattr(self.observer, 'order_ready_admission', False):
+            if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
                 self._ready_live()
             if action == "subscribe" and self._observation_ended and key not in self._operational:
                 # 아직 송신하지 않은 로컬 예약만 제거. 이미 송신 중인 슬롯은 불명으로 보존.
@@ -353,6 +404,12 @@ class QuoteSubscriptionCoordinator:
     async def _reconcile(self):
         self._expire()
         desired = self._desired()
+        if (self._static_lease_id in self._leases and
+                not all(k in desired for k in self._lease_channels(self.observer.pilot_symbol))):
+            self._gap('pilot_channel_capacity')
+            self.observer.ended = True
+            self.end_observation()
+            desired = list(self._operational)
         if self._send is not None:
             for key, state in list(self._states.items()):
                 if (key not in desired and state.pending is None and state.acknowledged
