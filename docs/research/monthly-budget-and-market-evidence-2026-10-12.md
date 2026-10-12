@@ -52,12 +52,31 @@ flowchart TD
 - 통합 관련 UTC403개, 이후 설정 연결2건을 보강한 최종 KST405개 통과. 최종 전체 UTC **5061 passed, 2 skipped, 2 xfailed**, 기존 pykrx 경고1,163.24초. 문법/비밀정보 검사 통과·운영 파일/외부 네트워크 접근 시도0.
 - 임시 파일/합성 비용의 예약+정산100회: 중앙12.58ms·p95 16.58ms·최대20.20ms, 불명0. 실제 거래 피크 부하/콜백 지연 상한을 보장하는 시험은 아니다. SQLite 동기 저장은 운영 지연 관찰 대상이다. 최초5초였던 잠금 대기는 리뷰 후0.1초로 줄여 경쟁 시 유료 호출을 보류한다.
 - Sol/high 정적 감사에서 유료 우회/설정 폴백/종료 누락을 확인해 반영했고, 원시 코드만으로 평가기가 정상장을 만들지 않는 회귀도 추가했다.
-- 최초 실제 `claude-opus-5`/요청 xhigh 리뷰는 CHANGES_REQUESTED. 다른 진행 중 예약의 소유권을 정산 실패 하나로 해제하는 결함, 설정 미주입 singleton, shadow 예외 이중 집계를 수정했다. 보고용 조회의 상태 변이·불필요한 Manus 전 작업 차단·잠금 대기도 보완했다. 두 번째 실제 Claude Opus5/요청 xhigh 리뷰도 CHANGES_REQUESTED: 복구 경로의 예약 추정 초과 기록 누락과 종료 시 호출자 task 취소를 지적했다. 각각 재현해 수정하고 마지막 독립 재검토를 진행한다.
+- 최초 실제 `claude-opus-5`/요청 xhigh 리뷰는 CHANGES_REQUESTED. 다른 진행 중 예약의 소유권을 정산 실패 하나로 해제하는 결함, 설정 미주입 singleton, shadow 예외 이중 집계를 수정했다. 보고용 조회의 상태 변이·불필요한 Manus 전 작업 차단·잠금 대기도 보완했다. 두 번째 실제 Claude Opus5/요청 xhigh 리뷰도 CHANGES_REQUESTED: 복구 경로의 예약 추정 초과 기록 누락과 종료 시 호출자 task 취소를 지적했다. 각각 재현해 수정했고 마지막 독립 재검토에서 승인받았다.
 - Gemini 출력 예약은 명시 출력 상한의2배 여유를 확보하되 실제 API 출력 파라미터는 바꾸지 않는다. [Google thinking 가이드](https://ai.google.dev/gemini-api/docs/thinking#token-limits-and-max_output_tokens)는 사고+응답의 합산 상한을 설명하지만 현재 Interactions 예제이며, [공식 포럼의 generateContent 답변](https://discuss.ai.google.dev/t/gemini-3-8-flash-high-does-maxoutputtokens-include-thinking-tokens/181077)은3.8 모델 사례다. 이를 배포된3.1 preview의 개별 청구 보증으로 확대하지 않고 추가 예약 여유를 둔다.
 - 정적 유료 호출 감사에서 src/scripts의28개 관련 선언/호출 접점을 확인했다. 앱의 클라이언트 생성은 manager만 수행하며 공유 singleton은 설정 미주입 시 차단한다. 별도 수동 `capture_openai_snapshots.py`, `probe_openai_models.py`의 직접 OpenAI HTTP는 운영 루프 밖으로 이번에 실행하지 않는다.
 - 수정본 관련 UTC/KST 각각436개, 전체 **5092 passed, 2 skipped, 2 xfailed**/160.69초·비밀정보 검사 통과·격리 위반0. 이후 원자적 복구 실패 회귀1건을 추가해 복구 도구 관련16개를 별도로 통과했다(실행 소스 불변). 최종 CI와 운영 verify는 이 추가 시험도 포함한다.
 - 재리뷰 P2의 `http_status=None`이면 미전송이라는 제안은 수용하지 않는다. 전송 후 응답이 오기 전에 예외가 날 수 있으므로 전송 여부를 입증하지 못하면 비용 불명을 유지한다. 보고용 SQLite 조회의 동기 대기 상한0.1초는 잔여 지연 위험으로 관찰한다. 복구 CLI의 잘못된 입력은 traceback 없이 오류로 거절한다.
-- 두 번째 리뷰 수정 최종 검증: 월 예산/전송 UTC·KST 각169개, 통합 관련 KST367개, 전체 UTC **5107 passed, 2 skipped, 2 xfailed**/225.10초. 문법·비밀정보 검사 통과, 운영 상태·외부 네트워크 접근 시도0. 마지막 독립 delta 리뷰 진행 중이며 운영 배포는 아직 실행 전이다.
+- 두 번째 리뷰 수정 최종 검증: 월 예산/전송 UTC·KST 각169개, 통합 관련 KST367개, 전체 UTC **5107 passed, 2 skipped, 2 xfailed**/225.10초. 문법·비밀정보 검사 통과, 운영 상태·외부 네트워크 접근 시도0. 실제 `claude-opus-5`(요청 xhigh·유효 effort 미노출) 독립 최종 delta 리뷰 **APPROVE/P0·P1없음**, 실행 rc0·실제 모델 확인·도구 위반 없음. 같은 head `4c15e7a`의 CI도 **5107 passed, 2 skipped, 2 xfailed**, 격리 접근0·문법/비밀정보 검사를 통과했다. PR #173은 merge `27635c5cb16978da3a857b0f3bdedd0fff9804f8`로 통합했다.
+
+## 운영 적용 결과 — 2026-10-12 22:35 KST
+
+- [PR #173](https://github.com/qwq-partners/qwq-ai-trader/pull/173), 운영 SHA **`27635c5cb16978da3a857b0f3bdedd0fff9804f8`**. 기존 `local_deploy.sh`로 이전 `32f52dd7a253`에서 적용했다. 검증/기동 rc0, 롤백 없음. 검토된 `4c15e7a`와 merge의 실행 코드/시험/설정 트리가 같고 `evolved_overrides.yml`의 tracked 변경도 없음을 확인했다.
+- 운영 verify **5107 passed, 2 skipped, 2 xfailed**/161.75초, 문법·비밀정보 검사 통과·격리 접근0. 기존 pykrx 경고와 별도로 pytest 종료 중 오래된 임시 디렉터리 삭제 경고가 있었으나 검증/배포는 rc0였다. 운영 상태 파일을 정리하거나 삭제하지 않았다.
+- **22:35:35 새 PID1018308**, active/running·NRestarts0. 22:36:04 확인에서 새 PID 오류/traceback0, 월 예산 저장 오류0, 기준자본 확정 로그1, pending0·recovery ready·stale loop0·브로커 연결 정상. 새 프로세스 HTTP 오류/재시도/EGW00215도0이었다.
+- 원장 실제 시작 **`2026-10-12T22:35:38.845900+09:00`**, baseline0·월100·KST/2026-10. 같은 점검에서 봇의 정상 기동 후 실제1회가 정산돼 **추정 사용 USD0.0022865**, 예약0·불명0·잔여99.9977135·차단false를 확인했다. 공급자 청구서 대사나 수동 모델 비교를 실시한 결과는 아니다.
+- 배포 전후 보호13경로 지문 동일. 운영의 기존 `config/evolved_overrides.yml` 미커밋 변경, `.env`, 매수 중지, 옛 입력/영수증/drop-in을 보존했다. 토스와 옛 관측 서비스는 inactive, 새 관측·20일 예약·매수 재개는 실행하지 않았다.
+- 비공개 운영 증적은 `~/.local/state/qwq-deploy/monthly-budget-20261012/`의 `deploy.log`, `predeploy.json`, `after.json`, `budget-after.json`, `startup-summary.json`이다. 원본 증적/원장/자격증명은 Git에 넣지 않는다.
+
+이번 배포에는 기존 main의66~68차 미배포 변경과69차 예산/호가 원천 변경이 함께 포함된다. 68차 감사 로그는 명시 경로를 주입할 때만 활성화되며 이를 신규 상세 계측이 자동 시작됐다는 뜻으로 읽지 않는다. 기존 모델 유지·순수익/지수 초과 미입증이며 다음 작업은 아래 순서를 따른다.
+
+## 마지막 독립 리뷰의 비차단 권고 처분
+
+- 종료 강제 취소는 응답의 `manager_closing`으로 표현되지만 일부 fallback 통계는 월 예산 보류에 포함되고 감사행은 원래 전송 취소 이유를 갖는다. **해당 합계를 순수 예산 부족 횟수로 해석하지 않는다.** 공통 입력/일별 비교 보고를 연결할 때 종료 사유와 예산 사유를 분리할 후속 항목이다.
+- Python3.10의 `Task.cancelling()` 부재는 이번 운영 대상이 아니다. `requirements.txt`는3.11+, CI와 운영은3.12로 확인했다. 알 수 없는 런타임에 대한 우회는 추가하지 않았다.
+- 종료 유예 상수5+1+1초와 runner10초는 결합된 계약이다. 유예를 늘릴 때 바깥 제한과 실제 종료 시험을 함께 변경한다. 외부 timeout 때 이미 닫히는 singleton을 즉시 비워 새 manager를 만드는 수정은 채택하지 않았다. 기존 fail-closed 상태를 유지한다.
+- HTTP 세션 정리는 순차여서 첫 세션 정리가 멈추면 다음 세션도 지연될 수 있다. 예산 정산·예약 소유권과 별개인 후속 정리 항목으로 남긴다. 현재 timeout은 모든 세션 종료 보장이 아니다.
+- 복구 CLI의 잘못된 입력/OS 오류는 명확한 비0 오류로 끝나지만 SQLite 쓰기 자체의 예외는 transaction rollback과 진단 traceback을 유지한다. 이를 성공이나 비용0으로 처리하지 않는다.
 
 ## 미확인 비용과 초기화 장애 복구 절차
 
