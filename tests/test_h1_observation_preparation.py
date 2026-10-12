@@ -237,6 +237,18 @@ def test_preserves_opaque_date_bearing_study_reference(tmp_path):
             assert json.loads(file["utf8"])["capture"]["study_ref"] == "reviewed-2026-10-13-reference"
 
 
+@pytest.mark.parametrize("field,value", [
+    ("max_candidates", 5),
+    ("source_version_ref", "different-source"),
+    ("configuration_ref", "different-config"),
+])
+def test_rejects_gate_trace_that_runtime_cannot_bind(tmp_path, field, value):
+    request_value = request(tmp_path)
+    request_value["study_template"]["capture"]["entry_gate_trace"][field] = value
+    with pytest.raises(ValueError, match="gate.*binding"):
+        build(request_value)
+
+
 def test_cli_rejects_invalid_regular_json_inputs_without_success_output(tmp_path):
     source = tmp_path / "request.json"
     source.write_text('{"protocol_ref":1,"protocol_ref":2}', encoding="utf-8")

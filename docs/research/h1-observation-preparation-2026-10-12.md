@@ -75,9 +75,9 @@ flowchart TD
 ## SEE — 검증과 통합 기록
 
 - 새 모듈이 없을 때 실패하는 시험부터 작성한 뒤 구현했다. 독립 검토에서 날짜 목록 alias, CLI manifest 키, 구조 오류 처리, opaque 참조의 임의 날짜 치환을 보완했다. 후보 분모100개와 호가 배정5개를 분리하는 회귀도 추가했다.
-- 구현자 최종 UTC/KST 관련 시험은 각각35 passed, 두 새 소스의 문법 검사는 통과했다. 독립 종결 리뷰 **승인/P0·P1·P2 0건**: 새 시험 UTC35(4.61초)/KST35(4.59초), 기존 H1 평가기/CLI 관련40(15.81초) 재실행, 운영 상태/외부 접근0·diff 검사 통과. 리뷰의 최초 잘못된 `.venv` 경로 실행은127로 실패했고 정해진 `venv`로 실행한 통과 결과만 근거로 썼다. 전체 `verify.sh`는 **4875 passed /2 skipped /2 known xfailed**,173.15초, 문법/비밀정보 검사 통과·운영/외부 접근0이었다. 기존 pykrx deprecation warning1개 외 새 경고는 없다.
+- 첫 독립 검토 이후 코디네이터가 gate 후보 수/소스/설정이 다른 입력을 준비기는 통과시키고 CapturePlan은 거절하는 차이를 재현했다. 세 실패 회귀를 먼저 확인한 뒤 같은 연결 검사를 준비기에 추가했다. 최종 관련 검사는 UTC38(2.15초)/독립 KST38(2.38초), 이전 H1 평가기/CLI 관련40(15.81초)도 통과했다. 최종 변경 재리뷰 **승인/P0·P1·P2 0건**, 운영 상태/외부 접근0·diff 검사 통과. 최초 잘못된 `.venv` 경로 실행은127로 실패했고 정해진 `venv`의 통과 결과만 근거로 썼다. 최종 수정 후 전체 verify는 **4878 passed /2 skipped /2 known xfailed**(156.95초), 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0건이다. 초기4875검사 대신 이 결과를 통합 근거로 사용한다.
 - 실제 명시 준비 입력으로 CLI를 실행했다.2026-10-12 **19:57:57 KST**에 제안 패키지를 생성했고,60개 파일의 바이트/해시·20개 독립 원장/영수증 경로를 확인했다. staged study를 임시 envelope로 읽은 **CapturePlan20개 모두 통과**했다.
-- 생성한 빈 평가 manifest를 기존 `evaluate_h1_multiday.py`로 실제 읽었다.20일 모두 `planned_missing`, `quality_only`/`suppressed`, 세 민감도 손익차 모두null이다. 미관측 자료를0원 또는 완료로 취급하지 않았다.
+- 생성한 빈 평가 manifest를 기존 `evaluate_h1_multiday.py`로 실제 읽었다.20일 모두 `planned_missing`, `quality_only`/`suppressed`, 세 민감도 손익차 모두null이다. 미관측 자료를0원 또는 완료로 취급하지 않았다. 마지막 연결 검사 보완 후 같은 입력/원래 준비 시각으로 재생성해 패키지 전체가 동일함도 확인했다.
 - 운영 체크아웃32f52dd, 기존10/8 study/manifest/once, 디스크 설정2개 전후 지문은 동일했다. 이번에 운영 API·계좌 조회·systemctl·배포·재시작·예약을 실행하지 않았다.
 
 준비 근거는 Git 밖의 `/home/ubuntu/.local/share/qwq-private/h1-preparation-20261012/`에 보존했다. `request.json`, `package.json`, `staged/`, `evaluation-manifest.json`, `quality-report.json`, `validation.json`과 달력/비용 원천이 있다. 패키지 SHA256은 `ab4b2ffaa2a6b94fa2876f4ee9a47874acb467a5856850d87502d12264fa6919`, 제안 정책 SHA256은 `1161d78977a72c1687cce80c0fc37cedd7e05ecc8cd040003f702c3580e9c971`이다. **제안 프로토콜의 시각/해시가 최종 사전등록이나 설치 승인을 의미하지 않는다.**

@@ -97,6 +97,11 @@ def _h1_contract(context: Mapping[str, Any]) -> None:
         raise ValueError("qualified H1 capture capacity required")
     if capture.get("selection_basis") != {"version": "selection-basis-v2", "max_candidates": 100, "max_source_terms": 16}:
         raise ValueError("qualified H1 selection profile required")
+    gate = capture.get("entry_gate_trace")
+    if (not isinstance(gate, Mapping) or gate.get("max_candidates") != 100
+            or any(gate.get(key) != capture.get(key)
+                   for key in ("source_version_ref", "configuration_ref"))):
+        raise ValueError("H1 gate population/source/configuration binding required")
     if capture.get("frame_diagnostics") != {"version": "kis-frame-diagnostics-v1"}:
         raise ValueError("qualified H1 frame diagnostics required")
     channels = capture.get("channels")
