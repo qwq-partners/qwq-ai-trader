@@ -8,6 +8,7 @@ Reservations are conservative estimates, not provider invoice guarantees.
 from __future__ import annotations
 
 import fcntl
+import logging
 import math
 import os
 import sqlite3
@@ -20,6 +21,7 @@ from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from .llm_pricing import rate_quote
+from .llm_budget_policy import BudgetPolicyMixin, POLICY_VERSION
 
 KST = ZoneInfo('Asia/Seoul')
 _SCALE = 1_000_000_000
@@ -46,8 +48,16 @@ def _units(value) -> int:
     return result
 
 
-class MonthlyBudgetLedger:
-    def __init__(self, path, monthly_limit_usd: float, *, clock: Optional[Callable] = None):
+class MonthlyBudgetLedger(BudgetPolicyMixin):
+    def __init__(self, path, monthly_limit_usd: float, *, clock: Optional[Callable] = None,
+                 policy_enabled: bool = False, economy_summary_models: tuple[str, ...] = ()):
+        if not isinstance(policy_enabled, bool):
+            raise BudgetStateError('invalid_budget_policy')
+        self.policy_enabled = policy_enabled
+        if not isinstance(economy_summary_models, tuple) or any(
+                not isinstance(model, str) or not model for model in economy_summary_models):
+            raise BudgetStateError('invalid_economy_models')
+        self.economy_summary_models = economy_summary_models
         self.limit_units = _units(monthly_limit_usd)
         self.path = Path(path).expanduser()
         if not self.path.is_absolute():
@@ -133,6 +143,8 @@ class MonthlyBudgetLedger:
                     raise BudgetStateError('storage_corrupt')
                 self._settings(db)
                 db.execute('SELECT token, state FROM reservations LIMIT 1').fetchall()
+                if self.policy_enabled:
+                    self._initialize_policy(db)
         except BudgetBlocked:
             raise
         except (OSError, sqlite3.Error, TypeError, ValueError):
@@ -205,13 +217,15 @@ class MonthlyBudgetLedger:
         try:
             with self._connect(readonly=True) as db:
                 db.execute('BEGIN')
-                return self._snapshot(db)[0]
+                status, committed = self._snapshot(db)
+                return self._policy_view(db, status, committed)[0] if self.policy_enabled else status
         except BudgetBlocked:
             raise
         except (OSError, sqlite3.Error, TypeError, ValueError):
             raise BudgetStateError('storage_unavailable') from None
 
-    def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int) -> str:
+    def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int, *,
+                policy_priority='standard', expected_policy_mode=None, task='', role='') -> str:
         """Conservative admission estimate: twice UTF-8 bytes plus 256 overhead.
 
         OpenAI reserves its completion cap; Gemini gets 2x output headroom.
@@ -222,6 +236,8 @@ class MonthlyBudgetLedger:
                 or not 0 < max_output_tokens <= 2 ** 31 - 1):
             raise BudgetBlocked('invalid_request_estimate')
         input_estimate = 2 * (len(prompt.encode('utf-8')) + len(system.encode('utf-8')) + 256)
+        if not isinstance(policy_priority, str) or policy_priority not in {'standard', 'essential', 'research'}:
+            raise BudgetBlocked('invalid_budget_priority')
         token = uuid.uuid4().hex
         fd = None
         admitted = staged = False
@@ -242,9 +258,24 @@ class MonthlyBudgetLedger:
                     raise BudgetBlocked('unpriced_model')
                 units = _units(quote.cost_usd)
                 status, committed = self._snapshot(db, persist_orphans=True, now=now)
+                if self.policy_enabled:
+                    status = self._observe_policy(db, status, committed, now)
                 if status['blocked']:
                     db.execute('COMMIT')
                     raise BudgetBlocked(status['block_reason'])
+                if self.policy_enabled:
+                    if expected_policy_mode is not None and expected_policy_mode != status['policy_mode']:
+                        db.execute('COMMIT')
+                        raise BudgetBlocked('budget_profile_changed')
+                    if (status['policy_mode'] == 'economy' and policy_priority != 'essential'
+                            and task == 'report_summary' and model not in self.economy_summary_models):
+                        db.execute('COMMIT')
+                        raise BudgetBlocked('economy_profile_required')
+                    if policy_priority != 'essential' and (
+                            status['policy_mode'] == 'essential'
+                            or (committed + units) * 100 > self.limit_units * 95):
+                        db.execute('COMMIT')
+                        raise BudgetBlocked('essential_budget_reserved')
                 if committed + units > self.limit_units:
                     db.execute('COMMIT')
                     raise BudgetBlocked('monthly_limit_exceeded')
@@ -254,6 +285,11 @@ class MonthlyBudgetLedger:
                 staged = True
                 db.execute("INSERT INTO reservations VALUES (?,?,?,?,'reserved',NULL,?,NULL)",
                            (token, now.strftime('%Y-%m'), model, units, now.isoformat()))
+                if self.policy_enabled:
+                    db.execute('INSERT INTO policy_attempts VALUES (?,?,?,?,?,?)',
+                               (token, POLICY_VERSION, status['policy_mode'], policy_priority, task, role))
+                    after, total = self._snapshot(db, now=now)
+                    self._observe_policy(db, after, total, now)
                 db.execute('COMMIT')
             self.active_reservations[token] = fd
             admitted = True
@@ -303,6 +339,15 @@ class MonthlyBudgetLedger:
                     (self.lock_dir / (token + '.lock')).unlink()
                 except OSError:
                     pass
+
+        # Known charges must survive an optional policy/outbox failure. Admission
+        # still fails closed on policy errors; the monitor retries this refresh.
+        # Keep policy state + its event atomic in their own transaction.
+        if committed and self.policy_enabled:
+            try:
+                self.policy_status()
+            except BudgetBlocked:
+                logging.getLogger(__name__).warning('Budget policy refresh failed; financial settlement retained')
 
     def abandon(self, token: str):
         """Drop ownership of only this attempt; leave its uncertain row intact."""

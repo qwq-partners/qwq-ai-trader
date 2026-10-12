@@ -2491,6 +2491,7 @@ class BatchAnalyzer:
                         llm.complete_json(
                             prompt=prompt,
                             system="한국 주식 배치 후보 우선순위 필터. JSON만 응답.",
+                            budget_priority="essential",
                             task=LLMTask.QUICK_ANALYSIS,
                             max_tokens=200,
                         ),

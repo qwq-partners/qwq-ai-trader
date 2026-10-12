@@ -1982,6 +1982,7 @@ class KRScheduler:
                 llm.complete_json(
                     prompt=prompt,
                     system="한국 주식시장 레짐 분류 전문가. JSON만 응답.",
+                    budget_priority="essential",
                     task=LLMTask.QUICK_ANALYSIS,
                     # max_tokens 미설정: gemini-3-flash-preview는 maxOutputTokens 설정 시
                     # 오히려 더 일찍 잘리는 버그 있음 (None → 모델 기본값 사용 → 정상)
@@ -2336,6 +2337,7 @@ JSON:
                 llm.complete_json(
                     prompt=prompt,
                     system="한국 주식 장중 포지션 관리 전문가. JSON만 응답.",
+                    budget_priority="essential",
                     task=LLMTask.QUICK_ANALYSIS,
                     max_tokens=_max_tokens,
                 ),
@@ -2517,6 +2519,7 @@ JSON:
                 llm.complete_json(
                     prompt=prompt,
                     system="한국 주식 스크리닝 개선 분석가. JSON만 응답.",
+                    budget_priority="research",
                     task=LLMTask.QUICK_ANALYSIS,
                     max_tokens=300,
                 ),
@@ -2703,6 +2706,7 @@ JSON:
                 llm.complete_json(
                     prompt=prompt,
                     system=f"당신은 한국 주식 장중 진입 검증 전문가입니다. {_sys_note} 선정 근거 텍스트만 보고 JSON으로만 응답하세요.",
+                    budget_priority="essential",
                     task=LLMTask.QUICK_ANALYSIS,
                     max_tokens=600,
                 ),
@@ -2711,6 +2715,16 @@ JSON:
 
             if not result or not isinstance(result, dict):
                 logger.debug(f"[LLM검증] {stock.symbol} 응답 없음 → pass")
+                return True
+
+            if result.get('budget_block_reason'):
+                logger.warning(
+                    f"[LLM검증] {stock.symbol} 예산 검증 불가 "
+                    f"({result['budget_block_reason']}) → 기존 규칙 유지; LLM 승인 아님"
+                )
+                return True
+            if result.get('error') and not any(key in result for key in ('q1', 'q2', 'q3')):
+                logger.warning(f"[LLM검증] {stock.symbol} 응답 오류로 검증 불가 → 기존 규칙 유지; LLM 승인 아님")
                 return True
 
             q1 = result.get("q1", "Y")

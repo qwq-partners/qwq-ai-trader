@@ -325,7 +325,8 @@ class TradeWiki:
                 f"새 교훈을 1~2줄로 작성하세요. 기존과 중복되지 않는 새로운 관점만."
             )
 
-            resp = await self._llm.complete(prompt, task=LLMTask.WIKI_INGEST, max_tokens=150)
+            resp = await self._llm.complete(prompt, task=LLMTask.WIKI_INGEST, max_tokens=150,
+                                            budget_priority="research")
             # 개행 정규화 — 마크다운 행 구조 보호 (리뷰 P1-2)
             lesson = " ".join((resp.content if resp.success else "").split())
             if lesson:

@@ -58,6 +58,7 @@ class LLMTask(str, Enum):
     STRATEGY_ANALYSIS = "strategy_analysis"  # 전략 분석/진화 -> GPT-4
     QUICK_ANALYSIS = "quick_analysis"        # 빠른 실시간 분석 -> Gemini Flash
     WIKI_INGEST = "wiki_ingest"              # 위키 교훈 추출 -> Gemini Flash
+    REPORT_SUMMARY = "report_summary"       # Non-decision summaries; economy eligible.
 
 
 @dataclass
@@ -100,8 +101,13 @@ class LLMConfig:
     daily_budget_usd: float = 5.0  # 일일 예산
     monthly_budget_usd: Optional[float] = None  # Explicit activation only.
     budget_state_path: Optional[str] = None
+    budget_policy_enabled: bool = False
 
     def __post_init__(self):
+        if not isinstance(self.budget_policy_enabled, bool):
+            raise ValueError("llm.budget_policy_enabled must be boolean")
+        if self.budget_policy_enabled and self.monthly_budget_usd is None:
+            raise ValueError("llm.budget_policy_enabled requires monthly_budget")
         if (isinstance(self.daily_budget_usd, bool)
                 or not isinstance(self.daily_budget_usd, (int, float))
                 or not math.isfinite(self.daily_budget_usd)
@@ -145,6 +151,7 @@ class LLMConfig:
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
             monthly_budget_usd=llm_cfg.get("monthly_budget"),
             budget_state_path=llm_cfg.get("budget_state_path"),
+            budget_policy_enabled=llm_cfg.get("budget_policy_enabled", False),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
@@ -220,6 +227,9 @@ class LLMResponse:
     provider_error_type: Optional[str] = None
     provider_error_status: Optional[str] = None
     budget_block_reason: Optional[str] = None
+    budget_policy_mode: Optional[str] = None
+    budget_policy_version: Optional[str] = None
+    budget_priority: Optional[str] = None
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -641,6 +651,10 @@ class LLMManager:
 
     # 작업별 최적 설정
     TASK_CONFIG = {
+        LLMTask.REPORT_SUMMARY: {
+            "primary": (LLMProvider.OPENAI, "heavy"),
+            "fallback": (LLMProvider.GEMINI, "heavy"),
+        },
         LLMTask.THEME_DETECTION: {
             "primary": (LLMProvider.GEMINI, "light"),
             "fallback": (LLMProvider.OPENAI, "light"),
@@ -699,7 +713,9 @@ class LLMManager:
                 if not isinstance(self.config.budget_state_path, str) or not self.config.budget_state_path.strip():
                     raise BudgetStateError("missing_budget_state_path")
                 self.monthly_budget = MonthlyBudgetLedger(
-                    self.config.budget_state_path, self.config.monthly_budget_usd
+                    self.config.budget_state_path, self.config.monthly_budget_usd,
+                    policy_enabled=self.config.budget_policy_enabled,
+                    economy_summary_models=(self.config.openai_model_light, self.config.gemini_model_light),
                 )
             except BudgetBlocked as exc:
                 self._monthly_budget_error = exc.reason
@@ -806,7 +822,8 @@ class LLMManager:
             return LLMResponse(
                 content="", model="", provider=LLMProvider.OPENAI,
                 success=False, error="Daily budget exceeded",
-                request_sent=False, usage_known=False, billing_status="not_sent"
+                request_sent=False, usage_known=False, billing_status="not_sent",
+                budget_block_reason="daily_unknown_cost" if self.daily_usage.cost_missing else "daily_limit_exceeded",
             )
 
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
@@ -956,7 +973,8 @@ class LLMManager:
             return LLMResponse(
                 content="", model="", provider=provider,
                 success=False, error="Daily budget exceeded",
-                request_sent=False, usage_known=False, billing_status="not_sent"
+                request_sent=False, usage_known=False, billing_status="not_sent",
+                budget_block_reason="daily_unknown_cost" if self.daily_usage.cost_missing else "daily_limit_exceeded",
             )
 
         client = self._get_client(provider)
@@ -1072,16 +1090,57 @@ class LLMManager:
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
         token = None
+        priority = kwargs.pop("budget_priority", "standard")
+        if _role == "shadow":
+            priority = "research"
+        policy = None
+        original_model, original_kwargs = _model, dict(kwargs)
         if self.config.monthly_budget_usd is not None:
             try:
                 if self._monthly_budget_error is not None or self.monthly_budget is None:
                     raise BudgetStateError(self._monthly_budget_error or "storage_unavailable")
-                output_limit = kwargs.get("max_tokens")
-                if output_limit is None:
-                    output_limit = self.config.max_output_tokens
-                token = self.monthly_budget.reserve(_model, _prompt, _system, output_limit)
+                # Reselect only before admission/HTTP. Other processes can move
+                # the policy between observation and BEGIN IMMEDIATE admission.
+                for selection in range(3):
+                    _model, kwargs = original_model, dict(original_kwargs)
+                    if self.config.budget_policy_enabled:
+                        policy = self.monthly_budget.status()
+                        mode = policy['policy_mode']
+                        if _role == 'shadow' and mode in {'economy', 'essential'}:
+                            raise BudgetBlocked('economy_shadow_paused')
+                        if mode == 'economy' and priority != 'essential':
+                            if _task == LLMTask.REPORT_SUMMARY.value:
+                                _model = self._get_model(provider, 'light')
+                                supported = (_OPENAI_EFFORTS if provider == LLMProvider.OPENAI else _GEMINI_LEVELS)
+                                if 'low' not in supported.get(_model, set()):
+                                    raise BudgetBlocked('unsupported_economy_controls')
+                                if provider == LLMProvider.OPENAI:
+                                    kwargs['reasoning_effort'] = 'low'
+                                else:
+                                    kwargs['thinking_level'] = 'low'
+                            if _task in {t.value for t in (
+                                    LLMTask.REPORT_SUMMARY, LLMTask.NEWS_SUMMARY,
+                                    LLMTask.QUICK_CLASSIFY, LLMTask.QUICK_ANALYSIS,
+                                    LLMTask.THEME_DETECTION, LLMTask.STOCK_MAPPING, LLMTask.WIKI_INGEST)}:
+                                cap = kwargs.get('max_tokens')
+                                cap = self.config.max_output_tokens if cap is None else cap
+                                if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+                                    kwargs['max_tokens'] = min(cap, 4096)
+                    output_limit = kwargs.get('max_tokens')
+                    if output_limit is None:
+                        output_limit = self.config.max_output_tokens
+                    try:
+                        token = self.monthly_budget.reserve(
+                            _model, _prompt, _system, output_limit, policy_priority=priority,
+                            expected_policy_mode=policy['policy_mode'] if policy else None,
+                            task=_task, role=_role)
+                        break
+                    except BudgetBlocked as exc:
+                        if exc.reason != 'budget_profile_changed' or selection == 2:
+                            raise
             except BudgetBlocked as exc:
                 response = self._monthly_blocked_response(provider, _model, exc.reason)
+                self._annotate_budget(response, policy, priority)
                 self._account_attempt(response, _task, _role)
                 return response
         try:
@@ -1092,6 +1151,7 @@ class LLMManager:
                 response = LLMResponse("", _model, provider, success=False,
                                        error="Request cancelled", usage_known=False, billing_status="unknown")
             if response is not None:
+                self._annotate_budget(response, policy, priority)
                 self._settle_monthly(token, response, _model)
                 self._account_attempt(response, _task, _role)
             exc._llm_response = response
@@ -1100,6 +1160,7 @@ class LLMManager:
             # Transport validation errors are local and retain their public raise contract.
             unsent = LLMResponse("", _model, provider, success=False, error="Invalid local controls",
                                  request_sent=False, usage_known=False, billing_status="not_sent")
+            self._annotate_budget(unsent, policy, priority)
             self._settle_monthly(token, unsent, _model)
             self._account_attempt(unsent, _task, _role)
             exc._llm_response = unsent
@@ -1107,13 +1168,22 @@ class LLMManager:
         except Exception as exc:
             unknown = LLMResponse("", _model, provider, success=False,
                                   error="Provider invocation failed", usage_known=False, billing_status="unknown")
+            self._annotate_budget(unknown, policy, priority)
             self._settle_monthly(token, unknown, _model)
             self._account_attempt(unknown, _task, _role)
             exc._llm_response = unknown
             raise
+        self._annotate_budget(response, policy, priority)
         self._settle_monthly(token, response, _model)
         self._account_attempt(response, _task, _role)
         return response
+
+    @staticmethod
+    def _annotate_budget(response, policy, priority):
+        response.budget_priority = priority
+        if policy:
+            response.budget_policy_mode = policy['policy_mode']
+            response.budget_policy_version = policy['policy_version']
 
     def _account_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Record known usage even for empty/error responses before another attempt."""
@@ -1161,6 +1231,9 @@ class LLMManager:
                 "request_sent": response.request_sent, "usage_known": response.usage_known,
                 "billing_status": response.billing_status,
                 "budget_block_reason": response.budget_block_reason,
+                "budget_policy_mode": response.budget_policy_mode,
+                "budget_policy_version": response.budget_policy_version,
+                "budget_priority": response.budget_priority,
                 "http_status": response.http_status,
                 "provider_error_code": response.provider_error_code,
                 "provider_error_type": response.provider_error_type,
@@ -1338,7 +1411,10 @@ class LLMManager:
                 task=task.value, model=response.model or "",
                 raw=response.error or "", parsed=None, success=False,
             )
-            return {"error": response.error}
+            result = {"error": response.error}
+            if response.budget_block_reason:
+                result['budget_block_reason'] = response.budget_block_reason
+            return result
 
         try:
             parsed = _extract_json(response.content)
@@ -1457,6 +1533,14 @@ def get_llm_manager() -> LLMManager:
             raise RuntimeError("LLM monthly budget configuration required before initialization")
         _llm_manager = LLMManager(config=_pending_config)
     return _llm_manager
+
+
+def get_budget_monitor_manager() -> Optional[LLMManager]:
+    """Initialize only when application config explicitly enables the monitor."""
+    config = _llm_manager.config if _llm_manager is not None else _pending_config
+    if config is None or not config.budget_policy_enabled:
+        return None
+    return get_llm_manager()
 
 
 async def close_llm_manager() -> None:

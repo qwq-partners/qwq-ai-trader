@@ -380,7 +380,8 @@ class _ScriptedLLM:
         self._idx: Dict[str, int] = {}
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty, seed, temperature):
+                            reasoning_effort, retry_on_empty, seed, temperature, budget_priority):
+        assert budget_priority == "essential"
         pv = getattr(provider, "value", str(provider))
         i = self._idx.get(pv, 0)
         self._idx[pv] = i + 1

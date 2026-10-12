@@ -1682,6 +1682,7 @@ class RiskManager:
             # 지식층 노출 태그 (2026-09-13) — gate_performance가 G4를 wiki 유무로 분리 집계
             "memory_adj": meta.get("memory_adj"),
             "wiki_context_used": meta.get("wiki_context_used"),
+            "llm_budget_validation": meta.get("llm_budget_validation"),
             # 진입 위험 스냅샷 (2026-09-14 T3) — signal_events 에서 risk 모드 주문을 골라낸다
             "entry_risk": meta.get("entry_risk"),
         }
@@ -2071,6 +2072,18 @@ class RiskManager:
                     sector=_meta.get("sector", ""),
                 )
                 _llm_ctx = dict(getattr(self._cross_validator, "last_llm_context", {}) or {})
+                _budget_ctx = getattr(self._cross_validator, "last_llm_budget_status", {})
+                if isinstance(_budget_ctx, dict) and _budget_ctx:
+                    event.metadata = event.metadata if event.metadata is not None else {}
+                    event.metadata["llm_budget_validation"] = dict(_budget_ctx)
+                    if event.signal is not None:
+                        if event.signal.metadata is None:
+                            event.signal.metadata = {}
+                        event.signal.metadata["llm_budget_validation"] = dict(_budget_ctx)
+                    self._log_sig(event, event_type=("llm_partial" if _budget_ctx.get('status') == 'partial'
+                                                    else "llm_unavailable"),
+                                  block_reason=f"LLM 예산 검증 {_budget_ctx.get('status')}: {_budget_ctx.get('reason')}",
+                                  regime=_regime)
                 if _llm_ctx:
                     if event.metadata is None:
                         event.metadata = {}

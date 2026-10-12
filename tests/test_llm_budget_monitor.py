@@ -13,8 +13,8 @@ def _payload(**overrides):
         "reserved_usd": 1.0,
         "monthly_limit_usd": 100.0,
         "policy_mode": "economy",
-        "policy_reason": "usage_80",
-        "policy_version": "monthly-budget-policy-v1",
+        "policy_reason": "threshold_80",
+        "policy_version": "budget-economy-v1",
     }
     payload.update(overrides)
     return payload
@@ -287,3 +287,59 @@ async def test_monitor_repeats_ticks_and_propagates_loop_cancellation(monkeypatc
         )
     assert ledger.events == [("status",), ("claim", 120)]
     assert sleeps == [17]
+
+
+@pytest.mark.asyncio
+async def test_monitor_recovers_after_unexpected_tick_error(monkeypatch):
+    import src.utils.llm_budget_monitor as monitor
+    calls = []
+    async def tick(*a, **kw):
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError('synthetic')
+        raise asyncio.CancelledError
+    async def sleep(_):
+        return None
+    monkeypatch.setattr(monitor, 'budget_monitor_tick', tick)
+    monkeypatch.setattr(monitor.asyncio, 'sleep', sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await monitor.run_budget_monitor(FakeManager(FakeLedger()))
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_missing_telegram_adapter_keeps_notice_retryable(monkeypatch):
+    from src.utils import telegram
+    from src.utils.llm_budget_monitor import budget_monitor_tick
+    monkeypatch.delattr(telegram, 'send_alert')
+    ledger = FakeLedger(_notice())
+    assert await budget_monitor_tick(FakeManager(ledger)) is False
+    assert ledger.events[-1] == ('finish', 'evt-1', 'claim-1', False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('configured', [True, False])
+async def test_real_telegram_wrapper_boolean_and_html_contract(monkeypatch, configured):
+    from src.utils import telegram
+    from src.utils.llm_budget_monitor import budget_monitor_tick
+    requests = []
+    class Response:
+        status = 200
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return None
+    def post(url, *, json, timeout):
+        requests.append(json)
+        return Response()
+    notifier = object.__new__(telegram.TelegramNotifier)
+    notifier.bot_token = 'synthetic' if configured else ''
+    notifier.alert_chat_id = 'synthetic'
+    notifier._session = SimpleNamespace(closed=False, post=post)
+    monkeypatch.setattr(telegram, 'get_telegram_notifier', lambda: notifier)
+    ledger = FakeLedger(_notice())
+    assert await budget_monitor_tick(FakeManager(ledger)) is configured
+    assert ledger.events[-1] == ('finish', 'evt-1', 'claim-1', configured)
+    if configured:
+        assert requests[0]['parse_mode'] == 'HTML'
+        assert '<b>' in requests[0]['text']
+    else:
+        assert not requests

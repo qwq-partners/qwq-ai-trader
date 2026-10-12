@@ -1632,7 +1632,7 @@ class DailyReportGenerator:
                         "당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. "
                         "주어진 자료 범위 밖을 단정하지 않는다."
                     ),
-                    task=LLMTask.MARKET_ANALYSIS,
+                    task=LLMTask.REPORT_SUMMARY,
                     max_tokens=1200,
                 ),
                 timeout=45.0,

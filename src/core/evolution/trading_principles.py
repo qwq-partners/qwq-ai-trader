@@ -474,6 +474,7 @@ class TradingPrinciplesManager:
 
         resp = await self._llm_manager.complete(
             prompt, task=LLMTask.TRADE_REVIEW, max_tokens=150,
+            budget_priority="research",
         )
         if resp.success and resp.content:
             return resp.content.strip()[:200]

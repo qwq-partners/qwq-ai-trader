@@ -496,6 +496,7 @@ class DailyReviewer:
         try:
             llm_response = await self.llm.complete(
                 prompt,
+                budget_priority="research",
                 task=LLMTask.TRADE_REVIEW,
                 system=_REVIEW_SYSTEM_PROMPT,
             )

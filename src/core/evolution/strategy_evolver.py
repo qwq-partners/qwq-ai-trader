@@ -1370,6 +1370,7 @@ class StrategyEvolver:
 
             result = await llm.complete_json(
                 prompt=user_prompt,
+                budget_priority="research",
                 task=LLMTask.STRATEGY_ANALYSIS,
                 system=system_prompt,
             )

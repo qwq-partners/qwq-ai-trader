@@ -78,6 +78,7 @@ class AdversarialResult:
     disagreed: bool = False
     failed: bool = False            # LLM 장애로 검증 못 함 (fail-open 통과)
     meta: Dict[str, Any] = field(default_factory=dict)
+    budget_block_reason: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,6 +89,7 @@ class AdversarialResult:
             "bear": self.bear_verdict,
             "disagreed": self.disagreed,
             "failed": self.failed,
+            "budget_block_reason": self.budget_block_reason,
         }
 
 
@@ -156,6 +158,7 @@ class AdversarialValidator:
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.OPENAI, weight="light",
             system=BULL_SYSTEM, max_tokens=MAX_TOKENS,
+            budget_priority="essential",
             # 판정만 필요하므로 추론을 최소화한다. 토큰을 덜 쓸수록 빈 응답 여지도 준다.
             reasoning_effort="minimal",
             retry_on_empty=1,   # 200 + 빈 content가 실측으로 확인됨 (6회 중 1회)
@@ -173,6 +176,7 @@ class AdversarialValidator:
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.GEMINI, weight="light",
             system=BEAR_SYSTEM, max_tokens=MAX_TOKENS,
+            budget_priority="essential",
             retry_on_empty=1,
             temperature=0.0,
         )
@@ -221,6 +225,10 @@ class AdversarialValidator:
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
             return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True)
 
+        budget_reasons = sorted({reason for resp in (bull_resp, bear_resp)
+                                 if isinstance((reason := getattr(resp, "budget_block_reason", None)), str)
+                                 and reason})
+        budget_reason = ",".join(budget_reasons) or None
         bull_text = ""
         bear_text = ""
         if not isinstance(bull_resp, Exception) and getattr(bull_resp, "success", False):
@@ -243,6 +251,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 True, 0.0, "양쪽 판정 불가 — fail-open",
                 bull_text=bull_text[:120], bear_text=bear_text[:120], failed=True,
+                budget_block_reason=budget_reason,
             )
 
         # 한쪽만 응답 → 그 판정을 따르되 confidence를 낮춘다
@@ -252,6 +261,7 @@ class AdversarialValidator:
             result = AdversarialResult(
                 approved=bool(single),
                 confidence=0.5,
+                budget_block_reason=budget_reason,
                 reason=f"{side} 단독 판정 ({'승인' if single else '거부'})",
                 bull_verdict=bull_verdict, bear_verdict=bear_verdict,
                 bull_text=bull_text[:120], bear_text=bear_text[:120],

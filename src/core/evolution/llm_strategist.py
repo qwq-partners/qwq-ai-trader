@@ -200,6 +200,7 @@ parameter_adjustments/new_rules는 비워 두세요. 가설의 비용 후 효과
         try:
             llm_response = await self.llm.complete(
                 prompt,
+                budget_priority="research",
                 task=LLMTask.STRATEGY_ANALYSIS,
                 system=self.SYSTEM_PROMPT,
             )

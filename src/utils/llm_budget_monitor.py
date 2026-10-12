@@ -212,15 +212,14 @@ async def budget_monitor_tick(
         )
         return False
 
-    if send is None:
-        from .telegram import send_alert
-        send = send_alert
-
     delivered = False
     try:
-        delivered = bool(await asyncio.wait_for(
+        if send is None:
+            from .telegram import send_alert
+            send = send_alert
+        delivered = (await asyncio.wait_for(
             send(text), timeout=_SEND_TIMEOUT_SECONDS
-        ))
+        )) is True
     except asyncio.CancelledError:
         # Do not finish the claim. Its ledger lease makes it recoverable.
         raise
@@ -261,5 +260,10 @@ async def run_budget_monitor(
     ):
         raise ValueError("interval_seconds must be a finite positive number")
     while True:
-        await budget_monitor_tick(manager, send=send)
+        try:
+            await budget_monitor_tick(manager, send=send)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _log_bounded('monitor_tick', '[LLM 예산정책] 알림 모니터 일시 오류; 다음 주기에 재시도합니다')
         await asyncio.sleep(interval_seconds)

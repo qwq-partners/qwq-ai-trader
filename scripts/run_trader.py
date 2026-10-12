@@ -1644,6 +1644,13 @@ class UnifiedTradingBot:
             # 1. 메인 엔진 실행 (이벤트 루프)
             tasks.append(asyncio.create_task(self.engine.run(), name="engine"))
 
+            from src.utils.llm import get_budget_monitor_manager
+            from src.utils.llm_budget_monitor import run_budget_monitor
+            budget_manager = get_budget_monitor_manager()
+            if budget_manager is not None:
+                tasks.append(asyncio.create_task(run_budget_monitor(budget_manager), name="llm_budget_monitor"))
+                logger.info("[LLM] 월 예산 80/95/100 정책 및 알림 모니터 시작")
+
             # 2. KR 스케줄러 태스크
             if self.market in ("kr", "both"):
                 kr_ctx = self.engine.get_context("KR")

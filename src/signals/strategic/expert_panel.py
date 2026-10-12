@@ -343,6 +343,7 @@ class ExpertPanel:
             result = await llm.complete_json(
                 prompt=user_prompt,
                 system=system_prompt + "\n응답은 반드시 유효한 JSON 형식으로만 해주세요.",
+                budget_priority="research",
                 task=LLMTask.STRATEGY_ANALYSIS,
                 max_tokens=4096,
             )
