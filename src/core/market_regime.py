@@ -593,6 +593,7 @@ class MarketRegimeAdapter:
         try:
             resp = await llm_manager.complete(
                 prompt, task=LLMTask.MARKET_ANALYSIS, max_tokens=150,
+                budget_priority="essential",
             )
             if resp.success and resp.content:
                 self._llm_assessment = resp.content.strip()

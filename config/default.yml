@@ -17,6 +17,7 @@ llm:
   # by user instruction; persisted state must never be removed to reset spend.
   monthly_budget: 100.0
   budget_state_path: "~/.local/state/qwq-ai-trader/llm-budget.sqlite3"
+  budget_policy_enabled: true  # 80% economy, 95% essential only, 100% paid stop; KST monthly restore
   # 2026-06-16: 모델명 config override (Dec 10, 2026 OpenAI GPT-5 snapshot deprecation 대비)
   # 코드 변경 없이 evolved_overrides.yml 또는 default.yml에서 모델 교체 가능
   # 빈 문자열 또는 키 없으면 LLMConfig dataclass 기본값 사용

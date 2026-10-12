@@ -195,6 +195,7 @@ class ResearchTeam:
             prompt, provider=provider, weight="light",
             system=system, max_tokens=MAX_TOKENS,
             retry_on_empty=EMPTY_RETRY,
+            budget_priority="essential",
             **controls,
         )
         ok = bool(getattr(resp, "success", False))

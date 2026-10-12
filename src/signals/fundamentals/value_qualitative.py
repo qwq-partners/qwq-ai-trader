@@ -94,6 +94,7 @@ class ValueQualitativeValidator:
                 parsed = await self._llm.complete_json(
                     prompt, task=LLMTask.STRATEGY_ANALYSIS,
                     system=_SYSTEM, max_tokens=1000,
+                    budget_priority="essential",
                 )
             except Exception as e:
                 logger.warning(f"[밸류코어 LLM] {c.symbol} 호출 실패 — 보류: {e}")

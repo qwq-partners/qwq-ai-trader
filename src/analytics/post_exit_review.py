@@ -274,6 +274,7 @@ class PostExitReviewer:
         try:
             resp = await self._llm.complete(
                 prompt=prompt,
+                budget_priority="research",
                 task=LLMTask.STRATEGY_ANALYSIS,
                 system=system,
                 max_tokens=1800,

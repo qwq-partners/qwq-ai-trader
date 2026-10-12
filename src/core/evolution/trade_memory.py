@@ -606,6 +606,7 @@ class TradeMemory:
 
         resp = await self._llm_manager.complete(
             prompt, task=LLMTask.TRADE_REVIEW, max_tokens=300,
+            budget_priority="research",
         )
         if not resp.success:
             return 0

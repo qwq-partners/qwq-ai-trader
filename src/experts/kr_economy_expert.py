@@ -139,7 +139,7 @@ class KREconomyExpert(ExpertAgent):
                 f"환율 상태: {json.dumps(krw_state, ensure_ascii=False)}"
             )
             resp = await self.llm_manager.complete(
-                prompt, task=LLMTask.MARKET_ANALYSIS,  # P2-4: 거시 종합은 heavy
+                prompt, task=LLMTask.REPORT_SUMMARY,  # Rule score is already set; summarize only.
                 system="당신은 한국 경제 분석가입니다. 한 줄로.",
             )
             if resp.success and resp.content:

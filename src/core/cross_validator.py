@@ -9,6 +9,7 @@ PRISM-INSIGHT의 "투자전략가" 패턴을 규칙 기반으로 구현.
 """
 
 from datetime import datetime
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 from loguru import logger
@@ -25,6 +26,16 @@ class CrossStrategyValidator:
 
     # 감점 후 최소 통과 점수 (이하면 차단)
     _MIN_PASS_SCORE: int = 50
+    _budget_context = ContextVar('cross_validation_budget', default=None)
+
+    @property
+    def last_llm_budget_status(self):
+        """Read after directly awaiting llm_second_check in the same task.
+
+        A child task's ContextVar writes do not propagate to its parent. Callers
+        using create_task/gather must copy this provenance inside that child.
+        """
+        return dict(self._budget_context.get() or {})
 
     # 2026-04-23 추가: 튜닝 가능 상수 (매직넘버 정리)
     # 지표 결손 감점: 결손 지표 1개당 -N점, 최대 -M점
@@ -728,6 +739,7 @@ class CrossStrategyValidator:
         규칙1~9는 이미 결정론적 게이트로 작동하므로 LLM은 추가 안전장치 역할.
         엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
+        self._budget_context.set(None)
         if not self._llm_manager:
             return True
 
@@ -745,6 +757,7 @@ class CrossStrategyValidator:
             self._daily_llm_count = 0
             self._daily_llm_count_date = today
         if self._daily_llm_count >= self._daily_llm_max:
+            self._budget_context.set({'status': 'unavailable', 'reason': 'validation_daily_call_limit'})
             # 2026-04-23 수정: 한도 소진 시 경고 로그 승격 + 통과 유지
             # 기존엔 debug 로그라 LLM 보호 상실 인지 지연 → warning으로 즉시 알림
             # 상위 호출자(engine.py:1389)가 변동성 큰 날 본 로그를 보고 수동 조치 가능
@@ -840,6 +853,10 @@ class CrossStrategyValidator:
                 # 적대검증은 Bull+Bear로 LLM을 2회 호출한다.
                 # 위에서 이미 1회를 세었으므로 1회를 더 반영해야 한도가 실제 호출 수와 맞는다.
                 self._daily_llm_count += 1
+                budget_reason = getattr(adv, 'budget_block_reason', None)
+                if isinstance(budget_reason, str) and budget_reason:
+                    self._budget_context.set({'status': 'unavailable' if adv.failed else 'partial',
+                                              'reason': budget_reason, 'stage': 'adversarial'})
                 if not adv.failed:
                     if not adv.approved:
                         logger.info(f"[크로스검증] 적대검증 거부: {symbol} — {adv.reason}")
@@ -854,12 +871,20 @@ class CrossStrategyValidator:
                 self._daily_llm_count += 1
             from ..utils.llm import LLMTask
             resp = await asyncio.wait_for(
-                self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100),
+                self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100,
+                                           budget_priority="essential"),
                 timeout=10.0,
             )
             if not resp.success:
+                budget_reason = getattr(resp, 'budget_block_reason', None)
+                if isinstance(budget_reason, str) and budget_reason:
+                    self._budget_context.set({'status': 'unavailable', 'reason': budget_reason,
+                                              'stage': 'single_fallback'})
                 logger.debug(f"[크로스검증] LLM 응답 실패 (통과): {resp.error}")
                 return True  # fail-open
+            if self._budget_context.get():
+                self._budget_context.set({**self._budget_context.get(), 'status': 'partial',
+                                          'fallback': 'response_received'})
             content = (resp.content or "").strip()
             if content and "NO" in content.upper()[:10]:
                 logger.info(f"[크로스검증] LLM 거부: {symbol} — {content[:80]}")

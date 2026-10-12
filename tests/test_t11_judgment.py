@@ -244,7 +244,8 @@ class _FakeLLM:
         self.calls = []
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None):
+                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None):
+        assert budget_priority == "essential"
         self.calls.append((provider, prompt))
         i = self._idx.get(provider, 0)
         items = self._script[provider]
