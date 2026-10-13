@@ -79,6 +79,8 @@ flowchart LR
 | pair incomplete | 쌍 실행이 끊겨 완성 보고서 없음 | `inspect_pair`/`inspect_attempt`로 보존 응답·예약 토큰·원래/대사 비용 점검, `export_incomplete_pair`는 진단 자료만 만든다. 원래 행과 incomplete 저널 증거가 없으면 복구하지 않는다. 자동 쌍 재실행/현재 시각으로 시각 복원 금지 |
 | 폴백 체인 시한 초과 | `PairSpec.fallback_chain_timeout_seconds`(운영 `SINGLE_FALLBACK_TIMEOUT` 10초와 같은 primary→fallback **체인 전체** 시한) 초과 | 그 arm 은 `unavailable`(fail-open 수량 보존)·사유 `fallback_chain_timeout`. 남은 폴백은 전송하지 않고, 끊긴 시도는 재전송 없이 `error='TimeoutError'`·원장 상태(미해결)로 기록한다 |
 
+예약 COMMIT이 성공한 뒤 반환 전에 오류가 나도 같은 트랜잭션에서 저장한 시도·슬롯의 토큰 연결을 유지한다. 실패 기록의 `None`으로 지우거나 다른 토큰으로 바꾸지 않는다. 반환되지 않은 영속 예약은 자동 해제·재정산 없이 불명 상태로 남기고 증빙 대사로 복구한다. 생성 전 거절 응답도 정산 쓰기에 실패했다면 검증된 대사액을 우선 적용해 `known_reconciled`로 읽는다. 원래 응답과 추정 비용은 그대로 보존하며 응답이 없는 시도는 대사 뒤에도 재전송하지 않는다.
+
 비교 예약 입장(v2 정책 `model-comparison-execution-v2`)은 월 예약과 같은 `BEGIN IMMEDIATE` 안에서 같은 예약 units로 검사한다. 기존 `essential_budget_reserved`(95%)·`monthly_limit_exceeded`(100%)가 먼저 적용되고, 이어서 `comparison_policy_disabled`(원장 정책 비활성), `comparison_policy_mode_not_normal`(절약/필수 단계), `comparison_experiment_expired`(KST `valid_from`~`valid_until` 포함 구간 밖), `comparison_economy_threshold`(이번 예약 포함 `(committed+units)×100 > limit×80`; 정확히 80%는 허용, 그 뒤 단계가 economy가 되어 다음 연구 예약은 거부), `comparison_experiment_ceiling`(실험 ID의 reserved/unknown 예약액+settled 실제액+이번 예약 > `experiment_usd_ceiling`) 순으로 거부한다. 거부해도 정책 관측은 커밋되고 예약은 생기지 않는다. 실험 상한·유효 구간은 월 전환으로 초기화되지 않는다.
 
 정책 v2 는 `pairs_per_day`·`max_common_context_bytes`(둘 다 기본값 없는 1 이상 정수, 저장 정책 JSON 에 포함)를 갖는다. 값이 다른 정책은 `comparison_policy_mismatch` 다. `comparison_pairs` 에는 없으면 `admission_day` 열을 추가한다(이전 행은 NULL — 상한 계산에서 빠진다).

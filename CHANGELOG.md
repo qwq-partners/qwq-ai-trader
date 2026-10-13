@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-14 — PR #190 종료·비용 복구·보고 결함 6건 수정 (운영 미배포·유료 비교 OFF)
+
+- 저장 지연 중 `stop()`이 복구 저널을 먼저 닫던 문제를 수정하고 작업자별 저널 ID/중복 번호 검사를 추가한다. 입장 전 종료는 실행 표본에서 제외한다.
+- 예약 COMMIT 후 반환 전 오류에도 요청·슬롯의 토큰 연결을 보존하며, 생성 전 거절도 검증된 대사 결과로 비용을 복구한다. 원래 응답·추정 비용과 재전송 금지는 유지한다.
+- incomplete 저널의 손상·결손·미종료 증거를 보고서에 전달하고 총지출을 null로 둔다. 확인된 부분합은 별도 보존한다.
+- [PLAN→DO→SEE·검증과 남은 순서](docs/research/model-comparison-review-fixes-2026-10-14.md). 전체 검증/독립 리뷰 결과는 정본에 기록한다. 운영·예약 변경, 실제 비교 호출 없음.
+
 ## 2026-10-13 — 실시간 비교 준비 2차 수정: Codex 독립 리뷰 반례 7건(P1 5·P2 2) 반영 (PR #190 갱신·운영 미배포·유료 비교 OFF)
 
 - **#1 호출 전 일/크기 제한(W-A)**: 정책 v2 에 `pairs_per_day`·`max_common_context_bytes`(기본값 없음) 추가. 러너 `_claim` 의 입장 트랜잭션 안에서 KST 당일 입장 수(`admission_day`)를 세어 초과면 `comparison_daily_pair_cap`, 입력 바이트 초과면 `comparison_input_too_large` — 차단된 쌍은 `model-comparison-pair-blocked-v1` 마커 행으로 고정해 다음날 자동 재실행 없음. 작업자 `offer()` 도 전송 전에 같은 조건으로 거부(`rejected_daily_pair_cap`/`rejected_input_too_large`), 당일 입장 수는 `start()` 때 원장에서 읽어 재시작 후 유지. manifest `execution_policy` 에 `pairs_per_day:1`·`max_common_context_bytes:16384`.

@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-14 — PR #190 후속 결함 6건 수정:** [PDS·흐름·검증·남은 순서](docs/research/model-comparison-review-fixes-2026-10-14.md). 생산자 종료 뒤 저널 봉인·작업자별 기록 ID·입장 전 취소 제외·예약 토큰 보존·검증 대사 우선·손상 incomplete 비용 null. 통합 검증/리뷰 기록은 정본 참조. 기본 OFF·운영 미배포·실수익 미검증. 이번 세션에서 운영/파일럿 상태를 조회·변경하지 않는다.
+
 > **2026-10-13 — 실시간 비교 준비 2차 수정(Codex 반례 7건 반영, PR #190 갱신·운영 미배포):** 호출 전 일 1쌍/입력 16,384바이트 제한(러너 입장 트랜잭션+작업자 사전 거부·영속 입장 수), 복구는 incomplete 저널 증거·전체 재계산 일치 시만, 폴백 체인 시한 10초 통일, 작업자 offers/incomplete 저널, 최신 장 상태 우선, 경제성 근거 스냅샷/시각 대조, 대사액 우선·고유 시도 집계. CHANGELOG 2차 항목 참조.
 
 > **2026-10-13 — 실시간 비교 준비(Task1~6, PR 대기·운영 미배포·유료 비교 OFF):** 공유 월 예산 예약 트랜잭션 안의 비교 입장 검사(정책 활성·normal·80% 경계·실험 상한·유효기간), 판단 전 `decision_id`/입력 봉투(같은 프로세스 attestation)·평가 기준시각 v2(`input_available_at`+900초), 기본 OFF 비교 작업자(`COMPARISON_WORKER=1`+manifest 필요), 진입 조건 재생(외부 상태 unknown)·장 상태 분류(확정 코드만)·R1 실험 manifest(`enabled:false`, 1쌍/일, 쌍당 $0.47·실험 $9.40 상한)·일별 보고 미리보기. E2E·전체 verify 는 CHANGELOG. 운영 `161b394`·10/14 08:55 파일럿·매수 중지·월 $100 집계 불변. [10월14일 체크리스트](docs/operations/pilot-decision-checklist-2026-10-14.md) · [구현 분담/계약](docs/superpowers/plans/2026-10-13-live-comparison-implementation-plan.md). 병합·배포·활성화는 Codex 리뷰 뒤 사용자 결정.
