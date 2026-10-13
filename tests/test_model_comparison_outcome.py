@@ -45,11 +45,12 @@ def sample():
     return row
 
 
-def admitted(arm, status='passed'):
+def admitted(arm, status='passed', anchor_at='2026-10-15T01:00:00+00:00'):
     gates = {name: {'status': status, 'as_of': '2026-10-15T00:59:59+00:00', 'reason': 'synthetic',
                     'replayable': True} for name in (*adm.REPLAYABLE_GATES, *adm.EXTERNAL_GATES)}
     return {'schema_version': adm.ADMISSION_SCHEMA, 'gates': gates,
             'admissible': {'passed': True, 'failed': False}.get(status),
+            'snapshot_id': arm['sizing_snapshot_ref'], 'anchor_at': anchor_at,
             'replay_id': arm['sizing_replay_ref'], 'verdict': arm['verdict'], 'quantity': arm['quantity']}
 
 
@@ -67,6 +68,8 @@ def live_v2():
     row['sizing_snapshot']['available_at'] = '2026-10-15T00:59:59.400000+00:00'
     row['exit_quote']['received_at'] = '2026-10-15T01:15:00+00:00'
     row['market_state']['exit'] = normal('2026-10-15T01:15:00+00:00')
+    for name in ('current', 'candidate'):
+        row['admission'][name]['anchor_at'] = row['input_available_at']
     return row
 
 
@@ -244,3 +247,52 @@ def test_legacy_requested_anchor_is_labelled():
     result = outcome.compare_policy_outcomes(sample(), fees=fees())
     assert result['evaluation_anchor'] == 'requested_at'
     assert 'legacy_requested_at_anchor_is_worker_dispatch_time' in result['assumptions']
+
+
+def _set_gate_time(row, arm, value):
+    for gate in row['admission'][arm]['gates'].values():
+        gate['as_of'] = value
+
+
+@pytest.mark.parametrize('build,mutation,arm,reason', [
+    (sample, lambda r: r['admission']['current'].update(snapshot_id='other-snapshot'), 'current',
+     'ADMISSION_SNAPSHOT_MISMATCH'),
+    (sample, lambda r: r['admission']['candidate'].pop('snapshot_id'), 'candidate', 'ADMISSION_SNAPSHOT_MISMATCH'),
+    (sample, lambda r: r['admission']['candidate'].update(anchor_at='2026-10-15T00:59:00+00:00'), 'candidate',
+     'ADMISSION_ANCHOR_MISMATCH'),
+    (sample, lambda r: r['admission']['candidate'].update(anchor_at=None), 'candidate', 'ADMISSION_ANCHOR_MISMATCH'),
+    (live_v2, lambda r: r['admission']['current'].update(anchor_at=r['requested_at']), 'current',
+     'ADMISSION_ANCHOR_MISMATCH'),
+    (sample, lambda r: _set_gate_time(r, 'candidate', '2026-10-16T00:59:59+00:00'), 'candidate',
+     'ADMISSION_GATE_FUTURE:cash_precheck'),
+    (sample, lambda r: r['admission']['current']['gates']['kill_switch'].update(as_of='2026-10-15T01:00:01+00:00'),
+     'current', 'ADMISSION_GATE_FUTURE:kill_switch'),
+    (sample, lambda r: r['admission']['current']['gates']['engine_cash'].update(as_of='2026-10-15T00:59:59'),
+     'current', 'ADMISSION_GATE_TIME_INVALID:engine_cash'),
+    (sample, lambda r: r['admission']['current']['gates']['engine_cash'].update(as_of=None),
+     'current', 'ADMISSION_GATE_TIME_INVALID:engine_cash'),
+])
+def test_admission_from_other_snapshot_anchor_or_future_is_not_evaluable(build, mutation, arm, reason):
+    row = build()
+    mutation(row)
+    result = outcome.compare_policy_outcomes(row, fees=fees())
+    assert result['net_delta_krw'] is None and result['status'] == 'not_evaluable'
+    assert reason in result['arm_reasons'][arm]
+
+
+def test_same_instant_in_other_offset_is_the_same_anchor():
+    row = sample()
+    row['admission']['candidate']['anchor_at'] = '2026-10-15T10:00:00+09:00'
+    assert outcome.compare_policy_outcomes(row, fees=fees())['net_delta_krw'] == '5000.00'
+
+
+def test_zero_quantity_arm_still_requires_same_snapshot_and_anchor():
+    row = sample()
+    row['current']['quantity'] = 0
+    row['current'].pop('entry_quote')
+    row['admission']['current'].update(quantity=0, admissible=False, snapshot_id='other')
+    row['admission']['current']['gates']['sizing_quantity']['status'] = 'failed'
+    row['market_state'].pop('current')
+    result = outcome.compare_policy_outcomes(row, fees=fees())
+    assert result['net_delta_krw'] is None
+    assert 'ADMISSION_SNAPSHOT_MISMATCH' in result['arm_reasons']['current']
