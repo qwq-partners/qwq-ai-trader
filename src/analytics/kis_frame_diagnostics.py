@@ -32,7 +32,7 @@ def validate_study_binding(observations, study):
     journal = observations.get('journal', {})
     if type(journal) is not dict:
         raise ValueError('원장 metadata 불일치')
-    if capture.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+    if capture.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', 'runner-llm-window-v1'):
         from .selection_basis import validate_settings as selection_settings
         from .entry_gate_trace import validate_settings as gate_settings
         settings = validate_settings(capture.get('frame_diagnostics'))

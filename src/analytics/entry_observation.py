@@ -156,7 +156,8 @@ class EntryObservationBuffer:
             except Exception:
                 self.mark_incomplete("journal_offer_failed")
         if (self.scan_scope == 'window' and kind == 'signal'
-                and not getattr(self, 'order_ready_admission', False)):
+                and not getattr(self, 'order_ready_admission', False)
+                and not getattr(self, 'llm_admission', False)):
             try:
                 if self.signal_quote_submit is None:
                     self.mark_incomplete('signal_enrollment_unavailable')
@@ -288,6 +289,21 @@ def capture_signal(observer, scan_id, event):
                             "strategy": event.strategy.value, "price": _scalar(event.price),
                             "signal_target_price": _scalar(event.target_price),
                             "signal_stop_price": _scalar(event.stop_price)})
+    except Exception:
+        _capture_failed(observer)
+
+
+def capture_llm_check_started(owner, event):
+    """실제 보조검증 진입만 복사한다. 예산 예약/유료 호출/응답 성공 증거는 아니다."""
+    observer = getattr(owner, "_entry_price_observer", None)
+    if not getattr(observer, 'llm_admission', False):
+        return
+    try:
+        if not observer.accepts_order_signal(event.id):
+            return
+        _publish(observer, dict(kind='llm_check_started', signal_id=event.id,
+            symbol=event.symbol, strategy=event.strategy.value,
+            source=event.source, observed_at=_now()))
     except Exception:
         _capture_failed(observer)
 
