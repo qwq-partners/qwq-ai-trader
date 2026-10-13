@@ -154,7 +154,7 @@ class ComparisonWorker:
         self.policy = runner.guard.policy
         # KST 날짜 → 그날 입장(또는 입장 예정)으로 센 pair_id. start() 때 원장에서 당일분을 채운다.
         self._day_pairs: dict[str, set] = {}
-        self._journal_seq = 0            # 이 프로세스 run 안의 단조 번호(저널 완전성 증거)
+        self._journal_seq: dict[str, int] = {}   # 파일 경로별 단조 번호(저널 완전성 증거, 쓰는 시점에 부여)
         self._dropped_written = 0        # 저널에 이미 남긴 journal_dropped 누계
         self._fresh: dict[str, tuple[str, str]] = {}            # decision_id → 이번 offer 가 새로 센 (day, pair_id)
         self.journal_dir = (Path(journal_dir) if journal_dir is not None
@@ -261,10 +261,9 @@ class ComparisonWorker:
 
     # ── 저널 ────────────────────────────────────────────────
     def _journal_put(self, record, timeout=None):
-        # 완전성 증거(재리뷰 P2): 프로세스 run_id 와 단조 journal_seq 를 붙여 독자가 유실(번호 빈틈)을 셀 수 있게 한다.
-        with self._lock:
-            self._journal_seq += 1
-            record = dict(record, run_id=mci.RUN_ID, journal_seq=self._journal_seq)
+        # 완전성 증거(재리뷰 P2): run_id 는 여기서, 파일별 단조 journal_seq 는 쓰는 시점에 붙인다(월 분할·스트림 분리 뒤에도
+        # 독자가 파일 하나 안의 빈틈만 유실로 세게 — 3회차 P2).
+        record = dict(record, run_id=mci.RUN_ID)
         try:
             if timeout is None:
                 self._journal.put_nowait(record)
@@ -286,6 +285,9 @@ class ComparisonWorker:
 
     def _journal_write(self, record):
         path = self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
+        with self._lock:
+            self._journal_seq[str(path)] = self._journal_seq.get(str(path), 0) + 1
+            record = dict(record, journal_seq=self._journal_seq[str(path)])
         line = json.dumps(record, sort_keys=True, ensure_ascii=True, default=str) + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as handle:
@@ -304,10 +306,8 @@ class ComparisonWorker:
                     dropped = self._counts["journal_dropped"]
                     marker = (dropped > self._dropped_written)
                     if marker:
-                        self._journal_seq += 1
                         drop_record = {"schema_version": JOURNAL_VERSION, "kind": "journal_drop", "run_id": mci.RUN_ID,
-                                       "journal_seq": self._journal_seq, "dropped_total": dropped,
-                                       "at": record.get("recorded_at") or record.get("at")}
+                                       "dropped_total": dropped, "at": record.get("recorded_at") or record.get("at")}
                 if marker:
                     self._journal_write(drop_record)
                     with self._lock:

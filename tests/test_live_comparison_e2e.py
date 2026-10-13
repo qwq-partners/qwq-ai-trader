@@ -492,3 +492,98 @@ def test_daily_cli_applies_manifest_limits_and_reads_budget_db(tmp_path, monkeyp
     assert out["selection_limits"]["max_common_context_bytes"] == man["execution_policy"]["max_common_context_bytes"]
     assert out["spend"]["ledger_attempts_supplied"] is True and out["spend"]["total_usd"] is not None
     assert out["offer_journal"]["complete"] is True and out["denominators"]["complete"] == 1
+
+
+def test_duplicate_redelivery_does_not_unsample_a_completed_pair(tmp_path, monkeypatch):
+    """3회차 P1: accepted → finished → rejected_duplicate 뒤에도 완료 표본은 그대로, 중복은 별도 집계."""
+    s = _stack(tmp_path, monkeypatch)
+    try:
+        _decide(s, "sig-dup")
+        assert wait(lambda: s.worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(s.ledger)
+        s.worker.stop(5)
+        records = _offers(s)
+        env = _offered_envelopes(records)[0]
+        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0,
+                                                journal_dir=s.journal_dir).start()
+        try:
+            assert worker2.offer(env) == "accepted"                    # 새 프로세스 흉내: 캐시 회수(무과금)
+            assert wait(lambda: worker2.health()["finished"] == 1)
+            assert worker2.offer(env) == "rejected_duplicate"          # 같은 작업자 안의 재전달 거부
+        finally:
+            worker2.stop(5)
+        records = _offers(s)
+        assert any(r.get("status") == "rejected_duplicate" for r in records if r.get("kind") == "offer")
+        day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+        report = daily.build_daily_report([pair], day_kst=day, offer_records=records, max_input_age_seconds=30.0,
+                                          pairs_per_day=1)
+        assert report["denominators"]["complete"] == 1 and report["denominators"]["offered"] == 1
+        assert report["duplicate_offers_rejected"] == 1
+        assert "rejected_duplicate" not in report["missing_reasons"]
+        assert "완료 1" in report["telegram_preview"]
+    finally:
+        s.recorder.close(); set_decision_recorder(None)
+
+
+def test_interrupted_attempt_without_response_counts_after_reconciliation_but_never_resends(tmp_path, monkeypatch):
+    """3회차 P1: 응답 없이 끊긴 시도의 예약을 대사하면 지출은 확정(known_reconciled)되되 같은 ID 재호출은 재전송하지 않는다."""
+    import asyncio as _asyncio
+    from src.analytics.model_comparison_execution import ComparisonRequest
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, policy_enabled=True)
+    man = manifest()
+    policy = dict(man["execution_policy"], experiment_id=man["experiment_id"]); policy["allowed_models"] = tuple(policy["allowed_models"])
+    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
+    calls = []
+    async def dispatch(req):
+        calls.append(req); raise TimeoutError("provider hung")
+    req = ComparisonRequest("gpt-5-mini", "facts", "role", 100)
+    try:
+        _asyncio.run(guard.call(req, dispatch=dispatch, attempt_id="hung-attempt"))
+    except TimeoutError:
+        pass
+    record = guard.lookup("hung-attempt")
+    assert record["state"] == "blocked" and record["result"] is None and record["reservation_token"]
+    assert ledger.status()["blocked"]                                           # unknown 예약 → 원장 차단
+    evidence = tmp_path / "usage.txt"; evidence.write_text("export")
+    review = {"version": "llm-budget-reconciliation-v1", "activated_at": ledger.status()["activated_at"],
+              "reviewer_ref": "synthetic-operator", "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+              "adjustments": [{"token": record["reservation_token"], "actual_cost_usd": 0.0002}], "clear_bound_breach": False}
+    preview = reconcile_budget(ledger.path, 100, review, evidence)
+    reconcile_budget(ledger.path, 100, review, evidence, apply=True, expected_state_sha256=preview["state_sha256"])
+    after = guard.lookup("hung-attempt")
+    assert after["state"] == "known_reconciled" and after["result"] is None and after["reconciled"]["actual_cost_usd"] == "0.0002"
+    day = ledger.today().isoformat()
+    (la,) = [a for a in guard.day_attempts(day) if a["attempt_id"] == "hung-attempt"]
+    assert la["state"] == "known_reconciled" and la["cost_usd"] == "0.0002"
+    report = daily.build_daily_report([], day_kst=day, offer_records=[], ledger_attempts=guard.day_attempts(day))
+    assert report["spend"]["total_usd"] == "0.0002" and report["spend"]["unaccounted_attempts"] == []
+    from src.utils.llm_budget import BudgetBlocked
+    import pytest
+    with pytest.raises(BudgetBlocked):                                           # 재전송 금지 유지
+        _asyncio.run(guard.call(req, dispatch=dispatch, attempt_id="hung-attempt"))
+    assert len(calls) == 1
+
+
+def test_journal_sequence_is_per_file_so_month_split_and_incomplete_stream_are_not_gaps(tmp_path, monkeypatch):
+    """3회차 P2: 번호는 파일별이라 incomplete 스트림이나 월 분할이 offers 파일의 유실로 잡히지 않는다."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from tests.test_model_comparison_worker import build, envelope
+    from src.analytics.model_comparison_runner import PairResultPersistenceError
+    worker, ledger, op, ge = build(tmp_path, journal_dir=tmp_path / "j")
+    async def failing_run(spec):
+        raise PairResultPersistenceError({"pair_id": worker.runner.pair_id(spec.decision_id), "decision_id": spec.decision_id})
+    monkeypatch.setattr(worker.runner, "run", failing_run)
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, "dec-a")) == "accepted"
+        assert wait(lambda: worker.health()["incomplete"] == 1)
+    finally:
+        worker.stop(10)
+    offers = sorted((tmp_path / "j").glob("offers-*.jsonl")); incomplete = sorted((tmp_path / "j").glob("incomplete-*.jsonl"))
+    assert offers and incomplete
+    ro = worker_api().read_offer_journal(offers[0], max_bytes=1 << 24)
+    ri = worker_api().read_incomplete_journal(incomplete[0], max_bytes=1 << 24)
+    assert ro["sequence_gaps"] == 0 and ro["dropped_records"] == 0 and ro["unsequenced_records"] == 0
+    assert ri["sequence_gaps"] == 0 and len(ri["records"]) == 1
+    assert [r["journal_seq"] for r in ro["records"]] == list(range(1, len(ro["records"]) + 1))

@@ -319,6 +319,10 @@ class ComparisonCallGuard:
         state, reason = "pending", "comparison_attempt_pending"
         if row["block_reason"]:
             state, reason = "blocked", row["block_reason"]
+        if result is None and reconciled is not None:
+            # 응답 없이 끊긴 시도(타임아웃 등)의 예약을 증빙으로 대사한 경우: 비용은 확정, 응답 복구는 불가.
+            # 재전송 금지는 _admit 이 result None 을 보고 BudgetBlocked 로 유지한다(3회차 P1).
+            state = "known_reconciled"
         if result is not None:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
             cost = _ledger_cost(result.actual_cost_usd)
@@ -391,6 +395,9 @@ class ComparisonCallGuard:
                     recovered = self._lookup_row(db, existing)
                     if recovered["state"] not in {"known", "unknown", "known_reconciled"}:
                         raise BudgetBlocked(recovered["block_reason"])
+                    if recovered["result"] is None:
+                        # 비용은 대사됐지만 응답이 없는 시도 — 완료로 돌려줄 수 없고 재전송도 금지한다
+                        raise BudgetBlocked(recovered["block_reason"] or "comparison_attempt_interrupted")
                     return None, None, recovered["result"]
                 day = self.ledger.today().isoformat()
                 used = db.execute("SELECT COUNT(*) FROM comparison_attempts WHERE admission_day=?", (day,)).fetchone()[0]

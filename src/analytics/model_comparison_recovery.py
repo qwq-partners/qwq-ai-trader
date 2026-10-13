@@ -29,7 +29,7 @@ from ..utils.llm_budget import BudgetBlocked, BudgetStateError
 # 러너가 모든 시도에 붙이는 키(저장 응답에 없는 키).
 _RUNNER_KEYS = frozenset({'attempt_id', 'role', 'reservation_token', 'ledger_state', 'available_at'})
 # 행 기록 뒤 감사 대사만 상태를 바꿀 수 있다. 그 외 상태 차이는 모순이다.
-_RECONCILED_FROM = frozenset({'unknown', 'pending_reconciliation'})
+_RECONCILED_FROM = frozenset({'unknown', 'pending_reconciliation', 'blocked'})   # blocked: 응답 없이 끊긴 시도의 예약을 뒤에 대사
 # 가드는 BudgetBlocked 가 아닌 예외(TimeoutError·ConnectionError 등)를 이 사유로만 남긴다 — 형식만 검사할 수 있다.
 _INTERRUPTED = 'comparison_attempt_interrupted'
 _EXCEPTION_NAME = re.compile(r'[A-Z][A-Za-z0-9_]{0,99}')

@@ -209,6 +209,8 @@ def offers_to_population(records: Iterable[Mapping]) -> tuple[list, list]:
             envelopes.append(dict(envelope, received_at=rec.get('received_at')))
         elif rec.get('kind') != 'transition':
             continue
+        if status == 'rejected_duplicate':
+            continue                                  # 같은 판단의 재전달 거부는 제외 사유가 아니다(최초 접수가 기준)
         if isinstance(status, str) and (status.startswith('rejected') or status in ('expired', 'incomplete')):
             reason = rec.get('reason')
             exclusions.append({'decision_id': rec['decision_id'],
@@ -240,10 +242,15 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     from_offers, excluded_offers = offers_to_population(offer_records)
     offered_envelopes += from_offers
     exclusions += excluded_offers
-    offer_statuses = {}
+    offer_statuses, duplicate_offers = {}, Counter()
     for r in offer_records:
         if isinstance(r, Mapping) and r.get('kind') == 'offer' and isinstance(r.get('decision_id'), str):
             status_value, reason = r.get('status'), r.get('reason')
+            if status_value == 'rejected_duplicate':
+                duplicate_offers[r['decision_id']] += 1       # 재전달 거부는 별도 집계, 최초 접수 결과를 덮지 않는다(3회차 P1)
+                continue
+            if r['decision_id'] in offer_statuses:
+                continue                                      # 판단별 최초 접수 결과 보존
             # 거부는 기록의 사유(없으면 상태)로 표기해 제외 사유 표기와 같은 어휘를 쓴다
             offer_statuses[r['decision_id']] = ('accepted' if status_value == 'accepted' else
                                                 (reason if isinstance(reason, str) and reason else status_value))
@@ -427,12 +434,13 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         missing_j = journal_status.get('missing') is True
         counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records')}
         evidence_ok = all(v is not None for v in counts.values())
-        complete = (not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
-        report['offer_journal'] = {'missing': missing_j, **counts, 'complete': complete,
+        journal_complete = (not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
+        report['offer_journal'] = {'missing': missing_j, **counts, 'complete': journal_complete,
                                    'completeness_evidence': 'run_id+journal_seq gaps and journal_drop markers'
                                    if evidence_ok else 'insufficient'}
-        if not complete:
+        if not journal_complete:
             report['limitations'].append('population_journal_incomplete')
+    report['duplicate_offers_rejected'] = sum(duplicate_offers.values())   # 재전달 거부 건수(분모와 별도)
     report['telegram_preview'] = (
         f"[모델비교 {day_kst}] 제공 {offered_n}·적격 {len(selection['eligible'])}·표본 {sampled_n}·"
         f"완료 {complete}·제외 {offered_n - complete}\n"
