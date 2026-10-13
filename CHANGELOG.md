@@ -1,5 +1,17 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-13 — 실시간 비교 준비 2차 수정: Codex 독립 리뷰 반례 7건(P1 5·P2 2) 반영 (PR #190 갱신·운영 미배포·유료 비교 OFF)
+
+- **#1 호출 전 일/크기 제한(W-A)**: 정책 v2 에 `pairs_per_day`·`max_common_context_bytes`(기본값 없음) 추가. 러너 `_claim` 의 입장 트랜잭션 안에서 KST 당일 입장 수(`admission_day`)를 세어 초과면 `comparison_daily_pair_cap`, 입력 바이트 초과면 `comparison_input_too_large` — 차단된 쌍은 `model-comparison-pair-blocked-v1` 마커 행으로 고정해 다음날 자동 재실행 없음. 작업자 `offer()` 도 전송 전에 같은 조건으로 거부(`rejected_daily_pair_cap`/`rejected_input_too_large`), 당일 입장 수는 `start()` 때 원장에서 읽어 재시작 후 유지. manifest `execution_policy` 에 `pairs_per_day:1`·`max_common_context_bytes:16384`.
+- **#2 복구 무결성(W-A)**: `_verify_attempt` 가 `error` 유무로 검사를 건너뛰지 않고 저장 응답의 모든 키·실패 시도의 차단 사유/상태를 대조, 행 전체를 러너와 같은 `finalize_row` 로 재계산해 일치 요구, `restore_pair_result(..., evidence_path)` 는 작업자 incomplete 저널에 같은 sha256 행이 있을 때만 복원(변조 행 17종 거부 시험).
+- **#3 폴백 체인 시한(W-A)**: `PairSpec.fallback_chain_timeout_seconds`(필수)로 폴백 루프 전체를 하나의 `asyncio.timeout` 으로 감싸 운영 `SINGLE_FALLBACK_TIMEOUT` 의미(체인 합산 10초)와 일치. 봉투 `role_controls`·manifest 키 동일, 불일치는 `rejected_control_mismatch`.
+- **#4 영속 저널(W-A)**: 작업자 `journal_dir`(기본 `~/.cache/ai_trader/comparison_worker/`)의 `offers-YYYY-MM.jsonl`(offer 봉투 전체·상태 전이)·`incomplete-YYYY-MM.jsonl`(저장 실패 원래 행, 복구 증거). 운영 루프는 큐에 넣기만, 작업자 스레드가 fsync 기록, `stop()` 이 저널을 먼저 비움. `read_offer_journal`/`read_incomplete_journal`(상한 초과는 오류).
+- **#5 최신 장 상태 우선(W-B)**: 채널별 최신 레코드를 먼저 고르고 그 레코드가 미자격·빈 값·다른 연결/세대·시각 불명이면 `latest_record_unqualified:<tr>` 로 unknown — 옛 정상값 대체 금지.
+- **#6 경제성 근거 일관성(W-B)**: arm admission 의 `snapshot_id == sizing_snapshot.ref`, `anchor_at == row[anchor]`, 모든 게이트 `as_of` tz-aware·≤ anchor(`ADMISSION_SNAPSHOT_MISMATCH`/`ADMISSION_ANCHOR_MISMATCH`/`ADMISSION_GATE_FUTURE`/`ADMISSION_GATE_TIME_INVALID`).
+- **#7 비용 집계(W-B)**: 시도별 대사액 우선 → 추정 → unknown(`original_estimated_usd`·`reconciled_usd`·`unknown_attempts`·`lookup_failed_attempts`), 그날 모든 행의 고유 attempt 1회 집계(같은 판단 여러 실행 `pair_runs`·`prior_pair_ids`), blocked 마커 행은 excluded 분모. `build_daily_report(offer_records=)` 로 저널 레코드에서 모집단/제외 유도, CLI `--daily --offers`.
+- **통합(코디네이터)**: E2E 를 작업자 저널 산출물 기반으로 교체(테스트 전용 메모리 캡처 제거), 반례 회귀 2건 추가(1쌍/일 두 번째 판단·재시작 뒤 세 번째 판단 호출 전 차단, 64바이트 상한 입력 거부), manifest `known_control_differences` 문장 정정. 검증: VERIFY2_PLACEHOLDER
+- 개발 라우팅: W-A·W-B 요청 claude-opus-5/high, metadata 표시 `claude-opus-5-5`, effort 미노출. 애플리케이션 유료 호출 0, 운영 변경 0. 병합·배포·활성화는 사용자의 Codex 재리뷰 뒤 결정.
+
 ## 2026-10-13 — 실시간 비교 준비: 예산 보호·판단 전 입력 봉투·비교 작업자·진입 조건/장 상태·R1 실험 명세 (PR 대기·운영 미배포·유료 비교 OFF)
 
 - **Task1 예산 보호·비용 복구(W1)**: `MonthlyBudgetLedger.reserve(admission_check=)` — 같은 `BEGIN IMMEDIATE`·같은 units 안에서 읽기 전용(SQLite authorizer) 검사. `ComparisonExecutionPolicy` v2(`experiment_usd_ceiling`·`valid_from/until`·`required_policy_mode=normal`, 저장 v1 정책은 `comparison_policy_mismatch`). 거부: `comparison_policy_disabled`/`_mode_not_normal`/`_experiment_expired`/`_economy_threshold`(이번 예약 포함 80% 초과)/`_experiment_ceiling`(실험 ID 전체 예약+정산+unknown 합), 기존 95%/100% 보호 유지. `guard.lookup` 에 `reconciled`·`original_estimated_cost_usd`·상태 `known_reconciled`(기존 대사 CLI 감사 행 연결, 원래 응답 불변). 신규 `model_comparison_recovery`(`inspect_attempt/inspect_pair/restore_pair_result/export_incomplete_pair` — 원래 행·manifest·시도 ID·원장 상태 일치 시만 `result IS NULL` 복구, 현재 시각 생성 없음). 월 전환·재시작·ID 변경이 실험 상한을 되살리지 않음을 시험. 시험 34+7건(80/95/100 경계·정책 비활성·동시 예약·스레드/fork 손실·대사 중복/변조/오래된 preview·쌍 복구 성공1/거부6, 변이 11/11 검출).

@@ -122,7 +122,7 @@
     "strict_on_disagreement": "src/core/adversarial_validator.py STRICT_ON_DISAGREEMENT=False (get_adversarial_validator 기본값)"
   },
   "known_control_differences": [
-    "운영 폴백 10초는 primary+fallback 합산 시한이지만 비교 runner 는 시도마다 timeout_seconds 를 적용한다(시도별 10초). 시도 수·비용 상한에는 영향 없고 지연 비교에서 구분한다.",
+    "운영 폴백 10초(SINGLE_FALLBACK_TIMEOUT)는 primary+fallback 합산 시한이며, 비교 runner 도 2차 수정부터 fallback_chain_timeout_seconds(10.0)로 체인 전체에 같은 시한을 적용한다. 각 폴백 시도의 timeout_seconds 는 그 안의 상한이다.",
     "gpt-5/6 계열에는 OpenAIClient 가 temperature 를 보내지 않는다(src/utils/llm.py:438). Gemini 값은 운영과 같다."
   ],
   "fallback_system": "",

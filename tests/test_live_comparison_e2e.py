@@ -29,30 +29,46 @@ from tests.test_model_comparison_worker import FakeGemini, FakeOpenAI, manifest,
 KST = timezone(timedelta(hours=9))
 
 
-def _stack(tmp_path, monkeypatch, *, ceiling="100", openai=None):
+def _stack(tmp_path, monkeypatch, *, ceiling="100", openai=None, pairs_per_day=None, max_context_bytes=None):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     recorder = DecisionRecorder(tmp_path / "decisions", enabled=True)
     set_decision_recorder(recorder)
     ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, policy_enabled=True)
     man = manifest(fixed_at="2026-01-01T00:00:00+00:00")
     man["execution_policy"]["experiment_usd_ceiling"] = ceiling
+    if pairs_per_day is not None:
+        man["execution_policy"]["pairs_per_day"] = pairs_per_day
+    if max_context_bytes is not None:
+        man["execution_policy"]["max_common_context_bytes"] = max_context_bytes
     policy = dict(man["execution_policy"], experiment_id=man["experiment_id"])
     policy["allowed_models"] = tuple(policy["allowed_models"])
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
     op, ge = openai or FakeOpenAI(), FakeGemini()
     runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(openai=op, gemini=ge))
-    worker = worker_api().ComparisonWorker(runner, manifest=man, max_input_age_seconds=30.0).start()
+    journal_dir = tmp_path / "journal"
+    worker = worker_api().ComparisonWorker(runner, manifest=man, max_input_age_seconds=30.0,
+                                           journal_dir=journal_dir).start()
     cross = _cross(monkeypatch, _LLM())
     worker_api().attach(worker, cross)
-    offered = []
-    inner = cross._comparison_handoff
-
-    def capturing(envelope):              # 훅이 넘긴 봉투를 그대로 보존한다(일별 보고의 모집단)
-        offered.append(dict(envelope))
-        return inner(envelope)
-    cross._comparison_handoff = capturing
     return SimpleNamespace(recorder=recorder, ledger=ledger, guard=guard, runner=runner, worker=worker,
-                           cross=cross, op=op, ge=ge, manifest=man, offered=offered, path=tmp_path / "budget.db")
+                           cross=cross, op=op, ge=ge, manifest=man, journal_dir=journal_dir,
+                           path=tmp_path / "budget.db")
+
+
+def _offers(s):
+    """작업자가 실제로 쓴 offers 저널(운영에 존재하는 산출물)만 읽는다 — 테스트 전용 메모리 캡처 없음."""
+    files = sorted(s.journal_dir.glob("offers-*.jsonl"))
+    assert files, "offers 저널 없음"
+    records = []
+    for f in files:
+        read = worker_api().read_offer_journal(f, max_bytes=1 << 24)
+        assert read["skipped_lines"] == 0 and read["missing"] is False
+        records.extend(read["records"])
+    return records
+
+
+def _offered_envelopes(records):
+    return [r["envelope"] for r in records if r.get("kind") == "offer"]
 
 
 def _decide(s, signal_id="sig-e2e"):
@@ -60,9 +76,10 @@ def _decide(s, signal_id="sig-e2e"):
     return approved, dict(s.cross.last_llm_decision)
 
 
-def _pair_rows(ledger):
+def _pair_rows(ledger, *, include_blocked=False):
     with ledger._connect(readonly=True) as db:
-        return [json.loads(r[0]) for r in db.execute("SELECT result FROM comparison_pairs WHERE result IS NOT NULL")]
+        rows = [json.loads(r[0]) for r in db.execute("SELECT result FROM comparison_pairs WHERE result IS NOT NULL")]
+    return rows if include_blocked else [r for r in rows if r.get("schema_version") != "model-comparison-pair-blocked-v1"]
 
 
 def _decision_rows(recorder):
@@ -96,8 +113,13 @@ def test_hook_to_daily_report_happy_path_then_restart_without_spend(tmp_path, mo
         rows = _decision_rows(s.recorder)
         decision = next(r for r in rows if r["decision_id"] == decision_id)
         (pair,) = _pair_rows(s.ledger)
-        assert pair["decision_id"] == decision_id == s.offered[0]["decision_id"]
-        assert pair["input_available_at"] == decision["inputs"]["collected_at"] == s.offered[0]["input_available_at"]
+        s.worker.stop(5)                      # 저널 큐를 비운다(운영 종료와 같은 경로); 이후 작업자는 새로 만든다
+        records = _offers(s)
+        offered = _offered_envelopes(records)
+        assert len(offered) == 1 and offered[0]["attestation"]["kind"] == "in_process_nonce"
+        assert [r["status"] for r in records if r.get("kind") == "transition"] == ["started", "finished"]
+        assert pair["decision_id"] == decision_id == offered[0]["decision_id"]
+        assert pair["input_available_at"] == decision["inputs"]["collected_at"] == offered[0]["input_available_at"]
         assert pair["schema_version"] == "model-comparison-pair-v2"
         assert pair["evaluation_anchor"] == "input_available_at" and pair["live_provenance"] == "in_process_attested"
         assert _utc(pair["evaluation_at"]) == _utc(pair["input_available_at"]) + timedelta(seconds=900)
@@ -137,8 +159,7 @@ def test_hook_to_daily_report_happy_path_then_restart_without_spend(tmp_path, mo
 
         # 5) 일별 보고: 모집단/선정/완료 분모와 미리보기 문자열만(발송 함수 없음).
         day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
-        env = dict(s.offered[0], received_at=s.offered[0]["handed_off_at"])
-        report = daily.build_daily_report([pair], day_kst=day, offered_envelopes=[env],
+        report = daily.build_daily_report([pair], day_kst=day, offer_records=records,
                                           max_input_age_seconds=30.0, pairs_per_day=1)
         text = json.dumps(report, ensure_ascii=False)
         assert '"offered": 1' in text and '"complete": 1' in text
@@ -146,9 +167,10 @@ def test_hook_to_daily_report_happy_path_then_restart_without_spend(tmp_path, mo
         assert not any(name.startswith("send") for name in dir(daily))
 
         # 6) 재시작: 새 작업자가 같은 봉투를 다시 받아도 공급자 호출·정산이 늘지 않는다.
-        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0).start()   # 같은 명세(다른 한도는 manifest 불일치로 재실행 거부)
+        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0,
+                                                journal_dir=s.journal_dir).start()   # 같은 명세(다른 한도는 manifest 불일치로 재실행 거부)
         try:
-            assert worker2.offer(s.offered[0]) == "accepted"
+            assert worker2.offer(offered[0]) == "accepted"
             assert wait(lambda: worker2.health()["finished"] == 1)
         finally:
             worker2.stop(5)
@@ -211,18 +233,71 @@ def test_unknown_cost_blocks_ledger_until_audited_reconciliation_then_report_sho
             assert db.execute("SELECT activated_at FROM settings").fetchone()[0] == activated_before
 
         assert inspect_pair(s.guard, pair["pair_id"])["complete"] is True
+        s.worker.stop(5)
+        records = _offers(s)
+        offered = _offered_envelopes(records)
         day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
-        env = dict(s.offered[0], received_at=s.offered[0]["handed_off_at"])
-        report = daily.build_daily_report([pair], day_kst=day, offered_envelopes=[env], max_input_age_seconds=30.0,
+        report = daily.build_daily_report([pair], day_kst=day, offer_records=records, max_input_age_seconds=30.0,
                                           pairs_per_day=1, reconciled_lookup=s.guard.lookup)
+        spend = report["spend"] if "spend" in report else report
         text = json.dumps(report, ensure_ascii=False)
-        assert "reconcil" in text and '"offered": 1' in text
+        assert '"offered": 1' in text and "reconciled" in text
+        assert spend is not None and "0.0004" in text            # 대사액 0.0002×2 가 합계에 반영(추정 우선 금지)
         # 같은 ID 재전달은 재전송·재과금하지 않는다.
-        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0).start()   # 같은 명세(다른 한도는 manifest 불일치로 재실행 거부)
+        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0,
+                                                journal_dir=s.journal_dir).start()
         try:
-            assert worker2.offer(s.offered[0]) == "accepted" and wait(lambda: worker2.health()["finished"] == 1)
+            assert worker2.offer(offered[0]) == "accepted" and wait(lambda: worker2.health()["finished"] == 1)
         finally:
             worker2.stop(5)
         assert len(s.op.calls) == 2 and s.ledger.status()["settled_count"] == 3
+    finally:
+        _teardown(s)
+
+
+def test_daily_pair_cap_and_input_size_block_before_any_provider_call(tmp_path, monkeypatch):
+    """Codex 반례 #1: 1쌍/일에서 두 번째 판단은 호출 전 차단되고, 상한 초과 입력은 큐에 들어가지 않는다."""
+    s = _stack(tmp_path, monkeypatch, pairs_per_day=1)
+    try:
+        _decide(s, "sig-first")
+        assert wait(lambda: s.worker.health()["finished"] == 1)
+        calls = (len(s.op.calls), len(s.ge.calls), s.ledger.status()["settled_count"])
+        approved, meta = _decide(s, "sig-second")
+        assert approved is True                                   # 운영 판단은 그대로
+        assert meta["comparison_handoff"] in ("rejected_daily_pair_cap", "accepted")
+        if meta["comparison_handoff"] == "accepted":              # 러너 입장 트랜잭션이 최종 차단
+            assert wait(lambda: s.worker.health()["finished"] + s.worker.health()["blocked"]
+                        + s.worker.health()["incomplete"] >= 2)
+        assert (len(s.op.calls), len(s.ge.calls), s.ledger.status()["settled_count"]) == calls
+        assert len(_pair_rows(s.ledger)) == 1
+        blocked = [r for r in _pair_rows(s.ledger, include_blocked=True)
+                   if r.get("schema_version") == "model-comparison-pair-blocked-v1"]
+        assert (meta["comparison_handoff"] == "rejected_daily_pair_cap") or blocked
+        # 재시작한 작업자도 당일 상한을 기억한다(영속 입장 수).
+        s.worker.stop(5)
+        worker2 = worker_api().ComparisonWorker(s.runner, manifest=s.manifest, max_input_age_seconds=30.0,
+                                                journal_dir=s.journal_dir).start()
+        try:
+            worker_api().attach(worker2, s.cross)
+            _, meta3 = _decide(s, "sig-third")
+            assert meta3["comparison_handoff"] == "rejected_daily_pair_cap"
+        finally:
+            worker2.stop(5)
+        assert (len(s.op.calls), len(s.ge.calls), s.ledger.status()["settled_count"]) == calls
+        records = _offers(s)
+        statuses = {r["decision_id"]: r["status"] for r in records if r.get("kind") == "offer"}
+        assert "rejected_daily_pair_cap" in statuses.values()    # 거부도 저널에 남는다
+    finally:
+        s.recorder.close()
+        set_decision_recorder(None)
+
+
+def test_oversized_common_context_is_rejected_at_offer(tmp_path, monkeypatch):
+    s = _stack(tmp_path, monkeypatch, max_context_bytes=64)
+    try:
+        approved, meta = _decide(s, "sig-big")
+        assert approved is True and meta["comparison_handoff"] == "rejected_input_too_large"
+        assert s.op.calls == [] and s.ge.calls == [] and s.ledger.status()["settled_count"] == 0
+        assert _pair_rows(s.ledger, include_blocked=True) == []
     finally:
         _teardown(s)

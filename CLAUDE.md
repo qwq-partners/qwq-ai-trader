@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-13 — 실시간 비교 준비 2차 수정(Codex 반례 7건 반영, PR #190 갱신·운영 미배포):** 호출 전 일 1쌍/입력 16,384바이트 제한(러너 입장 트랜잭션+작업자 사전 거부·영속 입장 수), 복구는 incomplete 저널 증거·전체 재계산 일치 시만, 폴백 체인 시한 10초 통일, 작업자 offers/incomplete 저널, 최신 장 상태 우선, 경제성 근거 스냅샷/시각 대조, 대사액 우선·고유 시도 집계. CHANGELOG 2차 항목 참조.
+
 > **2026-10-13 — 실시간 비교 준비(Task1~6, PR 대기·운영 미배포·유료 비교 OFF):** 공유 월 예산 예약 트랜잭션 안의 비교 입장 검사(정책 활성·normal·80% 경계·실험 상한·유효기간), 판단 전 `decision_id`/입력 봉투(같은 프로세스 attestation)·평가 기준시각 v2(`input_available_at`+900초), 기본 OFF 비교 작업자(`COMPARISON_WORKER=1`+manifest 필요), 진입 조건 재생(외부 상태 unknown)·장 상태 분류(확정 코드만)·R1 실험 manifest(`enabled:false`, 1쌍/일, 쌍당 $0.47·실험 $9.40 상한)·일별 보고 미리보기. E2E·전체 verify 는 CHANGELOG. 운영 `161b394`·10/14 08:55 파일럿·매수 중지·월 $100 집계 불변. [10월14일 체크리스트](docs/operations/pilot-decision-checklist-2026-10-14.md) · [구현 분담/계약](docs/superpowers/plans/2026-10-13-live-comparison-implementation-plan.md). 병합·배포·활성화는 Codex 리뷰 뒤 사용자 결정.
 
 > **2026-10-13 — 비교 실행·중립 수량 재생 후속(로컬 검증·독립 리뷰 완료, 운영 미배포):** [PDS·코드 흐름·복구·남은 우선순위](docs/research/model-comparison-runner-2026-10-13.md), [PR #189 CI·병합 정본](https://github.com/qwq-partners/qwq-ai-trader/pull/189). 안정 ID로 중복 전송을 막고 응답을 회수하며, 실제 LLM 직전 입력으로 기존 사이징을 재생한다. 같은 Bull 역할의 단일 변경·공통 Bear·명시 폴백을 별도 작업자에 연결하고 응답별 첫 호가를 보고한다. UTC 전체5758·KST 관련147통과, 실제 Claude Opus5 독립 통합 리뷰 종결. **sizing_only·raw 상태이므로 순손익은 null; 운영161b394·10월14일 파일럿·매수 중지·기존 월100 보존, 운영/유료 비교 실행 없음.** 아래는 당시 이력이다.
