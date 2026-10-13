@@ -2065,6 +2065,8 @@ class RiskManager:
             #   - LLM 거부 시 차단 대신 position_multiplier × _LLM_REJECT_SIZE_MULT(0.5) 완화
             if (self._LLM_CHECK_MIN <= _cv_score < self._LLM_BYPASS_AT
                     and _regime != "bull"):
+                from ..analytics.model_comparison_sizing import capture_policy_sizing_if_enabled
+                _neutral_sizing = capture_policy_sizing_if_enabled(self, event)
                 capture_llm_check_started(getattr(self, "_entry_observation_owner", None), event)
                 _llm_ok = await self._cross_validator.llm_second_check(
                     symbol=event.symbol,
@@ -2074,6 +2076,7 @@ class RiskManager:
                     market_regime=_regime,
                     sector=_meta.get("sector", ""),
                     signal_id=event.id,
+                    neutral_sizing=_neutral_sizing,
                 )
                 _llm_ctx = dict(getattr(self._cross_validator, "last_llm_context", {}) or {})
                 # 64차: 판단 기록 ID·기록 상태를 신호 메타에 남겨 signal_events ↔ llm-decision 원장을 조인한다
@@ -2992,7 +2995,8 @@ class RiskManager:
 
         return base_pct, max_pct, pool_equity
 
-    def _calculate_position_size(self, signal: SignalEvent) -> int:
+    def _calculate_position_size(self, signal: SignalEvent, *, sizing_overlays=None,
+                                 sizing_fee_calc=None, record_entry_risk=True) -> int:
         """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)
 
         2026-10-10 60차: 단계별 값·배율·중단 사유를 ``signal.metadata["size_trace"]`` 에 남긴다(측정 전용,
@@ -3213,7 +3217,10 @@ class RiskManager:
         # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
         try:
             from ..utils.calendar_seasonality import calendar_multiplier
-            _cal_mult, _ = calendar_multiplier(date.today(), "kr")
+            _cal_mult, _ = (calendar_multiplier(date.today(), "kr") if sizing_overlays is None
+                            else (sizing_overlays["calendar"], "captured"))
+            if _cal_mult is None:
+                raise ValueError("captured calendar overlay failed")
             if _cal_mult != 1.0:
                 position_value = min(
                     position_value * Decimal(str(_cal_mult)), max_value
@@ -3227,9 +3234,11 @@ class RiskManager:
         # 근거·검증: docs/research/ai-trading-research-2026-08.md + 모듈 docstring
         try:
             from ..utils.volatility_targeting import vol_targeting_multiplier
-            _vt_mult, _ = vol_targeting_multiplier(
+            _vt_mult, _ = (vol_targeting_multiplier(
                 signal.strategy.value if signal.strategy else ""
-            )
+            ) if sizing_overlays is None else (sizing_overlays["volatility"], "captured"))
+            if _vt_mult is None:
+                raise ValueError("captured volatility overlay failed")
             if _vt_mult < 1.0:
                 position_value = position_value * Decimal(str(_vt_mult))
             _rec(vol_targeting_multiplier=float(_vt_mult), after_vol_targeting=position_value)
@@ -3240,7 +3249,10 @@ class RiskManager:
         # 소폭 증액 (부스트 전용 — CF 실측상 HOLD 차단은 손해). 상한 재적용.
         try:
             from ..utils.team_conviction import team_conviction_multiplier
-            _tc_mult, _ = team_conviction_multiplier(signal.symbol)
+            _tc_mult, _ = (team_conviction_multiplier(signal.symbol) if sizing_overlays is None
+                           else (sizing_overlays["team"], "captured"))
+            if _tc_mult is None:
+                raise ValueError("captured team overlay failed")
             if _tc_mult > 1.0:
                 position_value = min(
                     position_value * Decimal(str(_tc_mult)), max_value
@@ -3302,7 +3314,7 @@ class RiskManager:
         if _stop_decision is not None and quantity > 0:
             _q_cap = risk_quantity_cap(
                 equity, price, _stop_decision.stop_pct,
-                risk_per_trade_pct=self.config.risk_per_trade_pct,
+                risk_per_trade_pct=self.config.risk_per_trade_pct, fee_calc=sizing_fee_calc,
             )
             if quantity > _q_cap:
                 logger.info(
@@ -3323,7 +3335,7 @@ class RiskManager:
         # event.signal.metadata **양쪽 별개 복사본**에 넣는다. 주문 캐시(_pending_signal_cache)는
         # dict(event.metadata) 를 복사하고, 체결 시 A 배선이 market_context.entry_risk 로 원장에 병합한다.
         # 수량 0(주문·pending 미생성)에는 남기지 않는다 — 주문 없는 계측 태그 방지.
-        if _stop_decision is not None and quantity > 0:
+        if record_entry_risk and _stop_decision is not None and quantity > 0:
             _snapshot = build_entry_risk_snapshot(
                 strategy=signal.strategy.value if signal.strategy else None,
                 stop_decision=_stop_decision,
