@@ -227,6 +227,37 @@ class ObservationJournal:
             self._fail("journal_record_rejected_or_queue_full")
             self.buffer.mark_incomplete(self._error)
 
+    def offer_pair(self, records):
+        """LLM 시작/배정 둘 다 검증한 뒤 큐에 함께 넣는다. 기존 offer는 불변.
+
+        Queue.put_nowait와 같은 짧은 메모리 lock만 사용한다. 파일 I/O/ACK/공간을
+        기다리지 않는다. writer가 첫 기록을 꺼내기 전에 두 기록의 큐 등록을 마친다.
+        디스크 쓰기의 crash-atomic 보장은 아니며 쓰기 실패는 기존 미봉인 경계다.
+        """
+        if self._failed.is_set() or self._closing.is_set() or self.buffer._capture_closed:
+            self.buffer.mark_incomplete('journal_pair_unavailable')
+            return False
+        try:
+            if (not getattr(self.buffer, 'llm_admission', False) or len(records) != 2
+                    or [r.get('kind') for r in records] != ['llm_check_started', 'llm_check_admission']):
+                raise ValueError('LLM 시작/배정 쌍 필요')
+            for record in records:
+                _record_shape(record, self._max_record_bytes)
+            # Queue.put의 동일 mutex/카운터 규약. 여러 put_nowait 사이의 writer
+            # 진입을 막고 레코드 수 기준 용량을 보존한다(튜플을 한 슬롯으로 세지 않음).
+            with self._queue.not_full:
+                if self._queue.maxsize > 0 and self._queue._qsize() + 2 > self._queue.maxsize:
+                    raise queue.Full
+                for record in records:
+                    self._queue._put(record)
+                self._queue.unfinished_tasks += 2
+                self._queue.not_empty.notify()
+            return True
+        except (ValueError, TypeError, queue.Full):
+            self._fail('journal_record_rejected_or_queue_full')
+            self.buffer.mark_incomplete(self._error)
+            return False
+
     def _write_row(self, kind, payload):
         row = {"row": self._row_count + 1, "previous_hash": self._last_hash,
                "kind": kind, "payload": payload}

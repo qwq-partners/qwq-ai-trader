@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import hashlib
@@ -515,6 +516,8 @@ class _WindowBuffer(EntryObservationBuffer):
         if self.scan_scope == 'window' and now < self.start_at and record.get('kind') in ('ws_quote', 'market_state'):
             return False
         # Original first-scan contracts retain their preparation-stage quotes.
+        if self.llm_admission and record.get('kind') == 'llm_check_started':
+            return self._publish_llm_check(record)
         category = _record_category(record)
         if self.llm_admission and self._record_counts.get(category, 0) >= self._record_limits[category]:
             self.mark_incomplete(category + '_record_limit')
@@ -528,8 +531,6 @@ class _WindowBuffer(EntryObservationBuffer):
                         self._ready_candidates[candidate['candidate_id']] = record.get('route_origin')
                 elif record.get('kind') == 'signal':
                     self._ready_signals.setdefault(record['signal_id'], dict(record))
-                elif record.get('kind') == 'llm_check_started':
-                    self._admit_llm_check(record)
             except Exception:
                 self.mark_incomplete('llm_check_admission_failed')
         if recorded and self.order_ready_admission:
@@ -545,21 +546,45 @@ class _WindowBuffer(EntryObservationBuffer):
                 self.mark_incomplete('order_ready_admission_failed')
         return recorded
 
-    def _admit_llm_check(self, record):
-        signal = self._ready_signals.get(record.get('signal_id'))
-        admission = _llm_admission_record(record, signal, self._ready_candidates,
-            self._llm_seen, self._llm_symbols, self.start_at, self.admission_end, self.end_at)
-        if not self.publish(admission):
-            self.mark_incomplete('llm_check_admission_not_recorded')
-            return
+    def _publish_llm_check(self, record):
+        """시작/배정은 단일 event-loop 턴에서 검증하고 함께 기록한다. await 없음."""
+        if self._capture_closed:
+            return False
+        try:
+            signal = self._ready_signals.get(record.get('signal_id'))
+            admission = _llm_admission_record(record, signal, self._ready_candidates,
+                self._llm_seen, self._llm_symbols, self.start_at, self.admission_end, self.end_at)
+            if not self.start_at <= _timestamp(record.get('observed_at'), 'LLM') < self.end_at:
+                raise ValueError('LLM boundary timestamp outside capture')
+            # 두 번째 publish에서 시계/한도를 다시 검사하면 고립된 started가 남는다.
+            if self._record_counts.get('other', 0) + 2 > self._record_limits['other']:
+                self.mark_incomplete('other_record_limit')
+                return False
+            if len(self._records) + 2 > self.capacity:
+                self.mark_incomplete('llm_check_pair_buffer_limit')
+                return False
+            pair = deepcopy([record, admission])
+            for sequence, item in enumerate(pair, len(self._records) + 1):
+                item['sequence'] = sequence
+            if self._journal_sink is not None and not self._journal_sink.offer_pair(pair):
+                self.mark_incomplete('llm_check_pair_not_recorded')
+                return False
+            self._records.extend(pair)
+            self._record_counts['other'] = self._record_counts.get('other', 0) + 2
+        except Exception:
+            self.mark_incomplete('llm_check_admission_failed')
+            return False
         self._llm_seen.add(record['signal_id'])
-        if admission['reason'] != 'llm_check_admitted':
-            return
-        self._llm_symbols[record['symbol']] = record['signal_id']
-        if self.llm_quote_submit is None:
-            self.mark_incomplete('llm_check_enrollment_unavailable')
-        else:
-            self.llm_quote_submit(admission)
+        if admission['reason'] == 'llm_check_admitted':
+            self._llm_symbols[record['symbol']] = record['signal_id']
+            try:
+                if self.llm_quote_submit is None:
+                    self.mark_incomplete('llm_check_enrollment_unavailable')
+                else:
+                    self.llm_quote_submit(admission)
+            except Exception:
+                self.mark_incomplete('llm_check_enrollment_failed')
+        return True
 
     def _admit_order_ready(self, record):
         # 저장된 준비 이벤트의 순서로만 예약한다. 호가/미래 가격은 읽지 않는다.

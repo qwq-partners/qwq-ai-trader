@@ -218,3 +218,146 @@ async def test_enrollment_failure_keeps_boundary_record_and_failclosed_status(tm
     assert not b.capture_status()['complete']
     assert b.export()['records'][-1]['reason']=='llm_check_admitted'
     assert not q._tasks
+
+
+@pytest.mark.parametrize('defect', ['invalid_symbol', 'signal_time', 'last_other_slot'])
+def test_failed_boundary_keeps_replayable_incomplete_prefix(tmp_path, monkeypatch, defect):
+    _, context, b, _, clock = setup(tmp_path, monkeypatch)
+    b.llm_quote_submit = lambda record: None
+    symbol = 'BADSYM' if defect == 'invalid_symbol' else '900001'
+    scan = obs.capture_scan(b, [stock(symbol)], 'regular')
+    e = event('boundary', symbol); e.source = 'live_screening'
+    obs.capture_signal(b, scan, e)
+    if defect == 'signal_time':
+        # The callback timestamp regressed without moving the capture clock.
+        monkeypatch.setattr(obs, '_now', lambda: (clock[0] - timedelta(seconds=1)).isoformat())
+    elif defect == 'last_other_slot':
+        while b._record_counts['other'] < b._record_limits['other'] - 1:
+            assert b.publish(dict(kind='quote_subscription', observed_at=clock[0].isoformat(), status='connected'))
+    obs.capture_llm_check_started(SimpleNamespace(_entry_price_observer=b), e)
+    assert not any(r['kind'] == 'llm_check_started' for r in b.export()['records'])
+    assert not b.capture_status()['complete']
+    validate_window_contract(context, b.export())
+
+
+def test_started_and_admission_share_one_capture_deadline_check(tmp_path, monkeypatch):
+    plan, context, b, _, clock = setup(tmp_path, monkeypatch)
+    b.llm_quote_submit = lambda record: None
+    scan = obs.capture_scan(b, [stock()], 'regular')
+    e = event('deadline'); e.source = 'live_screening'
+    obs.capture_signal(b, scan, e)
+    # A second clock read would close the window between the two records.
+    before = plan.end_at - timedelta(microseconds=1)
+    calls = []
+    def boundary_clock():
+        calls.append(None)
+        return before if len(calls) == 1 else plan.end_at
+    b._now = boundary_clock
+    monkeypatch.setattr(obs, '_now', lambda: before.isoformat())
+    obs.capture_llm_check_started(SimpleNamespace(_entry_price_observer=b), e)
+    records = b.export()['records']
+    assert [r['kind'] for r in records[-2:]] == ['llm_check_started', 'llm_check_admission']
+    validate_window_contract(context, b.export())
+
+
+@pytest.mark.parametrize('value', [4, 6, 5.0, True])
+def test_llm_contract_already_binds_exactly_five_distinct_symbols(tmp_path, value):
+    def change(context):
+        llm_plan(context)
+        context['capture']['channels']['max_candidates'] = value
+    with pytest.raises(ValueError):
+        load(tmp_path, change)
+
+
+def test_none_strategy_never_enters_captured_signal_cohort(tmp_path, monkeypatch):
+    _, context, b, q, _ = setup(tmp_path, monkeypatch)
+    scan = obs.capture_scan(b, [stock()], 'regular')
+    e = event('no-strategy'); e.strategy = None; e.source = 'live_screening'
+    obs.capture_signal(b, scan, e)
+    assert not b.accepts_order_signal(e.id)
+    obs.capture_llm_check_started(SimpleNamespace(_entry_price_observer=b), e)
+    assert not q._tasks
+    assert not b.capture_status()['complete']
+    validate_window_contract(context, b.export())
+
+
+def test_llm_keeps_order_ready_population_and_legacy_capacity_reason(tmp_path, monkeypatch):
+    _, context, b, q, _ = setup(tmp_path, monkeypatch)
+    b.llm_quote_submit = lambda record: None
+    scan = obs.capture_scan(b, [stock()], 'regular'); enter(b, scan, 's', '900001')
+    assert b.publish(dict(kind='order_ready', signal_id='s', order_id='o', symbol='900001',
+                          observed_at=obs._now(), requested_quantity=1, strategy='gap_and_go'))
+    q._gap('order_ready_channel_capacity')
+    assert any(r['kind'] == 'order_ready' for r in b.export()['records'])
+    assert 'order_ready_channel_capacity' in b.capture_status()['incomplete_reasons']
+    validate_window_contract(context, b.export())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('defect', ['queue_pair_capacity', 'record_shape', 'admission_shape'])
+async def test_pair_rejection_preserves_sealed_replayable_prefix(tmp_path, monkeypatch, defect):
+    import src.analytics.entry_observation_journal as journal
+    from src.analytics.entry_observation_runtime import ObservationRuntime
+    from src.analytics.kis_frame_diagnostics import validate_study_binding
+    from test_entry_observation_runtime import NOW, owner, read
+    plan, context = load(tmp_path, llm_plan); clock = [NOW]
+    monkeypatch.setattr(obs, '_now', lambda: clock[0].isoformat())
+    monkeypatch.setattr(journal, '_timestamp', lambda: clock[0].isoformat())
+    bot = owner(); runtime = await ObservationRuntime.install(bot, plan, now=lambda: clock[0])
+    b = runtime.buffer; clock[0] = plan.start_at
+    scan = obs.capture_scan(b, [stock()], 'regular')
+    e = event('pair'); e.source = 'live_screening'
+    obs.capture_signal(b, scan, e)
+    # Let the real writer persist prior records, then test bounded queue admission.
+    expected_prefix = len(b.export()['records'])
+    await journal._wait_until(lambda: runtime.journal._persisted == expected_prefix, 1)
+    if defect == 'queue_pair_capacity':
+        runtime.journal._queue.maxsize = 1
+    elif defect == 'record_shape':
+        e.source = 'x' * (plan.settings['max_record_bytes'] + 1)
+    elif defect == 'admission_shape':
+        # The start fits, but the longer admission must fail before either is queued.
+        runtime.journal._max_record_bytes = 250
+        journal._record_shape(dict(kind='llm_check_started', signal_id=e.id, symbol=e.symbol,
+            strategy=e.strategy.value, source=e.source, observed_at=obs._now(),
+            sequence=expected_prefix + 1), 250)
+    obs.capture_llm_check_started(bot, e)
+    assert not any(r['kind'] == 'llm_check_started' for r in b.export()['records'])
+    assert not b.capture_status()['complete']
+    clock[0] = plan.end_at
+    await runtime.close()
+    data = read(plan)
+    assert runtime.result['sealed'] and not data['complete']
+    validate_study_binding(data, context)
+
+
+@pytest.mark.asyncio
+async def test_closed_journal_excludes_whole_boundary_without_changing_seal(tmp_path, monkeypatch):
+    import src.analytics.entry_observation_journal as journal
+    from src.analytics.entry_observation_runtime import ObservationRuntime
+    from src.analytics.kis_frame_diagnostics import validate_study_binding
+    from test_entry_observation_runtime import NOW, owner, read
+    plan, context = load(tmp_path, llm_plan); clock = [NOW]
+    monkeypatch.setattr(obs, '_now', lambda: clock[0].isoformat())
+    monkeypatch.setattr(journal, '_timestamp', lambda: clock[0].isoformat())
+    bot = owner(); runtime = await ObservationRuntime.install(bot, plan, now=lambda: clock[0])
+    b = runtime.buffer; clock[0] = plan.start_at
+    scan = obs.capture_scan(b, [stock()], 'regular')
+    e = event('after-seal'); e.source = 'live_screening'
+    obs.capture_signal(b, scan, e)
+    result = await runtime.journal.close()
+    before = b.export()
+    obs.capture_llm_check_started(bot, e)
+    assert result['sealed'] and b.export() == before
+    assert not bot.ws_feed._quote_subscription_owner._tasks
+    validate_study_binding(read(plan), context)
+
+
+def test_enrollment_callback_cannot_mutate_recorded_admission_pair(tmp_path, monkeypatch):
+    _, context, b, _, _ = setup(tmp_path, monkeypatch)
+    def change_callback_copy(admission):
+        admission['signal_id'] = 'mutated-after-recording'
+    b.llm_quote_submit = change_callback_copy
+    scan = obs.capture_scan(b, [stock()], 'regular'); enter(b, scan, 'original', '900001')
+    assert b.export()['records'][-1]['signal_id'] == 'original'
+    validate_window_contract(context, b.export())
