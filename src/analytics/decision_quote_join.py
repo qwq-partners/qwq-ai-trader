@@ -191,6 +191,7 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
         row: Dict[str, Any] = {
             "decision_id": d.get("decision_id"), "signal_id": d.get("signal_id"), "symbol": symbol,
             "stage": d.get("stage"), "approved": result.get("approved"),
+            "failed": result.get("failed"), "verdict": result.get("verdict"),
             "decision_available_at": d.get("decision_available_at"),
             "first_quote_after": None, "market_state_at_quote": None,
         }
@@ -308,7 +309,11 @@ def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, A
         "ledger_time_error_reasons_by_symbol": rows[0].get("_ledger_time_error_reasons", {}) if rows else {},
         "decisions": len(rows),
         "evaluable": sum(1 for r in rows if r.get("evaluable") is True),
-        "approved_evaluable": sum(1 for r in rows if r.get("evaluable") is True and r.get("approved") is True),
+        # Engine fail-open permission is distinct from a completed model approval.
+        "engine_allowed_evaluable": sum(1 for r in rows if r.get("evaluable") is True and r.get("approved") is True),
+        "approved_evaluable": sum(1 for r in rows if r.get("evaluable") is True
+                                  and r.get("approved") is True and r.get("failed") is not True
+                                  and r.get("stage") != "unavailable" and r.get("verdict") != "unavailable"),
         "reasons": reasons,
         # 관측 호가는 체결 보장이 아니다 — 이 표는 '응답 뒤 호가 존재·신선도·같은 연결의 장 상태 근거' 까지만 말한다
         "note": "evaluable 은 검증된 완전한 원장에서 호가·장 상태 근거가 충족됐다는 뜻이며 체결 가능성·순수익 판정이 아니다",

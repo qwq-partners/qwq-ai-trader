@@ -136,13 +136,16 @@ def test_capture_disabled_never_reads_portfolio_or_overlays(case, monkeypatch, t
 
 
 @pytest.mark.parametrize('capture_fails', [False, True])
-def test_engine_freezes_before_await_and_capture_failure_keeps_rejection(case, monkeypatch, tmp_path, capture_fails):
+@pytest.mark.parametrize('aliased', [False, True])
+def test_engine_freezes_before_await_and_capture_failure_keeps_rejection(case, monkeypatch, tmp_path, capture_fails, aliased):
     import asyncio
     from datetime import datetime
     from test_engine_stale_pending_fixes import _rm
     from test_llm_decision_record import _LLM, _cross
     from src.analytics.llm_decision_record import DecisionRecorder, set_decision_recorder
     manager, event = case
+    if aliased:
+        event.metadata = event.signal.metadata
     rm = _rm(monkeypatch, None, datetime(2026, 10, 13, 10, 0))
     rm.config = manager.config
     rm.engine.portfolio = manager.engine.portfolio
@@ -171,7 +174,7 @@ def test_engine_freezes_before_await_and_capture_failure_keeps_rejection(case, m
     set_decision_recorder(recorder)
     try:
         assert asyncio.run(rm.on_signal(event)) is None  # Cash gate stops order creation.
-        assert event.signal.metadata['position_multiplier'] == 0.4
+        assert event.signal.metadata['position_multiplier'] == (0.2 if aliased else 0.4)
         assert event.metadata['llm_second_check'] == 'rejected_soft'
         assert recorder.flush()
         row = json.loads(next((tmp_path / 'records').glob('*.jsonl')).read_text())
@@ -184,7 +187,10 @@ def test_engine_freezes_before_await_and_capture_failure_keeps_rejection(case, m
         else:
             assert snap['state']['available_cash'] == '10000000'
             assert snap['signal']['nested_multiplier'] == 0.8
-            assert api().replay_policy_sizing(snap, 'reject')['quantity'] == 100
+            rm.engine.get_available_cash = lambda: Decimal('10000000')
+            live_quantity = rm._calculate_position_size(copy.deepcopy(event))
+            assert live_quantity == (50 if aliased else 100)
+            assert api().replay_policy_sizing(snap, 'reject')['quantity'] == live_quantity
     finally:
         recorder.close()
         set_decision_recorder(None)
@@ -250,13 +256,15 @@ def test_capture_cannot_warm_live_overlay_cache(case, monkeypatch, tmp_path):
     spec.loader.exec_module(fresh)
     fixture_file = tmp_path / 'vol.json'
     from datetime import date
-    fixture_file.write_text(json.dumps({'date': date.today().isoformat(), 'realized_vol_pct': 50}))
+    fixture_file.write_text(json.dumps({'date': date.today().isoformat(), 'realized_vol': 50, 'mult': 0.5}))
     monkeypatch.setattr(fresh, '_CACHE_FILE', fixture_file)
     monkeypatch.setenv('VOL_TARGETING', '1')
     monkeypatch.setattr(vt, 'vol_targeting_multiplier', fresh.vol_targeting_multiplier)
     # Clone the function's defining globals, even when a wrapper/test replaces it.
-    api().capture_policy_sizing(*case)
+    snapshot = api().capture_policy_sizing(*case)
+    assert snapshot['overlays']['volatility'] == {'status': 'resolved', 'multiplier': 0.5}
     assert fresh._mem_cache == {}
+    assert fresh._logged == set()
 
 
 def test_unavailable_verdict_still_persists_neutral_evidence(case, tmp_path):
@@ -346,3 +354,106 @@ def test_absent_event_and_nested_metadata_use_live_defaults(case):
     assert event.metadata is None and event.signal.metadata is None
     assert api().replay_policy_sizing(snapshot, 'approve')['quantity'] == 250
     assert api().replay_policy_sizing(snapshot, 'reject')['quantity'] == 125
+
+
+def test_replay_logs_visibly_marked_without_changing_live_logs(case):
+    from loguru import logger
+    rm, event = case
+    rm.config.sizing_mode = 'risk'
+    event.signal.metadata = {}
+    snapshot = api().capture_policy_sizing(rm, event)
+    messages = []
+    sink = logger.add(lambda msg: messages.append(msg.record), format='{message}')
+    try:
+        api().replay_policy_sizing(snapshot, 'approve')
+        assert messages and all(m['message'].startswith('[neutral-replay] ') for m in messages)
+        assert all(m['extra'].get('neutral_replay') is True for m in messages)
+        messages.clear()
+        rm._calculate_position_size(copy.deepcopy(event), record_entry_risk=False)
+        assert messages and all(not m['message'].startswith('[neutral-replay] ') for m in messages)
+        assert all(not m['extra'].get('neutral_replay') for m in messages)
+    finally:
+        logger.remove(sink)
+
+
+def test_input_and_applied_multiplier_are_unambiguous(case):
+    rm, event = case
+    rm.config.sizing_mode = 'risk'
+    event.signal.metadata = {'position_multiplier': 0.825, 'atr_pct': 4}
+    result = api().replay_policy_sizing(api().capture_policy_sizing(rm, event), 'approve')
+    assert result['input_multiplier'] == result['multiplier'] == 0.825
+    assert result['applied_multiplier'] == result['trace']['position_multiplier'] == 1.0
+
+
+def test_newly_named_overlay_mutable_state_is_isolated():
+    from types import FunctionType
+    def overlay(_):
+        alternate_cache['nested'].append('loaded')
+        return 0.5, 'fixture'
+    original = {'alternate_cache': {'nested': []}, '__name__': 'synthetic_overlay'}
+    function = FunctionType(overlay.__code__, original)
+    assert api()._read_overlay(function, 'sepa_trend') == (0.5, 'fixture')
+    assert original['alternate_cache'] == {'nested': []}
+
+
+def test_unsupported_cached_wrapper_marks_capture_unavailable(case, monkeypatch, tmp_path):
+    from functools import lru_cache
+    from src.analytics.llm_decision_record import DecisionRecorder, set_decision_recorder
+    wrapped = lru_cache()(lambda _: (0.5, 'fixture'))
+    monkeypatch.setattr('src.utils.volatility_targeting.vol_targeting_multiplier', wrapped)
+    recorder = DecisionRecorder(tmp_path, enabled=True)
+    set_decision_recorder(recorder)
+    try:
+        snapshot = api().capture_policy_sizing_if_enabled(*case)
+        assert snapshot['capture_status'] == 'unavailable'
+        assert wrapped.cache_info().currsize == 0
+    finally:
+        recorder.close()
+        set_decision_recorder(None)
+
+
+def test_outer_validation_exception_preserves_prior_attempts_and_context(case, monkeypatch, tmp_path):
+    import asyncio
+    from test_llm_decision_record import _LLM, _cross, _resp
+    from src.analytics.llm_decision_record import DecisionRecorder, set_decision_recorder
+    class BadContent(str):
+        def strip(self, *a):
+            raise RuntimeError('post-response parse failure')
+    class LLM(_LLM):
+        async def complete(self, *a, **kw):
+            return _resp(BadContent('YES'))
+    recorder = DecisionRecorder(tmp_path / 'records', enabled=True)
+    set_decision_recorder(recorder)
+    try:
+        cross = _cross(monkeypatch, LLM('unparseable', 'unparseable'))
+        assert asyncio.run(cross.llm_second_check('TEST', 'sepa_trend', 90, {}, 'sideways',
+            neutral_sizing=api().capture_policy_sizing(*case))) is True
+        assert recorder.flush()
+        row = json.loads(next((tmp_path / 'records').glob('*.jsonl')).read_text())
+        assert row['stage'] == 'unavailable'
+        assert row['result']['reason'] == 'validation_exception'
+        assert [attempt['role'] for attempt in row['attempts']] == ['bull', 'bear', 'single']
+        assert '<entry_facts>' in row['inputs']['common_context']
+    finally:
+        recorder.close()
+        set_decision_recorder(None)
+
+
+@pytest.mark.parametrize('change,verdict', [
+    ('none', 'invented'), ('naive_time','approve'), ('bad_alias','approve'),
+    ('negative_multiplier','approve'), ('missing_hybrid','approve')])
+def test_invalid_snapshot_boundaries_refuse_conditional_quantity(case, change, verdict):
+    snapshot = api().capture_policy_sizing(*case)
+    if change == 'naive_time':
+        snapshot['captured_at'] = '2026-10-13T10:00:00'
+    elif change == 'bad_alias':
+        snapshot['signal'].update(metadata_aliased=True, has_nested_signal=False)
+    elif change == 'negative_multiplier':
+        snapshot['signal']['nested_multiplier'] = -0.5
+    elif change == 'missing_hybrid':
+        del snapshot['config']['hybrid']['swing_pct']
+        snapshot['config_sha256'] = api()._digest(snapshot['config'])
+    snapshot.pop('snapshot_id')
+    snapshot['snapshot_id'] = api()._digest(snapshot)
+    with pytest.raises(ValueError):
+        api().replay_policy_sizing(snapshot, verdict)

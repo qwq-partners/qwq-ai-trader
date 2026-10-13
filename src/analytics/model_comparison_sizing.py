@@ -58,28 +58,56 @@ def policy_source_hash():
         FeeCalculator.calculate_buy_fee)])
 
 
-def _read_overlay(function, *args):
-    """Run existing overlay code with isolated module caches, without global swaps.
+class _OverlayIsolationError(ValueError):
+    """Unsupported overlay isolation is missing evidence, not a live overlay error."""
 
-    The three overlay modules warm dictionaries and mutate log-dedup sets on reads.
-    Clone their function globals together so helper calls see only copied caches.
-    No await, live module mutation, new policy formula, or additional API call.
+
+def _observation_logger(kind):
+    from loguru import logger
+    def mark(record):
+        record['message'] = f'[neutral-{kind}] ' + record['message']
+    return logger.bind(**{f'neutral_{kind}': True}).patch(mark)
+
+
+def _read_overlay(function, *args):
+    """Run existing overlay code against copied mutable globals, without global swaps.
+
+    Known overlay dependencies are module-owned plain functions; wrapped callables
+    cannot safely share their hidden cache with capture, so refuse their evidence.
     """
-    original = function.__globals__
-    isolated = dict(original)
-    for key in ('_cache', '_mem_cache', '_logged'):
-        if key in isolated:
-            isolated[key] = deepcopy(isolated[key])
-    for key, value in original.items():
-        if isinstance(value, FunctionType) and value.__globals__ is original:
-            clone = FunctionType(value.__code__, isolated, value.__name__,
-                                 value.__defaults__, value.__closure__)
-            clone.__kwdefaults__ = value.__kwdefaults__
-            isolated[key] = clone
-    # An injected function need not be registered by its __name__ in globals.
-    entry = FunctionType(function.__code__, isolated, function.__name__,
-                         function.__defaults__, function.__closure__)
-    entry.__kwdefaults__ = function.__kwdefaults__
+    try:
+        if not isinstance(function, FunctionType) or hasattr(function, '__wrapped__'):
+            raise _OverlayIsolationError('unsupported overlay wrapper')
+        original = function.__globals__
+        isolated = dict(original)
+        pending, visited = list(function.__code__.co_names), set()
+        while pending:
+            name = pending.pop()
+            if name in visited:
+                continue
+            visited.add(name)
+            dependency = original.get(name)
+            if callable(dependency) and hasattr(dependency, '__wrapped__'):
+                raise _OverlayIsolationError('unsupported overlay dependency wrapper')
+            if isinstance(dependency, FunctionType) and dependency.__globals__ is original:
+                pending.extend(dependency.__code__.co_names)
+        for key, value in original.items():
+            if key != '__builtins__' and isinstance(value, (dict, list, set)):
+                isolated[key] = deepcopy(value)
+            if isinstance(value, FunctionType) and value.__globals__ is original:
+                clone = FunctionType(value.__code__, isolated, value.__name__,
+                                     value.__defaults__, value.__closure__)
+                clone.__kwdefaults__ = value.__kwdefaults__
+                isolated[key] = clone
+        if 'logger' in isolated:
+            isolated['logger'] = _observation_logger('capture')
+        entry = FunctionType(function.__code__, isolated, function.__name__,
+                             function.__defaults__, function.__closure__)
+        entry.__kwdefaults__ = function.__kwdefaults__
+    except _OverlayIsolationError:
+        raise
+    except Exception as error:
+        raise _OverlayIsolationError('overlay state could not be isolated') from error
     return entry(*args)
 
 
@@ -89,6 +117,7 @@ def capture_policy_sizing(risk_manager, event) -> dict[str, Any]:
     Failure raises to the observational caller, which must preserve live behavior.
     Deliberately allowlist sizing fields rather than copying a trading configuration.
     """
+    from ..core.types import StrategyType
     from ..utils.calendar_seasonality import calendar_multiplier
     from ..utils.volatility_targeting import vol_targeting_multiplier
     from ..utils.team_conviction import team_conviction_multiplier
@@ -118,7 +147,7 @@ def capture_policy_sizing(risk_manager, event) -> dict[str, Any]:
         'effective_daily_pnl': _money(rm.engine.portfolio.effective_daily_pnl),
     }
     stop = {'status': 'not_required'}
-    if config['sizing_mode'] == 'risk' and strategy != 'core_holding':
+    if config['sizing_mode'] == 'risk' and strategy != StrategyType.CORE_HOLDING.value:
         resolver = getattr(rm, '_resolve_entry_stop', None)
         if resolver is None:
             stop = {'status': 'missing'}
@@ -140,6 +169,8 @@ def capture_policy_sizing(risk_manager, event) -> dict[str, Any]:
         try:
             value, _ = call()
             overlays[key] = {'status': 'resolved', 'multiplier': _number(value)}
+        except _OverlayIsolationError:
+            raise
         except Exception:
             # Existing sizing skips an overlay on exception, not an inferred value.
             overlays[key] = {'status': 'failed', 'multiplier': None}
@@ -178,7 +209,11 @@ def capture_policy_sizing_if_enabled(risk_manager, event):
 
 
 def replay_policy_sizing(snapshot, verdict: str) -> dict[str, Any]:
-    """Return conditional policy quantity; missing/changed evidence raises ValueError."""
+    """Return conditional policy quantity; invalid evidence raises ValueError.
+
+    multiplier is a compatibility alias of input_multiplier. applied_multiplier is
+    the value used after the risk-mode ATR exception, or None if sizing stopped first.
+    """
     from ..core.engine import RiskManager
     from ..core.event import SignalEvent
     from ..core.types import StrategyType, SignalStrength
@@ -216,10 +251,10 @@ def replay_policy_sizing(snapshot, verdict: str) -> dict[str, Any]:
         if type(config['hybrid']['enabled']) is not bool:
             raise ValueError('invalid hybrid flag')
         for key in _HYBRID_FIELDS:
-            if key != 'enabled' and _number(config['hybrid'][key]) < 0:
-                raise ValueError('negative hybrid configuration')
             if key not in config['hybrid']:
                 raise ValueError('missing hybrid configuration')
+            if key != 'enabled' and _number(config['hybrid'][key]) < 0:
+                raise ValueError('negative hybrid configuration')
         for value in state.values():
             _number(value)
         for key in ('event_multiplier', 'nested_multiplier', 'price'):
@@ -247,7 +282,7 @@ def replay_policy_sizing(snapshot, verdict: str) -> dict[str, Any]:
         rm._get_core_actual_value = lambda: Decimal(state['core_actual'])
         rm._pending_strategy_notional = lambda _: Decimal(state['strategy_pending'])
         stop = data['stop']
-        needs_stop = config['sizing_mode'] == 'risk' and sig['strategy'] != 'core_holding'
+        needs_stop = config['sizing_mode'] == 'risk' and sig['strategy'] != StrategyType.CORE_HOLDING.value
         if needs_stop == (stop['status'] == 'not_required'):
             raise ValueError('captured stop scope mismatch')
         if stop['status'] == 'resolved':
@@ -286,9 +321,13 @@ def replay_policy_sizing(snapshot, verdict: str) -> dict[str, Any]:
         if _number(fee.config.buy_commission_rate) < 0:
             raise ValueError('negative fee rate')
         quantity = rm._calculate_position_size(event, sizing_overlays=overlays,
-                                               sizing_fee_calc=fee, record_entry_risk=False)
+                                               sizing_fee_calc=fee, record_entry_risk=False,
+                                               sizing_logger=_observation_logger('replay'))
+        input_multiplier = nested_multiplier if sig['has_nested_signal'] else 1.0
         result = {'snapshot_id': snapshot_id, 'verdict': verdict, 'quantity': quantity,
-                  'multiplier': nested_multiplier if sig['has_nested_signal'] else 1.0,
+                  # Compatibility alias; applied_multiplier can differ in risk mode.
+                  'multiplier': input_multiplier, 'input_multiplier': input_multiplier,
+                  'applied_multiplier': event.metadata['size_trace'].get('position_multiplier'),
                   'trace': event.metadata['size_trace'], 'admissibility_scope': 'sizing_only',
                   'executable': False, 'economic_evaluable': False,
                   'exclusions': ['downstream_admission_not_replayed']}
