@@ -351,3 +351,26 @@ def test_latest_state_receipt_ties_are_not_arbitrarily_treated_as_proven():
     s2 = _state("005490", "2026-10-14T00:00:59", "H0STMKO0", vi="1")
     row = join_decisions([_decision()], [q, s1, s2], ledger_status=OK_LEDGER)[0]
     assert row["evaluable"] is False and "market_state_receipt_time_ambiguous:H0STMKO0" in row["reasons"]
+
+
+@pytest.mark.parametrize('stage,result_extra', [
+    ('unavailable', {}),
+    ('single_fallback', {'failed': True}),
+    ('adversarial', {'verdict': 'unavailable'}),
+])
+def test_fail_open_is_not_counted_as_validated_model_approval(stage, result_extra, tmp_path):
+    decision = _decision()
+    decision['stage'] = stage
+    decision['result'].update(result_extra)
+    decision['inputs'] = {'neutral_sizing': {'schema_version': 'neutral-policy-sizing-v1'}}
+    path = tmp_path / 'decisions.jsonl'
+    path.write_text(json.dumps(decision) + '\n')
+    payloads = [_quote('005490', '2026-10-14T00:01:00.2'),
+                _state('005490', '2026-10-14T00:00:58.0', 'H0STMKO0')]
+    rows = join_decisions(load_decisions(path), payloads, ledger_status=OK_LEDGER)
+    assert rows[0]['approved'] is True and rows[0]['evaluable'] is True
+    summary = summarize(rows, ledger_status=OK_LEDGER)
+    assert summary['approved_evaluable'] == 0
+    assert summary['engine_allowed_evaluable'] == 1
+    assert rows[0]['failed'] == result_extra.get('failed')
+    assert rows[0]['verdict'] == result_extra.get('verdict')

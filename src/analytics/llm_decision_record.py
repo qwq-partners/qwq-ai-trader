@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import asyncio
 import hashlib
 import json
@@ -203,7 +204,8 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
                     common_context: Optional[str], stage: str, attempts: List[Dict[str, Any]],
                     approved: Optional[bool], result: Dict[str, Any], budget_context: Optional[Dict[str, Any]],
                     decision_available_at: Optional[datetime] = None,
-                    collected_at: Optional[datetime] = None) -> Dict[str, Any]:
+                    collected_at: Optional[datetime] = None,
+                    neutral_sizing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다."""
     try:
         from ..utils.entry_risk import applied_sha
@@ -223,6 +225,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
         "code_version": code_version,
         "context_version": "entry-llm-input-v1",
         "inputs": {
+            "neutral_sizing": deepcopy(neutral_sizing),
             "common_context": common_context,
             "common_context_sha256": sha256_text(common_context),
             # 원천 관측 시각은 71차 기준 아직 확보되지 않았다 — 현재 시각으로 채우지 않는다.

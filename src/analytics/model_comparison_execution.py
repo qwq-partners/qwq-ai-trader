@@ -1,7 +1,10 @@
-"""미래 비교 실행기의 명시 주입형 호출 경계 — 실행기·CLI·공급자 연결은 없다.
+"""비교 실행기의 명시 주입형 호출·복구 경계 — 이 모듈은 공급자에 직접 연결하지 않는다.
 
 이미 열린 MonthlyBudgetLedger와 고정 정책을 주입한 뒤, 재시도·폴백을 포함한
-공급자 시도마다 ``await guard.call(request, dispatch=adapter)``를 호출한다.
+공급자 시도마다 ``await guard.call(request, dispatch=adapter, attempt_id=stable_id)``를 호출한다.
+ID·전체 요청/정책 지문·일 슬롯을 원자적으로 고정하고 응답 JSON을 월 정산 전에 보존한다.
+같은 ID의 완료 응답은 원래 시각/비용으로 복구하며 pending/blocked는 재전송하지 않는다.
+정산 불확실성은 pending_reconciliation으로 남겨 수동 대사가 필요함을 알린다.
 어댑터는 지정 모델·출력 상한으로 한 번만 전송하고 측정 비용(불명은 None)을
 돌려줘야 한다. LLMManager는 자체 예약·다중 시도를 소유하므로 연결하면 안 된다.
 실제 어댑터는 별도 검토가 필요하며 임의 콜백의 숨은 재시도를 여기서 증명하지 않는다.
@@ -18,7 +21,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from decimal import Decimal, ROUND_CEILING, localcontext
 import json
+import hashlib
+import math
 import sqlite3
+import time
 from typing import Any, Awaitable, Callable
 import uuid
 
@@ -60,6 +66,10 @@ class ComparisonRequest:
     prompt: str
     system: str
     max_output_tokens: int
+    reasoning_effort: str | None = None
+    temperature: float = 0.3
+    seed: int | None = None
+    timeout_seconds: float = 12.0
 
     def __post_init__(self):
         if not isinstance(self.model, str) or not self.model:
@@ -67,6 +77,18 @@ class ComparisonRequest:
         if not isinstance(self.prompt, str) or not isinstance(self.system, str):
             raise ValueError("prompt와 system은 문자열이어야 한다")
         _integer(self.max_output_tokens, "max_output_tokens", 1)
+        if self.reasoning_effort is not None and (
+                not isinstance(self.reasoning_effort, str) or not self.reasoning_effort.strip()):
+            raise ValueError("reasoning_effort는 비어 있지 않은 문자열 또는 None이어야 한다")
+        if (isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float))
+                or not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2):
+            raise ValueError("temperature는 유한한 0~2 숫자여야 한다")
+        if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)
+                                      or not -(2 ** 63) <= self.seed < 2 ** 63):
+            raise ValueError("seed는 signed64 정수 또는 None이어야 한다")
+        if (isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, (int, float))
+                or not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0):
+            raise ValueError("timeout_seconds는 유한한 양수여야 한다")
 
 
 @dataclass(frozen=True)
@@ -95,6 +117,42 @@ def _ledger_cost(value) -> float | None:
         pass
     # nano-USD 단위까지 보존할 수 없으면 거절한다. 호출자가 불명 정산을 소유한다.
     raise ValueError("actual_cost_usd를 원장 정밀도로 안전하게 전달할 수 없다")
+
+
+def _json_value(value):
+    """JSON 복구 전후 자료형이 달라지는 tuple·비문자 키·NaN 등을 거절한다."""
+    if value is None or type(value) in (str, bool, int):
+        return
+    if type(value) is float and math.isfinite(value):
+        return
+    if type(value) is list:
+        for item in value:
+            _json_value(item)
+        return
+    if type(value) is dict and all(type(key) is str for key in value):
+        for item in value.values():
+            _json_value(item)
+        return
+    raise ValueError("응답 value는 유한한 JSON 자료여야 한다")
+
+
+def _result_json(result: ComparisonAttemptResult) -> str:
+    _json_value(result.value)
+    cost = result.actual_cost_usd
+    kind = "decimal" if isinstance(cost, Decimal) else type(cost).__name__
+    return json.dumps({"value": result.value, "cost_type": kind,
+                       "cost": str(cost) if isinstance(cost, Decimal) else cost},
+                      sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _read_result(payload: str) -> ComparisonAttemptResult:
+    raw = json.loads(payload)
+    cost = Decimal(raw["cost"]) if raw["cost_type"] == "decimal" else raw["cost"]
+    result = ComparisonAttemptResult(raw["value"], cost)
+    if _result_json(result) != payload:
+        raise ValueError("응답 JSON 형식이 일치하지 않는다")
+    _ledger_cost(cost)
+    return result
 
 
 class ComparisonCallGuard:
@@ -136,6 +194,17 @@ class ComparisonCallGuard:
                     raise BudgetStateError("comparison_storage_corrupt")
                 self._check_policy(db)
                 db.execute("SELECT slot,admission_day,reservation_token,state FROM comparison_attempts LIMIT 1")
+                columns = {row[1] for row in db.execute("PRAGMA table_info(comparison_policy)")}
+                if "identity_version" not in columns:
+                    db.execute("ALTER TABLE comparison_policy ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1")
+                    db.execute("""CREATE TABLE comparison_requests (
+                        attempt_id TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL,
+                        request_json TEXT NOT NULL, slot TEXT NOT NULL UNIQUE,
+                        reservation_token TEXT, result_json TEXT, block_reason TEXT)""")
+                elif db.execute("SELECT identity_version FROM comparison_policy").fetchone()[0] != 1:
+                    raise BudgetStateError("comparison_identity_version")
+                db.execute("SELECT attempt_id,request_sha256,request_json,slot,reservation_token,result_json,block_reason "
+                           "FROM comparison_requests LIMIT 1")
                 db.execute("COMMIT")
         except BudgetBlocked:
             raise
@@ -150,23 +219,146 @@ class ComparisonCallGuard:
         if self.policy.serialized() != self._policy_json:
             raise BudgetStateError("comparison_policy_mismatch")
 
-    def _admit(self) -> tuple[str, str]:
+    @staticmethod
+    def _attempt_id(attempt_id):
+        if not isinstance(attempt_id, str) or not attempt_id.strip() or len(attempt_id) > 512:
+            raise ValueError("attempt_id는 1~512자 식별자여야 한다")
+        return attempt_id
+
+    def _lookup_row(self, db, row):
+        if hashlib.sha256(row["request_json"].encode()).hexdigest() != row["request_sha256"]:
+            raise BudgetStateError("comparison_storage_corrupt")
+        result = _read_result(row["result_json"]) if row["result_json"] is not None else None
+        state, reason = "pending", "comparison_attempt_pending"
+        if row["block_reason"]:
+            state, reason = "blocked", row["block_reason"]
+        if result is not None:
+            state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
+            reservation = db.execute("SELECT state,actual_units FROM reservations WHERE token=?",
+                                     (row["reservation_token"],)).fetchone()
+            cost = _ledger_cost(result.actual_cost_usd)
+            if reservation is not None:
+                if cost is None and reservation["state"] == "unknown":
+                    state, reason = "unknown", None
+                elif cost is not None and reservation["state"] == "settled":
+                    if reservation["actual_units"] != _units(cost):
+                        raise BudgetStateError("comparison_settlement_mismatch")
+                    state, reason = "known", None
+        return {"attempt_id": row["attempt_id"], "request_sha256": row["request_sha256"],
+                "state": state, "reservation_token": row["reservation_token"],
+                "result": result, "block_reason": reason}
+
+    def lookup(self, attempt_id: str) -> dict | None:
+        """읽기 전용 복구 조회. known/unknown만 정산 확인, pending_reconciliation은 재전송 금지.
+
+        result는 원래 시각을 포함한 JSON value와 원래 비용 자료형을 보존한다.
+        정산되지 않은 결과도 증거로 제공하지만 call은 이를 완료로 반환하지 않는다.
+        """
+        self._attempt_id(attempt_id)
+        try:
+            with self.ledger._connect(readonly=True) as db:
+                db.execute("BEGIN")
+                self._check_policy(db)
+                row = db.execute("SELECT * FROM comparison_requests WHERE attempt_id=?", (attempt_id,)).fetchone()
+                return self._lookup_row(db, row) if row is not None else None
+        except BudgetBlocked:
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError, ArithmeticError):
+            raise BudgetStateError("comparison_storage_unavailable") from None
+
+    def _admit(self, attempt_id: str, request_json: str):
         try:
             with self.ledger._connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 self._check_policy(db)
+                existing = db.execute("SELECT * FROM comparison_requests WHERE attempt_id=?", (attempt_id,)).fetchone()
+                if existing is not None:
+                    if existing["request_json"] != request_json:
+                        raise BudgetBlocked("comparison_attempt_mismatch")
+                    recovered = self._lookup_row(db, existing)
+                    if recovered["state"] not in {"known", "unknown"}:
+                        raise BudgetBlocked(recovered["block_reason"])
+                    return None, None, recovered["result"]
                 day = self.ledger.today().isoformat()
                 used = db.execute("SELECT COUNT(*) FROM comparison_attempts WHERE admission_day=?", (day,)).fetchone()[0]
-                if used >= self.policy.daily_attempt_cap:
-                    raise BudgetBlocked("comparison_daily_attempt_cap")
                 slot = uuid.uuid4().hex
+                fingerprint = hashlib.sha256(request_json.encode()).hexdigest()
+                if used >= self.policy.daily_attempt_cap:
+                    # 미전송 차단 ID도 고정한다. 날짜 변경이 같은 논리 시도의 자동 재시도가 되면 안 된다.
+                    db.execute("INSERT INTO comparison_requests VALUES (?,?,?,?,NULL,NULL,?)",
+                               (attempt_id, fingerprint, request_json, slot, "comparison_daily_attempt_cap"))
+                    db.execute("COMMIT")
+                    raise BudgetBlocked("comparison_daily_attempt_cap")
                 db.execute("INSERT INTO comparison_attempts VALUES (?,?,NULL,'admitted')", (slot, day))
+                db.execute("INSERT INTO comparison_requests VALUES (?,?,?,?,NULL,NULL,NULL)",
+                           (attempt_id, fingerprint, request_json, slot))
                 db.execute("COMMIT")
-                return slot, day
+                return slot, day, None
         except BudgetBlocked:
             raise
-        except (OSError, sqlite3.Error, TypeError, ValueError):
+        except (OSError, sqlite3.Error, TypeError, ValueError, ArithmeticError):
             raise BudgetStateError("comparison_storage_unavailable") from None
+
+    def _stored_result_matches(self, attempt_id: str, token: str, payload: str) -> bool:
+        try:
+            with self.ledger._connect(readonly=True) as db:
+                db.execute("BEGIN")
+                self._check_policy(db)
+                row = db.execute("SELECT reservation_token,result_json,block_reason FROM comparison_requests "
+                                 "WHERE attempt_id=?", (attempt_id,)).fetchone()
+                return row is not None and tuple(row) == (token, payload, None)
+        except (BudgetBlocked, OSError, sqlite3.Error, TypeError, ValueError):
+            return False
+
+    def _write_result_once(self, attempt_id: str, token: str, payload: str):
+        with self.ledger._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_policy(db)
+            row = db.execute("SELECT reservation_token,result_json,block_reason FROM comparison_requests "
+                             "WHERE attempt_id=?", (attempt_id,)).fetchone()
+            if row is None or row["block_reason"] is not None:
+                raise BudgetStateError("comparison_storage_corrupt")
+            if row["result_json"] is not None:
+                if tuple(row) != (token, payload, None):
+                    raise BudgetStateError("comparison_result_mismatch")
+                return  # 이전 COMMIT 응답 유실도 같은 토큰·바이트일 때만 성공으로 복구한다.
+            changed = db.execute("UPDATE comparison_requests SET reservation_token=?,result_json=? "
+                                 "WHERE attempt_id=? AND result_json IS NULL AND block_reason IS NULL",
+                                 (token, payload, attempt_id)).rowcount
+            if changed != 1:
+                raise BudgetStateError("comparison_storage_corrupt")
+            db.execute("COMMIT")
+
+    def _store_result(self, attempt_id: str, token: str, payload: str):
+        # 오프라인 작업 프로세스에서만 사용한다. 동일 응답 쓰기에 한해 BUSY/LOCKED를
+        # 약 1초/최대 10회까지 재시도한다. 공급자 호출이나 월 정산은 재시도하지 않는다.
+        deadline = time.monotonic() + 1.0
+        for attempt in range(10):
+            try:
+                self._write_result_once(attempt_id, token, payload)
+                return
+            except BudgetBlocked:
+                raise
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                busy = isinstance(code, int) and (code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+                remaining = deadline - time.monotonic()
+                if busy and attempt < 9 and remaining > 0:
+                    time.sleep(min(0.01, remaining))
+                    continue
+                # I/O 오류는 재쓰기하지 않는다. 이미 커밋된 동일 결과만 읽어서 확인한다.
+                if self._stored_result_matches(attempt_id, token, payload):
+                    return
+                raise BudgetStateError("comparison_storage_unavailable") from None
+
+    def _mark_failed(self, attempt_id: str, token: str | None, reason: str):
+        # 저장된 응답은 실패 처리로 덮어쓰지 않는다. 정산 여부는 월 원장에서 판독한다.
+        with self.ledger._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_policy(db)
+            db.execute("UPDATE comparison_requests SET reservation_token=?,block_reason=? "
+                       "WHERE attempt_id=? AND result_json IS NULL", (token, reason, attempt_id))
+            db.execute("COMMIT")
 
     def _record(self, slot: str, token: str | None, state: str):
         try:
@@ -184,10 +376,13 @@ class ComparisonCallGuard:
             raise BudgetStateError("comparison_storage_unavailable") from None
 
     async def call(self, request: ComparisonRequest, *,
-                   dispatch: Callable[[ComparisonRequest], Awaitable[ComparisonAttemptResult]]) -> ComparisonAttemptResult:
-        """입력 오류는 ValueError, 응답 계약 오류는 잠재 지출 보존 뒤 BudgetBlocked로 보고한다.
+                   dispatch: Callable[[ComparisonRequest], Awaitable[ComparisonAttemptResult]],
+                   attempt_id: str | None = None) -> ComparisonAttemptResult:
+        """같은 명시 ID는 한 번만 전송한다. 완료 결과만 원래 값으로 복구한다.
 
-        어댑터 자체 예외/취소도 잠재 지출을 보존하고 원래 예외를 유지한다.
+        입력 오류는 ValueError, 계약/저장소 오류는 BudgetBlocked다. 어댑터 예외/취소는
+        원형을 유지한다. pending/blocked ID는 자동 재시도하지 않는다. ID 생략은
+        호환용 새 시도이며 재시작 복구가 필요한 실행기는 반드시 안정 ID를 넘겨야 한다.
         """
         if not isinstance(request, ComparisonRequest) or not callable(dispatch):
             raise ValueError("ComparisonRequest와 단일 시도 async dispatch가 필요하다")
@@ -195,18 +390,20 @@ class ComparisonCallGuard:
             raise BudgetBlocked("comparison_model_not_allowed")
         if request.max_output_tokens > self.policy.max_output_tokens:
             raise BudgetBlocked("comparison_output_cap")
-        slot, day = self._admit()
+        attempt_id = self._attempt_id(attempt_id if attempt_id is not None else uuid.uuid4().hex)
+        payload = json.dumps({"request": asdict(request), "policy": self._policy_json},
+                             sort_keys=True, separators=(",", ":"), allow_nan=False)
+        slot, day, recovered = self._admit(attempt_id, payload)
+        if recovered is not None:
+            return recovered
         token = None
-        entered_dispatch = False
-        settled = False
+        entered_dispatch = settlement_attempted = False
+        outcome, cost = "unknown", None
         try:
             token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
                                         policy_priority="research", task="model_comparison",
                                         role=self.policy.experiment_id)
-            # 슬롯과 월 예약은 이미 확정됐다. 전송 전 부가 기록은 잠금 경합 시
-            # 무전송 예약까지 고아 상태로 만들 수 있어 정산 뒤에만 연결한다.
-            # 동기 입장 도중 자정을 넘기면 전날 슬롯으로 전송하지 않고 새 입장을 요구한다.
-            # 아직 어댑터에 진입하지 않았으므로 전송 전 실패로만 해제할 수 있다.
+            # ID/슬롯이 이미 확정됐다. 전송 전 부가 쓰기는 하지 않는다.
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")
             entered_dispatch = True
@@ -217,21 +414,33 @@ class ComparisonCallGuard:
                 cost = _ledger_cost(result.actual_cost_usd)
             except (ValueError, ArithmeticError):
                 raise BudgetBlocked("comparison_invalid_measured_cost") from None
-            state = "unknown" if cost is None else "known"
-            self.ledger.settle(token, outcome=state, actual_cost_usd=cost)
-            settled = True
-            self._record(slot, token, state)
-            return result
-        except BaseException:
-            # 취소·시간 초과·어댑터 실패·비용 오류는 0원 증거가 아니다.
-            # 어댑터 진입 전 실패만 미전송으로 해제한다.
-            if token is not None and not settled:
-                try:
-                    self.ledger.settle(token, outcome="unknown" if entered_dispatch else "not_sent")
-                except Exception:
-                    self.ledger.abandon(token)  # 기존 고아 예약 처리가 이후 모든 달의 호출을 차단한다.
+            outcome = "unknown" if cost is None else "known"
             try:
+                result_payload = _result_json(result)
+            except (ValueError, TypeError, RecursionError):
+                raise BudgetBlocked("comparison_invalid_result") from None
+            # 월 정산 전에 응답·토큰을 보존한다. 그 뒤 중단돼도 재전송 없이 대사한다.
+            self._store_result(attempt_id, token, result_payload)
+            settlement_attempted = True
+            self.ledger.settle(token, outcome=outcome, actual_cost_usd=cost)
+            try:
+                self._record(slot, token, outcome)
+            except Exception:
+                pass  # 응답과 월 정산은 이미 영속화됐다. 부가 기록 실패로 응답을 잃지 않는다.
+            return result
+        except BaseException as exc:
+            # settle은 실패해도 소유권을 잃는다. 이미 시도했다면 맹목적으로 재정산하지 않는다.
+            if token is not None and not settlement_attempted:
+                settlement_attempted = True
+                try:
+                    self.ledger.settle(token, outcome=outcome if entered_dispatch else "not_sent",
+                                       actual_cost_usd=cost)
+                except Exception:
+                    self.ledger.abandon(token)
+            reason = exc.reason if isinstance(exc, BudgetBlocked) else "comparison_attempt_interrupted"
+            try:
+                self._mark_failed(attempt_id, token, reason)
                 self._record(slot, token, "unknown" if entered_dispatch else "blocked")
             except Exception:
-                pass  # 슬롯은 이미 확정됐으므로 원래 실패를 가리지 않는다.
+                pass  # 확정된 ID/슬롯은 남는다. 결과를 복구할 수 없어도 재전송은 금지한다.
             raise

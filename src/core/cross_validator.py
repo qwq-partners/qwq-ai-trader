@@ -10,6 +10,7 @@ PRISM-INSIGHT의 "투자전략가" 패턴을 규칙 기반으로 구현.
 
 from datetime import datetime
 from contextvars import ContextVar
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 from loguru import logger
@@ -31,6 +32,7 @@ class CrossStrategyValidator:
     # 감점 후 최소 통과 점수 (이하면 차단)
     _MIN_PASS_SCORE: int = 50
     _budget_context = ContextVar('cross_validation_budget', default=None)
+    _neutral_sizing_context = ContextVar('cross_validation_neutral_sizing', default=None)
 
     @property
     def last_llm_budget_status(self):
@@ -735,6 +737,7 @@ class CrossStrategyValidator:
         market_regime: str,
         sector: str = "",
         signal_id: Optional[str] = None,
+        neutral_sizing: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
@@ -747,9 +750,26 @@ class CrossStrategyValidator:
         엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
         self._budget_context.set(None)
+        self._neutral_sizing_context.set(None)
+        try:
+            self._neutral_sizing_context.set(deepcopy(neutral_sizing))
+        except Exception:
+            pass  # Evidence failure never changes the live verdict.
         self.last_llm_decision = {}
+        _attempts, _adv_attempts = [], []
+        common_context = None
+
+        def unavailable(reason):
+            if self._neutral_sizing_context.get() is None:
+                return True
+            # Keep fail-open behavior, but do not label absence as model approval.
+            return self._finish_decision(
+                True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                market_regime=market_regime, common_context=common_context, stage="unavailable",
+                attempts=_attempts or _adv_attempts, result={"failed": True, "reason": reason, "verdict": "unavailable"})
+
         if not self._llm_manager:
-            return True
+            return unavailable("llm_manager_unavailable")
 
         # 강세장이면 LLM 검증 생략 (속도 우선)
         if market_regime == "bull":
@@ -774,7 +794,7 @@ class CrossStrategyValidator:
                 f"({self._daily_llm_max}회) → fail-open 통과. "
                 f"고변동 날엔 수동 모니터링 필요."
             )
-            return True
+            return unavailable("validation_daily_call_limit")
         self._daily_llm_count += 1
         logger.info(
             f"[크로스검증] LLM 이중검증 #{self._daily_llm_count}/{self._daily_llm_max}: "
@@ -945,7 +965,7 @@ class CrossStrategyValidator:
                                             "failed": False, "adversarial_failed_reason": _adv_failed_reason})
         except Exception as e:
             logger.debug(f"[크로스검증] LLM 검증 실패 (통과): {e}")
-            return True  # fail-open
+            return unavailable("validation_exception")  # fail-open
 
     def _finish_decision(self, approved: bool, *, signal_id, symbol, strategy, score, market_regime,
                          common_context, stage, attempts, result) -> bool:
@@ -959,7 +979,9 @@ class CrossStrategyValidator:
                                      market_regime=market_regime, common_context=common_context, stage=stage,
                                      attempts=attempts, approved=approved, result=result,
                                      budget_context=self._budget_context.get(),
-                                     collected_at=getattr(self, "_decision_collected_at", None))
+                                     collected_at=(None if stage == "unavailable" else
+                                                   getattr(self, "_decision_collected_at", None)),
+                                     neutral_sizing=self._neutral_sizing_context.get())
             status = get_decision_recorder().submit(record)
             self.last_llm_decision = {"decision_id": record["decision_id"], "record_status": status,
                                       "stage": stage, "attempts": len(attempts)}
