@@ -457,7 +457,8 @@ def test_offer_journal_completeness_evidence_reports_drops_and_gaps(tmp_path, mo
     assert tampered["sequence_gaps"] >= 1
     report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[],
                                       journal_status={k: tampered.get(k) for k in ("missing", "skipped_lines", "sequence_gaps",
-                                                                                   "dropped_records", "unsequenced_records")})
+                                                                                   "dropped_records", "unsequenced_records",
+                                                                                   "write_failures", "open_runs", "closed_runs")})
     assert report["offer_journal"]["complete"] is False and "population_journal_incomplete" in report["limitations"]
     # 증거가 없거나 잘못된 값(빈 문자열)이면 완전으로 확정하지 않는다
     report2 = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[],
@@ -587,3 +588,108 @@ def test_journal_sequence_is_per_file_so_month_split_and_incomplete_stream_are_n
     assert ro["sequence_gaps"] == 0 and ro["dropped_records"] == 0 and ro["unsequenced_records"] == 0
     assert ri["sequence_gaps"] == 0 and len(ri["records"]) == 1
     assert [r["journal_seq"] for r in ro["records"]] == list(range(1, len(ro["records"]) + 1))
+
+
+def test_expired_accepted_offer_frees_slot_and_report_follows_worker_execution(tmp_path, monkeypatch):
+    """4회차 P1: 수락된 A 가 실행 전 만료되고 B 가 실행·완료되면 보고서도 B 를 표본·완료로, A 는 만료 사유로 집계한다."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from datetime import timedelta as _td
+    from tests.test_model_comparison_worker import build, envelope, capped, Clock, GatedOpenAI, NOW
+    clock, op = Clock(), GatedOpenAI()
+    worker, ledger, *_ = build(tmp_path, clock=clock, op=op, man=capped(pairs_per_day=1), runner_clock=clock,
+                               journal_dir=tmp_path / "j")
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, "dec-0")) == "accepted"
+        assert wait(lambda: worker.health()["started"] == 1)
+        assert wait(lambda: worker.runner.admitted_pair_ids(ledger.today().isoformat()))
+        op.gate.set()
+        assert wait(lambda: worker.health()["finished"] == 1)
+    finally:
+        worker.stop(10)
+    # 두 번째 작업자: A(dec-1) 수락 → 실행 전 만료 → B(dec-2) 수락·실행. 일 상한은 1 이지만 하루 입장은 dec-0 로 이미 1.
+    # 따라서 같은 날 두 번째 입장은 러너가 차단한다 — 여기서는 보고서의 '실행 이력 우선' 규칙만 검증하기 위해
+    # 레코드 수준에서 A 만료·B 실행을 구성한다.
+    records = []
+    for f in sorted((tmp_path / "j").glob("offers-*.jsonl")):
+        records += worker_api().read_offer_journal(f, max_bytes=1 << 24)["records"]
+    offer0 = next(r for r in records if r.get("kind") == "offer" and r["decision_id"] == "dec-0")
+    day = _utc(offer0["envelope"]["input_available_at"]).astimezone(KST).date().isoformat()
+    env_a = dict(offer0["envelope"], decision_id="dec-A",
+                 input_available_at=(_utc(offer0["envelope"]["input_available_at"]) - _td(seconds=1)).isoformat())
+    env_b = dict(offer0["envelope"], decision_id="dec-B")
+    synthetic = [
+        dict(offer0, decision_id="dec-A", envelope=env_a, status="accepted", reason=None),
+        {**{k: offer0[k] for k in ("schema_version",)}, "kind": "transition", "decision_id": "dec-A", "status": "expired",
+         "reason": "input_too_old_at_dispatch", "at": offer0["recorded_at"], "pair_id": "pair-A"},
+        dict(offer0, decision_id="dec-B", envelope=env_b, status="accepted", reason=None),
+        {**{k: offer0[k] for k in ("schema_version",)}, "kind": "transition", "decision_id": "dec-B", "status": "started",
+         "reason": None, "at": offer0["recorded_at"], "pair_id": "pair-B"},
+        {**{k: offer0[k] for k in ("schema_version",)}, "kind": "transition", "decision_id": "dec-B", "status": "finished",
+         "reason": None, "at": offer0["recorded_at"], "pair_id": "pair-B"},
+    ]
+    pair_b = {"schema_version": "model-comparison-pair-v2", "pair_id": "pair-B", "decision_id": "dec-B",
+              "evaluation_anchor": "input_available_at", "input_available_at": env_b["input_available_at"],
+              "requested_at": offer0["recorded_at"], "policy": {},
+              "current": {"verdict": "approve", "attempts": [], "decision_available_at": offer0["recorded_at"]},
+              "candidate": {"verdict": "approve", "attempts": [], "decision_available_at": offer0["recorded_at"]}}
+    report = daily.build_daily_report([pair_b], day_kst=day, offer_records=synthetic, max_input_age_seconds=30.0, pairs_per_day=1)
+    assert report["denominators"]["offered"] == 2 and report["denominators"]["complete"] == 1
+    assert report["missing_reasons"] == {"input_too_old_at_dispatch": 1}
+    assert "daily_quota" not in json.dumps(report)
+
+
+def test_journal_close_marker_distinguishes_tail_loss_and_empty_file(tmp_path, monkeypatch):
+    """4회차 P2: 종료 표식이 없거나(열린/빈 파일) final_seq 보다 번호가 모자라면 완전으로 보지 않는다."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from tests.test_model_comparison_worker import build, envelope
+    worker, ledger, op, ge = build(tmp_path, journal_dir=tmp_path / "j")
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, "dec-a")) == "accepted"
+        assert wait(lambda: worker.health()["finished"] == 1)
+        files = sorted((tmp_path / "j").glob("offers-*.jsonl"))
+        open_read = worker_api().read_offer_journal(files[0], max_bytes=1 << 24)
+        assert open_read["open_runs"] and not open_read["closed_runs"]           # 아직 종료 표식 없음
+    finally:
+        worker.stop(10)
+    closed_read = worker_api().read_offer_journal(files[0], max_bytes=1 << 24)
+    assert closed_read["closed_runs"] and not closed_read["open_runs"] and closed_read["sequence_gaps"] == 0
+    status = {k: closed_read.get(k) for k in ("missing", "skipped_lines", "sequence_gaps", "dropped_records",
+                                               "unsequenced_records", "write_failures", "open_runs", "closed_runs")}
+    assert daily.build_daily_report([], day_kst="2026-10-13", journal_status=status)["offer_journal"]["complete"] is True
+    # 끝부분 유실: 종료 표식 직전 줄을 지우면 final_seq 보다 번호가 모자라 빈틈으로 잡힌다
+    lines = files[0].read_text().splitlines()
+    files[0].write_text("\n".join(lines[:-2] + lines[-1:]) + "\n")
+    tail = worker_api().read_offer_journal(files[0], max_bytes=1 << 24)
+    assert tail["sequence_gaps"] >= 1
+    # 빈 파일은 완전이 아니다
+    empty = tmp_path / "j" / "offers-2000-01.jsonl"; empty.write_text("")
+    e = worker_api().read_offer_journal(empty, max_bytes=1 << 24)
+    st = {k: e.get(k) for k in status}
+    assert daily.build_daily_report([], day_kst="2000-01-01", journal_status=st)["offer_journal"]["complete"] is False
+
+
+def test_other_day_journal_records_do_not_leak_into_daily_counts():
+    from src.analytics.model_comparison_daily_report import OFFER_SCHEMA
+    yesterday = {"schema_version": OFFER_SCHEMA, "kind": "offer", "recorded_at": "2026-10-12T01:00:00+00:00",
+                 "decision_id": "dec-y", "status": "rejected_duplicate", "reason": None, "received_at": None,
+                 "envelope": {"decision_id": "dec-y", "input_available_at": "2026-10-12T01:00:00+00:00"}}
+    yesterday_excl = {"schema_version": OFFER_SCHEMA, "kind": "transition", "decision_id": "dec-z", "status": "blocked",
+                      "reason": "comparison_daily_pair_cap", "at": "2026-10-12T01:00:00+00:00", "pair_id": "p"}
+    report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[yesterday, yesterday_excl])
+    assert report["duplicate_offers_rejected"] == 0 and report["stop_conditions_reached"] == []
+    assert report["denominators"]["offered"] == 0
+
+
+def test_explicit_empty_nonce_and_decision_id_are_rejected():
+    import pytest
+    from src.analytics import model_comparison_input as mci
+    from src.analytics.llm_decision_record import decision_record
+    with pytest.raises(ValueError):
+        decision_record(signal_id="s", symbol="005930", strategy="m", score=90, market_regime="x", common_context=None,
+                        stage="adversarial", attempts=[], approved=True, result={}, budget_context=None, decision_id="")
+    with pytest.raises(ValueError):
+        mci.build_envelope(decision_id="d", signal_id="s", symbol="005930", strategy="m", score=90.0, market_regime="x",
+                           common_context="c", role_controls={}, neutral_sizing=None, producer={},
+                           input_available_at="2026-10-13T00:00:00+00:00", handed_off_at="2026-10-13T00:00:00+00:00", nonce=b"")

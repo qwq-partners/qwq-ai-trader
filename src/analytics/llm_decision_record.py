@@ -200,6 +200,15 @@ def safe_attempt_record(role: str, provider: Any, requested_at: Optional[datetim
                 "error": str(error)[:200], "requested_at": _iso(requested_at)}
 
 
+def _decision_id_or_new(decision_id: Optional[str]) -> str:
+    """None 만 새 ID. 빈 문자열·비문자열은 입력 오류라 생략과 구분해 거부한다(4회차 P2)."""
+    if decision_id is None:
+        return new_id("dec")
+    if not isinstance(decision_id, str) or not decision_id.strip():
+        raise ValueError("decision_id must be a non-empty string or None")
+    return decision_id
+
+
 def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, score: Any, market_regime: Any,
                     common_context: Optional[str], stage: str, attempts: List[Dict[str, Any]],
                     approved: Optional[bool], result: Dict[str, Any], budget_context: Optional[Dict[str, Any]],
@@ -219,7 +228,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
     available = decision_available_at if decision_available_at is not None else now_kst()
     return {
         "schema_version": SCHEMA_VERSION,
-        "decision_id": decision_id if isinstance(decision_id, str) and decision_id else new_id("dec"),
+        "decision_id": _decision_id_or_new(decision_id),
         "decision_kind": "entry_llm_second_check",
         "signal_id": signal_id,
         "symbol": symbol,

@@ -70,7 +70,7 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
         return {"path": str(path), "missing": True, "records": [], "skipped_lines": 0}
     if size > max_bytes:
         raise ValueError("journal_too_large")      # 일부만 읽은 분모는 보고하지 않는다
-    records, skipped, seqs, dropped = [], 0, {}, {}
+    records, skipped, seqs, dropped, closed = [], 0, {}, {}, {}
     for line in path.read_bytes().splitlines():
         if not line.strip():
             continue
@@ -90,21 +90,32 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
             if isinstance(run, str) and type(total) is int and total >= 0:
                 dropped[run] = max(dropped.get(run, 0), total)
             continue
+        if record.get("kind") == "journal_close":
+            final, failed_total = record.get("final_seq"), record.get("journal_failed_total")
+            if isinstance(run, str) and type(final) is int and type(failed_total) is int:
+                closed[run] = {"final_seq": final, "journal_failed_total": failed_total}
+            continue
         if record.get("kind") not in kinds or (check is not None and not check(record)):
             skipped += 1
             continue
         records.append(record)
     # 번호 빈틈 = run 별 (최대 번호 − 존재 번호 수). 번호 없는 옛 기록은 증거 없음으로 둔다.
+    # 중간 빈틈: 번호 최대값 − 존재 수. 끝부분 유실: 종료 표식의 final_seq 보다 작은 최대 번호. 표식이 없는 run 은 미종료.
     gaps = sum(max(s) - len(s) for s in seqs.values())
+    tail_loss = sum(max(0, info["final_seq"] - max(seqs.get(run, {0}))) for run, info in closed.items())
+    open_runs = sorted(run for run in seqs if run not in closed)
+    failed = sum(info["journal_failed_total"] for info in closed.values())
     unsequenced = sum(1 for r in records if not isinstance(r.get("run_id"), str) or type(r.get("journal_seq")) is not int)
     return {"path": str(path), "missing": False, "records": records, "skipped_lines": skipped,
-            "sequence_gaps": gaps, "dropped_records": sum(dropped.values()), "unsequenced_records": unsequenced,
-            "runs": sorted(seqs)}
+            "sequence_gaps": gaps + tail_loss, "dropped_records": sum(dropped.values()),
+            "unsequenced_records": unsequenced, "write_failures": failed,
+            "runs": sorted(seqs), "open_runs": open_runs, "closed_runs": sorted(closed)}
 
 
 def read_offer_journal(path, *, max_bytes) -> dict:
     """offers-YYYY-MM.jsonl → {path, missing, records(offer/transition), skipped_lines, sequence_gaps, dropped_records,
-    unsequenced_records, runs}. journal_drop 마커(큐 포화 누계)는 records 에 넣지 않고 dropped_records 로만 센다."""
+    unsequenced_records, write_failures, runs, open_runs, closed_runs}. journal_drop/journal_close 마커는 records 에 넣지 않고
+    dropped_records·closed_runs 로만 반영한다. open_runs(종료 표식 없는 run)가 있으면 끝부분 유실을 판정할 수 없다."""
     return _read_journal(path, max_bytes, ("offer", "transition"))
 
 
@@ -283,11 +294,15 @@ class ComparisonWorker:
         month = _time(stamp).astimezone(_KST).strftime("%Y-%m")
         return self.journal_dir / f"{'incomplete' if kind == 'incomplete_result' else 'offers'}-{month}.jsonl"
 
-    def _journal_write(self, record):
-        path = self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
+    def _journal_write(self, record, path=None):
+        path = path if path is not None else self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
         with self._lock:
             self._journal_seq[str(path)] = self._journal_seq.get(str(path), 0) + 1
             record = dict(record, journal_seq=self._journal_seq[str(path)])
+            if record.get("kind") == "journal_close":
+                record["final_seq"] = self._journal_seq[str(path)]
+                record["journal_failed_total"] = self._counts["journal_failed"]
+                record["journal_dropped_total"] = self._counts["journal_dropped"]
         line = json.dumps(record, sort_keys=True, ensure_ascii=True, default=str) + "\n"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as handle:
@@ -312,6 +327,12 @@ class ComparisonWorker:
                     self._journal_write(drop_record)
                     with self._lock:
                         self._dropped_written = dropped
+                if record.get("kind") == "journal_close":
+                    with self._lock:
+                        touched = [Path(k) for k in self._journal_seq]
+                    for path in touched:                     # 이 run 이 쓴 모든 파일(offers·incomplete)에 종료 표식
+                        self._journal_write(record, path=path)
+                    continue
                 self._journal_write(record)
             except Exception as error:   # 기록 실패는 판단·offer 결과를 바꾸지 않는다
                 with self._lock:
@@ -447,7 +468,10 @@ class ComparisonWorker:
         # 상태 전이·incomplete 증거가 모두 쓰인 뒤 돌려준다(저널 큐를 비운 뒤 종료).
         journal = self._journal_thread
         if journal is not None and journal.is_alive():
+            # 종료 표식: 파일별 생산 번호·실패 수를 남겨 독자가 끝부분 유실을 판정한다(4회차 P2)
             try:
+                self._journal.put({"schema_version": JOURNAL_VERSION, "kind": "journal_close", "run_id": mci.RUN_ID,
+                                   "at": self.clock().isoformat()}, timeout=2.0)
                 self._journal.put(None, timeout=2.0)
             except queue.Full:
                 pass

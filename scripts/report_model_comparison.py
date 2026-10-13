@@ -51,8 +51,8 @@ def main(argv=None):
                 if read.get('missing'):
                     raise ValueError(f'offer journal missing: {args.offers}')   # 파일 부재는 축소 분모가 아니라 오류
                 offer_records = read['records']
-                journal_status = {k: read.get(k) for k in ('missing', 'skipped_lines', 'sequence_gaps',
-                                                           'dropped_records', 'unsequenced_records')}
+                journal_status = {k: read.get(k) for k in ('missing', 'skipped_lines', 'sequence_gaps', 'dropped_records',
+                                                           'unsequenced_records', 'write_failures', 'open_runs', 'closed_runs')}
             if args.incomplete:
                 read_inc = read_incomplete_journal(args.incomplete, max_bytes=args.max_bytes)
                 read_inc = read_inc if isinstance(read_inc, dict) else {'records': list(read_inc), 'missing': False}

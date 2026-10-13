@@ -130,8 +130,12 @@ def build_envelope(*, decision_id, signal_id, symbol, strategy, score, market_re
         "input_available_at": input_available_at,
     }))
     digest = body_sha256(body)
+    if nonce is None:
+        nonce = _NONCE                     # 생략만 기본값. 명시한 빈 바이트/다른 타입은 거부한다(4회차 P2)
+    elif not isinstance(nonce, (bytes, bytearray)) or len(nonce) == 0:
+        raise ValueError("nonce must be non-empty bytes or None")
     return {**body, "handed_off_at": handed_off_at, "received_at": None, "envelope_sha256": digest,
-            "attestation": {"kind": "in_process_nonce", "nonce_sha256": _mac(nonce or _NONCE, digest)}}
+            "attestation": {"kind": "in_process_nonce", "nonce_sha256": _mac(bytes(nonce), digest)}}
 
 
 def verify_envelope(envelope) -> str | None:

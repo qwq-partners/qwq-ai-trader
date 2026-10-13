@@ -83,7 +83,7 @@ def worst_case_reservation(manifest: Mapping, *, on_date: date | None = None) ->
 
 def select_daily_sample(envelopes: Iterable[Mapping], *, day_kst: str, max_input_age_seconds: float = 5.0,
                         pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
-                        offer_statuses: Mapping | None = None) -> dict:
+                        offer_statuses: Mapping | None = None, executed: Iterable[str] = ()) -> dict:
     """그날(KST) 제공된 봉투 중 attestation·입력 나이·크기를 통과한 첫 판단을 고른다.
 
     순서 = (input_available_at, decision_id). 응답·가격·결과는 보지 않는다.
@@ -93,6 +93,7 @@ def select_daily_sample(envelopes: Iterable[Mapping], *, day_kst: str, max_input
     date.fromisoformat(day_kst)
     offered, eligible, status, seen = [], [], {}, set()
     offer_statuses = dict(offer_statuses or {})
+    executed = set(executed)
     for env in envelopes:
         if not isinstance(env, Mapping) or not isinstance(env.get('decision_id'), str):
             continue
@@ -131,11 +132,14 @@ def select_daily_sample(envelopes: Iterable[Mapping], *, day_kst: str, max_input
         else:
             eligible.append((available, decision_id))
     eligible.sort()
-    sampled = [d for _, d in eligible[:pairs_per_day]]
-    for _, decision_id in eligible[pairs_per_day:]:
+    # 작업자가 실제로 실행한 판단이 먼저 표본이다(실행 이력 = 입장 계약). 남은 자리는 적격 순서로 채우고 그 뒤는 daily_quota.
+    ran = [d for _, d in eligible if d in executed]
+    rest = [d for _, d in eligible if d not in executed]
+    sampled = ran + rest[:max(0, pairs_per_day - len(ran))]
+    for decision_id in rest[max(0, pairs_per_day - len(ran)):]:
         status[decision_id] = 'daily_quota'
     return {'offered': offered, 'eligible': [d for _, d in eligible], 'sampled': sampled,
-            'ineligible': status}
+            'ineligible': status, 'sampled_over_quota': max(0, len(ran) - pairs_per_day)}
 
 
 def _ms(later, earlier):
@@ -190,15 +194,25 @@ BLOCKED_SCHEMA = 'model-comparison-pair-blocked-v1'
 OFFER_SCHEMA = 'comparison-offer-v1'
 
 
-def offers_to_population(records: Iterable[Mapping]) -> tuple[list, list]:
+def _record_day(rec) -> str | None:
+    try:
+        return _kst_day(rec.get('recorded_at') if rec.get('kind') == 'offer' else rec.get('at'))
+    except (ValueError, TypeError):
+        return None
+
+
+def offers_to_population(records: Iterable[Mapping], *, day_kst: str | None = None) -> tuple[list, list]:
     """작업자 offer 원장 레코드 → (offered_envelopes, exclusions).
 
     offer 기록의 봉투에 기록 received_at 을 붙여 모집단으로 쓴다(봉투 decision_id 가 기록과 다르면
     제외). rejected_*·expired·incomplete 상태(offer/transition)는 사유와 함께 제외로 보낸다.
+    day_kst 를 주면 그 KST 날짜의 기록만 본다(월 파일 전체가 다른 날 집계에 섞이지 않게 — 4회차 P2).
     """
     envelopes, exclusions = [], []
     for rec in records:
         if not isinstance(rec, Mapping) or not isinstance(rec.get('decision_id'), str):
+            continue
+        if day_kst is not None and _record_day(rec) != day_kst:
             continue
         status = rec.get('status')
         if rec.get('kind') == 'offer':
@@ -238,10 +252,19 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     journal_status: 모집단 저널의 결손 정보({missing, skipped_lines}) — 불완전하면 보고에 명시한다(재리뷰 P2)."""
     offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
     ledger_attempts, incomplete_records = list(ledger_attempts), list(incomplete_records)
-    offer_records = list(offer_records)
-    from_offers, excluded_offers = offers_to_population(offer_records)
+    offer_records = [r for r in offer_records if isinstance(r, Mapping) and _record_day(r) == day_kst]   # 그날 기록만
+    from_offers, excluded_offers = offers_to_population(offer_records, day_kst=day_kst)
     offered_envelopes += from_offers
     exclusions += excluded_offers
+    # 실행 이력: 작업자가 실제로 실행에 넘긴 판단(started 이후)과 실행 전에 만료한 판단. 보고서 선정은 이 이력을 따른다(4회차 P1).
+    executed, expired_before_start = set(), {}
+    for r in offer_records:
+        if r.get('kind') == 'transition' and isinstance(r.get('decision_id'), str):
+            if r.get('status') in ('started', 'finished', 'incomplete', 'blocked'):
+                executed.add(r['decision_id'])
+            elif r.get('status') == 'expired':
+                reason = r.get('reason')
+                expired_before_start[r['decision_id']] = reason if isinstance(reason, str) and reason else 'expired'
     offer_statuses, duplicate_offers = {}, Counter()
     for r in offer_records:
         if isinstance(r, Mapping) and r.get('kind') == 'offer' and isinstance(r.get('decision_id'), str):
@@ -254,9 +277,13 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             # 거부는 기록의 사유(없으면 상태)로 표기해 제외 사유 표기와 같은 어휘를 쓴다
             offer_statuses[r['decision_id']] = ('accepted' if status_value == 'accepted' else
                                                 (reason if isinstance(reason, str) and reason else status_value))
+    for decision_id, reason in expired_before_start.items():
+        if decision_id not in executed and offer_statuses.get(decision_id) == 'accepted':
+            offer_statuses[decision_id] = reason          # 수락됐지만 실행 전 만료 → 그 사유로 부적격(슬롯은 다른 판단에 돌아감)
     selection = select_daily_sample(offered_envelopes, day_kst=day_kst,
                                     max_input_age_seconds=max_input_age_seconds, pairs_per_day=pairs_per_day,
-                                    max_common_context_bytes=max_common_context_bytes, offer_statuses=offer_statuses)
+                                    max_common_context_bytes=max_common_context_bytes, offer_statuses=offer_statuses,
+                                    executed=executed)
     offered_set = set(selection['offered'])
     # 같은 판단의 여러 실행 행을 모두 보존한다(지출은 전부, 표시는 최신 행).
     runs, blocked = {}, []
@@ -432,11 +459,19 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             value = journal_status.get(key)
             return value if type(value) is int and value >= 0 else None     # 비음수 정수만 증거로 인정(None 은 증거 없음)
         missing_j = journal_status.get('missing') is True
-        counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records')}
-        evidence_ok = all(v is not None for v in counts.values())
-        journal_complete = (not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
+        counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records',
+                                               'write_failures')}
+        open_runs = journal_status.get('open_runs')
+        closed_runs = journal_status.get('closed_runs')
+        runs_known = isinstance(open_runs, (list, tuple)) and isinstance(closed_runs, (list, tuple))
+        evidence_ok = all(v is not None for v in counts.values()) and runs_known
+        # 종료 표식이 없는 run(열린 파일)·종료 run 0 개(빈 파일)·결손 카운터>0 이면 완전으로 확정하지 않는다(4회차 P2)
+        journal_complete = ((not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
+                            and len(open_runs) == 0 and len(closed_runs) > 0)
         report['offer_journal'] = {'missing': missing_j, **counts, 'complete': journal_complete,
-                                   'completeness_evidence': 'run_id+journal_seq gaps and journal_drop markers'
+                                   'open_runs': list(open_runs) if runs_known else None,
+                                   'closed_runs': list(closed_runs) if runs_known else None,
+                                   'completeness_evidence': 'run_id+per-file journal_seq gaps, journal_drop and journal_close markers'
                                    if evidence_ok else 'insufficient'}
         if not journal_complete:
             report['limitations'].append('population_journal_incomplete')
