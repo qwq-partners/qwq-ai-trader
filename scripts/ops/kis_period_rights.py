@@ -168,6 +168,9 @@ def _prepare_private_dir(path: Path) -> None:
         st = path.stat()
         if not path.is_dir() or st.st_uid != os.getuid() or (st.st_mode & 0o077):
             raise RuntimeError(f"출력 디렉터리는 본인 소유·0700 이어야 한다: {path}")
+        if any(path.iterdir()):
+            # 결과 파일은 O_EXCL 로 쓰므로 비어 있지 않은 디렉터리는 조회를 다 끝낸 뒤 저장에서 실패한다 — 첫 API 호출 전에 거부 (9차 리뷰 P2)
+            raise RuntimeError(f"출력 디렉터리가 비어 있지 않다 — 실행마다 새 디렉터리를 쓴다: {path}")
         return
     path.mkdir(parents=True)
     path.chmod(0o700)

@@ -142,6 +142,9 @@ def test_cli_refuses_shared_or_foreign_output_dir(tmp_path):
         cli._prepare_private_dir(shared)                                   # 기존 0755 디렉터리는 거부(권한을 바꾸지 않음)
     fresh = tmp_path / "fresh"
     cli._prepare_private_dir(fresh)
+    (fresh / "summary.json").write_text("{}")
+    with pytest.raises(RuntimeError, match="비어 있지 않다"):                    # 재사용 디렉터리는 조회 전에 거부(9차 P2)
+        cli._prepare_private_dir(fresh)
     assert stat.S_IMODE(fresh.stat().st_mode) == 0o700
 
 
