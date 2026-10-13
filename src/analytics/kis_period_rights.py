@@ -106,7 +106,6 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
         if kind in ("error", "malformed"):
             status = kind
             break
-        rows.extend(_rows(data))
         cont_raw = data.get("_tr_cont")
         cont = cont_raw.upper() if isinstance(cont_raw, str) else ""
         if cont in NEXT_PAGE:
@@ -114,9 +113,14 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
             next_nk = data.get("ctx_area_nk100") if isinstance(data.get("ctx_area_nk100"), str) else ""
             key = (next_fk, next_nk)
             if key in seen_keys or key == (fk, nk):
-                status = "partial_page_repeat"          # 같은 연속조회 키가 반복 — 무한 순회 방지
+                # 같은 연속조회 키가 반복 — 무한 순회 방지. 이 페이지가 앞 페이지의 재전송인지 확정할 수 없으므로
+                # 행·금액 집계에 넣지 않는다(원본 raw_pages 에는 남는다) (8차 리뷰 P2)
+                status = "partial_page_repeat"
+                pages[-1]["rows_excluded_from_totals"] = True
                 break
             seen_keys.add(key)
+        rows.extend(_rows(data))
+        if cont in NEXT_PAGE:
             fk, nk, tr_cont = next_fk, next_nk, "N"
             if page_no == max_pages:
                 status = "partial_max_pages"            # 공식 샘플의 재귀 상한 도달 ≠ 완료

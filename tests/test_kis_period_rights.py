@@ -44,7 +44,9 @@ def test_multi_page_window_completes_with_next_keys():
 def test_repeat_keys_and_max_pages_are_partial_not_complete():
     rep = _fetcher([_page([_row()], "F", fk="same", nk="same")])
     r = asyncio.run(collect_window(rep, "20250101", "20250131", max_pages=10))
-    assert r["status"] == "partial_page_repeat" and r["pages_fetched"] == 2        # 2페이지째 같은 키 → 중단
+    assert r["status"] == "partial_page_repeat" and r["pages_fetched"] == 2
+    assert len(r["rows"]) == 1 and r["pages"][1]["rows_excluded_from_totals"] is True   # 반복 페이지 행은 집계 제외(8차 P2)
+    assert len(r["raw_pages"]) == 2                                                  # 원본은 보존        # 2페이지째 같은 키 → 중단
     cap = _fetcher([_page([_row()], "F", fk=f"f{i}", nk=f"n{i}") for i in range(5)])
     r2 = asyncio.run(collect_window(cap, "20250101", "20250131", max_pages=3))
     assert r2["status"] == "partial_max_pages" and r2["pages_fetched"] == 3 and len(r2["rows"]) == 3
@@ -385,3 +387,23 @@ def test_min_interval_applies_to_internal_http_retries(monkeypatch, tmp_path):
     assert len(sent_at) == 2 and sent_at[1] - sent_at[0] >= 2.5          # 503 재시도도 2.5초 뒤(백오프 1초만이 아님)
     s = json.loads((out / "summary.json").read_text())
     assert s["window_statuses"] == {"complete": 1} and s["http_attempts"] == 2 and s["pages_fetched"] == 1
+
+
+def test_readonly_broker_requires_env_and_reads_repo_dotenv(monkeypatch, tmp_path):
+    """8차 리뷰 P2: .env 를 읽고, 필수 변수가 없으면 KIS 호출 전에 명확한 오류로 중단한다(값 비출력)."""
+    import pytest
+    from pathlib import Path
+    cli = _cli_module()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    for k in ("KIS_APPKEY", "KIS_APP_KEY", "KIS_CANO", "KIS_APPSECRET"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(cli, "_load_env", lambda: None)
+    with pytest.raises(RuntimeError, match="환경변수 없음"):
+        asyncio.run(cli._open_readonly_broker())
+    loaded = []
+    def fake_load():
+        loaded.append(True); monkeypatch.setenv("KIS_APPKEY", "k"); monkeypatch.setenv("KIS_CANO", "1")
+    monkeypatch.setattr(cli, "_load_env", fake_load)
+    with pytest.raises(RuntimeError) as e:          # 변수는 채워졌고 다음 단계(캐시 토큰 없음)에서 멈춘다
+        asyncio.run(cli._open_readonly_broker())
+    assert loaded == [True] and "환경변수 없음" not in str(e.value)

@@ -18,7 +18,8 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 from src.analytics.kis_period_rights import SCHEMA_VERSION, collect_window, month_windows, summarize_rights  # noqa: E402
 from src.utils import kis_request_metrics  # noqa: E402
@@ -111,6 +112,9 @@ async def _open_readonly_broker():
     import aiohttp
     from src.execution.broker.kis_kr import KISBroker, KISConfig
     from src.utils.token_manager import KISTokenManager
+    _load_env()
+    if not (os.getenv("KIS_APPKEY") or os.getenv("KIS_APP_KEY")) or not os.getenv("KIS_CANO"):
+        raise RuntimeError("KIS_APPKEY/KIS_CANO 환경변수 없음 — 저장소 .env 가 없거나 비어 있다(값은 출력하지 않는다)")
     tm = KISTokenManager()
     if not tm._is_token_valid():
         raise RuntimeError("캐시된 KIS 토큰이 없거나 만료 — 운영 봇 토큰을 보호하기 위해 새 발급을 하지 않는다. 봇이 갱신한 뒤 다시 실행")
@@ -123,6 +127,16 @@ async def _open_readonly_broker():
         await broker._session.close()
         raise
     return broker
+
+
+def _load_env() -> None:
+    """운영 봇과 같은 저장소 `.env` 를 읽는다(이미 있는 프로세스 환경변수는 덮지 않음). dotenv 부재·파일 없음은 조용히 넘기고
+    뒤의 필수 변수 검사가 명확한 오류로 중단한다 (8차 리뷰 P2)."""
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(str(ROOT / ".env"), override=False)
+    except Exception:
+        pass
 
 
 def _monotonic() -> float:
