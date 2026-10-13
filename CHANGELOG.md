@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-13 — 응답 뒤 호가 수신 시각 보정·판단 기록 정상 종료
+
+- `decision-quote-join-v2`: 실제 `received_at`으로 첫 호가/같은 연결·세대의 직전 상태를 선택하고 관측 복사·거래소 시각을 별도 보존한다. 수신 누락/시간대 없음/시계 역전·동률은 평가 불가다. 수신 및 복사 지연 한도도 검사한다. 과거 복사 시각으로 응답 전 호가나 이후 상태를 평가에 섞지 않는다.
+- `DecisionRecorder` 종료 경계·지연 제출 거절·유한 drain, runner의 LLM 정리 뒤 최대5초 저장 대기를 연결했다. 실제 저장 실패/상한/시간 초과는 성공으로 표시하지 않는다. 기록기 미사용 시 새 인스턴스를 만들지 않고 이벤트 루프·default executor를 막지 않는다.
+- KIS 공식 계좌 권리 TR `CTRGA011R` 발견을 문서화했다. 실제 계좌 기간 조회·세전/세후 금액 및 보존기간 검증은 미완료이며, 일반 입출금/과거 시작 NAV와 구분한다.
+- 최종 UTC verify5443 passed/2 skipped/2 known xfailed, 문법·비밀 검사 rc0·운영/외부 API 접근0. 일반 독립 리뷰와 실제 Claude Opus5/xhigh 요청의 중요 변경 종결 APPROVE, SIGTERM/SIGINT 종료 중 재요청 검사 포함.
+- [PDS·검증·다음 실측/우선순위](docs/research/decision-quote-receipt-time-2026-10-13.md). PR #183/184는 main7037717에 병합된 상태로 정정한다. 운영161b394·10월14일 고정 기술 파일럿·매수 중지·월100 기존 원장 보존. 이후 새 판단/호가 동시 관측이 필요하며 이번 운영 배포 없음.
+
 ## 2026-10-13 — 판단 기록 ↔ 관측 원장 조인 도구(65차, PR 대기·운영 미배포)
 
 - `src/analytics/decision_quote_join.py` + `scripts/report_decision_quotes.py`: `llm-decision-v1` 의 `decision_available_at` 이후 같은 종목 **첫 `ws_quote`**(지연·ask·수량·bid·거래소 시각)와 그 시점 이전 마지막 `market_state`(status·verdict·장 구분·거래정지·VI 코드) 를 붙여 판단별 행과 요약을 낸다. ask≤0/수량≤0/지연 초과(기본 60초)/장 상태 없음·raw 아님/판단 뒤 호가 없음을 `reasons` 로 남기고 `evaluable` 은 자료 충족일 뿐 체결 가능성·순수익 판정이 아니다. 장 상태 어휘는 해석하지 않고 보고한다.

@@ -242,3 +242,46 @@ def test_idle_worker_timeout_racing_last_submit_does_not_drop_accepted_record(tm
         drained = r.close(1)
     assert drained is True
     assert saved(r) == ["first", "last"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_name", ["SIGTERM", "SIGINT"])
+async def test_registered_signals_during_shutdown_do_not_cancel_drain(tmp_path, monkeypatch, signal_name):
+    import signal
+    from scripts.run_trader import UnifiedTradingBot
+    from src.utils import llm
+
+    handlers = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    recorder = rec.DecisionRecorder(tmp_path, enabled=True)
+    monkeypatch.setattr(rec, "_recorder", recorder)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def close_llm():
+        entered.set()
+        await release.wait()
+        assert recorder.submit(row("final")) == "queued"
+    monkeypatch.setattr(llm, "close_llm_manager", close_llm)
+    bot = object.__new__(UnifiedTradingBot)
+    bot.broker = bot._us_engine = bot.dashboard = bot.ws_feed = bot._token_manager = None
+    bot._entry_observation_runtime = None
+    bot._stop_event = asyncio.Event()
+    bot._loop = asyncio.get_running_loop()
+    bot.engine = SimpleNamespace(stop=lambda: None)
+    bot._setup_signal_handlers()
+    task = asyncio.create_task(bot.shutdown())
+    try:
+        await entered.wait()
+        handler = handlers[getattr(signal, signal_name)]
+        handler(getattr(signal, signal_name), None)
+        handler(getattr(signal, signal_name), None)
+        await asyncio.sleep(0)
+        assert bot._stop_event.is_set() and not task.done()
+        assert task.cancelling() == 0
+        release.set()
+        await task
+        assert saved(recorder) == ["final"]
+        assert recorder.close(0) is True
+    finally:
+        release.set()
+        await task
+        recorder.close(1)

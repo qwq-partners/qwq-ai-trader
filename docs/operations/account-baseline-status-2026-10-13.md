@@ -7,7 +7,7 @@
 | 항목 | 상태 | 근거 |
 |---|---|---|
 | 기간 조회 | 2025-01-01~2026-10-01 요청, 46회 완료, 주문 2,651행·체결 2,540행, 일별/종목 금액·비용 대사 `exact` | `account-review-20261002-1332.json` |
-| 증권사 보고 실현손익(비용 차감 후)·수수료·거래세·이자·회전금액 | 확보(원화) | 같은 파일. **비용은 실현손익에 이미 반영돼 다시 차감하지 않는다** |
+| 증권사 보고 실현손익(비용 차감 후)·수수료·거래세·대출이자 비용·회전금액 | 확보(원화) | 같은 파일. `loan_int`는 대출이자이며 이자 수입 증빙이 아니다. **비용은 실현손익에 이미 반영돼 다시 차감하지 않는다** |
 | 기간 끝 순자산 스냅샷 | 2026-10-02 13:27 KST 순자산·예수금·대출·미실현·보유 2종목 | 같은 파일 `balance` |
 | 추정 청산 29건 | 경제적 왕복 29/29 일치(일자·종목·방향·수량·가격 부분집합) — **주문 식별 인증 아님**(내부 주문 ID 부재), 비용 버킷 완전 커버 아님(혼합 비용일 4건) | `economic-reconciliation-v2.json`, `integrated-findings.json` |
 | 계좌 밖 운영비 중 LLM 유료 호출 | 월 예산 원장 SQLite 에 추정액 존재 | `~/.local/state/qwq-ai-trader/llm-budget.sqlite3` |
@@ -16,9 +16,9 @@
 
 | 항목 | 왜 없나 | 확보 방법 | 영향 |
 |---|---|---|---|
-| 기간 **시작** 순자산 | 현 브로커 코드의 KIS TR 은 잔고(현재)·체결·미체결·일별주문체결뿐 — 과거 시점 평가액 TR 미연동 | 증권사 월말/일별 잔고 명세 또는 시점 평가액 | 원화 손익·TWR null |
-| 외부 입출금·이체 | 입출금 내역 TR 미연동 | 증권사 거래/입출금 명세 | 끝−시작을 손익으로 쓸 수 없음 |
-| 배당·분배금·이자 | 미조회 | 증권사 명세 또는 KIS 배당 TR 확인 | `income_in_equity` 미확인 |
+| 기간 **시작** 순자산 | 검토한 공식 현재 잔고/투자계좌자산 조회 요청에 임의 기준일 파라미터가 없음 | 증권사 월말/일별 잔고 명세 또는 별도 과거 평가 API 확인 | 원화 손익·TWR null |
+| 외부 입출금·이체 | 공식 공개 국내주식 카탈로그/샘플에서 일반 현금흐름 TR 미확인(부재 확정 아님) | KIS에 TR·개인 권한·보존기간 문의 또는 입출금 명세 | 끝−시작을 손익으로 쓸 수 없음 |
+| 배당·분배금·이자 수입 | 공식 계좌 권리 TR `CTRGA011R` 발견, 실제 조회 미완료 | 아래 기간별계좌권리현황 읽기 전용 조회·명세 대사. 일반 예수금/CMA 이자 포함 여부 미확인 | `income_in_equity` 미확인 |
 | 기타 운영비(서버·데이터) | 미집계 | 청구서 집계·`allocation_ref` | 운영비 차감 후 손익 null |
 | 현재 엔진 귀속 | 계좌 총계가 수동 거래·여러 엔진 버전 혼합 | entry-risk SHA 보존 포지션 cohort 만 별도 집계 | 현재 엔진 귀속 손익 null |
 
@@ -31,6 +31,16 @@
 
 ## 다음 완료 조건
 
+0. KIS `CTRGA011R`를 월 단위로 읽기 전용 조회하되 모든 페이지를 회수하고, 빈 응답/오류/보존범위를 구분한다. 총량 상한/페이지 반복이면 부분 완료로 남기며, 한 건의 현금 지급 명세와 금액 의미를 대사하기 전 계좌 소득으로 승격하지 않는다. 이 단계는 단순 사용자 자료 대기로 두지 않는다.
 1. 시작 순자산(또는 첫 거래일 평가액)과 외부 입출금 명세가 확보되면 정규화 입력을 만들고 기존 CLI 로 원화 손익·TWR 을 낸다. 입출금 경계 평가액이 없으면 TWR 은 null 로 둔다.
 2. 29건은 원주문/체결 ID 가 있는 증권사 명세가 있을 때만 식별 확정으로 승격한다.
 3. 벤치마크(KODEX200·반도체 제외)는 같은 시작/끝/외부흐름 정의의 비교 포트폴리오가 있을 때만 수행한다.
+
+## 10월13일 공식 API 조사 — 확보 가능성과 미확인 구분
+
+공식 `koreainvestment/open-trading-api` 커밋 `208279102f43fd0c0f15fcf66c9e5a5adda27050`와 공식 API 포털을 조사했다. 공개 소스만 읽었으며 새 계좌 API 호출·운영 변경은 없다. 조사 라우팅은 Sol/high 요청, 실제 모델 메타데이터 미노출이고 아래 원천은 coordinator도 확인했다.
+
+- [기간별계좌권리현황조회](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_llm/domestic_stock/period_rights/period_rights.py): `CTRGA011R`, `/uapi/domestic-stock/v1/trading/period-rights`. 계좌·시작/종료일·권리 유형으로 조회하고 `CTX_AREA_FK100/NK100`와 `tr_cont`로 연속 조회한다. 공식 샘플은 재귀 상한에서 부분 결과를 반환하므로 그대로 복사해 완전 조회라고 표시하면 안 된다.
+- [응답 필드](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_llm/domestic_stock/period_rights/chk_period_rights.py): 권리유형·권리잔고유형·`last_alct_amt`(최종배정금액)·`tax_amt`·`cash_dfrm_dt`·지연이자 등이 있다. 배정금액의 세전/세후 의미, 최대 조회기간/보존, 실제 입금 확정 상태 및 일반 이자 포함 범위는 아직 검증되지 않았다. 권리 이벤트의 현금 입출금 코드를 일반 은행 입출금 원장으로 사용하지 않는다.
+- [주식잔고조회](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_llm/domestic_stock/inquire_balance/inquire_balance.py)와 [투자계좌자산현황](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_llm/domestic_stock/inquire_account_balance/inquire_account_balance.py)은 평가액을 제공하나 요청에 임의 과거 기준일이 없다. 검토한 TR로 2025년 시작 NAV를 얻을 수 있다고 주장하지 않는다. 향후 일별 NAV 저장은 과거 결측 복원이 아닌 재발 방지다.
+- [기간별손익](https://github.com/koreainvestment/open-trading-api/blob/208279102f43fd0c0f15fcf66c9e5a5adda27050/examples_llm/domestic_stock/inquire_period_profit/inquire_period_profit.py)은 기간 조회가 가능하지만 실현손익/비용 자료로 NAV를 대체하지 못한다. [공식 카탈로그](https://apiportal.koreainvestment.com/apiservice-category)에서 일반 입출금 이력 TR은 확인하지 못했다. KIS 문의가 필요하면 일반 위탁계좌의 은행 입출금/계좌간 이체, TR ID/path, 보존기간, 연속 조회, 개인 Open API 권한을 구체적으로 확인한다.

@@ -18,12 +18,13 @@ from src.analytics.decision_quote_join import (  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="판단 이후 실제 수신한 첫 호가와 직전 장 상태를 조인한다. 수신 시각 누락은 평가 불가다.")
     parser.add_argument("--decisions", required=True)
     parser.add_argument("--ledger", required=True)
     parser.add_argument("--study-sha256", default=None,
                         help="주면 기존 strict 리더로 해시 체인·헤더를 검증하고 완전성을 보고서에 싣는다(실패 시 종료 2). 없으면 모든 행이 ledger_unverified 다")
-    parser.add_argument("--max-delay-seconds", type=float, default=DEFAULT_MAX_DELAY_SECONDS)
+    parser.add_argument("--max-delay-seconds", type=float, default=DEFAULT_MAX_DELAY_SECONDS,
+                        help="판단부터 호가 수신 및 관측 복사까지 각각 허용할 최대 초")
     parser.add_argument("--max-state-age-seconds", type=float, default=DEFAULT_MAX_STATE_AGE_SECONDS)
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     args = parser.parse_args()

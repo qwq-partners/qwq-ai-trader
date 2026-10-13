@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-13 — 판단/호가 수신 시각 후속:** PR #183/184는 main `7037717`에 병합됐고 운영 미배포다. [PDS·동시 관측 흐름·남은 우선순위](docs/research/decision-quote-receipt-time-2026-10-13.md): 복사 시각과 실제 수신을 분리하고 종료 기록 drain을 검증한다. KIS 계좌 권리 TR `CTRGA011R` 발견, 실제 조회/금액 대사는 미완료. 운영 `161b394`·10월14일 고정 파일럿을 보존하며, 그 뒤 배포와 새 동시 관측이 필요하다. 아래는 당시 기록이다.
+
 > **2026-10-13 — 64차 LLM 판단 재생 기록·계좌 기준선 결측(PR 대기·운영 미배포):** `llm_second_check` 판단마다 공통 입력 원문·역할 지문·Bull/Bear/폴백 시도별 요청/실제 모델·시각·토큰·비용·예산 예약 토큰·결과를 `~/.cache/ai_trader/llm_decisions/decisions-YYYY-MM.jsonl` 에 남기고 `signal_events.metadata.llm_decision` 으로 조인한다(기록 실패는 `record_status`, 판단 불변, 별도 소켓 없음). 계좌 기준선은 시작 순자산·입출금·배당·운영비 결측으로 TWR null 보존, 새 KIS 호출 0. [B 설계](docs/research/llm-decision-record-2026-10-13.md) · [A 상태](docs/operations/account-baseline-status-2026-10-13.md). 10월14일 관측·운영 `161b394` 불변.
 
 > **2026-10-13 07:34 KST — 73차 배포·예약 완료:** [PDS·통합 흐름·남은 작업](docs/research/market-state-pilot-2026-10-13.md). PR #181/운영 `161b394a`·PID1114252·NRestarts0·오류/pending0·복구ready. 로컬/CI/운영5373통과·독립 실제 Opus5 승인. **10월14일08:55 활성화/09:00~09:05 한 종목 기술 관측 예약**, 새 요청 미소비·실수집 미완료. 소비된10월8일 drop-in만 백업 후 정리, 나머지 보호13경로/매수 중지/월100 기존 집계 보존. 수집 전 운영 HEAD/설정 변경 금지(고정 예약 중단). 새20일 미예약·순수익 미검증. 아래는 당시 기록이다.
