@@ -28,12 +28,22 @@ def parse_time(value: Any, label: str) -> datetime:
 
 
 def _read_lines(path, *, max_bytes: int) -> Iterable[bytes]:
+    """정규 파일만, 읽은 바이트를 누적 검사한다 — 검사 뒤 파일이 자라도(월별 판단 파일에 append) 한도를 넘지 않는다."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError("max_bytes 는 양의 정수여야 한다")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as handle:
         info = os.fstat(handle.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
             raise ValueError("정규 파일/읽기 크기 한도 위반")
-        for line in handle:
+        total = 0
+        while True:
+            line = handle.readline(max_bytes - total + 1)
+            if not line:
+                return
+            total += len(line)
+            if total > max_bytes or not line.endswith(b"\n"):
+                raise ValueError("읽기 크기 한도 초과/부분 기록")
             if line.strip():
                 yield line
 

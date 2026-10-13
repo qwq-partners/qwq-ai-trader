@@ -148,3 +148,38 @@ def test_time_limits_must_be_finite_and_nonnegative():
             join_decisions([_decision()], [], ledger_status=OK_LEDGER, max_delay_seconds=bad)
         with pytest.raises(ValueError):
             join_decisions([_decision()], [], ledger_status=OK_LEDGER, max_state_age_seconds=bad)
+
+
+# ── 3차 리뷰 반영: 누적 읽기 한도 / 빈 SHA ──
+
+def test_read_limit_is_cumulative_and_rejects_partial_last_line(tmp_path):
+    import pytest
+    from src.analytics.decision_quote_join import _read_lines
+    f = tmp_path / "d.jsonl"
+    f.write_text(json.dumps(_decision()) + "\n" + json.dumps(_decision(did="dec-2")) + "\n")
+    size = f.stat().st_size
+    assert len(list(_read_lines(f, max_bytes=size))) == 2
+    with pytest.raises(ValueError):
+        list(_read_lines(f, max_bytes=size - 1))              # 두 번째 행이 한도를 넘는다
+    g = tmp_path / "partial.jsonl"
+    g.write_text(json.dumps(_decision()) + "\n" + '{"schema_version": "llm-decision-v1"')   # 개행 없는 부분 기록
+    with pytest.raises(ValueError):
+        list(_read_lines(g, max_bytes=1 << 20))
+    for bad in (0, -1, True):
+        with pytest.raises(ValueError):
+            list(_read_lines(f, max_bytes=bad))
+
+
+def test_cli_rejects_empty_or_malformed_sha(tmp_path):
+    import subprocess, sys
+    from pathlib import Path
+    dec = tmp_path / "decisions.jsonl"; dec.write_text(json.dumps(_decision()) + "\n")
+    led = tmp_path / "engine.jsonl"; led.write_text(json.dumps(_env(_quote("005490", "2026-10-14T00:01:00.2"))) + "\n")
+    script = Path(__file__).resolve().parents[1] / "scripts" / "report_decision_quotes.py"
+    for sha in ("", "abc"):
+        proc = subprocess.run([sys.executable, str(script), "--decisions", str(dec), "--ledger", str(led), "--study-sha256", sha],
+                              capture_output=True, text=True)
+        assert proc.returncode == 2 and "study-sha256" in proc.stdout, (sha, proc.stdout)
+    proc = subprocess.run([sys.executable, str(script), "--decisions", str(dec), "--ledger", str(led), "--max-delay-seconds", "nan"],
+                          capture_output=True, text=True)
+    assert proc.returncode == 2

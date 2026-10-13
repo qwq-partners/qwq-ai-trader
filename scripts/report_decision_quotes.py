@@ -34,7 +34,11 @@ def main() -> int:
             print(json.dumps({"error": f"--{name.replace('_', '-')} 는 유한한 0 이상 값이어야 한다: {value}"}))
             return 2
     ledger_status = dict(UNVERIFIED_LEDGER)
-    if args.study_sha256:
+    if args.study_sha256 is not None:
+        import re
+        if re.fullmatch(r"[0-9a-f]{64}", args.study_sha256) is None:   # 빈 문자열·형식 오류는 미지정이 아니라 오류다
+            print(json.dumps({"error": "--study-sha256 는 64자리 소문자 hex 여야 한다"}))
+            return 2
         from src.analytics.entry_observation_journal import read_observation_journal
         try:
             verified = read_observation_journal(args.ledger, max_bytes=args.max_bytes,
