@@ -404,6 +404,10 @@ def test_readonly_broker_requires_env_and_reads_repo_dotenv(monkeypatch, tmp_pat
     def fake_load():
         loaded.append(True); monkeypatch.setenv("KIS_APPKEY", "k"); monkeypatch.setenv("KIS_CANO", "1")
     monkeypatch.setattr(cli, "_load_env", fake_load)
-    with pytest.raises(RuntimeError) as e:          # 변수는 채워졌고 다음 단계(캐시 토큰 없음)에서 멈춘다
+    import src.utils.token_manager as tm_mod
+    class NoToken:                                   # 운영 캐시 경로를 건드리지 않는 가짜 토큰 매니저
+        def _is_token_valid(self): return False
+    monkeypatch.setattr(tm_mod, "KISTokenManager", NoToken)
+    with pytest.raises(RuntimeError, match="캐시된 KIS 토큰") as e:   # 변수는 채워졌고 다음 단계(캐시 토큰 없음)에서 멈춘다
         asyncio.run(cli._open_readonly_broker())
-    assert loaded == [True] and "환경변수 없음" not in str(e.value)
+    assert loaded == [True]
