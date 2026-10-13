@@ -364,6 +364,9 @@ def test_expired_accepted_offer_does_not_consume_the_daily_pair(tmp_path):
     try:
         assert worker.offer(envelope(worker, "dec-0")) == "accepted"
         assert wait(lambda: worker.health()["started"] == 1)
+        # started 는 러너 claim 전에 오른다 — 시계를 옮기기 전에 dec-0 의 원장 입장이 끝났는지 기다린다.
+        # (안 기다리면 러너가 live_input_too_old 로 보수적으로 거부해 다른 시나리오가 된다)
+        assert wait(lambda: worker.runner.admitted_pair_ids(ledger.today().isoformat()))
         assert worker.offer(envelope(worker, "dec-1")) == "accepted"
         clock.at = NOW + timedelta(seconds=6)
         op.gate.set()
