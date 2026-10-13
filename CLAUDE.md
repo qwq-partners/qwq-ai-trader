@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-13 — 66차 권리조회 수집·동시 관측 초안·모델 비교 비용(PR 대기·운영 미배포):** KIS `CTRGA011R` 읽기 전용 수집 CLI(`scripts/ops/kis_period_rights.py`, 장중·봇 가동 중 거부·비공개 저장·전체 페이지·부분 완료 구분) 로 **2025-01~2026-09 실조회 완료**(22창, 8행, 오류 0 — 상태·건수만 문서, 금액 비공개, 소득 승격 아님; 2024년 이하 미실행), signal-window+장 상태 증거 초안의 `CapturePlan` 통합 검사 통과(버퍼/큐 40,000·상태 30,000, 미설치), 모델 비교 비용 상한 계산기(가용 $99.70·예비 50%·폴백 체인 합산 → max 기준 일 60~99쌍). CLI 는 실행 원장을 열지 않고 캐시 토큰만 읽는다. 유료 호출·운영 변경 없음. [A 상태](docs/operations/account-baseline-status-2026-10-13.md) · [B 설계](docs/research/concurrent-observation-design-2026-10-13.md) · [C 계획](docs/research/model-comparison-plan-2026-10-13.md).
+
 > **2026-10-13 — 판단/호가 수신 시각 후속:** PR #183/184는 main `7037717`에 병합됐고 운영 미배포다. [PDS·동시 관측 흐름·남은 우선순위](docs/research/decision-quote-receipt-time-2026-10-13.md): 복사 시각과 실제 수신을 분리하고 종료 기록 drain을 검증한다. KIS 계좌 권리 TR `CTRGA011R` 발견, 실제 조회/금액 대사는 미완료. 운영 `161b394`·10월14일 고정 파일럿을 보존하며, 그 뒤 배포와 새 동시 관측이 필요하다. 아래는 당시 기록이다.
 
 > **2026-10-13 — 64차 LLM 판단 재생 기록·계좌 기준선 결측(PR 대기·운영 미배포):** `llm_second_check` 판단마다 공통 입력 원문·역할 지문·Bull/Bear/폴백 시도별 요청/실제 모델·시각·토큰·비용·예산 예약 토큰·결과를 `~/.cache/ai_trader/llm_decisions/decisions-YYYY-MM.jsonl` 에 남기고 `signal_events.metadata.llm_decision` 으로 조인한다(기록 실패는 `record_status`, 판단 불변, 별도 소켓 없음). 계좌 기준선은 시작 순자산·입출금·배당·운영비 결측으로 TWR null 보존, 새 KIS 호출 0. [B 설계](docs/research/llm-decision-record-2026-10-13.md) · [A 상태](docs/operations/account-baseline-status-2026-10-13.md). 10월14일 관측·운영 `161b394` 불변.
