@@ -882,14 +882,25 @@ class CrossStrategyValidator:
                                                budget_priority="essential"),
                     timeout=10.0,
                 )
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as _to:
                 _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at, None,
                                                            timed_out=True, role_system_sha256=None,
-                                                           role_suffix=_single_suffix)]
+                                                           role_suffix=_single_suffix,
+                                                           trail=getattr(_to, "_llm_trail", None))]
                 return self._finish_decision(
                     True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
                     market_regime=market_regime, common_context=common_context, stage="single_fallback",
                     attempts=_attempts, result={"confidence": 0.0, "reason": "단일 폴백 타임아웃 — fail-open",
+                                                "failed": True, "adversarial_failed_reason": _adv_failed_reason})
+            except Exception as _single_err:
+                # 공급자·로컬 검증 예외도 기존처럼 fail-open 이지만, 확보한 Bull/Bear 시도와 함께 기록한다 (재리뷰 P2)
+                logger.debug(f"[크로스검증] 단일 폴백 예외 (통과): {_single_err}")
+                _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at, _single_err,
+                                                           role_system_sha256=None, role_suffix=_single_suffix)]
+                return self._finish_decision(
+                    True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                    market_regime=market_regime, common_context=common_context, stage="single_fallback",
+                    attempts=_attempts, result={"confidence": 0.0, "reason": "단일 폴백 예외 — fail-open",
                                                 "failed": True, "adversarial_failed_reason": _adv_failed_reason})
             _attempts = _adv_attempts + [attempt_record("single", getattr(resp, "provider", None),
                                                        _single_requested_at, resp, role_system_sha256=None,

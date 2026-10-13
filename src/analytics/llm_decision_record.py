@@ -96,10 +96,17 @@ def _sum_trail_cost(trail: Any) -> Dict[str, Any]:
 
 def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], response: Any, *,
                    role_system_sha256: Optional[str], role_suffix: Optional[str],
-                   timed_out: bool = False, responded_at: Optional[datetime] = None) -> Dict[str, Any]:
-    """LLM 호출 시도 하나의 기록. `response` 는 LLMResponse, Exception, 또는 None(타임아웃·미도달)."""
+                   timed_out: bool = False, responded_at: Optional[datetime] = None,
+                   trail: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """LLM 호출 시도 하나의 기록. `response` 는 LLMResponse, Exception, 또는 None(타임아웃·미도달).
+    `trail` 은 응답이 없을 때(취소·예외) LLMManager 가 예외에 붙여 준 실제 호출 내역이다."""
     exc = response if isinstance(response, BaseException) else None
     resp = None if exc is not None else response
+    if exc is not None:
+        if trail is None:
+            trail = getattr(exc, "_llm_trail", None)
+        if resp is None:
+            resp = getattr(exc, "_llm_response", None)   # 공급자 예외에 붙은 미전송/실패 응답(예산·토큰 보존)
     block = getattr(resp, "budget_block_reason", None)
     if timed_out:
         outcome = "timeout"
@@ -122,7 +129,8 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
     if requested_model is None:
         requested_model = getattr(resp, "model", None)
     content = _truncate(getattr(resp, "content", None))
-    trail = getattr(resp, "attempt_trail", None)
+    if trail is None:
+        trail = getattr(resp, "attempt_trail", None)
     trail_summary = _sum_trail_cost(trail)
     return {
         "attempt_id": new_id("att"),
@@ -278,8 +286,9 @@ class DecisionRecorder:
 
     def _write(self, record: Dict[str, Any]) -> None:
         path = self._path_for(record)
-        line = (json.dumps(record, ensure_ascii=False, default=str) + "\n").encode("utf-8")
         try:
+            # ensure_ascii=True: 응답의 단독 surrogate 등 비정상 문자도 이스케이프돼 인코딩 예외가 없다 (재리뷰 P2)
+            line = (json.dumps(record, ensure_ascii=True, default=str) + "\n").encode("utf-8")
             path.parent.mkdir(parents=True, exist_ok=True)
             current = path.stat().st_size if path.exists() else 0
             if current + len(line) > self.max_file_bytes:
@@ -295,7 +304,7 @@ class DecisionRecorder:
             with self._lock:
                 self.stats["written"] += 1
                 self._note_outcome(record, "written")
-        except OSError as error:
+        except Exception as error:   # 직렬화·인코딩·OS 오류 모두 실패로 집계하고 스레드는 계속 돈다
             with self._lock:
                 self.stats["write_errors"] += 1
                 self._note_outcome(record, "write_error")
@@ -306,7 +315,10 @@ class DecisionRecorder:
             item = self._queue.get()
             if item is None:
                 return
-            self._write(item)
+            try:
+                self._write(item)
+            except Exception as error:  # 어떤 예외도 기록 스레드를 멈추게 하지 않는다
+                logger.warning(f"[판단기록] 기록 처리 예외 (계속): {error}")
 
     def flush(self, timeout: float = 5.0) -> bool:
         """큐가 비고 쓰기가 끝날 때까지 대기 (시험·종료용). 시간 초과면 False."""

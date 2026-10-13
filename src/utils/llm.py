@@ -810,6 +810,9 @@ class LLMManager:
         token = _ATTEMPT_TRAIL.set([])
         try:
             response = await self._complete_impl(prompt, task, system, **kwargs)
+        except BaseException as exc:
+            self._attach_trail_to_exception(exc, _ATTEMPT_TRAIL.get())
+            raise
         finally:
             trail = _ATTEMPT_TRAIL.get()
             _ATTEMPT_TRAIL.reset(token)
@@ -978,6 +981,9 @@ class LLMManager:
         token = _ATTEMPT_TRAIL.set([])
         try:
             response = await self._complete_with_impl(prompt, provider, weight, system, retry_on_empty, **kwargs)
+        except BaseException as exc:
+            self._attach_trail_to_exception(exc, _ATTEMPT_TRAIL.get())
+            raise
         finally:
             trail = _ATTEMPT_TRAIL.get()
             _ATTEMPT_TRAIL.reset(token)
@@ -989,6 +995,16 @@ class LLMManager:
         try:
             if response is not None and isinstance(trail, list):
                 response.attempt_trail = list(trail)
+        except Exception:
+            pass
+
+    @classmethod
+    def _attach_trail_to_exception(cls, exc: BaseException, trail) -> None:
+        """타임아웃 취소·공급자 예외에서도 이미 보낸 시도(비용·예약 토큰)를 잃지 않는다 (64차 재리뷰 P1)."""
+        try:
+            if isinstance(trail, list):
+                exc._llm_trail = list(trail)
+                cls._attach_trail(getattr(exc, "_llm_response", None), trail)
         except Exception:
             pass
 
@@ -1084,8 +1100,8 @@ class LLMManager:
             cost = None
             if response.request_sent and response.usage_known and isinstance(response.input_tokens, int) \
                     and isinstance(response.output_tokens, int):
-                quote = rate_quote(response.requested_model or response.model,
-                                   response.input_tokens, response.output_tokens)
+                _model = response.requested_model if response.requested_model is not None else response.model
+                quote = rate_quote(_model, response.input_tokens, response.output_tokens)
                 if quote is not None:
                     from decimal import Decimal
                     cost = str(Decimal(str(quote.cost_usd)))

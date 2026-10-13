@@ -137,6 +137,7 @@ def _attempts_from_slots(requested_at, slots):
         done = "response" in slot
         rows.append(safe_attempt_record(role, provider, requested_at, slot.get("response") if done else None,
                                         timed_out=not done, responded_at=slot.get("responded_at"),
+                                        trail=slot.get("trail"),
                                         role_system_sha256=sha256_text(system), role_suffix=suffix))
     return rows
 
@@ -220,8 +221,10 @@ class AdversarialValidator:
             # 역할별 완료 시각·결과를 보관 — 전체 타임아웃이 나도 먼저 끝난 쪽의 응답·비용은 남는다 (리뷰 P2)
             try:
                 result = await coro
-            except asyncio.CancelledError:
-                raise                                   # 전체 타임아웃의 취소 — 미완료로 남긴다(timeout)
+            except asyncio.CancelledError as error:
+                # 전체 타임아웃의 취소 — 미완료(timeout)로 남기되 이미 보낸 호출 내역은 보존한다 (재리뷰 P1)
+                slots[role]["trail"] = getattr(error, "_llm_trail", None)
+                raise
             except BaseException as error:
                 slots[role].update(response=error, responded_at=now_kst())
                 raise

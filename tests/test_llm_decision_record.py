@@ -283,3 +283,82 @@ def test_health_stats_helper_requires_installed_enabled_recorder(tmp_path):
     set_decision_recorder(DecisionRecorder(tmp_path, enabled=True))
     assert _decision_record_stats()["queued"] == 0
     set_decision_recorder(None)
+
+
+# ── 재리뷰 반영: 예외·취소에서 trail 보존 / 직렬화 예외 / 폴백 일반 예외 / "" 모델 보존 ──
+
+def test_trail_survives_cancellation_and_exception(monkeypatch):
+    """P1: 빈 응답(비용 발생) 뒤 재시도가 취소/예외로 끝나도 이미 보낸 호출의 예약 토큰은 예외에 남는다."""
+    from src.utils.llm import LLMManager, LLMUsage
+    mgr = object.__new__(LLMManager)
+    mgr.daily_usage = LLMUsage()
+    monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
+
+    async def cancelled_impl(prompt, provider, weight, system, retry_on_empty, **kwargs):
+        mgr._account_attempt(_resp("", budget_reservation_token="tok-a"), "t", "r")
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(mgr, "_complete_with_impl", cancelled_impl, raising=False)
+    with pytest.raises(asyncio.CancelledError) as info:
+        asyncio.run(mgr.complete_with("p", LLMProvider.OPENAI))
+    assert [t["budget_reservation_token"] for t in info.value._llm_trail] == ["tok-a"]
+    row = attempt_record("bear", LLMProvider.GEMINI, None, None, timed_out=True, trail=info.value._llm_trail,
+                         role_system_sha256=None, role_suffix="x")
+    assert row["outcome"] == "timeout" and row["calls_count"] == 1 and row["calls"][0]["budget_reservation_token"] == "tok-a"
+
+    async def failing_impl(prompt, task, system, **kwargs):
+        mgr._account_attempt(_resp("", budget_reservation_token="tok-b"), "t", "r")
+        err = RuntimeError("Provider invocation failed")
+        err._llm_response = _resp("", success=False, budget_reservation_token="tok-c", usage_known=False)
+        raise err
+
+    monkeypatch.setattr(mgr, "_complete_impl", failing_impl, raising=False)
+    with pytest.raises(RuntimeError) as info2:
+        asyncio.run(mgr.complete("p"))
+    row2 = attempt_record("single", None, None, info2.value, role_system_sha256=None, role_suffix="x")
+    assert row2["outcome"] == "exception" and row2["calls_count"] == 1
+    assert row2["budget"]["reservation_token"] == "tok-c"            # 예외에 붙은 실패 응답의 토큰
+
+
+def test_recorder_writes_lone_surrogate_and_counts_serialization_failures(tmp_path):
+    r = DecisionRecorder(tmp_path / "d", enabled=True)
+    row = decision_record(signal_id="s", symbol="X", strategy="s", score=1, market_regime="r",
+                          common_context="c \ud800 깨진", stage="adversarial", attempts=[], approved=True,
+                          result={}, budget_context=None)
+    assert r.submit(row) == "queued" and r.flush(5.0) and r.status_of(row["decision_id"]) == "written"
+    saved = json.loads(next((tmp_path / "d").glob("*.jsonl")).read_text(encoding="utf-8").splitlines()[0])
+    assert saved["inputs"]["common_context"] == "c \ud800 깨진"
+    # 직렬화 불가 객체는 default=str 로 처리되지만, 그래도 실패하면 스레드는 살고 write_error 로 남는다
+    bad = dict(row); bad["decision_id"] = "bad-1"; bad["inputs"] = {"x": object()}
+    r.submit(bad); assert r.flush(5.0)
+    again = decision_record(signal_id="s2", symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
+                            stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
+    assert r.submit(again) == "queued" and r.flush(5.0) and r.status_of(again["decision_id"]) == "written"
+    r.close()
+
+
+def test_fallback_generic_exception_is_recorded_with_prior_attempts(monkeypatch, recorder):
+    class _Boom(_LLM):
+        async def complete(self, prompt, **kwargs):
+            raise RuntimeError("provider exploded")
+
+    cross = _cross(monkeypatch, _Boom("unparseable", "unparseable"))
+    assert asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="sig-9")) is True
+    row = _records(recorder)[0]
+    assert row["stage"] == "single_fallback" and row["result"]["failed"] is True
+    assert [a["role"] for a in row["attempts"]] == ["bull", "bear", "single"]
+    assert row["attempts"][2]["outcome"] == "exception" and "exploded" in row["attempts"][2]["error"]
+    assert cross.last_llm_decision["record_status"] == "queued"
+
+
+def test_empty_string_requested_model_is_preserved_in_trail(monkeypatch):
+    from src.utils.llm import LLMManager, LLMUsage, _ATTEMPT_TRAIL
+    mgr = object.__new__(LLMManager)
+    mgr.daily_usage = LLMUsage()
+    monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
+    token = _ATTEMPT_TRAIL.set([])
+    try:
+        mgr._account_attempt(_resp("x", requested_model=""), "t", "r")
+        assert _ATTEMPT_TRAIL.get()[0]["requested_model"] == ""      # "" 를 다른 모델로 바꾸지 않는다
+    finally:
+        _ATTEMPT_TRAIL.reset(token)
