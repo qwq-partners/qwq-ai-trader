@@ -66,5 +66,26 @@ flowchart TD
 - PLAN 확정. 두 구현 worktree를 분리했다. 경제성 worktree는 작업자 제한으로 사용하지 않고 총괄 worktree에서 소유한다.
 - DO 구현·오프라인 검증 완료. 실제 유효 관측·사이징 재생 입력·유료 비교 실행기는 후속 단계이며, 이번 가드/계산기만으로 실험을 자동 시작하지 않는다.
 - 경제성 독립 리뷰(Astra/high 요청, 실제 metadata unverified): 수수료 float/string/None과 최대 날짜 입력의 P2 두 건을 재현·수정했다. 관련26검사 통과 및 독립 재검증/범위 한정 승인. 참조·원천 인증이나 실제 수익 승인은 아니다.
-- 최종 통합 UTC `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`: **5606 passed / 2 skipped / 2 known xfailed**, rc0. 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 기존 pykrx deprecation warning 1건. KST 변경 관련147검사 rc0. 앞선5603 검사는 경제성 마지막 수정 전 결과이며 최종 결과로 사용하지 않는다.
+- 후속 수정 전 통합 UTC `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`: **5606 passed / 2 skipped / 2 known xfailed**, rc0. 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 기존 pykrx deprecation warning 1건. KST 변경 관련147검사 rc0. 앞선5603 검사는 경제성 마지막 수정 전 결과이며 최종 결과로 사용하지 않는다.
 - 관측/호출 예산의 첫 source-only Claude Opus5/xhigh 통합 리뷰는 로컬9분 절대 시한으로 종료돼 승인으로 세지 않았다. actual model=claude-opus-5는 노출됐으나 최종 판정은 없다. 동일 모델/effort/auth/도구 제한의 작은 대조 요청은7초/rc0/실제Opus5로 완료했다. 공급자 불가로 단정하지 않고 관측/예산으로 범위를 나눠 별도 리뷰를 요청했다(각8분/USD4 개발 리뷰 한도). 실제 판정과 그 뒤 CI/병합 상태는 [PR #188의 최종 검증 기록](https://github.com/qwq-partners/qwq-ai-trader/pull/188)을 정본으로 삼는다. 초안 PR 생성·push는 완료했으며, 최종 리뷰 승인과 CI 성공 전 병합하지 않는다.
+
+### 독립 리뷰 후속
+
+분할 xhigh 요청도 계속 생성하는 중 8분 절대 시한에 도달했다. 같은 모델·인증·도구 제한의 진단 뒤 요청 effort를 **high**로 명시 변경했다. 예산 리뷰는 실제 Claude Opus5/정상 종료로 P1 1건을 제시했고, 관측 리뷰는 지적 출력 중 시한 종료돼 완료된 승인으로 세지 않았다. 시간 초과를 공급자 불가나 코드 승인으로 해석하지 않는다.
+
+- 예산 P1: 예약 뒤 불필요한 전송 전 포렌식 쓰기가 DB 잠금에 막히면 무전송 예약까지 불명으로 남았다. 실제 임시 SQLite 잠금으로 전송0/불명1을 재현하고 해당 쓰기를 제거해 전송1/실측 정산/불명0을 확인했다. 응답 비용 계약·수치 범위·역할 충돌·경합 시험의 P2도 보완했다. 실제 전송 뒤 불명 비용은 기존 보호 정책대로 유지한다.
+- 관측 P1: 시작 저장 뒤 배정이 실패하면 고립 기록이 남았다. 두 기록의 신원·시각·용량·형식을 저장 전에 함께 검사하고 메모리/큐에 한 쌍으로 등록한다. 디스크 쓰기의 두 레코드 crash-atomic 보장은 아니며 쓰기 장애에는 기존 미봉인/incomplete 경계를 적용한다.
+- 관측 P2 중 최초5종목 계약·봉인 재생 누락은 기존 코드/시험과 대조해 기각했다. `validate_window_contract`가 정확히5를 강제하고 `validate_study_binding`이 해당 재생 검사를 호출한다. 기존 `order_ready` 모집단과 재사용 구독기의 사유 코드는 보존한다. 실제 runner의 관측 owner 배선도 기존에 있다.
+- 남은 제한: 공유 예산의 불명 비용이 운영 호출에도 영향을 주는 점, 기록 보존/정책 이전, 비공개 원장 API 결합, 직렬 구독 중 운영 등록 지연 가능성은 실연결·설치 단계에서 다룬다. 해당 범위를 이번 수정으로 해소했다고 주장하지 않는다.
+
+수정본의 최종 전체 검사와 source-only 재리뷰 결과는 아래 또는 PR #188의 최종 검증 기록을 따른다. 앞선5606/147검사는 위 후속 수정 전 결과다.
+
+
+### 최종 SEE — 후속 수정 포함
+
+- 통합 소스 `b82ea39`(예산 수정 `3f96a3c` 포함): UTC 전체 verify **5640 passed / 2 skipped / 2 known xfailed**, rc0. 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 기존 pykrx 경고1건. KST 변경 관련 **181 passed**, rc0. 이후 문서만 갱신했다.
+- 관측: 실제 **claude-opus-5**, 요청 effort **high**(effective effort 미노출), source-only 재리뷰 정상 종료/162.2초/rc0, **APPROVE·통합 차단 요인 없음**. 시작/배정 실패 전 검증과 큐 동시 등록, 구버전/default/거래 경계 보존을 확인했다.
+- 예산: 실제 **claude-opus-5**, 요청 effort **high**(effective effort 미노출), source-only 재리뷰 정상 종료/168.1초/rc0, **APPROVE·P0/P1 없음**. 무전송 고아 경로 제거와 전송 뒤 불명 보호 유지 확인. 두 리뷰는 Codex 구현에 대한 다른 공급자 독립 리뷰이며 실제 운영 실행 승인이 아니다.
+- 관측의 비차단 P2는 Queue 내부 규약·기본 publish와의 중복/계층 결합이다. `other` 분류는 현재 `_record_category`와 동일함을 총괄이 확인했다. 버전 변경 시 동시 갱신/회귀시험이 필요하다. 예산의 정산 후 부가 기록 오류·사유별 재시도·정책 목록 순서·복구 제한은 C의 실연결 전 과제로 남긴다.
+- 경제성 계산기는 앞선 별도 독립 리뷰와 최종 회귀 검사를 포함한다. 실제 어댑터·선행 사이징 캡처/재생·실측/수익성 판정은 미완료다. 개발 리뷰 호출과 엔진 유료 비교 호출을 구분하며 이번 엔진 유료 비교 호출은0이다.
+- 최종 문서 커밋·push 및 같은 head의 CI/병합 영수증은 [PR #188](https://github.com/qwq-partners/qwq-ai-trader/pull/188)에 기록한다. 운영 체크아웃은 `161b394`, 사용자 수정 `config/evolved_overrides.yml` 보존. 서비스·예약·운영 원장은 이번 작업에서 변경하거나 재검사하지 않았다.
