@@ -116,3 +116,35 @@ def test_loaders_and_summary(tmp_path):
     s = summarize(rows, ledger_status=OK_LEDGER)
     assert s["decisions"] == 2 and s["evaluable"] == 2 and s["approved_evaluable"] == 1 and s["reasons"] == {}
     assert summarize(rows)["ledger"]["verified"] is False and "체결 가능성" in s["note"]
+
+
+# ── 재리뷰 반영: 빈 필드·손상 시각·NaN 한도 ──
+
+def test_empty_state_fields_are_not_evidence_but_zero_is():
+    good = _state("005490", "2026-10-14T00:00:58.0", "H0STMKO0", vi="0")
+    r_ok = join_decisions([_decision()], [_quote("005490", "2026-10-14T00:01:00.2"), good], ledger_status=OK_LEDGER)[0]
+    assert r_ok["reasons"] == [] and r_ok["market_state_at_quote"]["H0STMKO0"]["vi_cls_code"] == "0"
+    empty = dict(good); empty["vi_cls_code"] = ""; empty["trht_yn"] = None
+    r_bad = join_decisions([_decision()], [_quote("005490", "2026-10-14T00:01:00.2"), empty], ledger_status=OK_LEDGER)[0]
+    assert r_bad["evaluable"] is False
+    assert r_bad["reasons"] == ["market_state_fields_missing:H0STMKO0:trht_yn,vi_cls_code"]
+
+
+def test_corrupt_observed_at_marks_symbol_unevaluable_and_is_counted():
+    corrupt = _quote("005490", "not-a-time", qid="corrupt")
+    payloads = [corrupt, _quote("005490", "2026-10-14T00:01:00.2", qid="first"), _state("005490", "2026-10-14T00:00:58.0", "H0STMKO0")]
+    rows = join_decisions([_decision(), _decision(symbol="000660", did="dec-2")], payloads, ledger_status=OK_LEDGER)
+    assert "ledger_record_time_invalid" in rows[0]["reasons"] and rows[0]["evaluable"] is False
+    assert rows[0]["first_quote_after"]["quote_id"] == "first"          # 선택은 하되 신뢰하지 않는다
+    assert "ledger_record_time_invalid" not in rows[1]["reasons"]        # 다른 종목은 영향 없음
+    assert summarize(rows, ledger_status=OK_LEDGER)["ledger_record_time_errors_by_symbol"] == {"005490": 1}
+
+
+def test_time_limits_must_be_finite_and_nonnegative():
+    import math
+    import pytest
+    for bad in (math.nan, math.inf, -1, True):
+        with pytest.raises(ValueError):
+            join_decisions([_decision()], [], ledger_status=OK_LEDGER, max_delay_seconds=bad)
+        with pytest.raises(ValueError):
+            join_decisions([_decision()], [], ledger_status=OK_LEDGER, max_state_age_seconds=bad)

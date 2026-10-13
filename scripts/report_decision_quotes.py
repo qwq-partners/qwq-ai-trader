@@ -27,6 +27,12 @@ def main() -> int:
     parser.add_argument("--max-state-age-seconds", type=float, default=DEFAULT_MAX_STATE_AGE_SECONDS)
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     args = parser.parse_args()
+    import math
+    for name in ("max_delay_seconds", "max_state_age_seconds"):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0:
+            print(json.dumps({"error": f"--{name.replace('_', '-')} 는 유한한 0 이상 값이어야 한다: {value}"}))
+            return 2
     ledger_status = dict(UNVERIFIED_LEDGER)
     if args.study_sha256:
         from src.analytics.entry_observation_journal import read_observation_journal

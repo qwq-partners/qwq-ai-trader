@@ -78,6 +78,24 @@ def _positive_int(value: Any) -> Optional[int]:
 
 
 VI_CHANNEL = "H0STMKO0"          # 장운영(VI·정지) 채널 — 체결 채널(H0STCNT0)은 VI 코드를 주지 않는다
+# 채널별로 '근거가 있다' 고 말하려면 실제 값이 있어야 하는 필드. 파서는 빈 문자열도 raw_only 로 통과시키므로
+# 여기서 결측·빈 문자열을 잡는다 — "0" 은 유효한 값으로 보존한다 (재리뷰 P1).
+REQUIRED_STATE_FIELDS = {
+    "H0STMKO0": ("trht_yn", "mkop_cls_code", "vi_cls_code", "iscd_stat_cls_code"),
+    "H0STCNT0": ("market_cls_code", "trht_yn", "hour_cls_code"),
+}
+
+
+def _finite_nonnegative(value: Any, label: str) -> float:
+    import math
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError(f"{label}: 유한한 0 이상 초 단위 값이 필요하다 ({value!r})")
+    return float(value)
+
+
+def _missing_fields(tr_id: str, state: Dict[str, Any]) -> List[str]:
+    required = REQUIRED_STATE_FIELDS.get(tr_id, ())
+    return [name for name in required if not isinstance(state.get(name), str) or state.get(name) == ""]
 DEFAULT_MAX_STATE_AGE_SECONDS = 60.0
 UNVERIFIED_LEDGER = {"verified": False, "complete": None, "incomplete_reasons": ["ledger_not_verified"]}
 
@@ -97,16 +115,23 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                    max_delay_seconds: float = DEFAULT_MAX_DELAY_SECONDS,
                    max_state_age_seconds: float = DEFAULT_MAX_STATE_AGE_SECONDS,
                    ledger_status: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    max_delay_seconds = _finite_nonnegative(max_delay_seconds, "max_delay_seconds")
+    max_state_age_seconds = _finite_nonnegative(max_state_age_seconds, "max_state_age_seconds")
     ledger_reasons = _ledger_reasons(ledger_status)
     quotes: Dict[str, List[tuple]] = {}
     states: Dict[str, List[tuple]] = {}
+    # 시각이 손상된 레코드는 조용히 버리지 않는다 — 그 종목의 판단은 '첫 호가/최신 상태' 를 믿을 수 없다 (재리뷰 P2)
+    time_errors: Dict[str, int] = {}
     for p in payloads:
         symbol = p.get("symbol")
         if not isinstance(symbol, str):
-            continue
+            symbol = "<missing_symbol>"
         try:
             at = parse_time(p.get("observed_at"), f"{p.get('kind')} observed_at")
         except ValueError:
+            time_errors[symbol] = time_errors.get(symbol, 0) + 1
+            continue
+        if symbol == "<missing_symbol>":
             continue
         (quotes if p.get("kind") == "ws_quote" else states).setdefault(symbol, []).append((at, p))
     for bucket in (quotes, states):
@@ -120,6 +145,8 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
         if not isinstance(result, dict):
             result = {}
         reasons: List[str] = list(ledger_reasons)
+        if time_errors.get(symbol) or time_errors.get("<missing_symbol>"):
+            reasons.append("ledger_record_time_invalid")
         row: Dict[str, Any] = {
             "decision_id": d.get("decision_id"), "signal_id": d.get("signal_id"), "symbol": symbol,
             "stage": d.get("stage"), "approved": result.get("approved"),
@@ -185,6 +212,9 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                     }
                     if s.get("market_state_status") != "raw_only":
                         reasons.append(f"market_state_not_raw:{tr_id}")
+                    missing = _missing_fields(tr_id, s)
+                    if missing:
+                        reasons.append(f"market_state_fields_missing:{tr_id}:{','.join(missing)}")
                     if age > max_state_age_seconds:
                         reasons.append(f"market_state_stale:{tr_id}")
                 row["market_state_at_quote"] = channels
@@ -192,6 +222,8 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                     reasons.append("market_state_vi_channel_missing")   # VI·정지 근거 없이 '진입 가능' 을 말하지 않는다
         row.update(evaluable=not reasons, reasons=reasons)
         out.append(row)
+    if out:
+        out[0].setdefault("_ledger_time_errors", dict(time_errors))   # 요약용 — 첫 행에 집계를 싣는다
     return out
 
 
@@ -203,9 +235,11 @@ def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, A
             row_reasons = []
         for reason in row_reasons:
             reasons[reason] = reasons.get(reason, 0) + 1
+    time_errors = rows[0].get("_ledger_time_errors") if rows and isinstance(rows[0].get("_ledger_time_errors"), dict) else {}
     return {
         "schema_version": SCHEMA_VERSION,
         "ledger": dict(ledger_status) if isinstance(ledger_status, dict) else dict(UNVERIFIED_LEDGER),
+        "ledger_record_time_errors_by_symbol": time_errors,
         "decisions": len(rows),
         "evaluable": sum(1 for r in rows if r.get("evaluable") is True),
         "approved_evaluable": sum(1 for r in rows if r.get("evaluable") is True and r.get("approved") is True),
