@@ -4,7 +4,7 @@
 
 ## PLAN — 무엇을 비교하고 무엇을 비교하지 않나
 
-- 현행: Bull = `openai_model_light`(gpt-5-mini, `reasoning_effort="minimal"`, max_tokens 400), Bear = `gemini_model_light`(gemini-3.1-flash-lite-preview, temperature 0, max_tokens 400), 둘 다 판정 불가면 단일 폴백(`STRATEGY_ANALYSIS` 작업 모델, max_tokens 100). 입력은 71차 공통 사실(`entry-llm-input-v1`)+역할 접미.
+- 현행: Bull = `openai_model_light`(gpt-5-mini, `reasoning_effort="minimal"`, max_tokens 400 — 후보 모델이 `minimal` 을 지원하지 않으면 지원하는 최저 수준으로 바꾸고 그 차이를 모델 차이와 분리해 기록), Bear = `gemini_model_light`(gemini-3.1-flash-lite-preview, temperature 0, max_tokens 400), 둘 다 판정 불가면 단일 폴백(`STRATEGY_ANALYSIS` 작업 모델, max_tokens 100). 입력은 71차 공통 사실(`entry-llm-input-v1`)+역할 접미.
 - **Bull/Bear 는 역할이 다르므로 서로의 응답 차이를 모델 성능 차이로 읽지 않는다.** 비교는 **같은 역할 안에서** 현행 모델 vs 후보 모델(또는 같은 모델의 추론 수준만 변경)로만 한다. 모델 변경과 추론 수준 변경은 별도 후보로 분리한다.
 - 입력은 64차 판단 기록의 `common_context`(원문)와 `role_suffix`·역할 시스템 프롬프트 sha256 으로 고정한다. 오프라인 재생 응답은 당시 실제 응답·체결로 표시하지 않는다.
 
@@ -17,7 +17,7 @@
 | 후보 | 후보 판단 expected / max | 비교 1쌍(max) | 최대 비교 수(max 기준) | 일 상한(max) | (참고) expected 기준 일 상한 |
 |---|---|---|---|---|---|
 | 현행(기준) Bull gpt-5-mini / Bear flash-lite | $0.002035 / $0.009300 | — | — | — | — |
-| A. Bull → gpt-5.6-sol (추론 동일) | $0.013668 / $0.030450 | $0.039750 | 1,254 | 69 | 176 |
+| A. Bull → gpt-5.6-sol, `reasoning_effort="low"` (현행 `minimal` 은 이 모델이 지원하지 않아 `_validate_controls` 가 거부 — 추론 수준 차이도 함께 기록) | $0.013668 / $0.030450 | $0.039750 | 1,254 | 69 | 176 |
 | B. Bull gpt-5-mini, 추론 상향(출력 1,200 토큰 가정) | $0.003795 / $0.012500 | $0.021800 | 2,286 | 127 | 475 |
 | C. Bear → gemini-3.1-pro-preview | $0.008388 / $0.020850 | $0.030150 | 1,653 | 91 | 265 |
 

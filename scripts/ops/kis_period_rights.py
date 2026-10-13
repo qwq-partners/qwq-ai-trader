@@ -29,6 +29,53 @@ def _in_market_hours(now: datetime) -> bool:
     return now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) < (15, 30)
 
 
+class ReadOnlyTokenProvider:
+    """봇과 같은 토큰 캐시를 **읽기만** 하는 공급자. 발급 POST·캐시 쓰기를 절대 하지 않는다 (재리뷰 P1).
+
+    브로커의 토큰 복구(`_recover_token` → `invalidate` → `_ensure_token`)가 불려도 캐시를 다시 읽어 봇이 회전시킨
+    유효 토큰만 돌려주고, 없으면 None 을 돌려 조회가 오류로 끝나게 한다.
+    """
+
+    def __init__(self, manager):
+        self._manager = manager
+
+    def _reload(self):
+        try:
+            self._manager._load_cached_tokens()
+        except Exception:
+            pass
+
+    @property
+    def _access_token(self):
+        return self._manager._access_token if self._manager._is_token_valid() else None
+
+    def _is_token_valid(self) -> bool:
+        return bool(self._manager._is_token_valid())
+
+    async def get_access_token(self):
+        self._reload()
+        return self._manager._access_token if self._manager._is_token_valid() else None
+
+    async def get_approval_key(self):
+        return None                                   # WebSocket 승인키는 조회에 불필요 — 발급하지 않는다
+
+    def invalidate(self) -> None:
+        self._reload()                                # 새 발급 대신 캐시 재읽기만
+
+
+class MarketHoursStop(RuntimeError):
+    """장중 진입(또는 진입 임박)으로 전송을 중단했다 — 운영 봇의 계좌 원장 TR 한도와 충돌하지 않기 위해."""
+
+
+def _blocked_by_market_hours(now: datetime, margin_seconds: float) -> bool:
+    """지금부터 margin 초 안에 장중이 되면 전송하지 않는다(내부 재시도 시간을 덮는 여유)."""
+    from datetime import timedelta
+    for probe in (now, now + timedelta(seconds=margin_seconds)):
+        if _in_market_hours(probe):
+            return True
+    return False
+
+
 async def _open_readonly_broker():
     """조회 전용 연결. `connect()` 는 운영 실행 원장(ExecutionHistory) 세션을 열어 봇의 기록을 깨뜨릴 수 있어 쓰지 않는다.
     토큰은 봇과 같은 캐시 파일을 **읽기만** 하며 유효하지 않으면 새로 발급하지 않고 중단한다(새 발급은 봇 토큰을 무효화할 수 있다)."""
@@ -38,7 +85,7 @@ async def _open_readonly_broker():
     tm = KISTokenManager()
     if not tm._is_token_valid():
         raise RuntimeError("캐시된 KIS 토큰이 없거나 만료 — 운영 봇 토큰을 보호하기 위해 새 발급을 하지 않는다. 봇이 갱신한 뒤 다시 실행")
-    broker = KISBroker(config=KISConfig.from_env(), token_manager=tm)
+    broker = KISBroker(config=KISConfig.from_env(), token_manager=ReadOnlyTokenProvider(tm))
     broker._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=broker.config.timeout_seconds))
     try:
         if not await broker._ensure_token():
@@ -82,6 +129,9 @@ async def _run(args) -> int:
         return 2
 
     async def fetch(start, end, *, fk100, nk100, tr_cont):
+        # 매 전송 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
+        if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), args.market_margin_seconds):
+            raise MarketHoursStop("장중 진입 임박/진입 — 수집 중단(확보한 페이지는 보존)")
         return await broker.get_period_rights(start, end, inqr_dvsn=args.inqr_dvsn, fk100=fk100, nk100=nk100,
                                               tr_cont=tr_cont)
 
@@ -98,6 +148,9 @@ async def _run(args) -> int:
             _write_private(out_dir / f"rights-{start}-{end}.json", json.dumps(result, ensure_ascii=False, indent=1))
             print(json.dumps({"window": [start, end], "status": result["status"], "pages": result["api_calls"],
                               "rows": len(result["rows"])}, ensure_ascii=False))
+            if result["status"].startswith("aborted:"):
+                print(json.dumps({"stopped": result["status"], "remaining_windows_not_queried": True}, ensure_ascii=False))
+                break
     finally:
         await _close_readonly_broker(broker)
     summary = summarize_rights(windows)
@@ -125,6 +178,8 @@ def main() -> int:
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--min-interval", type=float, default=1.5)
     parser.add_argument("--allow-market-hours", action="store_true")
+    parser.add_argument("--market-margin-seconds", type=float, default=90.0,
+                        help="개장까지 이 여유보다 가까우면 전송하지 않는다(내부 재시도 시간 포함)")
     args = parser.parse_args()
     if args.max_pages < 1 or not (args.min_interval >= 1.05):
         print(json.dumps({"error": "--max-pages ≥1, --min-interval ≥1.05(원장 TR 초당 1건)"}))

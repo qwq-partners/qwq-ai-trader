@@ -46,3 +46,12 @@ def test_comparison_budget_uses_max_basis_by_default_and_keeps_reserve():
         comparison_budget(available_usd="10", reserve_share="1", current=cur, candidate=cand, month_days_remaining=1)
     with pytest.raises(ValueError):
         comparison_budget(available_usd="10", reserve_share="0.5", current=cur, candidate=cand, month_days_remaining=1, basis="avg")
+
+
+def test_candidate_controls_must_be_supported_by_each_model():
+    """P2: 후보 A 는 gpt-5.6-sol 에 minimal 추론을 요구할 수 없다 — 지원 조합(low)만 비교 조건으로 둔다."""
+    from src.utils.llm import LLMProvider, _validate_controls
+    with pytest.raises(ValueError):
+        _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})
+    _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "low"})
+    _validate_controls("gpt-5-mini", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})

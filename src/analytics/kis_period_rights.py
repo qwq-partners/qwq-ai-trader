@@ -89,7 +89,12 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
     for page_no in range(1, max_pages + 1):
         if pause is not None and page_no > 1:
             await pause()
-        data = await fetch(start_yyyymmdd, end_yyyymmdd, fk100=fk, nk100=nk, tr_cont=tr_cont)
+        try:
+            data = await fetch(start_yyyymmdd, end_yyyymmdd, fk100=fk, nk100=nk, tr_cont=tr_cont)
+        except Exception as error:   # 호출부의 중단(장중 진입 등)도 상태로 남기고 확보한 페이지는 보존한다
+            status = f"aborted:{type(error).__name__}"
+            pages.append({"page": page_no, "kind": "aborted", "error": str(error)[:160]})
+            break
         raw_pages.append(data)
         kind = classify_page(data)
         pages.append({"page": page_no, "kind": kind,
@@ -121,7 +126,9 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
         break
     else:
         status = "partial_max_pages"
-    if status == "complete" and not rows:
+    if status.startswith("aborted:"):
+        pass
+    elif status == "complete" and not rows:
         status = "empty"
     return {"start": start_yyyymmdd, "end": end_yyyymmdd, "status": status, "pages": pages,
             "api_calls": len(pages), "rows": rows, "tr_cont_header_missing": header_missing,

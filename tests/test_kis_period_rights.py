@@ -110,7 +110,8 @@ def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkey
         return broker
     monkeypatch.setattr(cli, "_open_readonly_broker", fake_open)
     out = tmp_path / "rights"
-    args = SimpleNamespace(start="2025-01-01", end="2025-02-28", out_dir=str(out), inqr_dvsn="03", max_pages=10, min_interval=0)
+    args = SimpleNamespace(start="2025-01-01", end="2025-02-28", out_dir=str(out), inqr_dvsn="03", max_pages=10, min_interval=0,
+                           allow_market_hours=True, market_margin_seconds=90.0)
     rc = asyncio.run(cli._run(args))
     assert rc == 0 and broker._session.closed is True
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
@@ -135,3 +136,51 @@ def test_cli_refuses_shared_or_foreign_output_dir(tmp_path):
     fresh = tmp_path / "fresh"
     cli._prepare_private_dir(fresh)
     assert stat.S_IMODE(fresh.stat().st_mode) == 0o700
+
+
+# ── 재리뷰 반영: 읽기 전용 토큰 공급자·장중 재검사·부분 보존 ──
+
+def _cli_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kis_period_rights_cli3", "scripts/ops/kis_period_rights.py")
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod
+
+
+def test_readonly_token_provider_never_issues_and_follows_cache_rotation():
+    """P1: 복구 경로(invalidate → get_access_token)가 불려도 발급 없이 캐시만 다시 읽는다."""
+    cli = _cli_module()
+
+    class _TM:
+        def __init__(self):
+            self._access_token, self._valid, self.loads, self.issued = "tok-cached", True, 0, 0
+        def _is_token_valid(self): return self._valid
+        def _load_cached_tokens(self): self.loads += 1
+        async def _issue_access_token(self): self.issued += 1; return True
+    tm = _TM(); prov = cli.ReadOnlyTokenProvider(tm)
+    assert asyncio.run(prov.get_access_token()) == "tok-cached" and prov._access_token == "tok-cached"
+    prov.invalidate(); tm._valid = False                       # 봇이 회전 전 → 캐시 무효
+    assert asyncio.run(prov.get_access_token()) is None and prov._access_token is None
+    assert asyncio.run(prov.get_approval_key()) is None
+    assert tm.issued == 0 and tm.loads >= 2                     # 발급 0, 캐시 재읽기만
+
+
+def test_market_hours_guard_aborts_before_open_and_keeps_partial_pages():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    cli = _cli_module(); KST = ZoneInfo("Asia/Seoul")
+    assert cli._blocked_by_market_hours(datetime(2026, 10, 14, 8, 59, 0, tzinfo=KST), 90.0) is True    # 개장 1분 전 → 차단
+    assert cli._blocked_by_market_hours(datetime(2026, 10, 14, 8, 50, 0, tzinfo=KST), 90.0) is False
+    assert cli._blocked_by_market_hours(datetime(2026, 10, 14, 15, 35, 0, tzinfo=KST), 90.0) is False
+    assert cli._blocked_by_market_hours(datetime(2026, 10, 17, 10, 0, 0, tzinfo=KST), 90.0) is False    # 토요일
+    calls = {"n": 0}
+    async def fetch(start, end, *, fk100, nk100, tr_cont):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise cli.MarketHoursStop("장중 진입")
+        return _page([_row()], "F", fk="k1", nk="k1")
+    r = asyncio.run(collect_window(fetch, "20250101", "20250131", max_pages=5))
+    assert r["status"] == "aborted:MarketHoursStop" and len(r["raw_pages"]) == 1 and len(r["rows"]) == 1
+    assert r["pages"][-1]["kind"] == "aborted"
+    s = summarize_rights([r])
+    assert s["complete_windows"] == 0 and s["window_statuses"] == {"aborted:MarketHoursStop": 1}
