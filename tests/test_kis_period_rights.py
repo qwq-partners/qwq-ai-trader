@@ -97,6 +97,8 @@ def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkey
             self.calls = []
             self.config = SimpleNamespace(timeout_seconds=10)
             self._session = SimpleNamespace(closed=False)
+            async def _rl(tr_id=""): ...
+            self._rate_limit = _rl
             async def _close():
                 self._session.closed = True
             self._session.close = _close
@@ -204,6 +206,9 @@ def test_bot_active_guard_requires_override_and_slower_interval(monkeypatch):
     assert cli.main() == 2 and called["run"] == 0                                   # 기본 거부
     monkeypatch.setattr(sys, "argv", base + ["--allow-bot-running", "--min-interval", "1.5"])
     assert cli.main() == 2 and called["run"] == 0                                   # 간격 부족
+    monkeypatch.setattr(cli, "_bot_active", lambda: False)
+    assert cli.main() == 2 and called["run"] == 0                                   # 봇 정지 중에도 우회 옵션의 간격은 검증(6차 P2)
+    monkeypatch.setattr(cli, "_bot_active", lambda: True)
     monkeypatch.setattr(sys, "argv", base + ["--allow-bot-running", "--min-interval", "2.5"])
     assert cli.main() == 0 and called["run"] == 1
     monkeypatch.setattr(cli, "_bot_active", lambda: False)
@@ -258,7 +263,10 @@ def test_bot_starting_mid_collection_aborts_before_next_send(monkeypatch, tmp_pa
             self.calls = 0
             self.config = SimpleNamespace(timeout_seconds=10)
             self._session = SimpleNamespace(closed=False)
+            async def _rl(tr_id=""): ...
+            self._rate_limit = _rl
         async def get_period_rights(self, start, end, *, inqr_dvsn, fk100, nk100, tr_cont):
+            await self._rate_limit("CTRGA011R")           # 실제 _api_get 처럼 전송 직전 리미터(가드) 경유
             self.calls += 1
             return _page([_row()], "D")
         async def close(self): ...
@@ -276,9 +284,51 @@ def test_bot_starting_mid_collection_aborts_before_next_send(monkeypatch, tmp_pa
     s = json.loads((out / "summary.json").read_text())
     assert s["window_statuses"] == {"complete": 1, "aborted:BotStartedStop": 1} and s["windows"] == 2   # 3월은 미조회
 
-    broker.calls = 0
+    broker = Broker()                                    # 가드는 브로커 인스턴스에 설치되므로 새 인스턴스로 두 번째 실행
     out2 = tmp_path / "out2"; out2.mkdir(mode=0o700)
     monkeypatch.setattr(cli, "_bot_active", lambda: True)
     monkeypatch.setattr(sys, "argv", ["prog", "--start", "2025-01-01", "--end", "2025-03-31", "--out-dir", str(out2),
                                       "--allow-bot-running", "--min-interval", "2.1"])
     assert cli.main() == 0 and broker.calls == 3                  # 명시 우회는 계속
+
+
+def test_send_guard_runs_on_every_api_get_retry(monkeypatch):
+    """6차 리뷰 P1: 실제 `_api_get` 의 5xx 재시도 직전에도 가드가 돌아, 첫 전송 뒤 봇이 기동하면 재전송하지 않는다."""
+    from types import SimpleNamespace
+    from src.execution.broker import kis_kr
+    from src.utils import kis_rate_limit
+    cli = _cli_module()
+    kis_rate_limit.reset()
+    b = object.__new__(kis_kr.KISBroker)
+    b._token = "t"
+    b._token_mgr = SimpleNamespace(_access_token="t", _is_token_valid=lambda: True, invalidate=lambda: None)
+    b.config = SimpleNamespace(base_url="http://x", account_no="12345678", account_product_cd="01", env="prod",
+                               app_key="k", app_secret="s", timeout_seconds=10)
+    async def _no_limit(tr_id=""): ...
+    b._rate_limit = _no_limit
+    async def no_sleep(_d): ...
+    monkeypatch.setattr(kis_kr.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(kis_rate_limit, "release_ledger", lambda: None)
+    monkeypatch.setattr(kis_kr.KISBroker, "is_connected", property(lambda self: True))
+
+    class Resp:
+        def __init__(self, status, body, cont=""):
+            self.status, self._body, self.headers = status, body, ({"tr_cont": cont} if cont else {})
+        async def json(self): return dict(self._body)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return False
+    sent = []
+    seq = iter([Resp(503, {}), Resp(200, _page([_row()], "D"))])
+    def get(url, headers, params):
+        sent.append(dict(params)); return next(seq)
+    b._session = SimpleNamespace(closed=False, get=get)
+
+    states = iter([False, True])                       # 1차 전송 전 정지 → 503 → 2차 전송 전 봇 기동
+    checks = []
+    async def guard():
+        active = next(states, True); checks.append(active)
+        if active:
+            raise cli.BotStartedStop("기동")
+    cli._install_send_guard(b, guard)
+    r = asyncio.run(collect_window(lambda s, e, **k: b.get_period_rights(s, e, **k), "20250101", "20250131"))
+    assert r["status"] == "aborted:BotStartedStop" and len(sent) == 1 and checks == [False, True]   # 재전송 0

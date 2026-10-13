@@ -125,6 +125,18 @@ async def _open_readonly_broker():
     return broker
 
 
+def _install_send_guard(broker, guard) -> None:
+    """`_api_get` 은 타임아웃·401·5xx 에 최대 3회 전송하며 매 시도 직전 `_rate_limit` 을 부른다 — 거기에 가드를 걸어
+    **재시도마다** 리미터 대기 뒤·전송 직전에 장중/봇 상태를 재검사한다. 가드가 던진 예외는 `_api_get` 의
+    네트워크 예외 처리에 잡히지 않고 그대로 올라와 창을 `aborted:*` 로 끝낸다 (6차 리뷰 P1)."""
+    original = broker._rate_limit
+
+    async def guarded(tr_id: str = ""):
+        await original(tr_id)
+        await guard()
+    broker._rate_limit = guarded
+
+
 async def _close_readonly_broker(broker) -> None:
     session = getattr(broker, "_session", None)
     if session is not None and not session.closed:
@@ -160,14 +172,17 @@ async def _run(args) -> int:
     # 내부 재시도(_api_get 최대 3회 전송 + 대기)까지 덮도록 여유를 타임아웃 기준으로 넓힌다 (3차 리뷰 P2)
     effective_margin = max(float(args.market_margin_seconds), 3.0 * float(broker.config.timeout_seconds) + 15.0)
 
-    async def fetch(start, end, *, fk100, nk100, tr_cont):
-        # 매 전송 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
+    async def before_send():
+        # 매 전송(내부 재시도 포함) 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
         if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), effective_margin):
             raise MarketHoursStop("장중 진입 임박/진입 — 수집 중단(확보한 페이지는 보존)")
         # main() 의 1회 검사만으로는 수집 도중의 자동 재시작·예약 기동을 못 본다 — 명시 우회가 없으면 매 전송 직전
-        # 봇 상태를 다시 보고, 가동/확인 불가면 중단한다(남는 경쟁 창은 systemctl 응답~전송 사이 한 요청) (5차 리뷰 P1)
+        # 봇 상태를 다시 보고, 가동/확인 불가면 중단한다(남는 경쟁 창은 systemctl 응답~전송 사이 한 요청) (5차·6차 리뷰 P1)
         if not args.allow_bot_running and await asyncio.to_thread(_bot_active):
             raise BotStartedStop("수집 도중 운영 봇 기동/상태 확인 불가 — 수집 중단(확보한 페이지는 보존)")
+    _install_send_guard(broker, before_send)
+
+    async def fetch(start, end, *, fk100, nk100, tr_cont):
         return await broker.get_period_rights(start, end, inqr_dvsn=args.inqr_dvsn, fk100=fk100, nk100=nk100,
                                               tr_cont=tr_cont)
 
@@ -230,14 +245,14 @@ def main() -> int:
     if _in_market_hours(now) and not args.allow_market_hours:
         print(json.dumps({"error": f"장중({now.isoformat()}) 실행 거부 — 운영 봇의 계좌 원장 TR 한도와 충돌한다"}, ensure_ascii=False))
         return 2
-    if _bot_active():
-        if not args.allow_bot_running:
-            print(json.dumps({"error": "운영 봇 가동 중 — 봇은 장외에도 계좌 TR 을 주기 호출하고 CLI 와 직렬화되지 않는다. "
-                                       "--allow-bot-running 으로만 우회(간격 ≥2.1초, 충돌 시 봇은 1회 재시도)"}, ensure_ascii=False))
-            return 2
-        if args.min_interval < 2.1:
-            print(json.dumps({"error": "--allow-bot-running 에서는 --min-interval ≥ 2.1 (잔고 TR 간격과 동일) 이어야 한다"}))
-            return 2
+    if args.allow_bot_running and args.min_interval < 2.1:
+        # 우회 옵션은 봇 상태와 무관하게 검증한다 — 정지 중 시작했다가 봇이 기동하면 우회 때문에 재검사 없이 계속되므로 (6차 리뷰 P2)
+        print(json.dumps({"error": "--allow-bot-running 에서는 --min-interval ≥ 2.1 (잔고 TR 간격과 동일) 이어야 한다"}))
+        return 2
+    if _bot_active() and not args.allow_bot_running:
+        print(json.dumps({"error": "운영 봇 가동 중 — 봇은 장외에도 계좌 TR 을 주기 호출하고 CLI 와 직렬화되지 않는다. "
+                                   "--allow-bot-running 으로만 우회(간격 ≥2.1초, 충돌 시 봇은 1회 재시도)"}, ensure_ascii=False))
+        return 2
     return asyncio.run(_run(args))
 
 
