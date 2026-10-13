@@ -67,4 +67,4 @@ flowchart TD
 - DO 구현·오프라인 검증 완료. 실제 유효 관측·사이징 재생 입력·유료 비교 실행기는 후속 단계이며, 이번 가드/계산기만으로 실험을 자동 시작하지 않는다.
 - 경제성 독립 리뷰(Astra/high 요청, 실제 metadata unverified): 수수료 float/string/None과 최대 날짜 입력의 P2 두 건을 재현·수정했다. 관련26검사 통과 및 독립 재검증/범위 한정 승인. 참조·원천 인증이나 실제 수익 승인은 아니다.
 - 최종 통합 UTC `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`: **5606 passed / 2 skipped / 2 known xfailed**, rc0. 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 기존 pykrx deprecation warning 1건. KST 변경 관련147검사 rc0. 앞선5603 검사는 경제성 마지막 수정 전 결과이며 최종 결과로 사용하지 않는다.
-- 관측/호출 예산의 source-only 교차 공급자 중요 경로 리뷰는 Claude Opus5/xhigh 요청으로 진행 중이다. 완료된 실제 model metadata/판정 확인 전에는 승인으로 세지 않는다. PR/CI·병합은 그 결과 이후다.
+- 관측/호출 예산의 첫 source-only Claude Opus5/xhigh 통합 리뷰는 로컬9분 절대 시한으로 종료돼 승인으로 세지 않았다. actual model=claude-opus-5는 노출됐으나 최종 판정은 없다. 동일 모델/effort/auth/도구 제한의 작은 대조 요청은7초/rc0/실제Opus5로 완료했다. 공급자 불가로 단정하지 않고 관측/예산으로 범위를 나눠 별도 리뷰를 요청했다(각8분/USD4 개발 리뷰 한도). 실제 판정과 그 뒤 CI/병합 상태는 [PR #188의 최종 검증 기록](https://github.com/qwq-partners/qwq-ai-trader/pull/188)을 정본으로 삼는다. 초안 PR 생성·push는 완료했으며, 최종 리뷰 승인과 CI 성공 전 병합하지 않는다.
