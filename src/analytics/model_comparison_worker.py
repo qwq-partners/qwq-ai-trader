@@ -29,6 +29,7 @@ from pathlib import Path
 import queue
 import threading
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -77,6 +78,7 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
     if size > max_bytes:
         raise ValueError("journal_too_large")      # 일부만 읽은 분모는 보고하지 않는다
     records, skipped, seqs, dropped, closed = [], 0, {}, {}, {}
+    seen, duplicates, conflicts = {}, 0, 0
     for line in path.read_bytes().splitlines():
         if not line.strip():
             continue
@@ -90,6 +92,15 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
             continue
         run, seq = record.get("run_id"), record.get("journal_seq")
         if isinstance(run, str) and type(seq) is int and seq > 0:
+            key = (run, seq)
+            if key in seen:
+                # A repeated sequence is damaged evidence even when its payload is identical.
+                # Count it in the existing integrity field so older report consumers fail closed.
+                duplicates += 1
+                conflicts += seen[key] != record
+                skipped += 1
+                continue
+            seen[key] = record
             seqs.setdefault(run, set()).add(seq)
         if record.get("kind") == "journal_drop":
             total = record.get("dropped_total")
@@ -115,12 +126,14 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
     return {"path": str(path), "missing": False, "records": records, "skipped_lines": skipped,
             "sequence_gaps": gaps + tail_loss, "dropped_records": sum(dropped.values()),
             "unsequenced_records": unsequenced, "write_failures": failed,
+            "duplicate_sequences": duplicates, "conflicting_sequences": conflicts,
             "runs": sorted(seqs), "open_runs": open_runs, "closed_runs": sorted(closed)}
 
 
 def read_offer_journal(path, *, max_bytes) -> dict:
     """offers-YYYY-MM.jsonl → {path, missing, records(offer/transition), skipped_lines, sequence_gaps, dropped_records,
-    unsequenced_records, write_failures, runs, open_runs, closed_runs}. journal_drop/journal_close 마커는 records 에 넣지 않고
+    unsequenced_records, write_failures, duplicate_sequences, conflicting_sequences, runs, open_runs, closed_runs}.
+    중복 번호는 skipped_lines 에도 반영한다. journal_drop/journal_close 마커는 records 에 넣지 않고
     dropped_records·closed_runs 로만 반영한다. open_runs(종료 표식 없는 run)가 있으면 끝부분 유실을 판정할 수 없다."""
     return _read_journal(path, max_bytes, ("offer", "transition"))
 
@@ -159,7 +172,7 @@ class ComparisonWorker:
         self.shutdown_deadline_seconds = shutdown_deadline_seconds
         self.clock = clock or _kst_now
         self._queue: "queue.Queue[dict]" = queue.Queue(maxsize=int(max_queue))
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._counts = dict.fromkeys(COUNTERS, 0)
         self._seen: "OrderedDict[str, None]" = OrderedDict()   # ponytail: 최근 4096 ID, 하루 판단 수보다 훨씬 크다
         self.last_errors: deque = deque(maxlen=32)
@@ -172,11 +185,14 @@ class ComparisonWorker:
         # KST 날짜 → 그날 입장(또는 입장 예정)으로 센 pair_id. start() 때 원장에서 당일분을 채운다.
         self._day_pairs: dict[str, set] = {}
         self._journal_seq: dict[str, int] = {}   # 파일 경로별 단조 번호(저널 완전성 증거, 쓰는 시점에 부여)
+        self._journal_run_id = "worker-" + uuid4().hex  # distinct from process-level input attestation
+        self._producer_done = threading.Event()
+        self._journal_closed = False
         self._dropped_written = 0        # 저널에 이미 남긴 journal_dropped 누계
         self._fresh: dict[str, tuple[str, str]] = {}            # decision_id → 이번 offer 가 새로 센 (day, pair_id)
         self.journal_dir = (Path(journal_dir) if journal_dir is not None
                             else Path.home() / ".cache" / "ai_trader" / "comparison_worker")
-        self._journal: "queue.Queue[dict | None]" = queue.Queue(maxsize=int(journal_queue))
+        self._journal: "queue.Queue[dict]" = queue.Queue(maxsize=int(journal_queue))
         self._journal_thread: threading.Thread | None = None
         # 이 manifest 가 고정한 운영 조건 — 봉투의 실제 운영 조건과 다르면 비교가 아니다.
         self._expected_controls = {
@@ -202,10 +218,13 @@ class ComparisonWorker:
         now = self.clock()
         with self._lock:
             status, decision_id, reason = self._decide(envelope, now)
-        self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "offer", "recorded_at": now.isoformat(),
-                           "decision_id": decision_id, "status": status, "reason": reason,
-                           "received_at": now.isoformat(),
-                           "envelope": dict(envelope) if isinstance(envelope, dict) else envelope})
+            # Admission and its nonblocking journal enqueue are atomic with shutdown.
+            # Offers after stop are rejected without extending an already closing stream.
+            if not self._stop.is_set():
+                self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "offer", "recorded_at": now.isoformat(),
+                                   "decision_id": decision_id, "status": status, "reason": reason,
+                                   "received_at": now.isoformat(),
+                                   "envelope": dict(envelope) if isinstance(envelope, dict) else envelope})
         return status
 
     def _decide(self, envelope, now):
@@ -280,12 +299,16 @@ class ComparisonWorker:
     def _journal_put(self, record, timeout=None):
         # 완전성 증거(재리뷰 P2): run_id 는 여기서, 파일별 단조 journal_seq 는 쓰는 시점에 붙인다(월 분할·스트림 분리 뒤에도
         # 독자가 파일 하나 안의 빈틈만 유실로 세게 — 3회차 P2).
-        record = dict(record, run_id=mci.RUN_ID)
+        record = dict(record, run_id=self._journal_run_id)
         try:
-            if timeout is None:
-                self._journal.put_nowait(record)
-            else:
-                self._journal.put(record, timeout=timeout)
+            with self._lock:
+                if self._journal_closed:
+                    return
+                # Never hold the admission lock during a bounded producer wait.
+                if timeout is None:
+                    self._journal.put_nowait(record)
+                    return
+            self._journal.put(record, timeout=timeout)
         except queue.Full:
             with self._lock:
                 self._note("journal_dropped", record.get("decision_id"), "journal_queue_full")
@@ -319,16 +342,23 @@ class ComparisonWorker:
 
     def _journal_run(self):
         while True:
-            record = self._journal.get()
-            if record is None:
-                return
+            try:
+                record = self._journal.get(timeout=0.05)
+            except queue.Empty:
+                with self._lock:
+                    if not self._producer_done.is_set() or not self._journal.empty():
+                        continue
+                    # No accepted offer or worker transition can be enqueued after this boundary.
+                    self._journal_closed = True
+                record = {"schema_version": JOURNAL_VERSION, "kind": "journal_close",
+                          "run_id": self._journal_run_id, "at": self.clock().isoformat()}
             try:
                 # 큐 포화로 버린 기록이 있으면 그 사실을 먼저 남긴다 — 파일만 보고 "완전"으로 읽히지 않게 한다.
                 with self._lock:
                     dropped = self._counts["journal_dropped"]
                     marker = (dropped > self._dropped_written)
                     if marker:
-                        drop_record = {"schema_version": JOURNAL_VERSION, "kind": "journal_drop", "run_id": mci.RUN_ID,
+                        drop_record = {"schema_version": JOURNAL_VERSION, "kind": "journal_drop", "run_id": self._journal_run_id,
                                        "dropped_total": dropped, "at": _record_stamp(record)}
                 if marker:
                     self._journal_write(drop_record)
@@ -339,11 +369,13 @@ class ComparisonWorker:
                         touched = [Path(k) for k in self._journal_seq]
                     for path in touched:                     # 이 run 이 쓴 모든 파일(offers·incomplete)에 종료 표식
                         self._journal_write(record, path=path)
-                    continue
+                    return
                 self._journal_write(record)
             except Exception as error:   # 기록 실패는 판단·offer 결과를 바꾸지 않는다
                 with self._lock:
                     self._note("journal_failed", record.get("decision_id"), f"journal_write:{type(error).__name__}")
+                if record.get("kind") == "journal_close":
+                    return
 
     # ── 작업자 스레드 ────────────────────────────────────────
     def start(self) -> "ComparisonWorker":
@@ -353,12 +385,20 @@ class ComparisonWorker:
         self._day_pairs = {day: set(self.runner.admitted_pair_ids(day))}   # 재시작 뒤에도 당일 상한 유지
         self._journal_thread = threading.Thread(target=self._journal_run, name="comparison-journal", daemon=True)
         self._journal_thread.start()
-        self._thread = threading.Thread(target=lambda: asyncio.run(self._consume()), name="comparison-worker",
+        self._thread = threading.Thread(target=self._run, name="comparison-worker",
                                         daemon=True)   # 멈춘 공급자 호출이 프로세스 종료를 묶지 않게
         self._thread.start()
         with self._lock:
             self._accepting = True
         return self
+
+    def _run(self):
+        try:
+            asyncio.run(self._consume())
+        finally:
+            with self._lock:
+                self._accepting = False
+                self._producer_done.set()
 
     async def _consume(self):
         self._loop = asyncio.get_running_loop()
@@ -418,7 +458,7 @@ class ComparisonWorker:
     async def _process(self, env):
         decision_id = env.get("decision_id")
         if self._abort.is_set():
-            return self._end(decision_id, "incomplete", "shutdown_not_started", uncount=True)
+            return self._end(decision_id, "incomplete", "shutdown_not_started", uncount=True, admitted=False)
         if (self.clock() - _time(env["input_available_at"])).total_seconds() > self.max_input_age_seconds:
             return self._end(decision_id, "expired", "input_too_old_at_dispatch", uncount=True)
         with self._lock:
@@ -428,7 +468,7 @@ class ComparisonWorker:
         try:
             await self.runner.run(self._spec(env))
         except asyncio.CancelledError:
-            self._end(decision_id, "incomplete", "cancelled_at_shutdown")
+            self._end(decision_id, "incomplete", "cancelled_at_shutdown", admitted=self._admitted(decision_id))
             raise
         except PairResultPersistenceError as error:
             row = error.result
@@ -460,40 +500,33 @@ class ComparisonWorker:
                     pass
 
     def stop(self, deadline_seconds: float | None = None) -> dict:
-        """새 수락을 닫고 시한까지 drain. 시한 초과분은 incomplete. 반환은 health() + drained."""
+        """새 수락을 닫고 시한까지 drain. 늦은 생산자는 계속 살아 있는 저널에 기록하고 종료 시 자동 봉인한다."""
         deadline = self.shutdown_deadline_seconds if deadline_seconds is None else deadline_seconds
         with self._lock:
             self._accepting = False
-        self._stop.set()
+            self._stop.set()
         thread, drained = self._thread, True
         if thread is not None:
             thread.join(max(0.0, deadline))
             if thread.is_alive():
                 drained = False
-                self._abort.set()
+                with self._lock:
+                    cancel = not self._abort.is_set()
+                    self._abort.set()
                 loop, task = self._loop, self._current
-                if loop is not None and task is not None:
-                    loop.call_soon_threadsafe(task.cancel)
-                while True:
+                if cancel and loop is not None and task is not None:
                     try:
-                        env = self._queue.get_nowait()
-                    except queue.Empty:
-                        break
-                    self._end(env.get("decision_id"), "incomplete", "shutdown_not_started", uncount=True)
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass  # The worker may have closed its loop between the snapshot and scheduling.
                 thread.join(2.0)
-        # 상태 전이·incomplete 증거가 모두 쓰인 뒤 돌려준다(저널 큐를 비운 뒤 종료).
+        # Only the producer's actual exit permits sealing. A synchronous storage call can
+        # outlive this bounded stop and still publish recovery evidence to the live journal.
         journal = self._journal_thread
-        if journal is not None and journal.is_alive():
-            # 종료 표식: 파일별 생산 번호·실패 수를 남겨 독자가 끝부분 유실을 판정한다(4회차 P2)
-            try:
-                self._journal.put({"schema_version": JOURNAL_VERSION, "kind": "journal_close", "run_id": mci.RUN_ID,
-                                   "at": self.clock().isoformat()}, timeout=2.0)
-                self._journal.put(None, timeout=2.0)
-            except queue.Full:
-                pass
+        if journal is not None and self._producer_done.is_set():
             journal.join(5.0)
         return {**self.health(), "drained": drained,
-                "journal_drained": journal is None or not journal.is_alive()}
+                "journal_drained": journal is None or (self._producer_done.is_set() and not journal.is_alive())}
 
     def health(self) -> dict:
         with self._lock:
