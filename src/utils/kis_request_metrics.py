@@ -15,7 +15,7 @@ SOURCES = frozenset({"startup", "portfolio_sync", "portfolio_sync_consistency_re
 OPERATIONS = frozenset({"account_summary", "positions", "external_positions",
                         "daily_fills", "open_orders", "orderable_cash", "other"})
 TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R",
-                    "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R", "other"})
+                    "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R", "CTRGA011R", "other"})
 OUTCOMES = frozenset({"success", "http_error", "api_error", "network_error",
                      "cancelled", "invalid_json", "other"})
 _source = ContextVar("kis_request_source", default="unknown")

@@ -36,7 +36,7 @@ def test_multi_page_window_completes_with_next_keys():
     fetch = _fetcher([_page([_row()], "F", fk="f1", nk="n1"), _page([_row(amt="2000")], "M", fk="f2", nk="n2"),
                       _page([_row(amt="3000")], "D")])
     r = asyncio.run(collect_window(fetch, "20250101", "20250131"))
-    assert r["status"] == "complete" and r["api_calls"] == 3 and len(r["rows"]) == 3
+    assert r["status"] == "complete" and r["pages_fetched"] == 3 and len(r["rows"]) == 3
     assert fetch.calls[0] == {"fk": "", "nk": "", "tr_cont": ""}
     assert fetch.calls[1] == {"fk": "f1", "nk": "n1", "tr_cont": "N"} and fetch.calls[2]["fk"] == "f2"
 
@@ -44,10 +44,10 @@ def test_multi_page_window_completes_with_next_keys():
 def test_repeat_keys_and_max_pages_are_partial_not_complete():
     rep = _fetcher([_page([_row()], "F", fk="same", nk="same")])
     r = asyncio.run(collect_window(rep, "20250101", "20250131", max_pages=10))
-    assert r["status"] == "partial_page_repeat" and r["api_calls"] == 2        # 2페이지째 같은 키 → 중단
+    assert r["status"] == "partial_page_repeat" and r["pages_fetched"] == 2        # 2페이지째 같은 키 → 중단
     cap = _fetcher([_page([_row()], "F", fk=f"f{i}", nk=f"n{i}") for i in range(5)])
     r2 = asyncio.run(collect_window(cap, "20250101", "20250131", max_pages=3))
-    assert r2["status"] == "partial_max_pages" and r2["api_calls"] == 3 and len(r2["rows"]) == 3
+    assert r2["status"] == "partial_max_pages" and r2["pages_fetched"] == 3 and len(r2["rows"]) == 3
 
 
 def test_error_empty_and_malformed_pages():
@@ -56,7 +56,8 @@ def test_error_empty_and_malformed_pages():
     empty = asyncio.run(collect_window(_fetcher([_page([], "D")]), "20250101", "20250131"))
     assert empty["status"] == "empty" and empty["rows"] == []
     nohdr = asyncio.run(collect_window(_fetcher([_page([_row()], "")]), "20250101", "20250131"))
-    assert nohdr["status"] == "complete" and nohdr["tr_cont_header_missing"] is True
+    assert nohdr["status"] == "partial_missing_header" and nohdr["tr_cont_header_missing"] is True   # 마지막 페이지 근거 없음 ≠ 완료
+    assert summarize_rights([nohdr])["complete_windows"] == 0
     bad = asyncio.run(collect_window(_fetcher([{"rt_cd": "0"}]), "20250101", "20250131"))
     assert bad["status"] == "malformed" and bad["raw_pages"] == [{"rt_cd": "0"}]          # 원본 페이지 보존
     assert classify_page("x") == "malformed" and classify_page({"rt_cd": "0", "output1": []}) == "empty"
@@ -124,7 +125,7 @@ def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkey
     assert jan["status"] == "complete" and len(jan["raw_pages"]) == 2 and jan["raw_pages"][0]["ctx_area_fk100"] == "k1"
     assert [c[4] for c in broker.calls] == ["", "N", ""]                 # 2페이지째만 tr_cont=N
     summary = json.loads((out / "summary.json").read_text())
-    assert summary["window_statuses"] == {"complete": 1, "empty": 1} and summary["api_calls"] == 3
+    assert summary["window_statuses"] == {"complete": 1, "empty": 1} and summary["pages_fetched"] == 3
 
 
 def test_cli_refuses_shared_or_foreign_output_dir(tmp_path):
@@ -207,3 +208,34 @@ def test_bot_active_guard_requires_override_and_slower_interval(monkeypatch):
     monkeypatch.setattr(cli, "_bot_active", lambda: False)
     monkeypatch.setattr(sys, "argv", base)
     assert cli.main() == 0 and called["run"] == 2                                   # 봇 정지 시 그대로 실행
+
+
+def test_bot_active_only_trusts_confirmed_stopped(monkeypatch):
+    """4차 리뷰 P1: systemctl 조회 실패·전환 상태·알 수 없는 출력은 전부 '가동 중'. inactive/failed(rc 3)만 정지."""
+    import subprocess
+    cli = _cli_module()
+    def fake_run(rc, out):
+        return lambda *a, **k: subprocess.CompletedProcess(a, rc, stdout=out, stderr="")
+    for rc, out in [(0, "active\n"), (0, "activating\n"), (3, "deactivating\n"), (3, "unknown\n"), (4, ""), (1, "garbage")]:
+        monkeypatch.setattr(subprocess, "run", fake_run(rc, out))
+        assert cli._bot_active() is True, (rc, out)
+    for out in ("inactive\n", "failed\n"):
+        monkeypatch.setattr(subprocess, "run", fake_run(3, out))
+        assert cli._bot_active() is False
+    def boom(*a, **k): raise OSError("no systemctl")
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert cli._bot_active() is True
+
+
+def test_pages_fetched_excludes_aborted_and_http_attempts_from_metrics():
+    """4차 리뷰 P2: 전송 전 중단은 페이지 수에 들어가지 않고, HTTP 전송 횟수는 계측에서만 읽는다."""
+    cli = _cli_module()
+    from src.utils import kis_request_metrics as m
+    class Stop(Exception): ...
+    async def fetch(*a, **k): raise Stop()
+    r = asyncio.run(collect_window(fetch, "20250101", "20250131"))
+    assert r["status"] == "aborted:Stop" and r["pages_fetched"] == 0 and len(r["pages"]) == 1
+    before = cli._http_attempts()
+    assert before is not None
+    m.record_http_attempt("CTRGA011R", 0); m.record_http_attempt("CTRGA011R", 1)      # 1페이지 2전송(재시도 1)
+    assert cli._http_attempts() - before == 2

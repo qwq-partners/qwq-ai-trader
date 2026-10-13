@@ -123,6 +123,7 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
             continue
         if cont == "":
             header_missing = True
+            status = "partial_missing_header"          # 마지막 페이지라는 근거(D/E)가 없다 — 완료로 세지 않는다(4차 리뷰 P2)
         break
     else:
         status = "partial_max_pages"
@@ -130,8 +131,10 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
         pass
     elif status == "complete" and not rows:
         status = "empty"
+    # pages_fetched 는 응답을 받은 페이지 수다(전송 전 중단된 aborted 항목 제외). `_api_get` 내부 재시도까지 포함한
+    # 실제 HTTP 전송 횟수는 브로커 계측(`kis_request_metrics`)에서 따로 읽는다 — CLI summary.http_attempts (4차 리뷰 P2)
     return {"start": start_yyyymmdd, "end": end_yyyymmdd, "status": status, "pages": pages,
-            "api_calls": len(pages), "rows": rows, "tr_cont_header_missing": header_missing,
+            "pages_fetched": len(raw_pages), "rows": rows, "tr_cont_header_missing": header_missing,
             "raw_pages": raw_pages}
 
 
@@ -178,5 +181,5 @@ def summarize_rights(windows: List[Dict[str, Any]]) -> Dict[str, Any]:
         # 해석 금지 사항을 요약에도 남긴다
         "caveats": ["조회 성공은 소득 확정이 아니다", "last_alct_amt 의 세전/세후·실제 지급·보존기간은 미확인",
                     "예수금/CMA 이자 포함 여부 미확인", "권리 현금은 외부 입출금이 아니다",
-                    "partial_* 창은 완전 조회가 아니다"],
+                    "partial_* 창은 완전 조회가 아니다(partial_missing_header 는 마지막 페이지 근거 없음)"],
     }

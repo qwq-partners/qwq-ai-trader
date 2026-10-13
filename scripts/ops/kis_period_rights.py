@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.analytics.kis_period_rights import SCHEMA_VERSION, collect_window, month_windows, summarize_rights  # noqa: E402
+from src.utils import kis_request_metrics  # noqa: E402
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -37,7 +38,20 @@ def _bot_active() -> bool:
         out = subprocess.run(["systemctl", "is-active", "qwq-ai-trader"], capture_output=True, text=True, timeout=5)
     except Exception:
         return True            # 확인 불가는 가동 중으로 간주(보수적)
-    return out.stdout.strip() == "active"
+    # 확인된 정지(inactive/failed)만 '가동 아님'. activating/deactivating/reloading·알 수 없는 출력·비정상 종료 코드는
+    # 전부 가동 중으로 취급한다 — subprocess.run 은 종료 코드로 예외를 내지 않는다(4차 리뷰 P1)
+    return not (out.returncode == 3 and out.stdout.strip() in ("inactive", "failed"))
+
+
+def _http_attempts():
+    """브로커 계측에서 CTRGA011R 의 실제 HTTP 전송 횟수(재시도 포함). 계측 불가면 None."""
+    try:
+        snap = kis_request_metrics.snapshot()
+        if not snap.get("available"):
+            return None
+        return sum(int(r.get("attempts", 0)) for r in snap.get("http", []) if r.get("tr_id") == "CTRGA011R")
+    except Exception:
+        return None
 
 
 class ReadOnlyTokenProvider:
@@ -153,6 +167,7 @@ async def _run(args) -> int:
         await asyncio.sleep(args.min_interval)
 
     windows = []
+    http_before = _http_attempts()
     try:
         for start, end in month_windows(date.fromisoformat(args.start), date.fromisoformat(args.end)):
             if windows:
@@ -160,7 +175,7 @@ async def _run(args) -> int:
             result = await collect_window(fetch, start, end, max_pages=args.max_pages, pause=pause)
             windows.append(result)
             _write_private(out_dir / f"rights-{start}-{end}.json", json.dumps(result, ensure_ascii=False, indent=1))
-            print(json.dumps({"window": [start, end], "status": result["status"], "pages": result["api_calls"],
+            print(json.dumps({"window": [start, end], "status": result["status"], "pages": result["pages_fetched"],
                               "rows": len(result["rows"])}, ensure_ascii=False))
             if result["status"].startswith("aborted:"):
                 print(json.dumps({"stopped": result["status"], "remaining_windows_not_queried": True}, ensure_ascii=False))
@@ -168,8 +183,11 @@ async def _run(args) -> int:
     finally:
         await _close_readonly_broker(broker)
     summary = summarize_rights(windows)
+    http_after = _http_attempts()
     summary.update(requested=[args.start, args.end], inqr_dvsn=args.inqr_dvsn, collected_at=datetime.now(KST).isoformat(),
-                   api_calls=sum(w["api_calls"] for w in windows))
+                   pages_fetched=sum(w["pages_fetched"] for w in windows),
+                   # 실제 HTTP 전송 횟수(내부 재시도 포함) — 계측 불가면 None, 0 으로 채우지 않는다
+                   http_attempts=(http_after - http_before) if http_before is not None and http_after is not None else None)
     _write_private(out_dir / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2))
     manifest = {"schema_version": SCHEMA_VERSION, "collected_at": summary["collected_at"], "files": {}}
     for f in sorted(out_dir.glob("*.json")):
@@ -177,7 +195,7 @@ async def _run(args) -> int:
             manifest["files"][f.name] = {"bytes": f.stat().st_size, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
     _write_private(out_dir / "manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
     print(json.dumps({"summary": {k: summary[k] for k in ("windows", "window_statuses", "complete_windows", "rows",
-                                                            "unparsed_amount_rows", "api_calls")},
+                                                            "unparsed_amount_rows", "pages_fetched", "http_attempts")},
                       "right_types": {t: b["rows"] for t, b in summary["by_right_type"].items()},
                       "out_dir": str(out_dir)}, ensure_ascii=False))
     return 0 if summary["complete_windows"] == summary["windows"] else 1
