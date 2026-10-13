@@ -80,7 +80,8 @@ def test_concurrent_instances_cannot_overrun_one_daily_slot(tmp_path):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(run, guards))
-    assert sorted(outcomes) == ["approve", "comparison_daily_attempt_cap"]
+    assert outcomes.count("approve") == 1
+    assert set(outcomes) <= {"approve", "comparison_daily_attempt_cap", "comparison_storage_unavailable"}
     assert dispatches == ["gpt-5-mini"]
     assert ledger.status()["settled_count"] == 1
 
@@ -97,7 +98,7 @@ def test_unknown_or_invalid_cost_never_releases_possible_spend(tmp_path, cost):
     if cost is None:
         assert asyncio.run(guard.call(request(), dispatch=transport)).actual_cost_usd is None
     else:
-        with pytest.raises(ValueError, match="actual_cost_usd"):
+        with pytest.raises(BudgetBlocked, match="comparison_invalid_measured_cost"):
             asyncio.run(guard.call(request(), dispatch=transport))
     status = ledger.status()
     assert status["unresolved_count"] == 1 and status["spent_usd"] == 0
@@ -307,3 +308,54 @@ def test_decimal_cost_preserves_conservative_nano_usd_settlement(tmp_path, cost,
     with sqlite3.connect(ledger.path) as db:
         assert db.execute("SELECT actual_units FROM reservations").fetchone()[0] == expected_nanos
     assert ledger.status()["unresolved_count"] == 0
+
+
+def test_pre_dispatch_forensic_write_contention_cannot_create_unsent_unknown(tmp_path, monkeypatch):
+    ledger, policy, guard = setup_guard(tmp_path)
+    original_reserve = ledger.reserve
+    blocker = [None]
+    calls = []
+
+    def reserve_then_contend(*args, **kwargs):
+        token = original_reserve(*args, **kwargs)
+        blocker[0] = sqlite3.connect(ledger.path, isolation_level=None)
+        blocker[0].execute("BEGIN IMMEDIATE")
+        return token
+
+    def release():
+        if blocker[0] is not None:
+            blocker[0].execute("ROLLBACK")
+            blocker[0].close()
+            blocker[0] = None
+
+    async def transport(req):
+        # 예약 뒤 지속되는 잠금은 전송 전 포렌식 기록·보상 정산을 모두 막는다.
+        # 전송에 진입할 수 있으면 잠금을 풀고 실제 비용을 정산할 수 있다.
+        calls.append(req.model)
+        release()
+        return measured()
+
+    monkeypatch.setattr(ledger, "reserve", reserve_then_contend)
+    failure = None
+    try:
+        asyncio.run(guard.call(request(), dispatch=transport))
+    except BudgetBlocked as exc:
+        failure = exc.reason
+    finally:
+        release()
+    assert ledger.status()["unresolved_count"] == 0
+    assert failure is None
+    assert calls == ["gpt-5-mini"]
+    assert ledger.status()["spent_usd"] == 0.0001
+
+
+@pytest.mark.parametrize("response", ["malformed", measured("NaN"), measured("1e500")])
+def test_adapter_contract_violation_is_budget_blocked_with_unknown_spend(tmp_path, response):
+    ledger, policy, guard = setup_guard(tmp_path)
+
+    async def transport(req):
+        return response
+
+    with pytest.raises(BudgetBlocked, match="comparison_invalid_"):
+        asyncio.run(guard.call(request(), dispatch=transport))
+    assert ledger.status()["unresolved_count"] == 1

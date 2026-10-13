@@ -22,7 +22,7 @@ import sqlite3
 from typing import Any, Awaitable, Callable
 import uuid
 
-from ..utils.llm_budget import BudgetBlocked, BudgetStateError, MonthlyBudgetLedger, _units
+from ..utils.llm_budget import BudgetBlocked, BudgetStateError, MonthlyBudgetLedger, _MAX_UNITS, _units
 from .model_comparison_budget import _d, _integer
 
 SCHEMA_VERSION = "model-comparison-execution-v1"
@@ -76,11 +76,11 @@ class ComparisonAttemptResult:
 
 
 def _ledger_cost(value) -> float | None:
-    """측정값은 보존하고, 원장의 nano-USD 올림과 정확히 일치하는 전달값만 만든다."""
+    """원장의 nano-USD 올림과 일치하는 값을 반환한다. 변환 불가는 ValueError다."""
     if value is None:
         return None
     cost = _d(value, "actual_cost_usd")
-    if cost >= Decimal(2 ** 62) / Decimal(1_000_000_000):
+    if cost >= Decimal(_MAX_UNITS) / Decimal(1_000_000_000):
         raise ValueError("actual_cost_usd가 원장 범위를 초과한다")
     with localcontext() as context:
         context.prec = max(28, len(cost.as_tuple().digits) + 10)
@@ -93,7 +93,7 @@ def _ledger_cost(value) -> float | None:
             return candidate
     except BudgetBlocked:
         pass
-    # float 전용 기존 원장에 nano-USD 단위까지 보존할 수 없으면 불명 정산한다.
+    # nano-USD 단위까지 보존할 수 없으면 거절한다. 호출자가 불명 정산을 소유한다.
     raise ValueError("actual_cost_usd를 원장 정밀도로 안전하게 전달할 수 없다")
 
 
@@ -185,6 +185,10 @@ class ComparisonCallGuard:
 
     async def call(self, request: ComparisonRequest, *,
                    dispatch: Callable[[ComparisonRequest], Awaitable[ComparisonAttemptResult]]) -> ComparisonAttemptResult:
+        """입력 오류는 ValueError, 응답 계약 오류는 잠재 지출 보존 뒤 BudgetBlocked로 보고한다.
+
+        어댑터 자체 예외/취소도 잠재 지출을 보존하고 원래 예외를 유지한다.
+        """
         if not isinstance(request, ComparisonRequest) or not callable(dispatch):
             raise ValueError("ComparisonRequest와 단일 시도 async dispatch가 필요하다")
         if request.model not in self.policy.allowed_models:
@@ -199,7 +203,8 @@ class ComparisonCallGuard:
             token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
                                         policy_priority="research", task="model_comparison",
                                         role=self.policy.experiment_id)
-            self._record(slot, token, "reserved")
+            # 슬롯과 월 예약은 이미 확정됐다. 전송 전 부가 기록은 잠금 경합 시
+            # 무전송 예약까지 고아 상태로 만들 수 있어 정산 뒤에만 연결한다.
             # 동기 입장 도중 자정을 넘기면 전날 슬롯으로 전송하지 않고 새 입장을 요구한다.
             # 아직 어댑터에 진입하지 않았으므로 전송 전 실패로만 해제할 수 있다.
             if self.ledger.today().isoformat() != day:
@@ -207,8 +212,11 @@ class ComparisonCallGuard:
             entered_dispatch = True
             result = await dispatch(request)
             if not isinstance(result, ComparisonAttemptResult):
-                raise ValueError("dispatch는 ComparisonAttemptResult를 반환해야 한다")
-            cost = _ledger_cost(result.actual_cost_usd)
+                raise BudgetBlocked("comparison_invalid_result")
+            try:
+                cost = _ledger_cost(result.actual_cost_usd)
+            except (ValueError, ArithmeticError):
+                raise BudgetBlocked("comparison_invalid_measured_cost") from None
             state = "unknown" if cost is None else "known"
             self.ledger.settle(token, outcome=state, actual_cost_usd=cost)
             settled = True

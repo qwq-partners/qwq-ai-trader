@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
+from functools import wraps
 from typing import Any, Dict, List, Optional
 
 from ..utils.llm_pricing import rate_quote
@@ -35,6 +36,18 @@ def _integer(value: Any, name: str, minimum: int = 0) -> int:
 _MICRO = Decimal("0.000000001")
 
 
+def _numeric_errors(function):
+    """지원 범위를 넘는 수치 연산도 공개 입력 오류인 ValueError로 통일한다."""
+    @wraps(function)
+    def checked(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except ArithmeticError:
+            raise ValueError("numeric inputs가 지원 수치 연산 범위를 초과한다") from None
+    return checked
+
+
+@_numeric_errors
 def call_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Optional[Decimal]:
     """한 호출의 추정 비용 — 공표 요율을 Decimal 로 직접 계산하고 1e-9 단위로 올림(보수적). 단가표에 없으면 None."""
     _integer(input_tokens, "input_tokens")
@@ -46,12 +59,13 @@ def call_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Optional
     return cost.quantize(_MICRO, rounding=ROUND_UP)
 
 
+@_numeric_errors
 def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = Decimal("1.1"),
                       max_attempts_per_role: int = 2,
                       fallback: Optional[Any] = None) -> Dict[str, Any]:
     """판단 1건의 비용. roles: [{role, model, input_tokens, output_tokens}].
 
-    - expected: 역할별 1회 × retry_factor(실측 빈 응답 재시도율 상한 가정) — 평균 비용 가정.
+    - expected: 역할별 1회 × retry_factor(기본 1.1은 실측치가 아닌 시나리오 가정) — 평균 비용 가정.
     - max: 역할별 max_attempts_per_role(retry_on_empty=1 → 2회) + 단일 폴백 **체인 전체**(dict 하나 또는 list:
       `LLMManager.complete(STRATEGY_ANALYSIS)` 는 primary 실패 뒤 다른 공급자 heavy 를 추가 호출할 수 있고 실패 응답에
       사용량이 있으면 둘 다 과금된다) — 경로상 최대 비용(상한).
@@ -61,8 +75,15 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
     if retry_factor < 1:
         raise ValueError("retry_factor는 1 이상이어야 한다")
     _integer(max_attempts_per_role, "max_attempts_per_role", 1)
+    if not isinstance(roles, (list, tuple)):
+        raise ValueError("roles는 역할 목록이어야 한다")
     per_role, unpriced, total = {}, [], Decimal("0")
     for r in roles:
+        if not isinstance(r, dict) or not {"role", "model", "input_tokens", "output_tokens"} <= r.keys():
+            raise ValueError("roles의 각 항목에 role/model/input_tokens/output_tokens가 필요하다")
+        role = r["role"]
+        if not isinstance(role, str) or not role.strip() or role in per_role or role.startswith("fallback_"):
+            raise ValueError("role은 중복 없는 이름이어야 하며 fallback_ 접두어는 예약돼 있다")
         cost = call_cost_usd(r["model"], r["input_tokens"], r["output_tokens"])
         per_role[r["role"]] = {"model": r["model"], "cost_usd": str(cost) if cost is not None else None}
         if cost is None:
@@ -74,6 +95,8 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
         chain = fallback if isinstance(fallback, list) else [fallback]
         fb_cost = Decimal("0")
         for i, step in enumerate(chain):
+            if not isinstance(step, dict) or not {"model", "input_tokens", "output_tokens"} <= step.keys():
+                raise ValueError("fallback 항목에 model/input_tokens/output_tokens가 필요하다")
             cost = call_cost_usd(step["model"], step["input_tokens"], step["output_tokens"])
             per_role[f"fallback_{i}"] = {"model": step["model"], "cost_usd": str(cost) if cost is not None else None}
             if cost is None:
@@ -89,12 +112,16 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
             "max_usd": str(maximum.quantize(_MICRO, rounding=ROUND_UP))}
 
 
+@_numeric_errors
 def comparison_budget(*, available_usd: Any, reserve_share: Any, current: Dict[str, Any], candidate: Dict[str, Any],
                       month_days_remaining: int, basis: str = "max") -> Dict[str, Any]:
     """비교 실험에 쓸 수 있는 판단 수. available_usd 는 원장 status 의 가용액(사용·예약 차감 뒤).
 
     basis="max"(기본) 는 경로상 최대 비용으로 상한을 내고, "expected" 는 평균 가정이다 — 둘을 섞지 않는다.
     """
+    for name, value in (("current", current), ("candidate", candidate)):
+        if not isinstance(value, dict):
+            raise ValueError(f"{name}는 비용 dict여야 한다")
     avail = _d(available_usd, "available_usd")
     share = _d(reserve_share, "reserve_share")
     _integer(month_days_remaining, "month_days_remaining")

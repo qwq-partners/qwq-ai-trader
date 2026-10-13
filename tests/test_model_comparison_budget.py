@@ -119,3 +119,35 @@ def test_zero_inputs_and_unknown_cost_remain_distinct():
                              candidate={"max_usd": 0}, month_days_remaining=0)
     assert Decimal(zero["comparison_budget_usd"]) == 0
     assert zero["pair_cost_usd"] == "0" and zero["max_comparisons"] is None
+
+
+@pytest.mark.parametrize("operation", [
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 26, 0),
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 400, 0),
+    lambda: decision_cost_usd(CURRENT, retry_factor="1e999999999"),
+    lambda: comparison_budget(available_usd="1e100", reserve_share=0, current={"max_usd": 1},
+                              candidate={"max_usd": 1}, month_days_remaining=1),
+])
+def test_unsupported_numeric_range_has_consistent_value_error(operation):
+    with pytest.raises(ValueError):
+        operation()
+
+
+@pytest.mark.parametrize("side", ["current", "candidate"])
+@pytest.mark.parametrize("bad", [None, [], "bad", 1])
+def test_comparison_sides_must_be_explicit_dicts(side, bad):
+    kwargs = dict(available_usd=1, reserve_share=0, current={"max_usd": 1},
+                  candidate={"max_usd": 1}, month_days_remaining=1)
+    kwargs[side] = bad
+    with pytest.raises(ValueError, match=side):
+        comparison_budget(**kwargs)
+
+
+@pytest.mark.parametrize("roles", [
+    [{**CURRENT[0], "role": "fallback_0"}],
+    [CURRENT[0], CURRENT[0]],
+    [{**CURRENT[0], "role": None}],
+])
+def test_role_names_cannot_overwrite_cost_breakdown(roles):
+    with pytest.raises(ValueError, match="role"):
+        decision_cost_usd(roles, fallback=FALLBACK)
