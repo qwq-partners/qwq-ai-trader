@@ -444,7 +444,8 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'subtotal_uses_original_estimate': subtotal_uses_original_estimate,
              'total_usd': str(used) if not (unknown or unaccounted or incomplete_pairs) else None,
              'basis': 'unique attempt_id once across all pair runs of the day; '
-                      'reconciled > ledger > original estimate > unknown; arm scenario costs are not summed; '
+                      'unresolved ledger stays unknown; otherwise ledger(known|known_reconciled) > '
+                      'reconciliation lookup > original estimate > unknown; arm scenario costs are not summed; '
                       'known_subtotal_usd is computable cost including any original estimates used, '
                       'not verified invoice charges'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)
