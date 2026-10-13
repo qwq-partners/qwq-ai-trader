@@ -25,7 +25,9 @@ from ..utils.llm import OpenAIClient, GeminiClient, LLMProvider, LLMResponse, _v
 from ..utils.llm_budget import BudgetBlocked, BudgetStateError
 from ..utils.llm_pricing import rate_quote
 
-VERSION = 'model-comparison-pair-v1'
+VERSION = 'model-comparison-pair-v2'
+LEGACY_VERSION = 'model-comparison-pair-v1'  # requested_at+horizon 기준. 보고서가 그 의미 그대로 읽는다.
+ANCHORS = ('requested_at', 'input_available_at')
 
 
 def _now():
@@ -96,6 +98,12 @@ class PairSpec:
     empty_retries: int = 1
     horizon_seconds: int = 900
     max_input_age_seconds: float = 5.0
+    # v2: 평가 기준시각. live 는 공통 입력 구성 시각(input_available_at)+horizon 이다(연구 계약).
+    evaluation_anchor: str = 'requested_at'
+    enqueued_at: str | None = None          # 생산자가 작업자에게 넘긴 시각(handed_off_at)
+    live_provenance: str = 'caller_supplied_not_attested'
+    # 작업자가 같은 프로세스 봉투를 검증한 뒤 붙이는 HMAC. 라벨만으로는 live 가 아니다. manifest 에서 제외.
+    attestation: str | None = None
 
     def validate(self):
         for key in ('decision_id', 'signal_id', 'symbol', 'common_context'):
@@ -110,6 +118,18 @@ class PairSpec:
         if type(self.horizon_seconds) is not int or not 0 < self.horizon_seconds <= 86400:
             raise ValueError('invalid_horizon')
         _positive(self.max_input_age_seconds, 'max_input_age_seconds')
+        if self.evaluation_anchor not in ANCHORS:
+            raise ValueError('invalid_evaluation_anchor')
+        if self.live_provenance not in {'caller_supplied_not_attested', 'in_process_attested'}:
+            raise ValueError('invalid_live_provenance')
+        if self.enqueued_at is not None and _time(self.enqueued_at) < _time(self.input_available_at):
+            raise ValueError('enqueued_before_input_available')
+        if self.pricing_basis == 'paired_live_shadow':
+            if self.evaluation_anchor != 'input_available_at' or self.live_provenance != 'in_process_attested':
+                raise ValueError('live_requires_input_anchor_and_in_process_attestation')
+            from .model_comparison_input import verify_pair_attestation
+            if self.enqueued_at is None or not verify_pair_attestation(self):
+                raise ValueError('live_provenance_unattested')
         if not all(isinstance(c, RoleControls) for c in (self.current, self.candidate, self.bear)):
             raise ValueError('explicit_role_controls_required')
         if _provider(self.current.model) != LLMProvider.OPENAI or _provider(self.candidate.model) != LLMProvider.OPENAI or _provider(self.bear.model) != LLMProvider.GEMINI:
@@ -124,6 +144,12 @@ class PairSpec:
         for control in (self.current, self.candidate, self.bear, *self.fallback_chain):
             control.request('validate', '')
         _json(asdict(self))  # Reject non-JSON snapshots and nonfinite numbers before admission.
+
+    def snapshot(self):
+        """Persisted spec: the per-process attestation is evidence of this run, not pair identity."""
+        value = asdict(self)
+        value.pop('attestation')
+        return value
 
 
 class SingleAttemptAdapter:
@@ -199,7 +225,7 @@ class PairedComparisonRunner:
 
     def _claim(self, spec, now):
         pair_id = hashlib.sha256(_json([self.guard.policy.experiment_id, spec.decision_id]).encode()).hexdigest()
-        manifest = _json({'schema_version': VERSION, 'policy': self.guard.policy.serialized(), 'spec': asdict(spec)})
+        manifest = _json({'schema_version': VERSION, 'policy': self.guard.policy.serialized(), 'spec': spec.snapshot()})
 
         def existing(db):
             row = db.execute('SELECT manifest,result FROM comparison_pairs WHERE pair_id=?', (pair_id,)).fetchone()
@@ -392,13 +418,22 @@ class PairedComparisonRunner:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
         unique = {att['attempt_id']: att for arm in (a, b) for att in arm['attempts']}
+        times = {'input_available_at': spec.input_available_at, 'enqueued_at': spec.enqueued_at,
+                 'requested_at': now.isoformat()}
+        queue_delay = (None if spec.enqueued_at is None else
+                       (now - _time(spec.enqueued_at)).total_seconds() * 1000)
+        for arm in (a, b):
+            latencies = [att.get('latency_ms') for att in arm['attempts']]
+            arm['queue_delay_ms'] = queue_delay
+            arm['provider_latency_ms'] = (None if not latencies or any(v is None for v in latencies)
+                                          else sum(latencies))
         row = {'schema_version': VERSION, 'pair_id': pair_id, 'decision_id': spec.decision_id,
                'signal_id': spec.signal_id, 'symbol': spec.symbol, 'pricing_basis': spec.pricing_basis,
-               'live_provenance': 'caller_supplied_not_attested',
+               'live_provenance': spec.live_provenance,
                'latency_basis': 'worker_wall_clock_including_storage_and_scheduling',
-               'requested_at': now.isoformat(),
-               'evaluation_at': (now + timedelta(seconds=spec.horizon_seconds)).isoformat(),
-               'policy': json.loads(_json(asdict(spec))), 'current': a, 'candidate': b,
+               **times, 'evaluation_anchor': spec.evaluation_anchor,
+               'evaluation_at': (_time(times[spec.evaluation_anchor]) + timedelta(seconds=spec.horizon_seconds)).isoformat(),
+               'policy': json.loads(_json(spec.snapshot())), 'current': a, 'candidate': b,
                'actual_provider_attempts': sum(att.get('request_sent') is True for att in unique.values()),
                'unknown_transmission_attempts': sum(att.get('request_sent') is None for att in unique.values()),
                'admitted_attempts': len(unique), 'total_comparison_cost_usd': _sum_cost(list(unique.values())),
@@ -440,17 +475,25 @@ def report_pairs(pairs, *, payloads, ledger_status, max_delay_seconds=5.0, max_s
     rows, seen = [], set()
     for raw in pairs:
         row = deepcopy(raw)
-        if not isinstance(row, dict) or row.get('schema_version') != VERSION or not isinstance(row.get('pair_id'), str):
+        if (not isinstance(row, dict) or row.get('schema_version') not in (VERSION, LEGACY_VERSION)
+                or not isinstance(row.get('pair_id'), str)):
             raise ValueError('invalid_pair_record')
         if row['pair_id'] in seen:
             raise ValueError('duplicate_pair_id')
         seen.add(row['pair_id'])
         reasons = list(row.get('reasons', []))
+        if row['schema_version'] == LEGACY_VERSION:
+            # v1 rows keep their original meaning; never reinterpret them as input-anchored.
+            row['evaluation_anchor'] = 'requested_at'
+            reasons.append('legacy_v1_requested_at_anchor')
+        elif row.get('evaluation_anchor') not in ANCHORS:
+            raise ValueError('invalid_pair_record')
         requested = _time(row['requested_at'])
+        anchor = _time(row[row['evaluation_anchor']])
         horizon = row['policy']['horizon_seconds']
         if type(horizon) is not int or not 0 < horizon <= 86400:
             raise ValueError('invalid_report_horizon')
-        expected_evaluation = requested + timedelta(seconds=horizon)
+        expected_evaluation = anchor + timedelta(seconds=horizon)
         valid_evaluation = _time(row['evaluation_at']) == expected_evaluation
         if not valid_evaluation:
             reasons.append('evaluation_policy_mismatch')
@@ -479,6 +522,8 @@ def report_pairs(pairs, *, payloads, ledger_status, max_delay_seconds=5.0, max_s
         reasons += ['downstream_admission_not_replayed', 'continuous_session_not_certified']
         if row.get('pricing_basis') != 'paired_live_shadow':
             reasons.append('offline_replay_not_live')
+        elif row.get('live_provenance') != 'in_process_attested' or row['evaluation_anchor'] != 'input_available_at':
+            reasons.append('live_provenance_not_attested')
         row.update(economic_evaluable=False, actual_execution=False, net_delta_krw=None,
                    reasons=sorted(set(reasons)))
         rows.append(row)

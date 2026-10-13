@@ -66,6 +66,17 @@ def setup(tmp_path, **kwargs):
     return m, ledger, runner, spec, op, ge
 
 
+def live(spec, enqueued_at=None):
+    """Same-process attested live spec, as the comparison worker builds it from a verified envelope."""
+    from src.analytics.model_comparison_input import attest_pair
+    enqueued_at = enqueued_at or spec.input_available_at
+    return replace(spec, pricing_basis='paired_live_shadow', evaluation_anchor='input_available_at',
+                   live_provenance='in_process_attested', enqueued_at=enqueued_at,
+                   attestation=attest_pair(decision_id=spec.decision_id, signal_id=spec.signal_id, symbol=spec.symbol,
+                                           common_context=spec.common_context, input_available_at=spec.input_available_at,
+                                           enqueued_at=enqueued_at, neutral_sizing=spec.neutral_sizing))
+
+
 def test_pair_uses_one_common_bear_and_same_role_controls_then_resumes_without_spend(tmp_path):
     m, ledger, runner, spec, op, ge = setup(tmp_path)
     first = asyncio.run(runner.run(spec))
@@ -163,16 +174,18 @@ def test_caller_cancellation_is_not_swallowed_and_resume_does_not_redispatch(tmp
 
 def test_live_label_requires_fresh_input_and_no_replay_clock_substitution(tmp_path):
     m, ledger, runner, spec, op, ge = setup(tmp_path)
-    old = replace(spec, pricing_basis='paired_live_shadow', input_available_at='2025-01-01T00:00:00+00:00')
+    old = live(replace(spec, input_available_at='2025-01-01T00:00:00+00:00'))
     with pytest.raises(ValueError, match='live_input'):
         asyncio.run(runner.run(old))
+    with pytest.raises(ValueError, match='live_requires'):
+        asyncio.run(runner.run(replace(spec, pricing_basis='paired_live_shadow')))   # caller label only
     assert ledger.status()['settled_count'] == 0
 
 
 def test_report_selects_each_responses_later_quote_and_same_exit(tmp_path):
     from tests.test_decision_quote_join import _quote, _state, OK_LEDGER
     m, ledger, runner, spec, op, ge = setup(tmp_path)
-    row = asyncio.run(runner.run(replace(spec, pricing_basis='paired_live_shadow')))
+    row = asyncio.run(runner.run(live(spec)))
     row['current']['decision_available_at'] = '2026-10-13T12:00:01+00:00'
     row['candidate']['decision_available_at'] = '2026-10-13T12:00:03+00:00'
     payloads = [_state('005490', '2026-10-13T12:00:00', 'H0STMKO0'),
@@ -264,7 +277,20 @@ def test_explicit_fallback_is_separately_budgeted_and_applies_single_no_policy(t
 from tests.test_model_comparison_sizing import case as sizing_case
 
 
-def test_real_neutral_sizing_runs_each_final_verdict_and_retains_caps(tmp_path, sizing_case):
+@pytest.fixture
+def frozen_capture(monkeypatch):
+    """Snapshot capture uses wall time; pin it 1s before NOW so input/claim checks don't depend on today's clock."""
+    from datetime import timedelta
+    from src.analytics import model_comparison_sizing as sizing
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return (NOW - timedelta(seconds=1)).astimezone(tz)
+    monkeypatch.setattr(sizing, 'datetime', Frozen)
+
+
+def test_real_neutral_sizing_runs_each_final_verdict_and_retains_caps(tmp_path, sizing_case, frozen_capture):
     from src.analytics.model_comparison_sizing import capture_policy_sizing
     m, ledger, runner, spec, op, ge = setup(tmp_path)
     rm, event = sizing_case
@@ -299,7 +325,7 @@ def test_proven_not_sent_raw_clients_preserve_zero_spend_without_unknown_block(t
     assert row['current']['attempts'][0]['billing_status'] == 'not_sent'
 
 
-def test_snapshot_replay_does_not_hold_shared_budget_write_lock(tmp_path, sizing_case, monkeypatch):
+def test_snapshot_replay_does_not_hold_shared_budget_write_lock(tmp_path, sizing_case, monkeypatch, frozen_capture):
     import sqlite3
     from src.analytics import model_comparison_sizing as sizing
     m, ledger, runner, spec, op, ge = setup(tmp_path)
@@ -401,3 +427,47 @@ def test_empty_fallback_keeps_engine_policy_and_marks_absent_model_approval(tmp_
     assert row['current']['verdict'] == 'approve'  # Existing CrossStrategyValidator policy, not a new parser.
     assert row['current']['validation_verdict'] == 'unavailable'
     assert 'fallback_policy_without_explicit_model_verdict' in row['current']['reasons']
+
+
+def test_v2_row_separates_input_queue_dispatch_times_and_anchors_live_on_input(tmp_path):
+    from datetime import timedelta
+    m, ledger, runner, spec, op, ge = setup(tmp_path)
+    t_input = NOW - timedelta(seconds=2)
+    t_enqueue = NOW - timedelta(seconds=1.5)
+    spec = live(replace(spec, input_available_at=t_input.isoformat()), enqueued_at=t_enqueue.isoformat())
+    row = asyncio.run(runner.run(spec))
+    assert row['schema_version'] == 'model-comparison-pair-v2'
+    assert (row['input_available_at'], row['enqueued_at'], row['requested_at']) == (
+        t_input.isoformat(), t_enqueue.isoformat(), NOW.isoformat())
+    assert row['evaluation_anchor'] == 'input_available_at'
+    assert row['evaluation_at'] == (t_input + timedelta(seconds=900)).isoformat()
+    assert row['live_provenance'] == 'in_process_attested'
+    assert row['current']['queue_delay_ms'] == row['candidate']['queue_delay_ms'] == 1500
+    assert row['current']['provider_latency_ms'] == 0     # fake clock: every attempt 0 ms
+    assert 'attestation' not in row['policy']
+    out = m.report_pairs([row], payloads=[], ledger_status=None)['rows'][0]
+    assert 'evaluation_policy_mismatch' not in out['reasons'] and 'live_provenance_not_attested' not in out['reasons']
+    offline = asyncio.run(runner.run(replace(spec, decision_id='offline-1', pricing_basis='offline_replay',
+                                             evaluation_anchor='requested_at', live_provenance='caller_supplied_not_attested',
+                                             attestation=None, enqueued_at=None)))
+    assert offline['evaluation_at'] == (NOW + timedelta(seconds=900)).isoformat()
+    assert offline['current']['queue_delay_ms'] is None
+
+
+def test_report_reads_v1_rows_with_original_requested_at_meaning(tmp_path):
+    from datetime import timedelta
+    m, ledger, runner, spec, op, ge = setup(tmp_path)
+    row = asyncio.run(runner.run(spec))
+    legacy = json.loads(json.dumps(row))
+    legacy['schema_version'] = 'model-comparison-pair-v1'
+    for key in ('input_available_at', 'enqueued_at', 'evaluation_anchor'):
+        legacy.pop(key)
+    legacy['pricing_basis'] = 'paired_live_shadow'      # historical caller label, never upgraded
+    legacy['live_provenance'] = 'caller_supplied_not_attested'
+    out = m.report_pairs([legacy], payloads=[], ledger_status=None)['rows'][0]
+    assert out['evaluation_anchor'] == 'requested_at'
+    assert 'legacy_v1_requested_at_anchor' in out['reasons'] and 'live_provenance_not_attested' in out['reasons']
+    assert 'evaluation_policy_mismatch' not in out['reasons']   # requested_at + horizon still checks out
+    bad = dict(json.loads(json.dumps(row)), evaluation_anchor='responded_at')
+    with pytest.raises(ValueError, match='invalid_pair_record'):
+        m.report_pairs([bad], payloads=[], ledger_status=None)
