@@ -34,25 +34,43 @@ def month_windows(start: date, end: date) -> List[Tuple[str, str]]:
     return out
 
 
+VALID_TR_CONT = {"F", "M", "D", "E", ""}
+
+
+def _output(data: Dict[str, Any]) -> Any:
+    output = data.get("output")
+    return output if output is not None else data.get("output1")
+
+
 def classify_page(data: Any) -> str:
-    """한 페이지 응답 분류: ok / empty / error / malformed."""
+    """한 페이지 응답 분류: ok / empty / error / malformed.
+
+    행이 전부 dict 가 아니거나, `_tr_cont` 가 F/M/D/E/부재 밖이거나, 연속조회 키가 문자열이 아니면 malformed —
+    비정상 응답을 '완전 조회' 로 판정하지 않는다(리뷰 P2).
+    """
     if not isinstance(data, dict):
         return "malformed"
-    if str(data.get("rt_cd", "")) != "0":
-        return "error"
-    output = data.get("output")
-    if output is None:
-        output = data.get("output1")
-    if not isinstance(output, list):
+    rt_cd = data.get("rt_cd")
+    if not isinstance(rt_cd, str):
         return "malformed"
+    if rt_cd != "0":
+        return "error"
+    output = _output(data)
+    if not isinstance(output, list) or any(not isinstance(r, dict) for r in output):
+        return "malformed"
+    cont = data.get("_tr_cont")
+    if cont is not None and (not isinstance(cont, str) or cont.upper() not in VALID_TR_CONT):
+        return "malformed"
+    for key in ("ctx_area_fk100", "ctx_area_nk100"):
+        value = data.get(key)
+        if value is not None and not isinstance(value, str):
+            return "malformed"
     return "ok" if output else "empty"
 
 
 def _rows(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    output = data.get("output")
-    if output is None:
-        output = data.get("output1")
-    return [r for r in output if isinstance(r, dict)] if isinstance(output, list) else []
+    output = _output(data)
+    return list(output) if isinstance(output, list) else []
 
 
 async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *, max_pages: int = 50,
@@ -62,6 +80,7 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
     status: complete / empty / partial_max_pages / partial_page_repeat / error / malformed
     """
     pages: List[Dict[str, Any]] = []
+    raw_pages: List[Any] = []            # 비공개 파일에 원본 응답 전체를 보존한다 — 재검증용(리뷰 P2)
     rows: List[Dict[str, Any]] = []
     seen_keys = set()
     fk, nk, tr_cont = "", "", ""
@@ -71,6 +90,7 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
         if pause is not None and page_no > 1:
             await pause()
         data = await fetch(start_yyyymmdd, end_yyyymmdd, fk100=fk, nk100=nk, tr_cont=tr_cont)
+        raw_pages.append(data)
         kind = classify_page(data)
         pages.append({"page": page_no, "kind": kind,
                       "rt_cd": data.get("rt_cd") if isinstance(data, dict) else None,
@@ -82,9 +102,11 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
             status = kind
             break
         rows.extend(_rows(data))
-        cont = str(data.get("_tr_cont") or "").upper()
+        cont_raw = data.get("_tr_cont")
+        cont = cont_raw.upper() if isinstance(cont_raw, str) else ""
         if cont in NEXT_PAGE:
-            next_fk, next_nk = str(data.get("ctx_area_fk100") or ""), str(data.get("ctx_area_nk100") or "")
+            next_fk = data.get("ctx_area_fk100") if isinstance(data.get("ctx_area_fk100"), str) else ""
+            next_nk = data.get("ctx_area_nk100") if isinstance(data.get("ctx_area_nk100"), str) else ""
             key = (next_fk, next_nk)
             if key in seen_keys or key == (fk, nk):
                 status = "partial_page_repeat"          # 같은 연속조회 키가 반복 — 무한 순회 방지
@@ -102,7 +124,8 @@ async def collect_window(fetch: Fetch, start_yyyymmdd: str, end_yyyymmdd: str, *
     if status == "complete" and not rows:
         status = "empty"
     return {"start": start_yyyymmdd, "end": end_yyyymmdd, "status": status, "pages": pages,
-            "api_calls": len(pages), "rows": rows, "tr_cont_header_missing": header_missing}
+            "api_calls": len(pages), "rows": rows, "tr_cont_header_missing": header_missing,
+            "raw_pages": raw_pages}
 
 
 def _decimal(value: Any) -> Optional[Decimal]:

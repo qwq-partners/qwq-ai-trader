@@ -2,9 +2,9 @@
 
 ## 2026-10-13 — 권리조회 수집·동시 관측 초안·모델 비교 비용(66차, PR 대기·운영 미배포)
 
-- **A. KIS 기간별계좌권리현황(CTRGA011R) 읽기 전용 수집**: `KISBroker.get_period_rights`(공식 샘플 파라미터), `src/analytics/kis_period_rights.py`(월 창 분할·응답 헤더 `tr_cont` 로 전체 페이지 회수·`complete/empty/partial_max_pages/partial_page_repeat/error/malformed` 구분·권리유형별 Decimal 합 집계, 해석 없음), `scripts/ops/kis_period_rights.py`(장중 거부, 원본·금액은 비공개 out-dir, 표준 출력은 상태·행 수). `CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가. 시험 5건(합성). 실조회 결과는 계좌 기준선 문서 "실조회 기록" 절.
+- **A. KIS 기간별계좌권리현황(CTRGA011R) 읽기 전용 수집**: `KISBroker.get_period_rights`(공식 샘플 파라미터, 리미터는 `_api_get` 재시도마다), `src/analytics/kis_period_rights.py`(월 창 분할·응답 헤더 `tr_cont` 로 전체 페이지 회수·`complete/empty/partial_max_pages/partial_page_repeat/error/malformed` 엄격 구분(dict 아닌 행·알 수 없는 tr_cont·문자열 아닌 연속조회 키는 malformed)·원본 페이지 전체 보존·권리유형별 Decimal 합 집계, 해석 없음), `scripts/ops/kis_period_rights.py`(장중 거부, **`connect()` 를 쓰지 않는 조회 전용 연결 — 운영 실행 원장을 열지 않고 봇과 같은 토큰 캐시를 읽기만 하며 유효하지 않으면 새 발급 없이 중단**, 출력 디렉터리 본인 소유·0700 검증, 파일 0600, 표준 출력은 상태·행 수). `CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가. 시험 7건(합성·CLI 통합·권한). 실조회 결과는 계좌 기준선 문서 "실조회 기록" 절.
 - **B. 판단·호가 동시 관측 준비**: 기존 `runner-signal-window-v1` + `channels.market_state_evidence=true` 가 이미 신호 단계 관측·3채널 배정·같은 세대 수용·용량 검사를 갖춘 것을 확인하고, 10월8일 study 를 복사한 초안(버퍼/큐 40,000·상태 레코드 30,000·저장 상한 2.7GB·창 01:00→01:30→01:50Z)이 실제 `CapturePlan.load` 를 통과함을 확인(미설치). 판독 규칙(판단 0·상태 미수신·구독 지연·재연결·용량 초과·조기 종료)을 사전 고정. [설계](docs/research/concurrent-observation-design-2026-10-13.md).
-- **C. 모델 비교 비용 계획**: `src/analytics/model_comparison_budget.py`(공표 요율·재시도 상한 ×1.1·예비 비율로 비교 쌍 수 산정, 단가 없음은 None), 원장 가용 $99.70·예비 50%·잔여 18일 기준 후보 3안의 비교 상한(일 176~475쌍)과 보고서 계약 `model-comparison-report-v1` 초안. 유료 비교 호출·운영 모델 변경 없음. [계획](docs/research/model-comparison-plan-2026-10-13.md). 시험 3건.
+- **C. 모델 비교 비용 계획**: `src/analytics/model_comparison_budget.py`(공표 요율을 Decimal 로 직접 계산·1e-9 올림, expected(×1.1)와 max(역할별 2회+단일 폴백) 분리, 상한은 max 기준, 단가 없음은 None), 원장 가용 $99.70·예비 50%·잔여 18일 기준 후보 3안의 비교 상한(max 기준 일 69~127쌍, expected 참고 176~475)과 보고서 계약 `model-comparison-report-v1` 초안. 교차 공급자 리뷰(Codex 러너, 요청 gpt-6-astra/high) 1차 P1 2(CLI 가 실행 원장 개방·토큰 매니저 누락)·P2 7 반영. 유료 비교 호출·운영 모델 변경 없음. [계획](docs/research/model-comparison-plan-2026-10-13.md). 시험 3건.
 - 운영 `161b394`·10월14일 08:55 파일럿 예약·매수 중지·예산 원장(사용 $0.296083, 예약 0) 불변.
 
 ## 2026-10-13 — 응답 뒤 호가 수신 시각 보정·판단 기록 정상 종료

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any, Dict, List, Optional
 
 from ..utils.llm_pricing import rate_quote
@@ -18,17 +18,25 @@ def _d(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+_MICRO = Decimal("0.000000001")
+
+
 def call_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Optional[Decimal]:
-    """한 호출의 추정 비용. 단가표에 없는 모델은 None(0 으로 대체하지 않음)."""
-    quote = rate_quote(model, input_tokens, output_tokens)
-    return None if quote is None else _d(quote.cost_usd)
+    """한 호출의 추정 비용 — 공표 요율을 Decimal 로 직접 계산하고 1e-9 단위로 올림(보수적). 단가표에 없으면 None."""
+    quote = rate_quote(model, input_tokens, output_tokens)          # 모델 존재·장문 구간 판정은 기존 단가표 로직을 따른다
+    if quote is None:
+        return None
+    cost = (_d(input_tokens) * _d(quote.input_usd_per_million) + _d(output_tokens) * _d(quote.output_usd_per_million)) / Decimal(1_000_000)
+    return cost.quantize(_MICRO, rounding=ROUND_UP)
 
 
-def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = Decimal("1.1")) -> Dict[str, Any]:
-    """판단 1건(역할별 호출 1회씩) 의 추정 비용. roles: [{role, model, input_tokens, output_tokens}].
+def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = Decimal("1.1"),
+                      max_attempts_per_role: int = 2, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """판단 1건의 비용. roles: [{role, model, input_tokens, output_tokens}].
 
-    retry_factor 는 빈 응답 재시도(retry_on_empty=1, 실측 6회 중 1회)·폴백 비율의 상한 가정이다.
-    단가 없는 역할이 하나라도 있으면 total 은 None 이고 그 역할을 unpriced 에 적는다.
+    - expected: 역할별 1회 × retry_factor(실측 빈 응답 재시도율 상한 가정) — 평균 비용 가정.
+    - max: 역할별 max_attempts_per_role(retry_on_empty=1 → 2회) + 단일 폴백 1회 — 경로상 최대 비용(상한).
+    단가 없는 역할이 있으면 둘 다 None 이고 unpriced_roles 에 적는다.
     """
     per_role, unpriced, total = {}, [], Decimal("0")
     for r in roles:
@@ -38,32 +46,43 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
             unpriced.append(r["role"])
         else:
             total += cost
+    fb_cost = None
+    if fallback is not None:
+        fb_cost = call_cost_usd(fallback["model"], int(fallback["input_tokens"]), int(fallback["output_tokens"]))
+        per_role["fallback"] = {"model": fallback["model"], "cost_usd": str(fb_cost) if fb_cost is not None else None}
+        if fb_cost is None:
+            unpriced.append("fallback")
     if unpriced:
-        return {"per_role": per_role, "unpriced_roles": unpriced, "total_usd": None, "total_with_retry_usd": None}
+        return {"per_role": per_role, "unpriced_roles": unpriced, "total_usd": None,
+                "total_with_retry_usd": None, "max_usd": None}
+    maximum = total * _d(max_attempts_per_role) + (fb_cost if fb_cost is not None else Decimal("0"))
     return {"per_role": per_role, "unpriced_roles": [], "total_usd": str(total),
-            "total_with_retry_usd": str((total * retry_factor).quantize(Decimal("0.000001")))}
+            "total_with_retry_usd": str((total * retry_factor).quantize(_MICRO, rounding=ROUND_UP)),
+            "max_usd": str(maximum.quantize(_MICRO, rounding=ROUND_UP))}
 
 
 def comparison_budget(*, available_usd: Any, reserve_share: Any, current: Dict[str, Any], candidate: Dict[str, Any],
-                      month_days_remaining: int) -> Dict[str, Any]:
+                      month_days_remaining: int, basis: str = "max") -> Dict[str, Any]:
     """비교 실험에 쓸 수 있는 판단 수. available_usd 는 원장 status 의 가용액(사용·예약 차감 뒤).
 
-    reserve_share 는 운영 필수 판단(기존 Bull/Bear·레짐 등)을 위해 남겨 두는 비율. 비교 1건 = 현행 판단 비용 +
-    후보 판단 비용(둘 다 재시도 상한 반영). 어느 쪽이든 단가 없으면 count 는 None.
+    basis="max"(기본) 는 경로상 최대 비용으로 상한을 내고, "expected" 는 평균 가정이다 — 둘을 섞지 않는다.
     """
     avail = _d(available_usd)
     share = _d(reserve_share)
     if not (Decimal("0") <= share < Decimal("1")) or avail < 0 or int(month_days_remaining) < 0:
         raise ValueError("reserve_share ∈ [0,1), available_usd ≥ 0, month_days_remaining ≥ 0")
+    if basis not in ("max", "expected"):
+        raise ValueError("basis 는 max 또는 expected")
+    key = "max_usd" if basis == "max" else "total_with_retry_usd"
     budget = (avail * (Decimal("1") - share)).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
-    cur, cand = current.get("total_with_retry_usd"), candidate.get("total_with_retry_usd")
+    cur, cand = current.get(key), candidate.get(key)
     if cur is None or cand is None:
-        return {"schema_version": SCHEMA_VERSION, "comparison_budget_usd": str(budget), "pair_cost_usd": None,
+        return {"schema_version": SCHEMA_VERSION, "basis": basis, "comparison_budget_usd": str(budget), "pair_cost_usd": None,
                 "max_comparisons": None, "per_day_cap": None,
                 "note": "단가가 없는 역할이 있어 호출 수를 계산할 수 없다 — 0 으로 대체하지 않음"}
     pair = _d(cur) + _d(cand)
     max_cmp = int((budget / pair).to_integral_value(rounding=ROUND_DOWN)) if pair > 0 else None
     per_day = (int(max_cmp // int(month_days_remaining)) if max_cmp is not None and int(month_days_remaining) > 0 else None)
-    return {"schema_version": SCHEMA_VERSION, "comparison_budget_usd": str(budget), "pair_cost_usd": str(pair),
+    return {"schema_version": SCHEMA_VERSION, "basis": basis, "comparison_budget_usd": str(budget), "pair_cost_usd": str(pair),
             "max_comparisons": max_cmp, "per_day_cap": per_day,
-            "note": "공표 요율 추정이며 청구 보증이 아니다. 실제 유료 호출은 이 계산으로 시작되지 않는다"}
+            "note": "공표 요율 추정(올림)이며 청구 보증이 아니다. 실제 유료 호출은 이 계산으로 시작되지 않는다"}

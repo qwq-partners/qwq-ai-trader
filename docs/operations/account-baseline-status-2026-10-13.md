@@ -31,7 +31,7 @@
 
 ## 66차 — 권리조회(CTRGA011R) 수집 도구
 
-`scripts/ops/kis_period_rights.py --start 2025-01-01 --end 2026-10-01 --out-dir <비공개 경로>` 가 월 단위 창마다 모든 페이지를 회수한다(공식 샘플 파라미터, 응답 헤더 `tr_cont` F/M 이면 `ctx_area_fk100/nk100` 으로 다음 페이지, D/E/부재면 종료). 창별 상태는 `complete`/`empty`/`partial_max_pages`(공식 샘플의 재귀 상한 도달은 완료가 아님)/`partial_page_repeat`(같은 연속조회 키 반복)/`error`/`malformed` 로 구분하고, 원본 응답·금액·식별자는 out-dir(비공개) 에만 저장하며 표준 출력은 상태·행 수만 낸다. 장중(09:00~15:30 KST)에는 실행을 거부한다 — 운영 봇과 계좌 원장 TR 초당 1건 한도를 공유하므로(`CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가). 요약(`summarize_rights`)은 권리유형별 행 수·`last_alct_amt` 합(Decimal 문자열)·파싱 불가 건수만 집계하고 해석하지 않는다.
+`scripts/ops/kis_period_rights.py --start 2025-01-01 --end 2026-10-01 --out-dir <비공개 경로>` 가 월 단위 창마다 모든 페이지를 회수한다(공식 샘플 파라미터, 응답 헤더 `tr_cont` F/M 이면 `ctx_area_fk100/nk100` 으로 다음 페이지, D/E/부재면 종료). 창별 상태는 `complete`/`empty`/`partial_max_pages`(공식 샘플의 재귀 상한 도달은 완료가 아님)/`partial_page_repeat`(같은 연속조회 키 반복)/`error`/`malformed` 로 구분하고, 원본 응답·금액·식별자는 out-dir(비공개) 에만 저장하며 표준 출력은 상태·행 수만 낸다. 장중(09:00~15:30 KST)에는 실행을 거부한다 — 운영 봇과 계좌 원장 TR 초당 1건 한도를 공유하므로(`CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가). 연결은 `connect()` 를 쓰지 않는 조회 전용 경로다: `connect()` 는 운영 실행 원장(ExecutionHistory) 세션을 열어 봇의 기록을 깨뜨릴 수 있고, 토큰은 봇과 같은 캐시 파일을 읽기만 하며 유효하지 않으면 새 발급 없이 중단한다(새 발급은 봇 토큰을 무효화할 수 있다). 출력 디렉터리는 본인 소유·0700 이어야 하고 파일은 0600 으로 쓴다. 원본 응답은 페이지 전체를 보존한다. 요약(`summarize_rights`)은 권리유형별 행 수·`last_alct_amt` 합(Decimal 문자열)·파싱 불가 건수만 집계하고 해석하지 않는다.
 
 **해석 금지.** 조회 성공 ≠ 소득 확정. `last_alct_amt` 의 세전/세후·실제 지급·보존기간·예수금/CMA 이자 포함 여부는 지급 증빙 대사 전 미확인. 권리 이벤트의 현금은 외부 입출금·이체가 아니다. `loan_int` 는 대출이자 비용이다.
 

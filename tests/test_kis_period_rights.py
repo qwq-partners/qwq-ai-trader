@@ -58,8 +58,14 @@ def test_error_empty_and_malformed_pages():
     nohdr = asyncio.run(collect_window(_fetcher([_page([_row()], "")]), "20250101", "20250131"))
     assert nohdr["status"] == "complete" and nohdr["tr_cont_header_missing"] is True
     bad = asyncio.run(collect_window(_fetcher([{"rt_cd": "0"}]), "20250101", "20250131"))
-    assert bad["status"] == "malformed"
+    assert bad["status"] == "malformed" and bad["raw_pages"] == [{"rt_cd": "0"}]          # 원본 페이지 보존
     assert classify_page("x") == "malformed" and classify_page({"rt_cd": "0", "output1": []}) == "empty"
+    # 리뷰 P2: 비정상 응답을 완전 조회로 판정하지 않는다
+    assert classify_page(_page([None], "D")) == "malformed"                 # 행이 dict 가 아님
+    assert classify_page(_page([_row()], "X")) == "malformed"               # 알 수 없는 tr_cont
+    assert classify_page(_page([_row()], "F", fk=0)) == "malformed"         # 연속조회 키가 문자열 아님
+    assert classify_page({"rt_cd": 0, "output": []}) == "malformed"         # rt_cd 타입 오류
+    assert asyncio.run(collect_window(_fetcher([_page([_row()], "X")]), "20250101", "20250131"))["status"] == "malformed"
 
 
 def test_summary_aggregates_decimal_strings_without_interpreting():
@@ -74,3 +80,58 @@ def test_summary_aggregates_decimal_strings_without_interpreting():
     assert s["by_right_type"]["02"]["last_alct_amt_sum"] == "10" and s["unparsed_amount_rows"] == 1
     assert Decimal(s["by_right_type"]["01"]["last_alct_amt_sum"]) == Decimal("1000.50")
     assert any("소득 확정" in c for c in s["caveats"])
+
+
+def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkeypatch):
+    """리뷰 P1: CLI 통합 — connect() 없이 조회 전용 브로커, 비공개 디렉터리 0700, 파일 0600, 원본 보존."""
+    import json, os, stat, sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str((tmp_path / "_unused")))  # 경로 영향 없음
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("kis_period_rights_cli", "scripts/ops/kis_period_rights.py")
+    cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+
+    class _Broker:
+        def __init__(self):
+            self.calls = []
+            self._session = SimpleNamespace(closed=False)
+            async def _close():
+                self._session.closed = True
+            self._session.close = _close
+
+        async def get_period_rights(self, start, end, *, inqr_dvsn, fk100, nk100, tr_cont):
+            self.calls.append((start, end, fk100, nk100, tr_cont))
+            if start.startswith("202501") and fk100 == "":
+                return _page([_row()], "F", fk="k1", nk="k1")
+            return _page([_row(amt="5")] if start.startswith("202501") else [], "D")
+
+    broker = _Broker()
+    async def fake_open():
+        return broker
+    monkeypatch.setattr(cli, "_open_readonly_broker", fake_open)
+    out = tmp_path / "rights"
+    args = SimpleNamespace(start="2025-01-01", end="2025-02-28", out_dir=str(out), inqr_dvsn="03", max_pages=10, min_interval=0)
+    rc = asyncio.run(cli._run(args))
+    assert rc == 0 and broker._session.closed is True
+    assert stat.S_IMODE(out.stat().st_mode) == 0o700
+    files = sorted(p.name for p in out.iterdir())
+    assert files == ["manifest.json", "rights-20250101-20250131.json", "rights-20250201-20250228.json", "summary.json"]
+    for p in out.iterdir():
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600, p
+    jan = json.loads((out / "rights-20250101-20250131.json").read_text())
+    assert jan["status"] == "complete" and len(jan["raw_pages"]) == 2 and jan["raw_pages"][0]["ctx_area_fk100"] == "k1"
+    assert [c[4] for c in broker.calls] == ["", "N", ""]                 # 2페이지째만 tr_cont=N
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["window_statuses"] == {"complete": 1, "empty": 1} and summary["api_calls"] == 3
+
+
+def test_cli_refuses_shared_or_foreign_output_dir(tmp_path):
+    import importlib.util, os, stat, pytest
+    spec = importlib.util.spec_from_file_location("kis_period_rights_cli2", "scripts/ops/kis_period_rights.py")
+    cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(cli)
+    shared = tmp_path / "shared"; shared.mkdir(); shared.chmod(0o755)
+    with pytest.raises(RuntimeError):
+        cli._prepare_private_dir(shared)                                   # 기존 0755 디렉터리는 거부(권한을 바꾸지 않음)
+    fresh = tmp_path / "fresh"
+    cli._prepare_private_dir(fresh)
+    assert stat.S_IMODE(fresh.stat().st_mode) == 0o700

@@ -2051,7 +2051,6 @@ class KISBroker(BaseBroker):
             logger.error(f"외부 해외계좌 조회 오류 ({cano}): {e} → 캐시 폴백")
             return self._load_overseas_cache(cano)
 
-    @kis_request_metrics.observe_operation("account_summary")
     async def get_period_rights(self, start_yyyymmdd: str, end_yyyymmdd: str, *, inqr_dvsn: str = "03",
                                 fk100: str = "", nk100: str = "", tr_cont: str = "") -> Dict[str, Any]:
         """기간별계좌권리현황조회 CTRGA011R — 읽기 전용 1페이지 (66차).
@@ -2060,7 +2059,7 @@ class KISBroker(BaseBroker):
         페이지 순회·완료 판정은 호출부(`src.analytics.kis_period_rights`)가 응답 헤더 `_tr_cont` 와
         `ctx_area_fk100/nk100` 으로 한다. 주문·설정 변경 없음.
         """
-        await kis_rate_limit.acquire("CTRGA011R")
+        # 리미터는 _api_get 이 재시도마다 획득한다 — 여기서 먼저 잡으면 busy 상태가 풀리지 않아 10초 stale 대기(리뷰 P2)
         url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/period-rights"
         params = {
             "INQR_DVSN": inqr_dvsn, "CANO": self.config.account_no, "ACNT_PRDT_CD": self.config.account_product_cd,
@@ -2070,6 +2069,7 @@ class KISBroker(BaseBroker):
         }
         return await self._api_get(url, "CTRGA011R", params, tr_cont=tr_cont)
 
+    @kis_request_metrics.observe_operation("account_summary")
     async def get_account_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회
