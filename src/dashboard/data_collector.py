@@ -47,6 +47,18 @@ def _serialize(data: Any) -> Any:
     return data
 
 
+def _decision_record_stats():
+    """판단 기록기 통계 — 기록기 미설치/비활성이면 None (health 조회가 기록기를 만들지 않는다)."""
+    try:
+        from ..analytics import llm_decision_record as _rec
+        recorder = _rec._recorder
+        if recorder is None or not recorder.enabled:
+            return None
+        return dict(recorder.stats)
+    except Exception:
+        return None
+
+
 class DashboardDataCollector:
     """KR 봇 런타임 데이터를 JSON으로 변환"""
 
@@ -1595,6 +1607,8 @@ class DashboardDataCollector:
             "watch_symbols_count": len(getattr(bot, '_watch_symbols', [])),
             # 실행 원장/장부 귀속 상태 — status·reason·unattributed_symbols 만 운영자 노출 (48차 P2)
             "execution_recovery": _recovery,
+            # 64차: LLM 판단 기록기 통계(queued/written/dropped_*) — 폐기가 있으면 신호 메타의 decision_id 에 대응 행이 없다
+            "llm_decision_record": _decision_record_stats(),
             "timestamp": datetime.now(),
         })
 

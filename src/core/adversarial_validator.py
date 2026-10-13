@@ -117,6 +117,35 @@ def _parse_verdict(text: str, positive_token: str, negative_token: str) -> Optio
     return pos_at < neg_at
 
 
+# 역할별 사용자 프롬프트 접미 — 판단 기록(llm-decision-v1)이 역할 지시를 재생할 수 있게 상수로 둔다 (64차)
+BULL_SUFFIX = ("\n이 매수 후보의 지지 근거를 평가하라. "
+               "매수할 만하면 APPROVE, 아니면 REJECT로 시작하고 한 줄 사유를 적어라.")
+BEAR_SUFFIX = ("\n이 매수가 실패할 가장 그럴듯한 시나리오를 하나 제시하라. "
+               "그 시나리오가 치명적이면 REJECT, 감수 가능하면 ACCEPT로 시작하고 "
+               "시나리오를 한 줄로 적어라.")
+
+
+def _attempts_from_slots(requested_at, slots):
+    """Bull/Bear 시도 기록 2건. 완료한 쪽은 자기 응답·완료 시각, 미완료 쪽은 timeout 으로 남긴다.
+    기록 생성은 판정에 영향을 주지 않는다(예외는 record_error 행으로)."""
+    from ..analytics.llm_decision_record import safe_attempt_record, sha256_text
+    from ..utils.llm import LLMProvider
+    rows = []
+    for role, provider, system, suffix in (("bull", LLMProvider.OPENAI, BULL_SYSTEM, BULL_SUFFIX),
+                                            ("bear", LLMProvider.GEMINI, BEAR_SYSTEM, BEAR_SUFFIX)):
+        slot = slots.get(role)
+        if slot is None:
+            slot = {}
+        done = "response" in slot
+        # 미완료(취소)면 취소 예외에 붙은 응답 메타(요청 추론 수준·예산 모드)를 timeout 행에 보존한다 (4차 리뷰 P2)
+        payload = slot.get("response") if done else slot.get("cancelled_response")
+        rows.append(safe_attempt_record(role, provider, requested_at, payload,
+                                        timed_out=not done, responded_at=slot.get("responded_at"),
+                                        trail=slot.get("trail"),
+                                        role_system_sha256=sha256_text(system), role_suffix=suffix))
+    return rows
+
+
 class AdversarialValidator:
     """Bull/Bear 교차 검증기"""
 
@@ -139,11 +168,7 @@ class AdversarialValidator:
 
     async def _ask_bull(self, context: str):
         from ..utils.llm import LLMProvider
-        prompt = (
-            context
-            + "\n이 매수 후보의 지지 근거를 평가하라. "
-            "매수할 만하면 APPROVE, 아니면 REJECT로 시작하고 한 줄 사유를 적어라."
-        )
+        prompt = context + BULL_SUFFIX
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.OPENAI, weight="light",
             system=BULL_SYSTEM, max_tokens=MAX_TOKENS,
@@ -156,12 +181,7 @@ class AdversarialValidator:
 
     async def _ask_bear(self, context: str):
         from ..utils.llm import LLMProvider
-        prompt = (
-            context
-            + "\n이 매수가 실패할 가장 그럴듯한 시나리오를 하나 제시하라. "
-            "그 시나리오가 치명적이면 REJECT, 감수 가능하면 ACCEPT로 시작하고 "
-            "시나리오를 한 줄로 적어라."
-        )
+        prompt = context + BEAR_SUFFIX
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.GEMINI, weight="light",
             system=BEAR_SYSTEM, max_tokens=MAX_TOKENS,
@@ -197,12 +217,30 @@ class AdversarialValidator:
         context = (common_context if common_context is not None else
                    self._build_context(symbol, strategy, score, indicators,
                                        market_regime, sector, extra_context))
+        from ..analytics.llm_decision_record import now_kst
+        requested_at = now_kst()
+        slots: Dict[str, Dict[str, Any]] = {"bull": {}, "bear": {}}
+
+        async def _timed(role: str, coro):
+            # 역할별 완료 시각·결과를 보관 — 전체 타임아웃이 나도 먼저 끝난 쪽의 응답·비용은 남는다 (리뷰 P2)
+            try:
+                result = await coro
+            except asyncio.CancelledError as error:
+                # 전체 타임아웃의 취소 — 미완료(timeout)로 남기되 이미 보낸 호출 내역은 보존한다 (재리뷰 P1)
+                slots[role]["trail"] = getattr(error, "_llm_trail", None)
+                slots[role]["cancelled_response"] = getattr(error, "_llm_response", None)
+                raise
+            except BaseException as error:
+                slots[role].update(response=error, responded_at=now_kst())
+                raise
+            slots[role].update(response=result, responded_at=now_kst())
+            return result
 
         try:
             bull_resp, bear_resp = await asyncio.wait_for(
                 asyncio.gather(
-                    self._ask_bull(context),
-                    self._ask_bear(context),
+                    _timed("bull", self._ask_bull(context)),
+                    _timed("bear", self._ask_bear(context)),
                     return_exceptions=True,
                 ),
                 timeout=LLM_TIMEOUT,
@@ -210,11 +248,14 @@ class AdversarialValidator:
         except asyncio.TimeoutError:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 타임아웃 ({LLM_TIMEOUT}s) — fail-open 통과")
-            return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True)
+            return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True,
+                                     meta={"attempts": _attempts_from_slots(requested_at, slots)})
         except Exception as e:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
-            return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True)
+            return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True,
+                                     meta={"attempts": _attempts_from_slots(requested_at, slots)})
+        meta = {"attempts": _attempts_from_slots(requested_at, slots)}
 
         budget_reasons = sorted({reason for resp in (bull_resp, bear_resp)
                                  if isinstance((reason := getattr(resp, "budget_block_reason", None)), str)
@@ -242,7 +283,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 True, 0.0, "양쪽 판정 불가 — fail-open",
                 bull_text=bull_text[:120], bear_text=bear_text[:120], failed=True,
-                budget_block_reason=budget_reason,
+                budget_block_reason=budget_reason, meta=meta,
             )
 
         # 한쪽만 응답 → 그 판정을 따르되 confidence를 낮춘다
@@ -255,7 +296,7 @@ class AdversarialValidator:
                 budget_block_reason=budget_reason,
                 reason=f"{side} 단독 판정 ({'승인' if single else '거부'})",
                 bull_verdict=bull_verdict, bear_verdict=bear_verdict,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
             self.stats["approved" if result.approved else "blocked"] += 1
             logger.info(f"[적대검증] {symbol} {result.reason} (편측 응답)")
@@ -268,7 +309,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 True, 1.0, "만장일치 승인",
                 bull_verdict=True, bear_verdict=True,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
 
         if not bull_verdict and not bear_verdict:
@@ -278,7 +319,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 False, 1.0, reason,
                 bull_verdict=False, bear_verdict=False,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
 
         # 불일치
@@ -298,6 +339,7 @@ class AdversarialValidator:
             approved, 0.5, reason,
             bull_verdict=bull_verdict, bear_verdict=bear_verdict,
             bull_text=bull_text[:120], bear_text=bear_text[:120],
+            meta=meta,
             disagreed=True,
         )
 

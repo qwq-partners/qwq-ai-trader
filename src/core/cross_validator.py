@@ -16,6 +16,10 @@ from loguru import logger
 import json
 
 
+# 단일 LLM 폴백의 시한(초) — 시험에서 monkeypatch 가능하게 상수로 둔다 (64차)
+SINGLE_FALLBACK_TIMEOUT = 10.0
+
+
 class CrossStrategyValidator:
     """
     크로스 전략 검증 게이트
@@ -66,6 +70,8 @@ class CrossStrategyValidator:
         # 게이트 성적표·CF에서 위키/메모리 영향을 분리 집계한다
         self.last_memory_adj: int = 0
         self.last_llm_context: Dict[str, bool] = {}
+        # 64차: 직전 llm_second_check 의 판단 기록 상태 {decision_id, record_status, stage} — 엔진이 신호 메타로 복사
+        self.last_llm_decision: Dict[str, Any] = {}
 
         # 적대적 교차 검증기 (2026-08-02 추가) — Bull/Bear 역할 분리 + 멀티 LLM 합의
         # 초기화 실패해도 단일 LLM 경로로 폴백되므로 매매에 영향 없음
@@ -728,6 +734,7 @@ class CrossStrategyValidator:
         indicators: dict,
         market_regime: str,
         sector: str = "",
+        signal_id: Optional[str] = None,
     ) -> bool:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
@@ -740,6 +747,7 @@ class CrossStrategyValidator:
         엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
         self._budget_context.set(None)
+        self.last_llm_decision = {}
         if not self._llm_manager:
             return True
 
@@ -824,6 +832,8 @@ class CrossStrategyValidator:
                                  "symbol_wiki": symbol_wiki, "disclosure": disclosure_ctx,
                                  "panel_risks": panel_risks},
             )
+            from ..analytics.llm_decision_record import now_kst as _now_kst
+            self._decision_collected_at = _now_kst()   # 공통 입력 구성 시각 — 판단 완료 시각과 구분 (3차 리뷰 P2)
             prompt = (
                 common_context
                 + "\n이 매수 시그널을 승인하시겠습니까? "
@@ -850,8 +860,17 @@ class CrossStrategyValidator:
                 if not adv.failed:
                     if not adv.approved:
                         logger.info(f"[크로스검증] 적대검증 거부: {symbol} — {adv.reason}")
-                    return adv.approved
+                    return self._finish_decision(
+                        adv.approved, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                        market_regime=market_regime, common_context=common_context, stage="adversarial",
+                        attempts=list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else [],
+                        result={"confidence": adv.confidence, "reason": adv.reason, "failed": False,
+                                "disagreed": adv.disagreed, "bull": adv.bull_verdict, "bear": adv.bear_verdict})
                 # adv.failed면 폴백 (아래 단일 LLM 경로)
+                _adv_attempts = list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else []
+                _adv_failed_reason = adv.reason
+            else:
+                _adv_attempts, _adv_failed_reason = [], None
 
             # 단일 LLM 폴백 — GPT-5.4 (STRATEGY_ANALYSIS)
             # 2026-08-08 P2: 적대검증 실패 후 폴백도 실호출 1회로 계수 (한도 정합).
@@ -860,29 +879,94 @@ class CrossStrategyValidator:
             if self._adversarial is not None:
                 self._daily_llm_count += 1
             from ..utils.llm import LLMTask
-            resp = await asyncio.wait_for(
-                self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100,
-                                           budget_priority="essential"),
-                timeout=10.0,
-            )
+            from ..analytics.llm_decision_record import safe_attempt_record as attempt_record, now_kst
+            _single_requested_at = now_kst()
+            _single_suffix = prompt[len(common_context):]
+            _single_slot: Dict[str, Any] = {}
+
+            async def _single_call():
+                # wait_for 는 취소를 새 TimeoutError 로 바꾸므로, 취소 시점에 trail 을 슬롯에 보존한다 (3차 리뷰 P1)
+                try:
+                    return await self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100,
+                                                            budget_priority="essential")
+                except asyncio.CancelledError as _cancel:
+                    _single_slot["trail"] = getattr(_cancel, "_llm_trail", None)
+                    _single_slot["response"] = getattr(_cancel, "_llm_response", None)
+                    raise
+
+            try:
+                resp = await asyncio.wait_for(_single_call(), timeout=SINGLE_FALLBACK_TIMEOUT)
+            except asyncio.TimeoutError:
+                _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at,
+                                                           _single_slot.get("response"),
+                                                           timed_out=True, role_system_sha256=None,
+                                                           role_suffix=_single_suffix,
+                                                           trail=_single_slot.get("trail"))]
+                return self._finish_decision(
+                    True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                    market_regime=market_regime, common_context=common_context, stage="single_fallback",
+                    attempts=_attempts, result={"confidence": 0.0, "reason": "단일 폴백 타임아웃 — fail-open",
+                                                "failed": True, "adversarial_failed_reason": _adv_failed_reason})
+            except Exception as _single_err:
+                # 공급자·로컬 검증 예외도 기존처럼 fail-open 이지만, 확보한 Bull/Bear 시도와 함께 기록한다 (재리뷰 P2)
+                logger.debug(f"[크로스검증] 단일 폴백 예외 (통과): {_single_err}")
+                _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at, _single_err,
+                                                           role_system_sha256=None, role_suffix=_single_suffix)]
+                return self._finish_decision(
+                    True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                    market_regime=market_regime, common_context=common_context, stage="single_fallback",
+                    attempts=_attempts, result={"confidence": 0.0, "reason": "단일 폴백 예외 — fail-open",
+                                                "failed": True, "adversarial_failed_reason": _adv_failed_reason})
+            _attempts = _adv_attempts + [attempt_record("single", getattr(resp, "provider", None),
+                                                       _single_requested_at, resp, role_system_sha256=None,
+                                                       role_suffix=_single_suffix)]
             if not resp.success:
                 budget_reason = getattr(resp, 'budget_block_reason', None)
                 if isinstance(budget_reason, str) and budget_reason:
                     self._budget_context.set({'status': 'unavailable', 'reason': budget_reason,
                                               'stage': 'single_fallback'})
                 logger.debug(f"[크로스검증] LLM 응답 실패 (통과): {resp.error}")
-                return True  # fail-open
+                return self._finish_decision(
+                    True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                    market_regime=market_regime, common_context=common_context, stage="single_fallback",
+                    attempts=_attempts, result={"confidence": 0.0, "reason": "단일 폴백 실패 — fail-open",
+                                                "failed": True, "adversarial_failed_reason": _adv_failed_reason})
             if self._budget_context.get():
                 self._budget_context.set({**self._budget_context.get(), 'status': 'partial',
                                           'fallback': 'response_received'})
             content = (resp.content or "").strip()
-            if content and "NO" in content.upper()[:10]:
+            rejected = bool(content) and "NO" in content.upper()[:10]
+            if rejected:
                 logger.info(f"[크로스검증] LLM 거부: {symbol} — {content[:80]}")
-                return False
-            return True
+            return self._finish_decision(
+                not rejected, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                market_regime=market_regime, common_context=common_context, stage="single_fallback",
+                attempts=_attempts, result={"confidence": 0.5, "reason": ("단일 폴백 거부" if rejected else "단일 폴백 승인"),
+                                            "failed": False, "adversarial_failed_reason": _adv_failed_reason})
         except Exception as e:
             logger.debug(f"[크로스검증] LLM 검증 실패 (통과): {e}")
             return True  # fail-open
+
+    def _finish_decision(self, approved: bool, *, signal_id, symbol, strategy, score, market_regime,
+                         common_context, stage, attempts, result) -> bool:
+        """판단 기록(llm-decision-v1)을 조립해 기록기에 넘기고 approved 를 그대로 돌려준다 — 64차.
+
+        기록 실패는 판단에 영향을 주지 않으며 `last_llm_decision.record_status` 로 드러난다(성공으로 위장하지 않음).
+        """
+        try:
+            from ..analytics.llm_decision_record import decision_record, get_decision_recorder
+            record = decision_record(signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                                     market_regime=market_regime, common_context=common_context, stage=stage,
+                                     attempts=attempts, approved=approved, result=result,
+                                     budget_context=self._budget_context.get(),
+                                     collected_at=getattr(self, "_decision_collected_at", None))
+            status = get_decision_recorder().submit(record)
+            self.last_llm_decision = {"decision_id": record["decision_id"], "record_status": status,
+                                      "stage": stage, "attempts": len(attempts)}
+        except Exception as error:  # 기록은 판단을 막지 않는다
+            logger.warning(f"[크로스검증] 판단 기록 실패 (판단 영향 없음): {error}")
+            self.last_llm_decision = {"decision_id": None, "record_status": "error", "stage": stage}
+        return approved
 
     def get_stats(self) -> Dict:
         """오늘 검증 통계"""

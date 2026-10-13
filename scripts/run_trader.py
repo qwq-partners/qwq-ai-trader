@@ -854,6 +854,12 @@ class UnifiedTradingBot:
             self.engine.risk_manager = engine_risk_manager
             # 기본은 관측기 없음. 명시 주입 시에만 주문 생성 결과를 메모리에 복사한다.
             engine_risk_manager._entry_observation_owner = self
+            # 64차: LLM 진입 판단 재생 기록(llm-decision-v1) — 기본 활성, LLM_DECISION_RECORD=0 이면 비활성
+            try:
+                from src.analytics.llm_decision_record import install_production_recorder
+                install_production_recorder()
+            except Exception as _rec_err:
+                logger.warning(f"[판단기록] 기록기 설치 실패 (판단 영향 없음): {_rec_err}")
             # 자동매도 금지 종목 세트 주입 — 포지션 교체 축출 경로 가드 (2026-08-04 P0)
             # live set 참조라 이후 add/remove_exit_exempt 변경도 즉시 반영된다.
             if self.exit_manager:
