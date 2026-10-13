@@ -187,7 +187,9 @@ def test_record_failure_does_not_change_verdict(monkeypatch, recorder):
     cross = _cross(monkeypatch, _LLM("APPROVE", "ACCEPT"))
     monkeypatch.setattr(rec, "decision_record", lambda **kw: (_ for _ in ()).throw(RuntimeError("disk")))
     assert asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="s")) is True
-    assert cross.last_llm_decision["record_status"] == "error" and cross.last_llm_decision["decision_id"] is None
+    assert cross.last_llm_decision["record_status"] == "error"
+    # 호출 전에 배정한 ID 는 기록 실패에도 남는다(비교 봉투 조인용) — 기록이 있다는 뜻은 아니다
+    assert cross.last_llm_decision["decision_id"].startswith("dec-")
 
 
 def test_without_signal_id_record_still_written_with_null_link(monkeypatch, recorder):

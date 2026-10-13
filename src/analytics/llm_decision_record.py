@@ -205,8 +205,12 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
                     approved: Optional[bool], result: Dict[str, Any], budget_context: Optional[Dict[str, Any]],
                     decision_available_at: Optional[datetime] = None,
                     collected_at: Optional[datetime] = None,
-                    neutral_sizing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다."""
+                    neutral_sizing: Optional[Dict[str, Any]] = None,
+                    decision_id: Optional[str] = None) -> Dict[str, Any]:
+    """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다.
+
+    `decision_id` 는 호출 전에 한 번 배정한 ID(비교 입력 봉투와 같은 값). 생략하면 기존처럼 새로 만든다.
+    """
     try:
         from ..utils.entry_risk import applied_sha
         code_version = applied_sha()
@@ -215,7 +219,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
     available = decision_available_at if decision_available_at is not None else now_kst()
     return {
         "schema_version": SCHEMA_VERSION,
-        "decision_id": new_id("dec"),
+        "decision_id": decision_id if isinstance(decision_id, str) and decision_id else new_id("dec"),
         "decision_kind": "entry_llm_second_check",
         "signal_id": signal_id,
         "symbol": symbol,
