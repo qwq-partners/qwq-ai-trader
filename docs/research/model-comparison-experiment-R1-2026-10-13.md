@@ -131,7 +131,7 @@ manifest 수치는 `worst_case_reservation(manifest)` 와 같음을 시험이 �
 - 분모 `offered/eligible/sampled/complete/excluded`(excluded = offered − complete), `missing_reasons`(unattested_input·not_received·input_too_old·input_clock_reversal·common_context_too_large·daily_quota·pair_result_missing·partial_result·제외 사유), 중복 전달은 첫 봉투만.
 - 행별: 스키마, anchor(v1 은 `requested_at (legacy)`), provenance, 입력/큐/요청/평가 시각, arm 별 판정·시도별 요청/응답 모델·`model_identity`·추론·지연·전송 여부·비용, `queue_delay_ms`·`provider_latency_ms`(v2), 완료−입력 지연, 응답 뒤 첫 호가(`quote_evidence.first_quote_after`, report_pairs 결합 결과가 있을 때), 재생 수량, 시나리오 비용(합산 금지), 조건부 경제성(`compare_policy_outcomes` 결과 또는 null+`outcome_not_supplied`).
 - 지출(Codex #7 후): 그날 **모든 실행 행**(같은 decision_id 의 여러 pair 행 포함)의 고유 attempt_id 를 한 번씩. 시도별 비용 = 감사 대사액(`reconciled_lookup` — W1 `guard.lookup` 결과 또는 매핑) > 저장 추정 `api_cost_usd` > 불명. 조회 예외는 대사 여부를 모르므로 불명(`lookup_failed_attempts`). 필드 `original_estimated_usd`(저장 추정 합, 정보용)·`reconciled_usd`·`reconciled_attempts`·`unknown_attempts`·`pair_runs`, 불명이 하나라도 있으면 `total_usd=null`. 판단별 행은 최신 실행(`requested_at`, 동률은 입력 순서)이고 `pair_runs`·`prior_pair_ids` 를 싣는다.
-- `stop_conditions_reached`, `telegram_preview`(문자열만, 발송 함수 없음). CLI `--daily` 는 `reconciled_lookup`/`outcomes` 를 받지 않는다(원장 접근 없음).
+- `stop_conditions_reached`, `telegram_preview`(문자열만, 발송 함수 없음). CLI `--daily` 는 `--offers`(모집단·실제 접수 결과: 거부된 봉투는 한도와 무관하게 부적격)·`--incomplete`(결과 행 없는 쌍 → 지출 null)·`--budget-db`(원장 읽기 전용: pair 행 밖 시도 집계, 같은 attempt_id 의 원장 정산/대사액이 추정액보다 우선)·`--experiment-manifest`(실행 당시 입력 나이·일 표본·입력 크기 한도) 를 받는다. `outcomes` 는 여전히 받지 않는다. 저널 완전성은 `run_id+journal_seq` 빈틈과 `journal_drop` 마커로 판정하며 증거가 없으면 완전으로 표시하지 않는다.
 
 ## SEE — 검증
 

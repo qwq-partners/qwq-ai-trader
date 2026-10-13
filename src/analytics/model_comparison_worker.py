@@ -70,7 +70,7 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
         return {"path": str(path), "missing": True, "records": [], "skipped_lines": 0}
     if size > max_bytes:
         raise ValueError("journal_too_large")      # 일부만 읽은 분모는 보고하지 않는다
-    records, skipped = [], 0
+    records, skipped, seqs, dropped = [], 0, {}, {}
     for line in path.read_bytes().splitlines():
         if not line.strip():
             continue
@@ -79,16 +79,32 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
         except ValueError:
             skipped += 1
             continue
-        if (not isinstance(record, dict) or record.get("schema_version") != JOURNAL_VERSION
-                or record.get("kind") not in kinds or (check is not None and not check(record))):
+        if not isinstance(record, dict) or record.get("schema_version") != JOURNAL_VERSION:
+            skipped += 1
+            continue
+        run, seq = record.get("run_id"), record.get("journal_seq")
+        if isinstance(run, str) and type(seq) is int and seq > 0:
+            seqs.setdefault(run, set()).add(seq)
+        if record.get("kind") == "journal_drop":
+            total = record.get("dropped_total")
+            if isinstance(run, str) and type(total) is int and total >= 0:
+                dropped[run] = max(dropped.get(run, 0), total)
+            continue
+        if record.get("kind") not in kinds or (check is not None and not check(record)):
             skipped += 1
             continue
         records.append(record)
-    return {"path": str(path), "missing": False, "records": records, "skipped_lines": skipped}
+    # 번호 빈틈 = run 별 (최대 번호 − 존재 번호 수). 번호 없는 옛 기록은 증거 없음으로 둔다.
+    gaps = sum(max(s) - len(s) for s in seqs.values())
+    unsequenced = sum(1 for r in records if not isinstance(r.get("run_id"), str) or type(r.get("journal_seq")) is not int)
+    return {"path": str(path), "missing": False, "records": records, "skipped_lines": skipped,
+            "sequence_gaps": gaps, "dropped_records": sum(dropped.values()), "unsequenced_records": unsequenced,
+            "runs": sorted(seqs)}
 
 
 def read_offer_journal(path, *, max_bytes) -> dict:
-    """offers-YYYY-MM.jsonl → {path, missing, records(offer/transition), skipped_lines(손상·형식 불일치 줄 수)}."""
+    """offers-YYYY-MM.jsonl → {path, missing, records(offer/transition), skipped_lines, sequence_gaps, dropped_records,
+    unsequenced_records, runs}. journal_drop 마커(큐 포화 누계)는 records 에 넣지 않고 dropped_records 로만 센다."""
     return _read_journal(path, max_bytes, ("offer", "transition"))
 
 
@@ -138,6 +154,8 @@ class ComparisonWorker:
         self.policy = runner.guard.policy
         # KST 날짜 → 그날 입장(또는 입장 예정)으로 센 pair_id. start() 때 원장에서 당일분을 채운다.
         self._day_pairs: dict[str, set] = {}
+        self._journal_seq = 0            # 이 프로세스 run 안의 단조 번호(저널 완전성 증거)
+        self._dropped_written = 0        # 저널에 이미 남긴 journal_dropped 누계
         self._fresh: dict[str, tuple[str, str]] = {}            # decision_id → 이번 offer 가 새로 센 (day, pair_id)
         self.journal_dir = (Path(journal_dir) if journal_dir is not None
                             else Path.home() / ".cache" / "ai_trader" / "comparison_worker")
@@ -243,6 +261,10 @@ class ComparisonWorker:
 
     # ── 저널 ────────────────────────────────────────────────
     def _journal_put(self, record, timeout=None):
+        # 완전성 증거(재리뷰 P2): 프로세스 run_id 와 단조 journal_seq 를 붙여 독자가 유실(번호 빈틈)을 셀 수 있게 한다.
+        with self._lock:
+            self._journal_seq += 1
+            record = dict(record, run_id=mci.RUN_ID, journal_seq=self._journal_seq)
         try:
             if timeout is None:
                 self._journal.put_nowait(record)
@@ -262,19 +284,35 @@ class ComparisonWorker:
         month = _time(stamp).astimezone(_KST).strftime("%Y-%m")
         return self.journal_dir / f"{'incomplete' if kind == 'incomplete_result' else 'offers'}-{month}.jsonl"
 
+    def _journal_write(self, record):
+        path = self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
+        line = json.dumps(record, sort_keys=True, ensure_ascii=True, default=str) + "\n"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+
     def _journal_run(self):
         while True:
             record = self._journal.get()
             if record is None:
                 return
             try:
-                path = self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
-                line = json.dumps(record, sort_keys=True, ensure_ascii=True, default=str) + "\n"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with open(path, "a", encoding="utf-8") as handle:
-                    handle.write(line)
-                    handle.flush()
-                    os.fsync(handle.fileno())
+                # 큐 포화로 버린 기록이 있으면 그 사실을 먼저 남긴다 — 파일만 보고 "완전"으로 읽히지 않게 한다.
+                with self._lock:
+                    dropped = self._counts["journal_dropped"]
+                    marker = (dropped > self._dropped_written)
+                    if marker:
+                        self._journal_seq += 1
+                        drop_record = {"schema_version": JOURNAL_VERSION, "kind": "journal_drop", "run_id": mci.RUN_ID,
+                                       "journal_seq": self._journal_seq, "dropped_total": dropped,
+                                       "at": record.get("recorded_at") or record.get("at")}
+                if marker:
+                    self._journal_write(drop_record)
+                    with self._lock:
+                        self._dropped_written = dropped
+                self._journal_write(record)
             except Exception as error:   # 기록 실패는 판단·offer 결과를 바꾸지 않는다
                 with self._lock:
                     self._note("journal_failed", record.get("decision_id"), f"journal_write:{type(error).__name__}")

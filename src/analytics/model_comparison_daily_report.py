@@ -82,13 +82,17 @@ def worst_case_reservation(manifest: Mapping, *, on_date: date | None = None) ->
 
 
 def select_daily_sample(envelopes: Iterable[Mapping], *, day_kst: str, max_input_age_seconds: float = 5.0,
-                        pairs_per_day: int = 1, max_common_context_bytes: int | None = None) -> dict:
+                        pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
+                        offer_statuses: Mapping | None = None) -> dict:
     """그날(KST) 제공된 봉투 중 attestation·입력 나이·크기를 통과한 첫 판단을 고른다.
 
     순서 = (input_available_at, decision_id). 응답·가격·결과는 보지 않는다.
+    offer_statuses: 작업자 offer 저널의 실제 접수 결과(decision_id → status). `accepted` 가 아닌 판단은 보고서 한도와
+    무관하게 그 사유로 부적격이다 — 실행 당시 거부된 봉투가 보고서에서 첫 표본을 차지하지 않게 한다(재리뷰 P1).
     """
     date.fromisoformat(day_kst)
     offered, eligible, status, seen = [], [], {}, set()
+    offer_statuses = dict(offer_statuses or {})
     for env in envelopes:
         if not isinstance(env, Mapping) or not isinstance(env.get('decision_id'), str):
             continue
@@ -103,6 +107,10 @@ def select_daily_sample(envelopes: Iterable[Mapping], *, day_kst: str, max_input
             continue  # 중복 전달은 첫 봉투만 센다
         seen.add(decision_id)
         offered.append(decision_id)
+        actual = offer_statuses.get(decision_id)
+        if isinstance(actual, str) and actual != 'accepted':
+            status[decision_id] = actual          # 실행 당시 작업자가 거부한 봉투: 보고서 한도보다 우선
+            continue
         attestation = env.get('attestation') if isinstance(env.get('attestation'), Mapping) else {}
         if attestation.get('kind') != 'in_process_nonce':
             status[decision_id] = 'unattested_input'
@@ -220,19 +228,28 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                        outcomes: Mapping | None = None, max_input_age_seconds: float = 5.0,
                        pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
                        offer_records: Iterable[Mapping] = (), ledger_attempts: Iterable[Mapping] = (),
-                       incomplete_records: Iterable[Mapping] = (), journal_status: Mapping | None = None) -> dict:
+                       incomplete_records: Iterable[Mapping] = (), journal_status: Mapping | None = None,
+                       limits_from_manifest: bool = False) -> dict:
     """ledger_attempts: 그날 입장한 시도의 원장 상태(`ComparisonCallGuard.day_attempts`/`read_day_attempts`).
     pair 행 밖의 유료 시도(종료·취소·저장 실패)를 지출에 넣고, 상태가 미확정이면 총비용을 null 로 둔다(재리뷰 P1).
     incomplete_records: 작업자 incomplete 저널 레코드 — 결과 행이 없는 쌍은 미정산으로 표시한다.
     journal_status: 모집단 저널의 결손 정보({missing, skipped_lines}) — 불완전하면 보고에 명시한다(재리뷰 P2)."""
     offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
     ledger_attempts, incomplete_records = list(ledger_attempts), list(incomplete_records)
+    offer_records = list(offer_records)
     from_offers, excluded_offers = offers_to_population(offer_records)
     offered_envelopes += from_offers
     exclusions += excluded_offers
+    offer_statuses = {}
+    for r in offer_records:
+        if isinstance(r, Mapping) and r.get('kind') == 'offer' and isinstance(r.get('decision_id'), str):
+            status_value, reason = r.get('status'), r.get('reason')
+            # 거부는 기록의 사유(없으면 상태)로 표기해 제외 사유 표기와 같은 어휘를 쓴다
+            offer_statuses[r['decision_id']] = ('accepted' if status_value == 'accepted' else
+                                                (reason if isinstance(reason, str) and reason else status_value))
     selection = select_daily_sample(offered_envelopes, day_kst=day_kst,
                                     max_input_age_seconds=max_input_age_seconds, pairs_per_day=pairs_per_day,
-                                    max_common_context_bytes=max_common_context_bytes)
+                                    max_common_context_bytes=max_common_context_bytes, offer_statuses=offer_statuses)
     offered_set = set(selection['offered'])
     # 같은 판단의 여러 실행 행을 모두 보존한다(지출은 전부, 표시는 최신 행).
     runs, blocked = {}, []
@@ -334,10 +351,27 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                                and _same_day(rec.get('recorded_at'), day_kst)})
     estimated, reconciled, used = Decimal('0'), Decimal('0'), Decimal('0')
     unknown, reconciled_ids, lookup_failed = [], [], []
+    ledger_by_id = {la['attempt_id']: la for la in ledger_attempts
+                    if isinstance(la, Mapping) and isinstance(la.get('attempt_id'), str)}
+    ledger_used = []
     for attempt_id, a in sorted(unique.items()):
-        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None else None
+        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
         if estimate is not None:
             estimated += estimate
+        la = ledger_by_id.get(attempt_id)
+        ledger_state = la.get('state') if la is not None else None
+        ledger_cost = la.get('cost_usd') if la is not None else None
+        if ledger_state in ('pending', 'pending_reconciliation', 'unknown'):
+            unknown.append(attempt_id)                      # 원장이 미확정이면 추정액으로 메우지 않는다
+            continue
+        if ledger_state in ('known', 'known_reconciled') and ledger_cost is not None:
+            value = Decimal(str(ledger_cost))                # 같은 attempt_id 의 원장 정산/대사액이 추정액보다 우선(재리뷰 P1)
+            used += value
+            ledger_used.append(attempt_id)
+            if ledger_state == 'known_reconciled':
+                reconciled += value
+                reconciled_ids.append({'attempt_id': attempt_id, 'reconciliation_id': 'ledger'})
+            continue
         value, ref = _reconciled(reconciled_lookup, attempt_id) if reconciled_lookup is not None else (None, None)
         if value is _LOOKUP_FAILED:
             lookup_failed.append(attempt_id)
@@ -357,6 +391,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'reconciled_usd': str(reconciled), 'reconciled_attempts': reconciled_ids,
              'unknown_attempts': unknown, 'lookup_failed_attempts': lookup_failed,
              'ledger_attempts_outside_pair_rows': outside_rows, 'unaccounted_attempts': unaccounted,
+             'ledger_cost_used_attempts': ledger_used,
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
              'total_usd': str(used) if not (unknown or unaccounted or incomplete_pairs) else None,
@@ -380,12 +415,23 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     }
     if not ledger_attempts:
         report['limitations'].append('spend_from_pair_rows_only_ledger_attempts_not_supplied')
+    report['selection_limits'] = {'max_input_age_seconds': max_input_age_seconds, 'pairs_per_day': pairs_per_day,
+                                  'max_common_context_bytes': max_common_context_bytes,
+                                  'source': 'experiment_manifest' if limits_from_manifest else 'report_defaults'}
+    if not limits_from_manifest:
+        report['limitations'].append('selection_limits_not_from_experiment_manifest')
     if journal_status is not None:
-        missing_j = bool(journal_status.get('missing'))
-        skipped = int(journal_status.get('skipped_lines') or 0)
-        report['offer_journal'] = {'missing': missing_j, 'skipped_lines': skipped,
-                                   'complete': (not missing_j) and skipped == 0}
-        if missing_j or skipped:
+        def _count(key):
+            value = journal_status.get(key)
+            return value if type(value) is int and value >= 0 else None     # 비음수 정수만 증거로 인정(None 은 증거 없음)
+        missing_j = journal_status.get('missing') is True
+        counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records')}
+        evidence_ok = all(v is not None for v in counts.values())
+        complete = (not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
+        report['offer_journal'] = {'missing': missing_j, **counts, 'complete': complete,
+                                   'completeness_evidence': 'run_id+journal_seq gaps and journal_drop markers'
+                                   if evidence_ok else 'insufficient'}
+        if not complete:
             report['limitations'].append('population_journal_incomplete')
     report['telegram_preview'] = (
         f"[모델비교 {day_kst}] 제공 {offered_n}·적격 {len(selection['eligible'])}·표본 {sampled_n}·"

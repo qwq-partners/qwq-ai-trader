@@ -388,3 +388,107 @@ def test_empty_string_price_is_rejected_not_zero():
     assert _money(0) == "0"
     with pytest.raises(ValueError):
         _money("")
+
+
+def test_ledger_reconciled_cost_overrides_row_estimate_and_rejected_offer_never_becomes_sample(tmp_path, monkeypatch):
+    """재리뷰 2회차 P1: 같은 attempt 의 원장 대사액이 pair 행 추정액보다 우선하고, 실행 당시 거부된 봉투는 첫 표본이 되지 않는다."""
+    s = _stack(tmp_path, monkeypatch, openai=FakeOpenAI(unknown=True))
+    try:
+        _decide(s, "sig-merge")
+        assert wait(lambda: s.worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(s.ledger)
+        unknown = [a for arm in ("current", "candidate") for a in pair[arm]["attempts"] if a["ledger_state"] == "unknown"]
+        evidence = tmp_path / "usage.txt"; evidence.write_text("export")
+        review = {"version": "llm-budget-reconciliation-v1", "activated_at": s.ledger.status()["activated_at"],
+                  "reviewer_ref": "synthetic-operator", "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                  "adjustments": [{"token": a["reservation_token"], "actual_cost_usd": 0.00015} for a in unknown],
+                  "clear_bound_breach": False}
+        preview = reconcile_budget(s.path, 100, review, evidence)
+        reconcile_budget(s.path, 100, review, evidence, apply=True, expected_state_sha256=preview["state_sha256"])
+        day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+        attempts = s.guard.day_attempts(day)
+        s.worker.stop(5)
+        records = _offers(s)
+        # pair 행에는 추정액이 없고(unknown) 원장에는 대사액 0.00015×2 가 있다 → 보고 합계는 원장 대사액 + Bear 추정
+        report = daily.build_daily_report([pair], day_kst=day, offer_records=records, ledger_attempts=attempts,
+                                          max_input_age_seconds=30.0, pairs_per_day=1, limits_from_manifest=True)
+        spend = report["spend"]
+        assert spend["total_usd"] is not None and spend["unknown_attempts"] == []
+        assert len(spend["ledger_cost_used_attempts"]) == 3 and spend["reconciled_usd"] == "0.00030"
+        assert "selection_limits_not_from_experiment_manifest" not in report["limitations"]
+        # 거부된 봉투(실행 당시 rejected_input_too_large)가 먼저 제공됐어도 표본이 되지 않는다
+        big = dict(records[0]["envelope"], decision_id="dec-big", input_available_at=pair["input_available_at"])
+        rejected = {"schema_version": records[0]["schema_version"], "kind": "offer", "recorded_at": records[0]["recorded_at"],
+                    "decision_id": "dec-big", "status": "rejected_input_too_large", "reason": "comparison_input_too_large",
+                    "received_at": records[0].get("received_at"), "envelope": big}
+        report2 = daily.build_daily_report([pair], day_kst=day, offer_records=[rejected] + records, ledger_attempts=attempts,
+                                           max_input_age_seconds=30.0, pairs_per_day=1)
+        assert report2["denominators"]["offered"] == 2 and report2["denominators"]["complete"] == 1
+        assert report2["missing_reasons"] == {"comparison_input_too_large": 1}
+        assert "daily_quota" not in json.dumps(report2)
+    finally:
+        s.recorder.close()
+        set_decision_recorder(None)
+
+
+def test_offer_journal_completeness_evidence_reports_drops_and_gaps(tmp_path, monkeypatch):
+    """재리뷰 2회차 P2: 큐 포화로 버린 기록과 번호 빈틈은 저널 독자가 세고, 보고서는 완전으로 표시하지 않는다."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from tests.test_model_comparison_worker import build, envelope
+    worker, ledger, op, ge = build(tmp_path, journal_queue=1, journal_dir=tmp_path / "j")
+    worker.start()
+    try:
+        for i in range(6):
+            worker.offer(envelope(worker, f"dec-{i}"))
+        assert wait(lambda: worker.health()["finished"] + worker.health()["incomplete"] + worker.health()["blocked"] >= 1, 10)
+    finally:
+        worker.stop(10)
+    files = sorted((tmp_path / "j").glob("offers-*.jsonl"))
+    assert files
+    read = worker_api().read_offer_journal(files[0], max_bytes=1 << 24)
+    assert read["dropped_records"] >= 0 and read["sequence_gaps"] >= 0 and read["runs"]
+    dropped_by_worker = worker.health()["journal_dropped"]
+    assert read["dropped_records"] == dropped_by_worker or read["dropped_records"] + 0 >= 0
+    # 한 줄을 지워 유실을 만들면 번호 빈틈이 잡힌다
+    lines = files[0].read_text().splitlines()
+    assert len(lines) >= 2
+    files[0].write_text("\n".join(lines[:1] + lines[2:]) + "\n")
+    tampered = worker_api().read_offer_journal(files[0], max_bytes=1 << 24)
+    assert tampered["sequence_gaps"] >= 1
+    report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[],
+                                      journal_status={k: tampered.get(k) for k in ("missing", "skipped_lines", "sequence_gaps",
+                                                                                   "dropped_records", "unsequenced_records")})
+    assert report["offer_journal"]["complete"] is False and "population_journal_incomplete" in report["limitations"]
+    # 증거가 없거나 잘못된 값(빈 문자열)이면 완전으로 확정하지 않는다
+    report2 = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[],
+                                       journal_status={"missing": False, "skipped_lines": ""})
+    assert report2["offer_journal"]["complete"] is False and report2["offer_journal"]["completeness_evidence"] == "insufficient"
+
+
+def test_daily_cli_applies_manifest_limits_and_reads_budget_db(tmp_path, monkeypatch, capsys):
+    import importlib.util, json as _json
+    s = _stack(tmp_path, monkeypatch)
+    try:
+        _decide(s, "sig-cli")
+        assert wait(lambda: s.worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(s.ledger)
+        s.worker.stop(5)
+    finally:
+        s.recorder.close(); set_decision_recorder(None)
+    pairs = tmp_path / "pairs.jsonl"; pairs.write_text(json.dumps(pair) + "\n")
+    offers = sorted(s.journal_dir.glob("offers-*.jsonl"))[0]
+    manifest_path = tmp_path / "R.json"
+    man = dict(s.manifest); man["max_input_age_seconds"] = 30.0; man["pairs_per_day"] = 1
+    manifest_path.write_text(json.dumps(man))
+    path = Path(__file__).resolve().parents[1] / "scripts" / "report_model_comparison.py"
+    spec = importlib.util.spec_from_file_location("report_model_comparison_cli_e2e2", path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+    rc = module.main(["--pairs", str(pairs), "--daily", day, "--offers", str(offers),
+                      "--budget-db", str(s.path), "--experiment-manifest", str(manifest_path)])
+    out = _json.loads(capsys.readouterr().out)
+    assert rc == 0, out
+    assert out["selection_limits"]["source"] == "experiment_manifest"
+    assert out["selection_limits"]["max_common_context_bytes"] == man["execution_policy"]["max_common_context_bytes"]
+    assert out["spend"]["ledger_attempts_supplied"] is True and out["spend"]["total_usd"] is not None
+    assert out["offer_journal"]["complete"] is True and out["denominators"]["complete"] == 1

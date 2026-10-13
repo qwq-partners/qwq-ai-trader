@@ -32,6 +32,7 @@ def main(argv=None):
     parser.add_argument('--offers', help='--daily 용 작업자 offer 원장 JSONL (모집단·제외; read_offer_journal 로 읽음)')
     parser.add_argument('--incomplete', help='--daily 용 작업자 incomplete 저널 JSONL (결과 행 없는 쌍 → 지출 미확정)')
     parser.add_argument('--budget-db', help='--daily 용 월 예산 원장 SQLite 경로(읽기 전용) — pair 행 밖 시도의 비용/상태')
+    parser.add_argument('--experiment-manifest', help='--daily 용 실험 manifest JSON — 실행 당시 입력 나이·일 표본·입력 크기 한도를 보고서 선정에 적용')
     args = parser.parse_args(argv)
     try:
         if args.max_bytes <= 0:
@@ -50,7 +51,8 @@ def main(argv=None):
                 if read.get('missing'):
                     raise ValueError(f'offer journal missing: {args.offers}')   # 파일 부재는 축소 분모가 아니라 오류
                 offer_records = read['records']
-                journal_status = {'missing': False, 'skipped_lines': read.get('skipped_lines', 0)}
+                journal_status = {k: read.get(k) for k in ('missing', 'skipped_lines', 'sequence_gaps',
+                                                           'dropped_records', 'unsequenced_records')}
             if args.incomplete:
                 read_inc = read_incomplete_journal(args.incomplete, max_bytes=args.max_bytes)
                 read_inc = read_inc if isinstance(read_inc, dict) else {'records': list(read_inc), 'missing': False}
@@ -60,11 +62,18 @@ def main(argv=None):
             if args.budget_db:
                 from src.analytics.model_comparison_execution import read_day_attempts
                 ledger_attempts = read_day_attempts(args.budget_db, args.daily)
+            limits = {}
+            if args.experiment_manifest:
+                manifest = json.loads(Path(args.experiment_manifest).read_text(encoding='utf-8'))
+                policy = manifest.get('execution_policy') if isinstance(manifest.get('execution_policy'), dict) else {}
+                limits = {'max_input_age_seconds': manifest['max_input_age_seconds'],
+                          'pairs_per_day': manifest['pairs_per_day'],
+                          'max_common_context_bytes': policy['max_common_context_bytes'], 'limits_from_manifest': True}
             result = build_daily_report(pairs, day_kst=args.daily,
                                         offered_envelopes=_jsonl(args.envelopes, args.max_bytes),
                                         exclusions=_jsonl(args.exclusions, args.max_bytes),
                                         offer_records=offer_records, incomplete_records=incomplete_records,
-                                        journal_status=journal_status, ledger_attempts=ledger_attempts)
+                                        journal_status=journal_status, ledger_attempts=ledger_attempts, **limits)
             print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
             return 0
         payloads, status = [], None
