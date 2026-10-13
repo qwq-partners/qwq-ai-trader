@@ -74,6 +74,9 @@ class ComparisonExecutionPolicy:
     experiment_usd_ceiling: str
     valid_from: str
     valid_until: str
+    # 쌍 단위 상한 — 러너가 입장(claim) 트랜잭션 안에서, 작업자가 offer 에서 공급자 호출 전에 적용한다.
+    pairs_per_day: int
+    max_common_context_bytes: int
     required_policy_mode: str = "normal"
 
     def __post_init__(self):
@@ -81,8 +84,11 @@ class ComparisonExecutionPolicy:
             raise ValueError("experiment_id는 비어 있지 않은 문자열이어야 한다")
         _integer(self.daily_attempt_cap, "daily_attempt_cap")
         _integer(self.max_output_tokens, "max_output_tokens", 1)
-        if self.daily_attempt_cap > 2 ** 31 - 1 or self.max_output_tokens > 2 ** 31 - 1:
-            raise ValueError("daily_attempt_cap·max_output_tokens는 int32 범위여야 한다")
+        _integer(self.pairs_per_day, "pairs_per_day", 1)
+        _integer(self.max_common_context_bytes, "max_common_context_bytes", 1)
+        if max(self.daily_attempt_cap, self.max_output_tokens, self.pairs_per_day,
+               self.max_common_context_bytes) > 2 ** 31 - 1:
+            raise ValueError("daily_attempt_cap·max_output_tokens·pairs_per_day·max_common_context_bytes는 int32 범위여야 한다")
         if (not isinstance(self.allowed_models, tuple) or not self.allowed_models
                 or any(not isinstance(model, str) or not model.strip() for model in self.allowed_models)
                 or len(set(self.allowed_models)) != len(self.allowed_models)):

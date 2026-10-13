@@ -47,14 +47,15 @@ class FakeGemini(GeminiClient):
                            requested_model=model, resolved_model='reported-gemini', usage_known=True)
 
 
-def setup(tmp_path, **kwargs):
+def setup(tmp_path, *, pairs_per_day=20, max_common_context_bytes=65536, **kwargs):
     m = api()
     # 정책 v2(W1): 입장 검사는 정책이 켜진 원장의 normal 단계만 허용한다
     ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
-        experiment_id='R', daily_attempt_cap=20,
+        experiment_id='R', daily_attempt_cap=40,
         allowed_models=('gpt-5-mini', 'gemini-3.1-flash-lite-preview'), max_output_tokens=400,
-        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
+        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
+        pairs_per_day=pairs_per_day, max_common_context_bytes=max_common_context_bytes))
     op, ge = FakeOpenAI(**kwargs), FakeGemini()
     adapter = m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW)
     runner = m.PairedComparisonRunner(guard=guard, adapter=adapter, clock=lambda: NOW)
@@ -64,7 +65,7 @@ def setup(tmp_path, **kwargs):
                       candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803),
                       bear=m.RoleControls('gemini-3.1-flash-lite-preview', 400, None, 0.0),
                       neutral_sizing=None, pricing_basis='offline_replay',
-                      fixed_at=NOW.isoformat(), strict_on_disagreement=True)
+                      fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
     return m, ledger, runner, spec, op, ge
 
 
@@ -473,3 +474,90 @@ def test_report_reads_v1_rows_with_original_requested_at_meaning(tmp_path):
     bad = dict(json.loads(json.dumps(row)), evaluation_anchor='responded_at')
     with pytest.raises(ValueError, match='invalid_pair_record'):
         m.report_pairs([bad], payloads=[], ledger_status=None)
+
+
+# --- P1 #1: 쌍 상한·입력 크기는 공급자 호출·예약 전에 적용된다 -------------------------------------
+
+def _pair_row(ledger, pair_id):
+    with ledger._connect(readonly=True) as db:
+        return db.execute('SELECT result,admission_day FROM comparison_pairs WHERE pair_id=?', (pair_id,)).fetchone()
+
+
+def test_second_pair_same_day_is_blocked_before_any_reservation_and_not_rerun_next_day(tmp_path):
+    from datetime import timedelta
+    m, ledger, runner, spec, op, ge = setup(tmp_path, pairs_per_day=1)
+    asyncio.run(runner.run(spec))
+    calls, settled = len(op.calls) + len(ge.calls), ledger.status()['settled_count']
+    second = replace(spec, decision_id='decision-2')
+    with pytest.raises(BudgetBlocked, match='comparison_daily_pair_cap'):
+        asyncio.run(runner.run(second))
+    assert len(op.calls) + len(ge.calls) == calls and ledger.status()['settled_count'] == settled
+    assert ledger.status()['reserved_usd'] == 0
+    result, day = _pair_row(ledger, runner.pair_id('decision-2'))
+    assert json.loads(result) == {'schema_version': 'model-comparison-pair-blocked-v1',
+                                  'reason': 'comparison_daily_pair_cap', 'blocked_at': NOW.isoformat()}
+    assert day is None                                         # 표식은 입장이 아니다
+    assert _pair_row(ledger, runner.pair_id('decision-1'))[1] == '2026-10-13'
+    # 다음날: 같은 판단은 표식으로 막히고(캐시 결과 아님) 공급자 호출이 없다. 새 판단은 그날 1쌍으로 허용된다.
+    tomorrow = NOW + timedelta(days=1)
+    ledger.clock = runner.clock = runner.adapter.clock = lambda: tomorrow
+    with pytest.raises(BudgetBlocked, match='comparison_daily_pair_cap'):
+        asyncio.run(runner.run(second))
+    assert len(op.calls) + len(ge.calls) == calls
+    asyncio.run(runner.run(replace(spec, decision_id='decision-3', input_available_at=tomorrow.isoformat())))
+    assert len(op.calls) + len(ge.calls) == calls + 3
+
+
+def test_oversized_common_context_is_blocked_before_claim_or_provider_call(tmp_path):
+    m, ledger, runner, spec, op, ge = setup(tmp_path, max_common_context_bytes=16384)
+    big = replace(spec, decision_id='big', common_context='x' * 20000)
+    with pytest.raises(BudgetBlocked, match='comparison_input_too_large'):
+        asyncio.run(runner.run(big))
+    with pytest.raises(BudgetBlocked, match='comparison_input_too_large'):
+        asyncio.run(runner.run(big))                            # 재실행도 표식으로 막힌다
+    assert op.calls == [] and ge.calls == [] and ledger.status()['settled_count'] == 0
+    assert _pair_row(ledger, runner.pair_id('big'))[1] is None
+    edge = replace(spec, decision_id='edge', common_context='가' * (16384 // 3))   # 바이트 기준(UTF-8 3바이트)
+    asyncio.run(runner.run(edge))
+    assert len(op.calls) == 2
+    with pytest.raises(BudgetBlocked, match='comparison_input_too_large'):
+        asyncio.run(runner.run(replace(spec, decision_id='multi', common_context='가' * (16384 // 3 + 1))))
+
+
+# --- P1 #3: 폴백 시한은 체인 전체 ------------------------------------------------------------------
+
+def test_fallback_chain_deadline_stops_remaining_fallbacks_and_keeps_size(tmp_path):
+    m, ledger, runner, spec, op, ge = setup(tmp_path)
+    sent = []
+
+    async def reply(prompt, system='', model=None, **kw):
+        provider = LLMProvider.GEMINI if model.startswith('gemini') else LLMProvider.OPENAI
+        if prompt == 'fb':
+            sent.append(model)
+            await asyncio.sleep(0.2)        # 시도별 시한(1초) 안, 체인 시한(0.06초)은 첫 폴백에서 초과
+            return LLMResponse('', model, provider, requested_model=model, input_tokens=10, output_tokens=2,
+                               usage_known=True, success=False)
+        return LLMResponse('unknown', model, provider, requested_model=model, input_tokens=10, output_tokens=2,
+                           usage_known=True)
+    op.complete = ge.complete = reply
+    spec = replace(spec, fallback_prompt='fb', fallback_chain_timeout_seconds=0.06,
+                   fallback_chain=(m.RoleControls('gpt-5-mini', 100, timeout_seconds=1.0),
+                                   m.RoleControls('gemini-3.1-flash-lite-preview', 100, timeout_seconds=1.0)))
+    row = asyncio.run(runner.run(spec))
+    assert sent == ['gpt-5-mini', 'gpt-5-mini']                     # 두 arm 의 첫 폴백만. 두 번째 폴백 공급자 호출 0
+    for arm in ('current', 'candidate'):
+        assert row[arm]['verdict'] == 'unavailable' and row[arm]['unavailable_policy'] == 'fail_open_size_preserved'
+        assert 'fallback_chain_timeout' in row[arm]['reasons']
+        (cut,) = [a for a in row[arm]['attempts'] if a['role'] == arm + '_fallback']
+        assert cut['error'] == 'TimeoutError' and cut['api_cost_usd'] is None and cut['success'] is False
+        assert cut['ledger_state'] == 'blocked' and cut['reservation_token'] is not None   # 재전송 없이 원장 상태만
+    assert ledger.status()['unresolved_count'] == 2                   # 이미 전송됐을 수 있는 두 폴백은 미해결
+
+
+@pytest.mark.parametrize('bad', [0, -1, float('nan'), float('inf'), True, '10'])
+def test_fallback_chain_timeout_is_required_finite_positive(tmp_path, bad):
+    m, ledger, runner, spec, op, ge = setup(tmp_path)
+    with pytest.raises(ValueError, match='fallback_chain_timeout_seconds'):
+        replace(spec, fallback_chain_timeout_seconds=bad).validate()
+    with pytest.raises(TypeError):
+        m.PairSpec(**{k: v for k, v in vars(spec).items() if k != 'fallback_chain_timeout_seconds'})

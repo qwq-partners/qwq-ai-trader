@@ -77,7 +77,8 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
 
     Bull/Bear 는 adversarial_validator 상수 + LLMManager 의 light 모델, 폴백은 STRATEGY_ANALYSIS 경로
     (primary→fallback)·max_tokens=100·system 없음. 온도를 넘기지 않는 호출은 원시 클라이언트 기본 0.3 이다
-    (gpt-5 계열은 요청 본문에서 온도를 생략한다). 운영 Bull/Bear 시한은 패널 전체 12초, 폴백 시한은 체인 전체다.
+    (gpt-5 계열은 요청 본문에서 온도를 생략한다). 운영 Bull/Bear 시한은 패널 전체 12초, 폴백 시한은 체인 전체다
+    (`fallback_chain_timeout_seconds`; 비교 러너가 같은 의미로 체인 전체에 적용한다).
     """
     from ..core import adversarial_validator as av
     from ..utils.llm import LLMManager, LLMProvider, LLMTask
@@ -99,6 +100,8 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
         "bear": role(LLMProvider.GEMINI, "light", av.MAX_TOKENS, None, 0.0, None, av.LLM_TIMEOUT),
         "fallback_chain": [role(p, w, 100, None, 0.3, None, fallback_timeout)
                            for p, w in (route["primary"], route["fallback"])],
+        # 운영 SINGLE_FALLBACK_TIMEOUT 은 primary→fallback 체인 전체 시한이다(시도별 timeout_seconds 와 별개).
+        "fallback_chain_timeout_seconds": float(fallback_timeout),
         "fallback_prompt_suffix": fallback_prompt_suffix,
         "fallback_system": "",
         "empty_retries": 1,

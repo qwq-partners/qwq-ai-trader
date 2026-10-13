@@ -27,7 +27,8 @@ def policy(**changes):
     from src.analytics.model_comparison_execution import ComparisonExecutionPolicy
     values = dict(experiment_id="R1", daily_attempt_cap=50,
                   allowed_models=("gpt-5-mini", "gemini-3.1-flash-lite-preview"), max_output_tokens=400,
-                  experiment_usd_ceiling="1", valid_from="2026-10-13", valid_until="2026-10-31")
+                  experiment_usd_ceiling="1", valid_from="2026-10-13", valid_until="2026-10-31",
+                  pairs_per_day=10, max_common_context_bytes=65536)
     values.update(changes)
     return ComparisonExecutionPolicy(**values)
 
@@ -456,7 +457,7 @@ def _runner(path, *, unknown=False, crash=False):
                       candidate=m.RoleControls("gpt-5-mini", 400, "low", 0.3, 20260803),
                       bear=m.RoleControls("gemini-3.1-flash-lite-preview", 400, None, 0.0),
                       neutral_sizing=None, pricing_basis="offline_replay",
-                      fixed_at=NOW.isoformat(), strict_on_disagreement=True)
+                      fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
     return m, ledger, guard, runner, spec, openai, gemini
 
 
@@ -479,6 +480,19 @@ def _stored_pair(path, pair_id):
                           (pair_id,)).fetchone()
 
 
+def _journal(path):
+    return path.parent / "incomplete-2026-10.jsonl"
+
+
+def _write_evidence(path, row):
+    """작업자가 저장 실패 때 쓰는 incomplete 저널 레코드와 같은 형식(row_sha256 = 정규화 JSON)."""
+    from src.analytics.model_comparison_worker import JOURNAL_VERSION, row_sha256
+    record = {"schema_version": JOURNAL_VERSION, "kind": "incomplete_result", "recorded_at": NOW.isoformat(),
+              "decision_id": row["decision_id"], "pair_id": row["pair_id"], "row_sha256": row_sha256(row), "row": row}
+    with open(_journal(path), "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
 def _unpersisted_pair(tmp_path, **kwargs):
     path = tmp_path / "b.db"
     m, ledger, guard, runner, spec, openai, gemini = _runner(path, **kwargs)
@@ -487,6 +501,7 @@ def _unpersisted_pair(tmp_path, **kwargs):
         asyncio.run(runner.run(spec))
     _allow_final_write(path)
     row = raised.value.result
+    _write_evidence(path, row)
     return m, path, ledger, guard, runner, spec, openai, gemini, row
 
 
@@ -525,23 +540,154 @@ def test_unpersisted_pair_is_restored_only_from_original_row(tmp_path):
     rejected.append(hidden)
     for bad in rejected:
         with pytest.raises(ValueError):
-            recovery.restore_pair_result(guard, pair_id, bad, manifest_json=manifest)
+            recovery.restore_pair_result(guard, pair_id, bad, manifest_json=manifest, evidence_path=_journal(path))
     with pytest.raises(ValueError):
-        recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest.replace("decision-1", "decision-2"))
+        recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest.replace("decision-1", "decision-2"), evidence_path=_journal(path))
     assert _stored_pair(path, pair_id)[2] is None
 
-    restored = recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest)
+    restored = recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest, evidence_path=_journal(path))
     assert restored["restored"] is True
     assert json.loads(_stored_pair(path, pair_id)[2]) == row
-    assert recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest)["restored"] is False
+    assert recovery.restore_pair_result(guard, pair_id, row, manifest_json=manifest, evidence_path=_journal(path))["restored"] is False
     with pytest.raises(ValueError):
-        recovery.restore_pair_result(guard, pair_id, tampered, manifest_json=manifest)
+        recovery.restore_pair_result(guard, pair_id, tampered, manifest_json=manifest, evidence_path=_journal(path))
     calls = (len(openai.calls), len(gemini.calls))
     assert asyncio.run(runner.run(spec)) == row
     assert (len(openai.calls), len(gemini.calls)) == calls
     assert recovery.inspect_pair(guard, pair_id)["complete"] is True
     with pytest.raises(ValueError):
         recovery.export_incomplete_pair(guard, pair_id)
+
+
+def _mutations(row, pair_id):
+    """원래 행에서 한 값씩 바꾼 반례. 모두 복구가 거부해야 한다(P1 #2)."""
+    from copy import deepcopy
+    out = {}
+
+    def case(name, fn):
+        bad = deepcopy(row)
+        fn(bad)
+        out[name] = bad
+    case("decision_available_at", lambda r: r["current"].__setitem__("decision_available_at", "2026-10-13T03:00:09+00:00"))
+    case("attempt_available_at_unrecorded", lambda r: r["candidate"]["attempts"][0].__setitem__(
+        "available_at", "2026-10-13T03:00:09+00:00"))
+    case("total_cost", lambda r: r.__setitem__("total_comparison_cost_usd", "0"))
+    case("arm_cost", lambda r: r["current"].__setitem__("api_cost_usd", "0"))
+    case("attempt_counts", lambda r: r.__setitem__("actual_provider_attempts", 0))
+    case("unknown_count", lambda r: r.__setitem__("unknown_transmission_attempts", 1))
+    case("admitted_count", lambda r: r.__setitem__("admitted_attempts", 9))
+    case("economic", lambda r: r.update(economic_evaluable=True, net_delta_krw=12345))
+    case("actual_execution", lambda r: r.__setitem__("actual_execution", True))
+    case("evaluation_at", lambda r: r.__setitem__("evaluation_at", "2026-10-13T04:00:00+00:00"))
+    case("evaluation_anchor", lambda r: r.__setitem__("evaluation_anchor", "input_available_at"))
+    case("queue_delay", lambda r: r["current"].__setitem__("queue_delay_ms", 1.0))
+    case("policy", lambda r: r["policy"].__setitem__("horizon_seconds", 60))
+    # error 키를 붙이면 검사를 건너뛰던 결함: 내용·성공·비용을 바꾼 성공 시도
+    case("error_key_skip", lambda r: r["current"]["attempts"][0].update(error="x", content="APPROVE", success=True))
+    case("error_key_only", lambda r: r["current"]["attempts"][0].__setitem__("error", "x"))
+    case("extra_key", lambda r: r["current"]["attempts"][0].__setitem__("injected", True))
+    case("role", lambda r: r["current"]["attempts"][0].__setitem__("role", "bear"))
+    return out
+
+
+@pytest.mark.parametrize("name", ["decision_available_at", "attempt_available_at_unrecorded", "total_cost", "arm_cost",
+                                  "attempt_counts", "unknown_count", "admitted_count", "economic", "actual_execution",
+                                  "evaluation_at", "evaluation_anchor", "queue_delay", "policy", "error_key_skip",
+                                  "error_key_only", "extra_key", "role"])
+def test_restore_rejects_each_mutated_row_even_when_mutation_is_in_evidence(tmp_path, name):
+    """행 수준 재계산·시도 원본 비교·증거 일치 중 하나라도 맞지 않으면 쓰지 않는다."""
+    from src.analytics import model_comparison_recovery as recovery
+    m, path, ledger, guard, runner, spec, openai, gemini, row = _unpersisted_pair(tmp_path)
+    manifest = _stored_pair(path, row["pair_id"])[0]
+    bad = _mutations(row, row["pair_id"])[name]
+    with pytest.raises(ValueError, match="result_row_not_in_incomplete_evidence"):
+        recovery.restore_pair_result(guard, row["pair_id"], bad, manifest_json=manifest, evidence_path=_journal(path))
+    _write_evidence(path, bad)          # 증거 파일까지 바꾼 경우에도 재계산 가능한 값은 막는다
+    if name not in ("decision_available_at", "attempt_available_at_unrecorded"):
+        with pytest.raises(ValueError):
+            recovery.restore_pair_result(guard, row["pair_id"], bad, manifest_json=manifest,
+                                         evidence_path=_journal(path))
+    assert _stored_pair(path, row["pair_id"])[2] is None or name in (
+        "decision_available_at", "attempt_available_at_unrecorded")
+
+
+def test_restore_requires_journal_evidence_and_then_serves_cache_without_provider_calls(tmp_path):
+    from src.analytics import model_comparison_recovery as recovery
+    m, path, ledger, guard, runner, spec, openai, gemini, row = _unpersisted_pair(tmp_path)
+    manifest = _stored_pair(path, row["pair_id"])[0]
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text('{"not json\n')
+    for evidence in (tmp_path / "missing.jsonl", empty):
+        with pytest.raises(ValueError, match="result_row_not_in_incomplete_evidence"):
+            recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest, evidence_path=evidence)
+    with pytest.raises(TypeError):
+        recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest)   # evidence_path 필수
+    assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest,
+                                        evidence_path=_journal(path))["restored"] is True
+    calls = (len(openai.calls), len(gemini.calls))
+    assert asyncio.run(runner.run(spec)) == row
+    assert (len(openai.calls), len(gemini.calls)) == calls
+
+
+def test_failed_attempt_row_restores_only_with_recomputed_error_fields(tmp_path):
+    """저장 응답이 있는 실패 시도(정산 실패)는 러너의 같은 실패 함수로 재계산해 비교한다 — 건너뛰지 않는다."""
+    from copy import deepcopy
+    from src.analytics import model_comparison_recovery as recovery
+    from src.utils.llm_budget import BudgetStateError
+    path = tmp_path / "b.db"
+    m, ledger, guard, runner, spec, openai, gemini = _runner(path)
+    original = ledger.settle
+    first = []
+
+    def fail_once(token, **kwargs):
+        if not first:
+            first.append(token)
+            ledger.abandon(token)
+            raise BudgetStateError("storage_unavailable")
+        return original(token, **kwargs)
+    ledger.settle = fail_once
+    _failing_final_write(path)
+    with pytest.raises(m.PairResultPersistenceError) as raised:
+        asyncio.run(runner.run(spec))
+    _allow_final_write(path)
+    row = raised.value.result
+    attempts = [a for arm in ("current", "candidate") for a in row[arm]["attempts"]]
+    failed = [a for a in attempts if a["ledger_state"] == "pending_reconciliation"]
+    assert failed and failed[0]["error"] and failed[0]["provider_success"] is True
+    # 같은 행의 뒤 시도는 미해결 예약 때문에 전송 전 차단(저장 응답 없음) — 그 경로도 복구 검사를 거친다.
+    assert any(a["ledger_state"] == "blocked" and a["reservation_token"] is None and a["api_cost_usd"] == "0"
+               for a in attempts)
+    _write_evidence(path, row)
+    manifest = _stored_pair(path, row["pair_id"])[0]
+    for change in ({"success": True}, {"content": "edited"}, {"api_cost_usd": "0"}, {"provider_success": False}):
+        bad = deepcopy(row)
+        for arm in ("current", "candidate"):
+            for attempt in bad[arm]["attempts"]:
+                if attempt["attempt_id"] == failed[0]["attempt_id"]:
+                    attempt.update(change)
+        for arm in ("current", "candidate"):
+            bad[arm]["api_cost_usd"] = m._sum_cost(bad[arm]["attempts"])
+        bad["total_comparison_cost_usd"] = m._sum_cost(list({a["attempt_id"]: a for arm in ("current", "candidate")
+                                                             for a in bad[arm]["attempts"]}.values()))
+        _write_evidence(path, bad)
+        with pytest.raises(ValueError, match="result_row_response_mismatch"):
+            recovery.restore_pair_result(guard, row["pair_id"], bad, manifest_json=manifest, evidence_path=_journal(path))
+    # 저장 응답이 없는 시도: 원장 차단 사유·상태와 행의 error·ledger_state 가 정확히 같아야 한다.
+    blocked_id = next(a["attempt_id"] for a in attempts if a["ledger_state"] == "blocked")
+    for change, reason in (({"error": "comparison_daily_attempt_cap"}, "result_row_error_mismatch"),
+                           ({"error": "TimeoutError"}, "result_row_error_mismatch"),
+                           ({"ledger_state": "known"}, "result_row_ledger_state_mismatch"),
+                           ({"request_sent": None}, "result_row_(derived|response)_mismatch")):
+        bad = deepcopy(row)
+        for arm in ("current", "candidate"):
+            for attempt in bad[arm]["attempts"]:
+                if attempt["attempt_id"] == blocked_id:
+                    attempt.update(change)
+        _write_evidence(path, bad)
+        with pytest.raises(ValueError, match=reason):
+            recovery.restore_pair_result(guard, row["pair_id"], bad, manifest_json=manifest, evidence_path=_journal(path))
+    assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest,
+                                        evidence_path=_journal(path))["restored"] is True
 
 
 def test_unknown_pair_cost_reconciled_then_restored_keeps_original_states(tmp_path):
@@ -560,7 +706,7 @@ def test_unknown_pair_cost_reconciled_then_restored_keeps_original_states(tmp_pa
     states = {a["attempt_id"]: a["state"] for a in recovery.inspect_pair(guard, row["pair_id"])["attempts"]}
     assert "known_reconciled" in states.values()
     manifest = _stored_pair(path, row["pair_id"])[0]
-    assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest)["restored"]
+    assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest, evidence_path=_journal(path))["restored"]
     restored = json.loads(_stored_pair(path, row["pair_id"])[2])
     # 복구는 당시 상태를 보존한다. 대사 결과는 inspect 로 별도 확인한다.
     assert "known_reconciled" not in {a["ledger_state"] for arm in ("current", "candidate")
@@ -587,7 +733,7 @@ def test_restore_retries_short_lock_but_gives_up_on_long_lock_without_writing(tm
     started = time.monotonic()
     try:
         with pytest.raises(BudgetBlocked, match="comparison_pair_storage_unavailable"):
-            recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest)
+            recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest, evidence_path=_journal(path))
     finally:
         elapsed = time.monotonic() - started
         release.set()
@@ -600,7 +746,7 @@ def test_restore_retries_short_lock_but_gives_up_on_long_lock_without_writing(tm
     worker.start()
     assert locked.wait(2)
     try:
-        assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest)["restored"]
+        assert recovery.restore_pair_result(guard, row["pair_id"], row, manifest_json=manifest, evidence_path=_journal(path))["restored"]
     finally:
         worker.join(2)
     assert json.loads(_stored_pair(path, row["pair_id"])[2]) == row

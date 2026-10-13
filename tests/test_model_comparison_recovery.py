@@ -17,7 +17,7 @@ NOW = datetime(2026, 10, 13, 3, tzinfo=timezone.utc)
 
 def setup(tmp_path):
     ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW, policy_enabled=True)
-    policy = ComparisonExecutionPolicy("identity-study", 10, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31")
+    policy = ComparisonExecutionPolicy("identity-study", 10, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31", 10, 16384)
     return ledger, policy, ComparisonCallGuard(ledger=ledger, policy=policy)
 
 
@@ -298,7 +298,7 @@ def test_seed_is_bound_to_stable_id(tmp_path):
 def test_daily_blocked_id_is_not_automatically_retried_on_next_day(tmp_path):
     now = [NOW]
     ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: now[0], policy_enabled=True)
-    policy = ComparisonExecutionPolicy("one-per-day", 1, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31")
+    policy = ComparisonExecutionPolicy("one-per-day", 1, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31", 10, 16384)
     guard = ComparisonCallGuard(ledger=ledger, policy=policy)
     calls = []
 

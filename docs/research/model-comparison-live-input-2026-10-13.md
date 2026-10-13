@@ -94,12 +94,22 @@ rejected_invalid/rejected_control_mismatch/expired/started/finished/incomplete`.
 (시계 역전·필드 결함·수량 스냅샷 신원 불일치), `rejected_control_mismatch`(허용된 추가). 무결성 실패
 (`envelope_hash_mismatch/context_hash_mismatch/unattested`)는 `rejected_unattested` 다.
 `accepted` 는 큐 접수일 뿐이며 `finished` 만 pair 결과 저장 완료다.
+**P1 후속 추가:** `rejected_daily_pair_cap`·`rejected_input_too_large`(아래), `blocked`(러너가 쌍 입장 전 표식으로
+막음), `journal_dropped`(저널 큐 포화)·`journal_failed`(저널 쓰기 실패).
+
+offer 순서: 비활성 → 봉투 검증 → 시계 → 조건/생산자 일치 → 입력 나이 → 중복 → **입력 크기**(`common_context` UTF-8
+바이트 > 정책 `max_common_context_bytes`) → **하루 쌍 상한**(그날 센 pair 수 ≥ 정책 `pairs_per_day`) → 큐. 그날 센
+pair 는 `start()` 때 원장 `comparison_pairs.admission_day=오늘` 에서 채우고(재시작 뒤에도 유지) 수락 때 더한다 — 운영
+루프에서 파일·DB 를 읽지 않는다. 이미 센 pair 의 재전달(재시작 뒤 같은 판단)은 러너가 저장 결과를 돌려줘 지출이 없으므로
+상한에 다시 세지 않는다. 러너에 닿지 못한 수락분(dispatch 만료·종료 미시작)은 그날 수에서 빼고, 러너가 실패하면
+작업자 스레드가 원장 `admission_day` 를 다시 읽어 입장하지 않은 pair 를 뺀다(확인 불가면 센 채 둔다). 최종 판정은 러너
+claim(같은 쓰기 잠금 안의 원장 카운트)이다.
 
 manifest(작업자가 읽는 키, W3 manifest 와 통합 시 정렬 필요): `experiment_id`(guard 정책과 같아야 함), `enabled`
 (true 가 아니면 생성 거부), `fixed_at`, `horizon_seconds`, `strict_on_disagreement`, `empty_retries`, `current`,
-`candidate`, `bear`, `fallback_chain`(RoleControls 필드), 런처용 `execution_policy`
-(`ComparisonExecutionPolicy` 인자, `experiment_id` 제외). 봉투의 운영 Bull 조건이 `current` 와, Bear·폴백·재시도·불일치
-정책이 manifest 와 같고 `producer` 의 실험 ID·manifest 해시·소스 지문·run_id·pid 가 이 프로세스 값과 같아야 수락한다.
+`candidate`, `bear`, `fallback_chain`(RoleControls 필드), `fallback_chain_timeout_seconds`(체인 전체 시한, 필수),
+런처용 `execution_policy`(`ComparisonExecutionPolicy` 인자, `experiment_id` 제외 — `pairs_per_day`·`max_common_context_bytes`
+포함). 봉투의 운영 Bull 조건이 `current` 와, Bear·폴백·폴백 체인 시한·재시도·불일치 정책이 manifest 와 같고 `producer` 의 실험 ID·manifest 해시·소스 지문·run_id·pid 가 이 프로세스 값과 같아야 수락한다.
 
 생명주기:
 - 재시작 시 큐는 사라진다. SQLite `comparison_pairs` 의 result NULL 행은 자동 재실행하지 않는다(러너가
@@ -108,9 +118,22 @@ manifest(작업자가 읽는 키, W3 manifest 와 통합 시 정렬 필요): `ex
   공급자 호출·예약·과금 0.
 - `stop(deadline)`: 수락 차단 → 시한 내 drain → 시한 초과 시 진행 작업 취소·남은 큐는 `incomplete`
   (`shutdown_not_started`). 공급자가 이미 받았을 수 있는 시도는 원장에 미해결로 남고 재전송하지 않는다.
-- `PairResultPersistenceError` 의 원래 행은 `incomplete_results`(메모리, 최근 64)에 보존한다. 프로세스 종료 시
-  소실되며 개별 시도는 원장에 남는다.
-- 스레드 종료 시 원시 클라이언트의 aiohttp 세션을 작업자 루프에서 닫는다.
+- `PairResultPersistenceError` 의 원래 행은 incomplete 저널(아래)에 영속 보존하고 `incomplete_results`(메모리,
+  최근 64)에도 둔다. 복구는 `restore_pair_result(..., evidence_path=그 저널)` 로만 한다.
+- 스레드 종료 시 원시 클라이언트의 aiohttp 세션을 작업자 루프에서 닫는다. `stop()` 은 작업자 drain 뒤 저널 큐를 비우고
+  (`journal_drained`) 돌려준다.
+
+저널(append-only JSONL, `journal_dir=` 주입, 기본 `Path.home()/.cache/ai_trader/comparison_worker`, KST 월 파일):
+- `offers-YYYY-MM.jsonl` — offer 마다 `{schema_version:"comparison-offer-v1", kind:"offer", recorded_at, decision_id,
+  status, reason, received_at, envelope}`(봉투 전체·attestation 포함, 거부 포함), 상태 전이마다 `{schema_version, kind:
+  "transition", decision_id, status ∈ expired|started|finished|incomplete|blocked, reason, at, pair_id}`.
+- `incomplete-YYYY-MM.jsonl` — `{schema_version, kind:"incomplete_result", recorded_at, decision_id, pair_id, row_sha256, row}`.
+- 운영 루프의 `offer()` 는 유한 큐(`journal_queue=1024`)에 `put_nowait` 만 하고 저널 스레드가 쓴다(fsync). 포화는
+  `journal_dropped`, 쓰기 실패는 `journal_failed` 로 세며 판단·offer 결과를 바꾸지 않는다. 작업자 스레드의 전이·
+  incomplete 기록은 저널 큐가 차면 각각 최대 1초·5초 기다린다(운영 루프 아님).
+- 읽기: `read_offer_journal(path, *, max_bytes)`·`read_incomplete_journal(path, *, max_bytes)` →
+  `{path, missing, records, skipped_lines}`. 손상·형식 불일치 줄(incomplete 는 `row_sha256` 불일치 포함)은 건너뛰고 수를
+  센다. 파일이 `max_bytes` 보다 크면 일부만 읽지 않고 `ValueError('journal_too_large')`. 일별 보고(W-B)의 모집단·제외 입력이다.
 
 ### 런처 배선 (기본 OFF)
 
@@ -135,6 +158,10 @@ offer→실행→stop 을 한 번 돌려 health JSON 을 출력한다(네트워�
   낡은 입력 거부, 큐 포화·dispatch 만료(offer 비대기), 종료 시한 초과 취소·미재전송, 저장 실패 원래 행 보존,
   manifest 검사, 런처 기본 OFF·비활성 manifest 무클라이언트, cross_validator→작업자 E2E(판단·메타 불변, ID 동일),
   dry-run 진입점(격리 가드 아래). `run_trader.shutdown` 은 `__init__` 을 거치지 않은 객체도 다루도록 `getattr` 로 작업자를 읽는다.
+- P1 후속(같은 날): 작업자 시험 +8 — offer 단계 하루 쌍 상한·입력 크기 거부와 재시작 뒤 상한 유지(같은 판단 재전달은
+  지출 0), 만료 수락분·claim 전 실패분 미소진(원장 재확인), 폴백 체인 시한 불일치 거부, offer·전이 저널(호출 스레드 파일 open 0)·incomplete 행 저널→
+  복구→캐시(공급자 호출 0), 저널 포화·쓰기 실패가 offer 결과 불변, 읽기 함수의 손상 줄 집계·부분 읽기 거부.
+  러너 시험 +4(쌍 상한·표식·다음날 미재실행, 입력 바이트 상한, 체인 시한에서 두 번째 폴백 호출 0, 시한 필수).
 - `tests/test_model_comparison_runner.py`: v2 시각 분리·입력 기준 평가, v1 행 원래 의미 보고. 기존 live 시험은
   `live()` 헬퍼로 증명된 spec 을 쓰도록 갱신(의미 보존). 기존 `frozen_capture` 추가 — 스냅샷 `captured_at` 이 실제
   시각이라 고정 `NOW`(2026-10-13 12:00 UTC) 이후 두 시험이 기준선에서도 실패하던 시계 의존 결함(제품 검사는 불변).
@@ -142,7 +169,11 @@ offer→실행→stop 을 한 번 돌려 health JSON 을 출력한다(네트워�
 ## 한계·미완료
 
 - 출처 증명은 같은 프로세스 난수 범위다. 파일 전달·다른 프로세스는 비인증이며 지원하지 않는다.
-- 폴백 시한: 운영은 체인 전체 10초, 러너는 시도마다 `timeout_seconds`(10초) — 최악 지연이 다르다(미수정, 러너 계약).
+- 폴백 시한: P1 후속으로 러너가 `PairSpec.fallback_chain_timeout_seconds`(운영 `SINGLE_FALLBACK_TIMEOUT` 복사,
+  `role_controls.fallback_chain_timeout_seconds`)를 체인 전체에 적용한다. 시도별 `timeout_seconds` 도 그대로 남는다.
+  manifest `known_control_differences` 의 "시도별 10초" 문장은 이제 낡았다(W3 소유 키라 이번에 고치지 않음).
+- 하루 쌍 상한의 작업자 사전 검사는 이 프로세스가 유일한 입장자라는 가정의 메모리 카운트다. 다른 프로세스가 같은
+  원장에 입장시키면 러너 claim 이 최종 차단한다(공급자 호출 전).
 - 공통 입력 원천 관측 시각(`source_observed_at`)은 여전히 None — `input_available_at` 은 구성 시각이지 원천 시각이 아니다.
 - 예산 정책 v2(`experiment_usd_ceiling`, 유효 기간, `required_policy_mode`)와 `known_reconciled` 상태는 W1 소관이다.
   러너는 guard lookup 의 `state` 를 문자열로 통과시키며, 작업자 시험의 정책 setup 은 W1 통합 시 v2 필드로 바꿔야 한다.
