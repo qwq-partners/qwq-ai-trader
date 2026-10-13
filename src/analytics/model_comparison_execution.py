@@ -13,25 +13,56 @@ ID·전체 요청/정책 지문·일 슬롯을 원자적으로 고정하고 응�
 기준선은 생성하거나 재설정하지 않는다. 일 슬롯 확정 → 월 예약 → 전송 순서이며,
 월 차단·충돌·프로세스 종료에도 슬롯을 환급하지 않아 초과 호출보다 과소 사용을 택한다.
 이는 시도 상한이며 엔진의 일 판단 상한이나 전체 재생·보고서 구현이 아니다.
+
+v2 입장 조건은 월 예약과 같은 BEGIN IMMEDIATE 안에서 같은 units 로 검사한다.
+정책이 켜진 원장의 normal 단계만 허용하고, 이번 예약을 포함한 월 사용액이 80%를
+**넘으면**(정확히 80%는 허용) 거부한다. 95% 필수 보호·100% 중지는 기존 원장 검사가
+먼저 적용한다. 실험 상한은 월 집계와 별개인 실험 ID 전체의 예약/정산 합이며,
+월 전환·재시작·ID 변경(저장 정책 불일치로 거부)이 상한을 되살리지 않는다.
 SQLite 처리는 동기식이다. 별도 오프라인 작업 프로세스용이며 실시간 엔진의
 이벤트 루프에 비차단으로 통합됐다고 해석하면 안 된다.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from decimal import Decimal, ROUND_CEILING, localcontext
+from datetime import date
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, localcontext
 import json
 import hashlib
 import math
+import re
 import sqlite3
 import time
 from typing import Any, Awaitable, Callable
 import uuid
 
-from ..utils.llm_budget import BudgetBlocked, BudgetStateError, MonthlyBudgetLedger, _MAX_UNITS, _units
+from ..utils.llm_budget import BudgetBlocked, BudgetStateError, MonthlyBudgetLedger, _MAX_UNITS, _SCALE, _units
 from .model_comparison_budget import _d, _integer
 
-SCHEMA_VERSION = "model-comparison-execution-v1"
+SCHEMA_VERSION = "model-comparison-execution-v2"
+_SUPPORTED_POLICY_MODES = ("normal",)
+
+
+def _kst_date(value, name):
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+        raise ValueError(f"{name}는 KST YYYY-MM-DD 문자열이어야 한다")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{name}는 실제 날짜여야 한다") from None
+
+
+def _ceiling_units(value) -> int:
+    """실험 상한(USD Decimal 문자열)을 nano-USD로 내림한다. 상한은 보수적으로 작게 잡는다."""
+    if not isinstance(value, str):
+        raise ValueError("experiment_usd_ceiling은 Decimal 문자열이어야 한다")
+    amount = _d(value, "experiment_usd_ceiling")
+    if amount >= Decimal(_MAX_UNITS) / _SCALE:
+        raise ValueError("experiment_usd_ceiling이 원장 범위를 초과한다")
+    units = int((amount * _SCALE).to_integral_value(rounding=ROUND_FLOOR))
+    if units <= 0:
+        raise ValueError("experiment_usd_ceiling은 1 nano-USD 이상이어야 한다")
+    return units
 
 
 @dataclass(frozen=True)
@@ -40,6 +71,10 @@ class ComparisonExecutionPolicy:
     daily_attempt_cap: int
     allowed_models: tuple[str, ...]
     max_output_tokens: int
+    experiment_usd_ceiling: str
+    valid_from: str
+    valid_until: str
+    required_policy_mode: str = "normal"
 
     def __post_init__(self):
         if not isinstance(self.experiment_id, str) or not self.experiment_id.strip():
@@ -52,6 +87,13 @@ class ComparisonExecutionPolicy:
                 or any(not isinstance(model, str) or not model.strip() for model in self.allowed_models)
                 or len(set(self.allowed_models)) != len(self.allowed_models)):
             raise ValueError("allowed_models는 중복 없는 모델명의 비어 있지 않은 tuple이어야 한다")
+        _ceiling_units(self.experiment_usd_ceiling)
+        _kst_date(self.valid_from, "valid_from")
+        _kst_date(self.valid_until, "valid_until")
+        if self.valid_from > self.valid_until:
+            raise ValueError("valid_from은 valid_until 이전이어야 한다")
+        if self.required_policy_mode not in _SUPPORTED_POLICY_MODES:
+            raise ValueError("required_policy_mode는 normal만 지원한다")
 
     def serialized(self) -> str:
         return json.dumps({**asdict(self), "schema_version": SCHEMA_VERSION,
@@ -170,6 +212,7 @@ class ComparisonCallGuard:
         self.ledger = ledger
         self.policy = policy
         self._policy_json = policy.serialized()
+        self._ceiling = _ceiling_units(policy.experiment_usd_ceiling)
         self._initialize()
 
     def _initialize(self):
@@ -225,31 +268,62 @@ class ComparisonCallGuard:
             raise ValueError("attempt_id는 1~512자 식별자여야 한다")
         return attempt_id
 
+    @staticmethod
+    def _reconciled(db, token, reservation):
+        """기존 대사 CLI의 감사 행에서 이 토큰의 증거 기반 정정 비용을 찾는다(읽기만)."""
+        if token is None or reservation is None or db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='reconciliations'").fetchone() is None:
+            return None
+        found = []
+        for audit in db.execute("SELECT id,applied_at,reviewer_ref,evidence_sha256,adjustments_json "
+                                "FROM reconciliations WHERE instr(adjustments_json,?)>0 ORDER BY id", (token,)):
+            found += [(audit, item) for item in json.loads(audit["adjustments_json"])
+                      if isinstance(item, dict) and item.get("token") == token]
+        if not found:
+            return None
+        if (len(found) != 1 or reservation["state"] != "settled"
+                or reservation["actual_units"] != _units(found[0][1].get("actual_cost_usd"))):
+            raise BudgetStateError("comparison_reconciliation_mismatch")
+        audit = found[0][0]
+        return {"actual_cost_usd": str(Decimal(reservation["actual_units"]) / _SCALE),
+                "reconciliation_id": audit["id"], "applied_at": audit["applied_at"],
+                "reviewer_ref": audit["reviewer_ref"], "evidence_sha256": audit["evidence_sha256"]}
+
     def _lookup_row(self, db, row):
         if hashlib.sha256(row["request_json"].encode()).hexdigest() != row["request_sha256"]:
             raise BudgetStateError("comparison_storage_corrupt")
         result = _read_result(row["result_json"]) if row["result_json"] is not None else None
+        token = row["reservation_token"]
+        reservation = (db.execute("SELECT state,actual_units FROM reservations WHERE token=?", (token,)).fetchone()
+                       if token is not None else None)
+        reconciled = self._reconciled(db, token, reservation)
         state, reason = "pending", "comparison_attempt_pending"
         if row["block_reason"]:
             state, reason = "blocked", row["block_reason"]
         if result is not None:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
-            reservation = db.execute("SELECT state,actual_units FROM reservations WHERE token=?",
-                                     (row["reservation_token"],)).fetchone()
             cost = _ledger_cost(result.actual_cost_usd)
             if reservation is not None:
-                if cost is None and reservation["state"] == "unknown":
+                if reconciled is not None:
+                    # 원래 미확정 예약이 감사 대사로 정산됐다. 응답·원래 추정 비용은 바꾸지 않는다.
+                    state, reason = "known_reconciled", None
+                elif cost is None and reservation["state"] == "unknown":
                     state, reason = "unknown", None
                 elif cost is not None and reservation["state"] == "settled":
                     if reservation["actual_units"] != _units(cost):
                         raise BudgetStateError("comparison_settlement_mismatch")
                     state, reason = "known", None
+        estimate = result.value.get("api_cost_usd") if result is not None and isinstance(result.value, dict) else None
         return {"attempt_id": row["attempt_id"], "request_sha256": row["request_sha256"],
-                "state": state, "reservation_token": row["reservation_token"],
-                "result": result, "block_reason": reason}
+                "state": state, "reservation_token": token,
+                "result": result, "block_reason": reason,
+                "original_estimated_cost_usd": estimate, "reconciled": reconciled}
 
     def lookup(self, attempt_id: str) -> dict | None:
-        """읽기 전용 복구 조회. known/unknown만 정산 확인, pending_reconciliation은 재전송 금지.
+        """읽기 전용 복구 조회. known/unknown/known_reconciled만 정산 확인, pending_reconciliation은 재전송 금지.
+
+        reconciled 는 감사 대사(reconciliations)로 확인된 정정 비용·감사 참조이며,
+        original_estimated_cost_usd 는 저장 응답의 api_cost_usd 다. 둘 다 원래 result 를 바꾸지 않는다.
 
         result는 원래 시각을 포함한 JSON value와 원래 비용 자료형을 보존한다.
         정산되지 않은 결과도 증거로 제공하지만 call은 이를 완료로 반환하지 않는다.
@@ -276,7 +350,7 @@ class ComparisonCallGuard:
                     if existing["request_json"] != request_json:
                         raise BudgetBlocked("comparison_attempt_mismatch")
                     recovered = self._lookup_row(db, existing)
-                    if recovered["state"] not in {"known", "unknown"}:
+                    if recovered["state"] not in {"known", "unknown", "known_reconciled"}:
                         raise BudgetBlocked(recovered["block_reason"])
                     return None, None, recovered["result"]
                 day = self.ledger.today().isoformat()
@@ -375,6 +449,28 @@ class ComparisonCallGuard:
         except (OSError, sqlite3.Error, TypeError, ValueError):
             raise BudgetStateError("comparison_storage_unavailable") from None
 
+    def _admission_check(self, db, status, committed, units, now):
+        """MonthlyBudgetLedger.reserve 안(같은 잠금·같은 units)에서만 호출된다. 읽기 전용."""
+        self._check_policy(db)
+        if not self.ledger.policy_enabled or "policy_mode" not in status:
+            raise BudgetBlocked("comparison_policy_disabled")
+        if status["policy_mode"] != self.policy.required_policy_mode:
+            raise BudgetBlocked("comparison_policy_mode_not_normal")
+        if not self.policy.valid_from <= now.date().isoformat() <= self.policy.valid_until:
+            raise BudgetBlocked("comparison_experiment_expired")
+        # 이번 예약을 포함해 80%를 넘지 않아야 한다. 정확히 80%는 허용한다.
+        if (committed + units) * 100 > self.ledger.limit_units * 80:
+            raise BudgetBlocked("comparison_economy_threshold")
+        used = db.execute("""SELECT COALESCE(SUM(CASE WHEN r.state IN ('reserved','unknown') THEN r.reserved_units
+                                                     WHEN r.state='settled' THEN r.actual_units ELSE 0 END),0)
+                             FROM reservations r JOIN policy_attempts p ON p.token=r.token
+                             WHERE p.task='model_comparison' AND p.role=?""",
+                          (self.policy.experiment_id,)).fetchone()[0]
+        if not isinstance(used, int) or used < 0:
+            raise BudgetStateError("comparison_storage_corrupt")
+        if used + units > self._ceiling:
+            raise BudgetBlocked("comparison_experiment_ceiling")
+
     async def call(self, request: ComparisonRequest, *,
                    dispatch: Callable[[ComparisonRequest], Awaitable[ComparisonAttemptResult]],
                    attempt_id: str | None = None) -> ComparisonAttemptResult:
@@ -402,7 +498,8 @@ class ComparisonCallGuard:
         try:
             token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
                                         policy_priority="research", task="model_comparison",
-                                        role=self.policy.experiment_id)
+                                        role=self.policy.experiment_id,
+                                        admission_check=self._admission_check)
             # ID/슬롯이 이미 확정됐다. 전송 전 부가 쓰기는 하지 않는다.
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")

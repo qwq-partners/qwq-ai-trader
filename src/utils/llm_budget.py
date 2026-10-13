@@ -39,6 +39,15 @@ class BudgetStateError(BudgetBlocked):
     pass
 
 
+_READ_ACTIONS = frozenset({sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ,
+                           sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE})
+
+
+def _read_only(action, *_):
+    # Admission hooks observe the locked snapshot; they cannot write or end it.
+    return sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
+
+
 def _units(value) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise BudgetBlocked('invalid_cost')
@@ -225,12 +234,19 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
             raise BudgetStateError('storage_unavailable') from None
 
     def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int, *,
-                policy_priority='standard', expected_policy_mode=None, task='', role='') -> str:
+                policy_priority='standard', expected_policy_mode=None, task='', role='',
+                admission_check=None) -> str:
         """Conservative admission estimate: twice UTF-8 bytes plus 256 overhead.
 
         OpenAI reserves its completion cap; Gemini gets 2x output headroom.
         Month attribution is admission time, not a provider billing promise.
+        admission_check(db, status, committed_units, units, now) runs inside the
+        same BEGIN IMMEDIATE after every existing check and before INSERT. It may
+        only read (SQLite authorizer); BudgetBlocked rejects after COMMIT of the
+        policy observation, with no reservation. Never call providers from it.
         """
+        if admission_check is not None and not callable(admission_check):
+            raise BudgetBlocked('invalid_admission_check')
         if (not isinstance(model, str) or not isinstance(prompt, str) or not isinstance(system, str)
                 or isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int)
                 or not 0 < max_output_tokens <= 2 ** 31 - 1):
@@ -279,6 +295,16 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 if committed + units > self.limit_units:
                     db.execute('COMMIT')
                     raise BudgetBlocked('monthly_limit_exceeded')
+                if admission_check is not None:
+                    db.set_authorizer(_read_only)
+                    try:
+                        admission_check(db, status, committed, units, now)
+                    except BudgetBlocked:
+                        db.set_authorizer(None)
+                        db.execute('COMMIT')
+                        raise
+                    finally:
+                        db.set_authorizer(None)
                 fd = os.open(self.lock_dir / (token + '.lock'),
                              os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

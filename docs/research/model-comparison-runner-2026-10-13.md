@@ -69,14 +69,17 @@ flowchart LR
 |---|---|---|
 | known | 응답과 월 정산 금액 일치 | 같은 ID로 기존 결과 회수; 신규 전송 없음 |
 | unknown | 응답 비용 미확인 | 원본 사용량/청구 근거 대사; 0원/월초 초기화 금지 |
+| known_reconciled | 원래 unknown/pending_reconciliation 예약이 `scripts/reconcile_llm_budget.py` 감사 대사로 settled | `lookup(id)["reconciled"]`(정정 비용·감사 ID·적용 시각·검토자·증거 해시)와 `original_estimated_cost_usd`(응답의 `api_cost_usd`)를 따로 본다. 원래 응답·`success=False`는 바뀌지 않으며 같은 ID 재호출은 원래 응답만 돌려준다 |
 | pending_reconciliation | 응답은 있으나 월 정산 확정 불가 | `guard.lookup(id)`로 응답·예약 토큰 확인, 증거 대사; 자동 정산 재시도 없음 |
 | pending / interrupted | 전송·결과가 불확실 | 재전송 금지, 예약/공급자 증거 확인 |
 | blocked | 상한/예산 등으로 해당 ID 거부 | 같은 신호를 다음날 자동 실행하지 않음. 새 관측의 새 decision ID만 새 명세로 검토 |
 | comparison_result_mismatch | 저장된 응답과 재쓰기 토큰/본문 불일치 | 덮어쓰지 않고 원본/호출 ID 대사 |
-| comparison_pair_result_unpersisted | 쌍 최종 기록 저장 실패 | 예외의 `.result`에 보존된 원래 행을 별도 증거로 보관; 자동 재실행 금지 |
-| pair incomplete | 쌍 실행이 끊겨 완성 보고서 없음 | 각 안정 시도 ID를 lookup해 보존 응답 점검. 자동 쌍 재실행/시각 복원 금지 |
+| comparison_pair_result_unpersisted | 쌍 최종 기록 저장 실패 | 예외의 `.result`에 보존된 원래 행을 별도 증거로 보관; 자동 재실행 금지. `model_comparison_recovery.restore_pair_result(guard, pair_id, 원래 행, manifest_json=저장 manifest)`는 manifest·`requested_at`·식별자·정책이 같고, 행의 시도 ID 집합이 저장된 시도와 정확히 같으며, 각 예약 토큰·당시 원장 상태(대사로 인한 unknown→known_reconciled만 허용)·저장 응답 필드가 일치할 때만 `result IS NULL` 행에 쓴다. 불일치는 ValueError로 아무것도 쓰지 않고, 동일 BUSY/LOCKED만 약1초/최대10회 재시도한다 |
+| pair incomplete | 쌍 실행이 끊겨 완성 보고서 없음 | `inspect_pair`/`inspect_attempt`로 보존 응답·예약 토큰·원래/대사 비용 점검, `export_incomplete_pair`는 진단 자료만 만든다. 원래 행이 없으면 복구하지 않는다. 자동 쌍 재실행/현재 시각으로 시각 복원 금지 |
 
-정책은 월 원장당 하나로 고정된다. 상한·모델 집합·순서를 바꿔 재생성하거나 새 DB로 월 사용액을 우회하지 않는다. 정책 이전/증거 기반 비용 정정용 운영 명령은 아직 미구현이며, 유료 실험 설치 전에 별도 검증해야 한다. 저장장치 장애까지 응답 보존을 보장하지 않는다. 복구 불가해도 중복 전송은 허용하지 않는다.
+비교 예약 입장(v2 정책 `model-comparison-execution-v2`)은 월 예약과 같은 `BEGIN IMMEDIATE` 안에서 같은 예약 units로 검사한다. 기존 `essential_budget_reserved`(95%)·`monthly_limit_exceeded`(100%)가 먼저 적용되고, 이어서 `comparison_policy_disabled`(원장 정책 비활성), `comparison_policy_mode_not_normal`(절약/필수 단계), `comparison_experiment_expired`(KST `valid_from`~`valid_until` 포함 구간 밖), `comparison_economy_threshold`(이번 예약 포함 `(committed+units)×100 > limit×80`; 정확히 80%는 허용, 그 뒤 단계가 economy가 되어 다음 연구 예약은 거부), `comparison_experiment_ceiling`(실험 ID의 reserved/unknown 예약액+settled 실제액+이번 예약 > `experiment_usd_ceiling`) 순으로 거부한다. 거부해도 정책 관측은 커밋되고 예약은 생기지 않는다. 실험 상한·유효 구간은 월 전환으로 초기화되지 않는다.
+
+정책은 월 원장당 하나로 고정된다. 상한·모델 집합·순서·실험 ID·유효 구간을 바꿔 재생성하거나 새 DB로 월 사용액을 우회하지 않는다(저장 v1 정책도 `comparison_policy_mismatch`). 증거 기반 월 비용 정정은 기존 CLI `scripts/reconcile_llm_budget.py`(미리보기 기본·증거 해시·상태 해시 일치 시에만 `--apply`)로 하며, 이번에 비교 전용 연결(`lookup`의 `reconciled`·`known_reconciled`, `inspect_*`, `restore_pair_result`)을 추가했다. **정책 이전(migration)은 계속 미지원**이며 리셋 탈출구는 두지 않는다. 저장장치 장애까지 응답 보존을 보장하지 않는다. 복구 불가해도 중복 전송은 허용하지 않는다.
 
 보고 명령(읽기 전용):
 
