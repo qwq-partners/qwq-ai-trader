@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from src.analytics import model_comparison_admission as adm
 from src.analytics import model_comparison_outcome as outcome
 from src.utils.fee_calculator import FeeCalculator, FeeConfig
 
@@ -35,7 +36,37 @@ def sample():
            'fx': {'krw_per_usd': '1300', 'evidence_ref': 'fx-1',
                   'available_at': '2026-10-15T00:00:00+00:00'},
            'current': deepcopy(arm), 'candidate': deepcopy(arm)}
-    row['current'].update(verdict='reject', applied_multiplier='0.5', quantity=50)
+    row['current'].update(verdict='reject', applied_multiplier='0.5', quantity=50,
+                          sizing_replay_ref='replay-c')
+    row['admission'] = {name: admitted(row[name]) for name in ('current', 'candidate')}
+    row['market_state'] = {'current': normal(row['current']['entry_quote']['received_at']),
+                           'candidate': normal(row['candidate']['entry_quote']['received_at']),
+                           'exit': normal(row['exit_quote']['received_at'])}
+    return row
+
+
+def admitted(arm, status='passed'):
+    gates = {name: {'status': status, 'as_of': '2026-10-15T00:59:59+00:00', 'reason': 'synthetic',
+                    'replayable': True} for name in (*adm.REPLAYABLE_GATES, *adm.EXTERNAL_GATES)}
+    return {'schema_version': adm.ADMISSION_SCHEMA, 'gates': gates,
+            'admissible': {'passed': True, 'failed': False}.get(status),
+            'replay_id': arm['sizing_replay_ref'], 'verdict': arm['verdict'], 'quantity': arm['quantity']}
+
+
+def normal(at, verdict='normal_continuous'):
+    return {'schema_version': adm.MARKET_STATE_SCHEMA, 'verdict': verdict, 'basis': ['synthetic'],
+            'source_refs': [{'tr_id': 'H0STCNT0'}], 'evaluated_at': at}
+
+
+def live_v2():
+    row = sample()
+    row.update(schema_version='model-comparison-pair-v2', live_provenance='in_process_attested',
+               input_available_at='2026-10-15T00:59:59.500000+00:00', evaluation_anchor='input_available_at',
+               evaluation_at='2026-10-15T01:14:59.500000+00:00')
+    row['policy']['evaluation_anchor'] = 'input_available_at'
+    row['sizing_snapshot']['available_at'] = '2026-10-15T00:59:59.400000+00:00'
+    row['exit_quote']['received_at'] = '2026-10-15T01:15:00+00:00'
+    row['market_state']['exit'] = normal('2026-10-15T01:15:00+00:00')
     return row
 
 
@@ -55,10 +86,17 @@ def test_soft_reject_delta_is_fifty_shares_not_whole_trade():
 def test_same_quantity_and_zero_quantity_cash_are_preserved():
     row = sample()
     row['current'] = deepcopy(row['candidate'])
+    row['admission']['current'] = deepcopy(row['admission']['candidate'])
+    row['market_state']['current'] = deepcopy(row['market_state']['candidate'])
     assert outcome.compare_policy_outcomes(row, fees=fees())['net_delta_krw'] == '0.00'
     for arm in ('current', 'candidate'):
         row[arm]['quantity'] = 0
         row[arm].pop('entry_quote')
+        row['admission'][arm]['quantity'] = 0
+        row['admission'][arm]['gates']['sizing_quantity']['status'] = 'failed'
+        row['admission'][arm]['admissible'] = False
+        row['market_state'].pop(arm)
+    row['market_state'].pop('exit')
     result = outcome.compare_policy_outcomes(row, fees=fees())
     assert result['current']['trade_pnl_krw'] == '0'
     assert result['current']['net_proxy_krw'] == '-13.00'
@@ -108,6 +146,7 @@ def test_each_response_uses_own_later_entry_price_and_api_cost_currency():
     row['candidate']['decision_available_at'] = '2026-10-15T01:00:03+00:00'
     row['candidate']['entry_quote'].update(received_at='2026-10-15T01:00:04+00:00', ask='1020')
     row['candidate']['api_cost_usd'] = '0.02'
+    row['market_state']['candidate'] = normal('2026-10-15T01:00:04+00:00')
     result = outcome.compare_policy_outcomes(row, fees=fees())
     assert result['net_delta_krw'] == '2987.00'
 
@@ -141,3 +180,67 @@ def test_missing_fee_config_and_date_overflow_preserve_null_row():
     result = outcome.compare_policy_outcomes(row, fees=fees())
     assert result['decision_id'] == 'd1'
     assert result['status'] == 'not_evaluable' and result['net_delta_krw'] is None
+
+
+def test_input_available_anchor_uses_common_input_time_plus_horizon():
+    result = outcome.compare_policy_outcomes(live_v2(), fees=fees())
+    assert result['status'] == 'conditional_price_proxy', result['reasons']
+    assert result['evaluation_anchor'] == 'input_available_at'
+    assert result['evaluation_at'] == '2026-10-15T01:14:59.500000+00:00'
+    assert result['net_delta_krw'] == '5000.00'
+    assert any('not_fill_vwap_or_slippage_certification' in a for a in result['assumptions'])
+
+
+@pytest.mark.parametrize('mutation,reason', [
+    (lambda r: r.pop('input_available_at'), 'INVALID_TIME:input_available_at'),
+    (lambda r: r.update(live_provenance='caller_supplied_not_attested'), 'LIVE_PROVENANCE_NOT_ATTESTED'),
+    (lambda r: r.update(evaluation_anchor='requested_at'), 'EVALUATION_ANCHOR_MISMATCH'),
+    (lambda r: r.update(evaluation_at='2026-10-15T01:15:00+00:00'), 'COMMON_EVALUATION_POLICY_MISMATCH'),
+    (lambda r: r['sizing_snapshot'].update(available_at='2026-10-15T00:59:59.600000+00:00'),
+     'SIZING_SNAPSHOT_NOT_AVAILABLE_AT_ANCHOR'),
+    (lambda r: r['current'].update(decision_available_at='2026-10-15T00:59:59.400000+00:00'), 'DECISION_TIME:current'),
+])
+def test_input_anchor_requires_attested_input_and_its_own_times(mutation, reason):
+    row = live_v2()
+    mutation(row)
+    result = outcome.compare_policy_outcomes(row, fees=fees())
+    assert result['net_delta_krw'] is None and result['status'] == 'not_evaluable'
+    assert reason in result['reasons']
+
+
+@pytest.mark.parametrize('mutation,arm,reason', [
+    (lambda r: r.pop('admission'), 'current', 'ADMISSION_MISSING'),
+    (lambda r: r['admission'].update(candidate=admitted(r['candidate'], 'unknown')), 'candidate',
+     'ADMISSION_NOT_PASSED'),
+    (lambda r: r['admission']['current']['gates']['kill_switch'].update(status='unknown'), 'current',
+     'ADMISSION_GATE_NOT_PASSED:kill_switch'),
+    (lambda r: r['admission']['current'].update(replay_id='other'), 'current', 'ADMISSION_REPLAY_MISMATCH'),
+    (lambda r: r['admission']['candidate'].update(quantity=1), 'candidate', 'ADMISSION_REPLAY_MISMATCH'),
+    (lambda r: r['market_state'].update(candidate=normal('2026-10-15T01:00:02+00:00', 'unknown')), 'candidate',
+     'MARKET_STATE_NOT_NORMAL:unknown'),
+    (lambda r: r['market_state'].update(current=normal('2026-10-15T01:00:03+00:00')), 'current',
+     'MARKET_STATE_TIME_MISMATCH'),
+    (lambda r: r['market_state'].pop('exit'), 'exit', 'MARKET_STATE_MISSING'),
+    (lambda r: r['market_state'].update(exit=normal('2026-10-15T01:15:01+00:00', 'not_normal')), 'exit',
+     'MARKET_STATE_NOT_NORMAL:not_normal'),
+])
+def test_admission_and_market_state_gate_each_arm(mutation, arm, reason):
+    row = sample()
+    mutation(row)
+    result = outcome.compare_policy_outcomes(row, fees=fees())
+    assert result['net_delta_krw'] is None and result['status'] == 'not_evaluable'
+    assert reason in result['arm_reasons'][arm]
+    assert f'{arm}:{reason}' in result['reasons']
+
+
+def test_caller_true_flag_without_passed_gates_is_not_an_override():
+    row = sample()
+    row['admission']['current'] = admitted(row['current'], 'unknown')
+    row['admission']['current']['admissible'] = True        # 일괄 True 덮어쓰기
+    assert outcome.compare_policy_outcomes(row, fees=fees())['net_delta_krw'] is None
+
+
+def test_legacy_requested_anchor_is_labelled():
+    result = outcome.compare_policy_outcomes(sample(), fees=fees())
+    assert result['evaluation_anchor'] == 'requested_at'
+    assert 'legacy_requested_at_anchor_is_worker_dispatch_time' in result['assumptions']
