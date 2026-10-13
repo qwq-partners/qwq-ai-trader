@@ -14,10 +14,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections import OrderedDict
 import queue
 import threading
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -43,7 +45,7 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
 def sha256_text(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return None
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def new_id(prefix: str) -> str:
@@ -56,18 +58,40 @@ def _truncate(text: Optional[str]) -> Optional[str]:
     return text if len(text) <= MAX_TEXT_CHARS else text[:MAX_TEXT_CHARS]
 
 
-def _estimated_cost_usd(response) -> Optional[float]:
-    """공급자가 사용량을 보고했고 단가표에 있는 모델만 추정 비용을 낸다. 아니면 None(미확인)."""
-    if response is None or not getattr(response, "usage_known", False):
+def _int_or_none(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _estimated_cost_usd(response) -> Optional[str]:
+    """공급자가 사용량을 보고했고 단가표에 있는 모델만 추정 비용(Decimal 문자열). 결측·불명은 None(0 으로 대체하지 않음)."""
+    if response is None or getattr(response, "usage_known", False) is not True:
+        return None
+    tokens_in, tokens_out = _int_or_none(getattr(response, "input_tokens", None)), _int_or_none(getattr(response, "output_tokens", None))
+    if tokens_in is None or tokens_out is None:
         return None
     try:
         from ..utils.llm_pricing import rate_quote
-        quote = rate_quote(getattr(response, "model", None) or "",
-                           int(getattr(response, "input_tokens", 0) or 0),
-                           int(getattr(response, "output_tokens", 0) or 0))
+        model = getattr(response, "requested_model", None)
+        quote = rate_quote(model if model is not None else (getattr(response, "model", None) or ""), tokens_in, tokens_out)
     except Exception:
         return None
-    return None if quote is None else float(quote.cost_usd)
+    return None if quote is None else str(Decimal(str(quote.cost_usd)))
+
+
+def _sum_trail_cost(trail: Any) -> Dict[str, Any]:
+    """trail(실제 시도 목록)의 알려진 비용 합 — 하나라도 불명이면 cost_complete=False."""
+    if not isinstance(trail, list) or not trail:
+        return {"calls": 0, "estimated_cost_usd": None, "cost_complete": False}
+    total, complete = Decimal("0"), True
+    for row in trail:
+        cost = row.get("estimated_cost_usd") if isinstance(row, dict) else None
+        if cost is None:
+            if isinstance(row, dict) and row.get("request_sent") is False:
+                continue                       # 미전송 시도는 비용 0 이 확정이다
+            complete = False
+            continue
+        total += Decimal(str(cost))
+    return {"calls": len(trail), "estimated_cost_usd": str(total) if complete else None, "cost_complete": complete}
 
 
 def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], response: Any, *,
@@ -94,8 +118,12 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
     else:
         outcome = "success"
     resolved = getattr(resp, "resolved_model", None)
-    requested_model = getattr(resp, "requested_model", None) or getattr(resp, "model", None)
+    requested_model = getattr(resp, "requested_model", None)
+    if requested_model is None:
+        requested_model = getattr(resp, "model", None)
     content = _truncate(getattr(resp, "content", None))
+    trail = getattr(resp, "attempt_trail", None)
+    trail_summary = _sum_trail_cost(trail)
     return {
         "attempt_id": new_id("att"),
         "role": role,
@@ -109,12 +137,18 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         # 공급자가 응답에 모델을 적어 준 경우만 확인된 신원이다. 요청 모델은 신원 증거가 아니다.
         "resolved_model": resolved,
         "model_identity": "provider_reported" if resolved else "unverified",
-        "input_tokens": getattr(resp, "input_tokens", None),
-        "output_tokens": getattr(resp, "output_tokens", None),
-        "reasoning_tokens": getattr(resp, "reasoning_tokens", None),
+        "input_tokens": _int_or_none(getattr(resp, "input_tokens", None)),
+        "output_tokens": _int_or_none(getattr(resp, "output_tokens", None)),
+        "reasoning_tokens": _int_or_none(getattr(resp, "reasoning_tokens", None)),
         "usage_known": getattr(resp, "usage_known", None),
         "billing_status": getattr(resp, "billing_status", None),
+        # 최종 응답 1건의 추정 비용(Decimal 문자열). 재시도·폴백을 포함한 호출 전체는 calls 에 있다.
         "estimated_cost_usd": _estimated_cost_usd(resp),
+        # LLMManager 가 이 응답을 만들기까지 실제로 보낸 공급자 시도(재시도·폴백 각 1행, 예약 토큰 포함)
+        "calls": trail if isinstance(trail, list) else None,
+        "calls_count": trail_summary["calls"],
+        "calls_estimated_cost_usd": trail_summary["estimated_cost_usd"],
+        "calls_cost_complete": trail_summary["cost_complete"],
         "budget": {
             "policy_mode": getattr(resp, "budget_policy_mode", None),
             "policy_version": getattr(resp, "budget_policy_version", None),
@@ -132,6 +166,16 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         "response_text": content,
         "response_sha256": sha256_text(getattr(resp, "content", None)),
     }
+
+
+def safe_attempt_record(role: str, provider: Any, requested_at: Optional[datetime], response: Any, **kwargs) -> Dict[str, Any]:
+    """attempt_record 의 예외를 판단 경로로 올리지 않는다 — 실패 시 record_error 행을 남긴다 (리뷰 P1)."""
+    try:
+        return attempt_record(role, provider, requested_at, response, **kwargs)
+    except Exception as error:
+        logger.warning(f"[판단기록] 시도 기록 생성 실패 (판단 영향 없음): {error}")
+        return {"attempt_id": new_id("att"), "role": role, "outcome": "record_error",
+                "error": str(error)[:200], "requested_at": _iso(requested_at)}
 
 
 def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, score: Any, market_regime: Any,
@@ -187,6 +231,21 @@ class DecisionRecorder:
                       "write_errors": 0}
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        # 판단 ID별 최종 저장 결과(written / dropped_file_cap / write_error) — 최근 1024건
+        self._outcomes: "OrderedDict[str, str]" = OrderedDict()
+
+    def status_of(self, decision_id: Optional[str]) -> Optional[str]:
+        """판단 ID 의 저장 결과. 아직 큐에 있으면 None. `queued` 는 큐 수락일 뿐 저장 완료가 아니다."""
+        with self._lock:
+            return self._outcomes.get(decision_id) if decision_id else None
+
+    def _note_outcome(self, record: Dict[str, Any], status: str) -> None:
+        key = record.get("decision_id") if isinstance(record, dict) else None
+        if not key:
+            return
+        self._outcomes[key] = status
+        while len(self._outcomes) > 1024:
+            self._outcomes.popitem(last=False)
 
     # ── 제출 ───────────────────────────────────────────────
     def submit(self, record: Dict[str, Any]) -> str:
@@ -199,6 +258,8 @@ class DecisionRecorder:
         except queue.Full:
             with self._lock:
                 self.stats["dropped_queue_full"] += 1
+                self._note_outcome(record, "dropped_queue_full")
+            logger.warning("[판단기록] 큐 포화로 기록 폐기 (판단 영향 없음)")
             return "dropped_queue_full"
         with self._lock:
             self.stats["queued"] += 1
@@ -224,6 +285,8 @@ class DecisionRecorder:
             if current + len(line) > self.max_file_bytes:
                 with self._lock:
                     self.stats["dropped_file_cap"] += 1
+                    self._note_outcome(record, "dropped_file_cap")
+                logger.warning(f"[판단기록] 월 파일 상한 초과로 기록 폐기: {path.name} ({current} bytes)")
                 return
             with open(path, "ab") as handle:
                 handle.write(line)
@@ -231,9 +294,11 @@ class DecisionRecorder:
                 os.fsync(handle.fileno())
             with self._lock:
                 self.stats["written"] += 1
+                self._note_outcome(record, "written")
         except OSError as error:
             with self._lock:
                 self.stats["write_errors"] += 1
+                self._note_outcome(record, "write_error")
             logger.warning(f"[판단기록] 쓰기 실패 (판단에는 영향 없음): {error}")
 
     def _run(self) -> None:

@@ -873,7 +873,7 @@ class CrossStrategyValidator:
             if self._adversarial is not None:
                 self._daily_llm_count += 1
             from ..utils.llm import LLMTask
-            from ..analytics.llm_decision_record import attempt_record, now_kst
+            from ..analytics.llm_decision_record import safe_attempt_record as attempt_record, now_kst
             _single_requested_at = now_kst()
             _single_suffix = prompt[len(common_context):]
             try:

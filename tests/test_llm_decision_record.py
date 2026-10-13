@@ -194,3 +194,92 @@ def test_without_signal_id_record_still_written_with_null_link(monkeypatch, reco
     cross = _cross(monkeypatch, _LLM("APPROVE", "ACCEPT"))
     assert asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways")) is True
     assert _records(recorder)[0]["signal_id"] is None
+
+
+# ── 리뷰 반영: 기록 실패가 판정을 바꾸지 않는다 / trail / 부분 타임아웃 / 저장 결과 / Decimal ──
+
+def test_attempt_record_failure_keeps_rejection(monkeypatch):
+    """P1: 시도 기록 생성이 예외를 내도 거절 판정은 거절로 남아야 한다(fail-open 으로 승격 금지)."""
+    monkeypatch.setattr(rec, "attempt_record", lambda *a, **k: (_ for _ in ()).throw(UnicodeEncodeError("utf-8", "", 0, 1, "surrogate")))
+    adv = AdversarialValidator(_LLM("REJECT 과열", "REJECT 위험"))
+    result = asyncio.run(adv.validate("005930", "momentum", 90, {}, "bear", common_context="ctx"))
+    assert result.approved is False and result.confidence == 1.0
+    assert [a["outcome"] for a in result.meta["attempts"]] == ["record_error", "record_error"]
+
+
+def test_lone_surrogate_in_response_is_hashed_not_raised():
+    row = attempt_record("bull", LLMProvider.OPENAI, None, _resp(content="REJECT \ud800 깨진문자"), role_system_sha256=None, role_suffix="x")
+    assert row["outcome"] == "success" and len(row["response_sha256"]) == 64
+
+
+def test_partial_timeout_keeps_completed_side(monkeypatch):
+    """P2: Bear 가 제한 시간을 넘겨도 먼저 끝난 Bull 의 응답·완료 시각은 남고 Bear 만 timeout 이다."""
+    import src.core.adversarial_validator as av
+
+    class _Slow(_LLM):
+        async def complete_with(self, prompt, *, provider, **kwargs):
+            if provider == LLMProvider.GEMINI:
+                await asyncio.sleep(1.0)
+            return _resp("APPROVE", provider=provider)
+
+    monkeypatch.setattr(av, "LLM_TIMEOUT", 0.05)
+    result = asyncio.run(AdversarialValidator(_Slow("APPROVE", "x")).validate("005930", "momentum", 90, {}, "bear", common_context="ctx"))
+    assert result.failed is True
+    bull, bear = result.meta["attempts"]
+    assert bull["outcome"] == "success" and bull["responded_at"] is not None
+    assert bear["outcome"] == "timeout" and bear["responded_at"] is not None  # 기록 생성 시각(완료 시각 아님)
+
+
+def test_llm_manager_trail_collects_every_real_attempt(monkeypatch):
+    """P1: complete_with 한 호출 안의 재시도(빈 응답 → 재시도)가 trail 2행으로 남고 응답에 붙는다."""
+    from src.utils.llm import LLMManager, LLMUsage
+    mgr = object.__new__(LLMManager)
+    mgr.daily_usage = LLMUsage()
+    monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
+
+    async def fake_impl(prompt, provider, weight, system, retry_on_empty, **kwargs):
+        first = _resp("", budget_reservation_token="tok-a")
+        mgr._account_attempt(first, "t", "r")                 # 빈 응답(비용 발생) → 재시도
+        second = _resp("APPROVE", budget_reservation_token="tok-b")
+        mgr._account_attempt(second, "t", "r")
+        return second
+
+    monkeypatch.setattr(mgr, "_complete_with_impl", fake_impl, raising=False)
+    resp = asyncio.run(mgr.complete_with("p", LLMProvider.OPENAI))
+    assert [t["budget_reservation_token"] for t in resp.attempt_trail] == ["tok-a", "tok-b"]
+    row = attempt_record("bull", LLMProvider.OPENAI, None, resp, role_system_sha256=None, role_suffix="x")
+    assert row["calls_count"] == 2 and row["calls"][0]["budget_reservation_token"] == "tok-a"
+    # 단가표에 없는 모델이라 비용은 None 이고 '완전' 표시도 False — 0 으로 대체하지 않는다
+    assert row["calls_estimated_cost_usd"] is None and row["calls_cost_complete"] is False
+
+
+def test_trail_cost_sums_as_decimal_strings_and_marks_unknown():
+    assert rec._sum_trail_cost([{"estimated_cost_usd": "0.001", "request_sent": True},
+                                {"estimated_cost_usd": "0.0005", "request_sent": True}]) == \
+        {"calls": 2, "estimated_cost_usd": "0.0015", "cost_complete": True}
+    assert rec._sum_trail_cost([{"estimated_cost_usd": "0.001", "request_sent": True},
+                                {"estimated_cost_usd": None, "request_sent": True}])["estimated_cost_usd"] is None
+    assert rec._sum_trail_cost([{"estimated_cost_usd": None, "request_sent": False}])["cost_complete"] is True
+    assert rec._int_or_none(True) is None and rec._int_or_none("3") is None and rec._int_or_none(3) == 3
+
+
+def test_recorder_status_of_distinguishes_written_from_dropped(tmp_path):
+    r = DecisionRecorder(tmp_path / "d", enabled=True, max_file_bytes=1 << 20)
+    a = decision_record(signal_id="a", symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
+                        stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
+    b = decision_record(signal_id="b", symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
+                        stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
+    assert r.submit(a) == "queued" and r.flush(5.0) and r.status_of(a["decision_id"]) == "written"
+    r.max_file_bytes = 10
+    assert r.submit(b) == "queued" and r.flush(5.0) and r.status_of(b["decision_id"]) == "dropped_file_cap"
+    assert r.status_of("unknown") is None
+    r.close()
+
+
+def test_health_stats_helper_requires_installed_enabled_recorder(tmp_path):
+    from src.dashboard.data_collector import _decision_record_stats
+    set_decision_recorder(None)
+    assert _decision_record_stats() is None                      # 조회가 기록기를 만들지 않는다
+    set_decision_recorder(DecisionRecorder(tmp_path, enabled=True))
+    assert _decision_record_stats()["queued"] == 0
+    set_decision_recorder(None)

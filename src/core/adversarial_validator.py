@@ -125,16 +125,20 @@ BEAR_SUFFIX = ("\n이 매수가 실패할 가장 그럴듯한 시나리오를 �
                "시나리오를 한 줄로 적어라.")
 
 
-def _attempts(requested_at, bull_resp, bear_resp, *, timed_out=False):
-    """Bull/Bear 시도 기록 2건 — 요청 시각은 동시 발사 시각(gather 직전)이다."""
-    from ..analytics.llm_decision_record import attempt_record, sha256_text
+def _attempts_from_slots(requested_at, slots):
+    """Bull/Bear 시도 기록 2건. 완료한 쪽은 자기 응답·완료 시각, 미완료 쪽은 timeout 으로 남긴다.
+    기록 생성은 판정에 영향을 주지 않는다(예외는 record_error 행으로)."""
+    from ..analytics.llm_decision_record import safe_attempt_record, sha256_text
     from ..utils.llm import LLMProvider
-    return [
-        attempt_record("bull", LLMProvider.OPENAI, requested_at, bull_resp, timed_out=timed_out,
-                       role_system_sha256=sha256_text(BULL_SYSTEM), role_suffix=BULL_SUFFIX),
-        attempt_record("bear", LLMProvider.GEMINI, requested_at, bear_resp, timed_out=timed_out,
-                       role_system_sha256=sha256_text(BEAR_SYSTEM), role_suffix=BEAR_SUFFIX),
-    ]
+    rows = []
+    for role, provider, system, suffix in (("bull", LLMProvider.OPENAI, BULL_SYSTEM, BULL_SUFFIX),
+                                            ("bear", LLMProvider.GEMINI, BEAR_SYSTEM, BEAR_SUFFIX)):
+        slot = slots.get(role) or {}
+        done = "response" in slot
+        rows.append(safe_attempt_record(role, provider, requested_at, slot.get("response") if done else None,
+                                        timed_out=not done, responded_at=slot.get("responded_at"),
+                                        role_system_sha256=sha256_text(system), role_suffix=suffix))
+    return rows
 
 
 class AdversarialValidator:
@@ -210,12 +214,25 @@ class AdversarialValidator:
                                        market_regime, sector, extra_context))
         from ..analytics.llm_decision_record import now_kst
         requested_at = now_kst()
+        slots: Dict[str, Dict[str, Any]] = {"bull": {}, "bear": {}}
+
+        async def _timed(role: str, coro):
+            # 역할별 완료 시각·결과를 보관 — 전체 타임아웃이 나도 먼저 끝난 쪽의 응답·비용은 남는다 (리뷰 P2)
+            try:
+                result = await coro
+            except asyncio.CancelledError:
+                raise                                   # 전체 타임아웃의 취소 — 미완료로 남긴다(timeout)
+            except BaseException as error:
+                slots[role].update(response=error, responded_at=now_kst())
+                raise
+            slots[role].update(response=result, responded_at=now_kst())
+            return result
 
         try:
             bull_resp, bear_resp = await asyncio.wait_for(
                 asyncio.gather(
-                    self._ask_bull(context),
-                    self._ask_bear(context),
+                    _timed("bull", self._ask_bull(context)),
+                    _timed("bear", self._ask_bear(context)),
                     return_exceptions=True,
                 ),
                 timeout=LLM_TIMEOUT,
@@ -224,13 +241,13 @@ class AdversarialValidator:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 타임아웃 ({LLM_TIMEOUT}s) — fail-open 통과")
             return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True,
-                                     meta={"attempts": _attempts(requested_at, None, None, timed_out=True)})
+                                     meta={"attempts": _attempts_from_slots(requested_at, slots)})
         except Exception as e:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
             return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True,
-                                     meta={"attempts": _attempts(requested_at, e, e)})
-        meta = {"attempts": _attempts(requested_at, bull_resp, bear_resp)}
+                                     meta={"attempts": _attempts_from_slots(requested_at, slots)})
+        meta = {"attempts": _attempts_from_slots(requested_at, slots)}
 
         budget_reasons = sorted({reason for resp in (bull_resp, bear_resp)
                                  if isinstance((reason := getattr(resp, "budget_block_reason", None)), str)

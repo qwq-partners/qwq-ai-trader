@@ -4,9 +4,9 @@
 
 정본: [설계](../research/llm-decision-record-2026-10-13.md). 10월14일 관측은 운영 `161b394` 로 진행되며 이 기록은 그 뒤 배포 승인 시부터 쌓인다.
 
-- [x] 합성 시험 11건: 결과 분류·모델 신원 unverified·예약 토큰·상한 drop·재생 가능 프롬프트·폴백 3시도·기록 실패 시 판정 불변.
+- [x] 합성 시험 18건: 결과 분류·모델 신원 unverified·예약 토큰·상한 drop·재생 가능 프롬프트·폴백 3시도·기록 실패 시 판정 불변(거절 유지)·trail 2행·부분 타임아웃·저장 결과 조회·health 통계.
 - [ ] 배포 뒤 첫 `llm_second_check`: 기동 로그 `[판단기록] llm-decision-v1 기록 활성` 확인, `signal_events` 최신 LLM 행 메타 `llm_decision.record_status == queued`, 월 파일 행의 `decision_id` 일치 1건.
-- [ ] 월 파일 크기·`dropped_*` 통계가 0 인지(큐 256·월 64MiB 상한).
+- [ ] `/api/health.llm_decision_record` 의 `dropped_*`·`write_errors` 가 0 인지(큐 256·월 64MiB 상한). `record_status=queued` 는 큐 수락이므로 저장은 월 파일 행으로 대조.
 - [ ] 다음 관측 자료가 있으면 `decision_available_at` 이후 첫 유효 ask·장 상태를 조인해 '응답 후 진입 가능 가격' 표를 낸다. 부족하면 평가 불가로 남긴다.
 
 ## 73차 — 한 종목 기술 파일럿

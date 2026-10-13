@@ -28,6 +28,10 @@ from loguru import logger
 
 from .llm_pricing import rate_quote
 from .llm_budget import MonthlyBudgetLedger, BudgetBlocked, BudgetStateError
+from contextvars import ContextVar
+
+# 64차: complete()/complete_with() 한 호출 동안 실제 공급자 시도(재시도·폴백 포함)를 모아 응답에 붙인다
+_ATTEMPT_TRAIL: ContextVar = ContextVar("llm_attempt_trail", default=None)
 
 
 class LLMProvider(str, Enum):
@@ -231,6 +235,7 @@ class LLMResponse:
     budget_policy_version: Optional[str] = None
     budget_priority: Optional[str] = None
     budget_reservation_token: Optional[str] = None  # 64차: 월 예산 원장 reservations.token 연결 (정산 시 기록)
+    attempt_trail: Optional[list] = None  # 64차: 이 응답을 만들기까지의 실제 공급자 시도 목록(재시도·폴백 각 1행)
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -801,6 +806,23 @@ class LLMManager:
         system: str = "",
         **kwargs
     ) -> LLMResponse:
+        """complete_impl 을 감싸 이 호출의 실제 시도 trail 을 응답에 붙인다 (64차, 동작 불변)."""
+        token = _ATTEMPT_TRAIL.set([])
+        try:
+            response = await self._complete_impl(prompt, task, system, **kwargs)
+        finally:
+            trail = _ATTEMPT_TRAIL.get()
+            _ATTEMPT_TRAIL.reset(token)
+        self._attach_trail(response, trail)
+        return response
+
+    async def _complete_impl(
+        self,
+        prompt: str,
+        task: LLMTask = LLMTask.QUICK_CLASSIFY,
+        system: str = "",
+        **kwargs
+    ) -> LLMResponse:
         """
         용도에 맞는 최적 모델로 완성
 
@@ -952,6 +974,33 @@ class LLMManager:
         retry_on_empty: int = 0,
         **kwargs
     ) -> LLMResponse:
+        """complete_with_impl 을 감싸 이 호출의 실제 시도 trail 을 응답에 붙인다 (64차, 동작 불변)."""
+        token = _ATTEMPT_TRAIL.set([])
+        try:
+            response = await self._complete_with_impl(prompt, provider, weight, system, retry_on_empty, **kwargs)
+        finally:
+            trail = _ATTEMPT_TRAIL.get()
+            _ATTEMPT_TRAIL.reset(token)
+        self._attach_trail(response, trail)
+        return response
+
+    @staticmethod
+    def _attach_trail(response, trail) -> None:
+        try:
+            if response is not None and isinstance(trail, list):
+                response.attempt_trail = list(trail)
+        except Exception:
+            pass
+
+    async def _complete_with_impl(
+        self,
+        prompt: str,
+        provider: LLMProvider,
+        weight: str = "light",
+        system: str = "",
+        retry_on_empty: int = 0,
+        **kwargs
+    ) -> LLMResponse:
         """
         특정 provider를 명시해 호출한다 (폴백 없음).
 
@@ -1024,6 +1073,39 @@ class LLMManager:
         return {"enabled": True, "blocked": True, "block_reason": status_error,
                 "spent_usd": None, "reserved_usd": None, "available_usd": None,
                 "monthly_limit_usd": self.config.monthly_budget_usd}
+
+    @staticmethod
+    def _append_trail(response: LLMResponse, task: str, role: str) -> None:
+        """현재 complete()/complete_with() 호출의 trail 에 이 실제 시도 1행을 더한다 (64차). 실패해도 호출을 막지 않는다."""
+        trail = _ATTEMPT_TRAIL.get()
+        if trail is None:
+            return
+        try:
+            cost = None
+            if response.request_sent and response.usage_known and isinstance(response.input_tokens, int) \
+                    and isinstance(response.output_tokens, int):
+                quote = rate_quote(response.requested_model or response.model,
+                                   response.input_tokens, response.output_tokens)
+                if quote is not None:
+                    from decimal import Decimal
+                    cost = str(Decimal(str(quote.cost_usd)))
+            trail.append({
+                "provider": getattr(response.provider, "value", str(response.provider)),
+                "task": task, "role": role,
+                "requested_model": response.requested_model if response.requested_model is not None else response.model,
+                "resolved_model": response.resolved_model,
+                "request_sent": response.request_sent, "success": response.success,
+                "billing_status": response.billing_status, "usage_known": response.usage_known,
+                "input_tokens": response.input_tokens if response.request_sent else None,
+                "output_tokens": response.output_tokens if response.request_sent else None,
+                "estimated_cost_usd": cost,
+                "budget_reservation_token": response.budget_reservation_token,
+                "budget_block_reason": response.budget_block_reason,
+                "latency_ms": response.latency_ms, "error": response.error,
+                "recorded_at": datetime.now().astimezone().isoformat(),
+            })
+        except Exception:
+            pass
 
     def _settle_monthly(self, token: Optional[str], response: LLMResponse, model: str) -> None:
         # 64차: 판단 기록이 예산 원장 행과 조인할 수 있게 응답에 예약 토큰을 남긴다 (정산 결과와 무관)
@@ -1193,6 +1275,7 @@ class LLMManager:
 
     def _account_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Record known usage even for empty/error responses before another attempt."""
+        self._append_trail(response, task, role)
         if response.billing_status == "rejected_before_generation":
             self.daily_usage.inferred_nonbillable_rejections += 1
         elif response.request_sent:
