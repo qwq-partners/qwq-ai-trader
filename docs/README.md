@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [실시간 비교 준비 — 입력 봉투·작업자(W2)](research/model-comparison-live-input-2026-10-13.md) · [R1 실험 명세·진입 조건·장 상태·일별 보고(W3)](research/model-comparison-experiment-R1-2026-10-13.md) · [구현 분담·인터페이스 계약](superpowers/plans/2026-10-13-live-comparison-implementation-plan.md) · [인계 원문](superpowers/plans/2026-10-13-live-comparison-claude-handoff.md) · [10월14일 판단 체크리스트](operations/pilot-decision-checklist-2026-10-14.md): 예산 보호/비용 복구는 러너 문서 "실패·복구 절차" 절. 기본 OFF·운영 미배포·유료 비교 없음.
+
 > [비교 실행·중립 수량 재생 PDS/복구/다음 순서](research/model-comparison-runner-2026-10-13.md): 중복 과금 방지·판단 전 기존 사이징 재생·명시 별도 비교 작업자/읽기 전용 보고. 순수익/진입 가능성 미검증, 운영/파일럿 보존.
 
 > [66차 후속 PDS·검증·남은 작업](superpowers/plans/2026-10-13-comparison-evidence-remediation.md): LLM 대상 신규 관측 계약·용량, 비용 계산/실행 경계, 실제 수량 정책의 조건부 증분 계산. 운영·10월14일 파일럿 보존. 실제 시세/정책 재생 입력·공급자 어댑터와 순수익 검증은 별도다.
