@@ -94,6 +94,7 @@ def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkey
     class _Broker:
         def __init__(self):
             self.calls = []
+            self.config = SimpleNamespace(timeout_seconds=10)
             self._session = SimpleNamespace(closed=False)
             async def _close():
                 self._session.closed = True
@@ -184,3 +185,25 @@ def test_market_hours_guard_aborts_before_open_and_keeps_partial_pages():
     assert r["pages"][-1]["kind"] == "aborted"
     s = summarize_rights([r])
     assert s["complete_windows"] == 0 and s["window_statuses"] == {"aborted:MarketHoursStop": 1}
+
+
+def test_bot_active_guard_requires_override_and_slower_interval(monkeypatch):
+    """3차 리뷰 P1: 봇 가동 중에는 기본 거부, 우회 시 간격 ≥2.1초."""
+    import json, sys
+    cli = _cli_module()
+    monkeypatch.setattr(cli, "_bot_active", lambda: True)
+    monkeypatch.setattr(cli, "_in_market_hours", lambda now: False)
+    called = {"run": 0}
+    async def fake_run(args):
+        called["run"] += 1; return 0
+    monkeypatch.setattr(cli, "_run", fake_run)
+    base = ["prog", "--start", "2025-01-01", "--end", "2025-01-31", "--out-dir", "/tmp/x"]
+    monkeypatch.setattr(sys, "argv", base)
+    assert cli.main() == 2 and called["run"] == 0                                   # 기본 거부
+    monkeypatch.setattr(sys, "argv", base + ["--allow-bot-running", "--min-interval", "1.5"])
+    assert cli.main() == 2 and called["run"] == 0                                   # 간격 부족
+    monkeypatch.setattr(sys, "argv", base + ["--allow-bot-running", "--min-interval", "2.5"])
+    assert cli.main() == 0 and called["run"] == 1
+    monkeypatch.setattr(cli, "_bot_active", lambda: False)
+    monkeypatch.setattr(sys, "argv", base)
+    assert cli.main() == 0 and called["run"] == 2                                   # 봇 정지 시 그대로 실행

@@ -31,11 +31,14 @@ def call_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Optional
 
 
 def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = Decimal("1.1"),
-                      max_attempts_per_role: int = 2, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      max_attempts_per_role: int = 2,
+                      fallback: Optional[Any] = None) -> Dict[str, Any]:
     """판단 1건의 비용. roles: [{role, model, input_tokens, output_tokens}].
 
     - expected: 역할별 1회 × retry_factor(실측 빈 응답 재시도율 상한 가정) — 평균 비용 가정.
-    - max: 역할별 max_attempts_per_role(retry_on_empty=1 → 2회) + 단일 폴백 1회 — 경로상 최대 비용(상한).
+    - max: 역할별 max_attempts_per_role(retry_on_empty=1 → 2회) + 단일 폴백 **체인 전체**(dict 하나 또는 list:
+      `LLMManager.complete(STRATEGY_ANALYSIS)` 는 primary 실패 뒤 다른 공급자 heavy 를 추가 호출할 수 있고 실패 응답에
+      사용량이 있으면 둘 다 과금된다) — 경로상 최대 비용(상한).
     단가 없는 역할이 있으면 둘 다 None 이고 unpriced_roles 에 적는다.
     """
     per_role, unpriced, total = {}, [], Decimal("0")
@@ -48,10 +51,15 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
             total += cost
     fb_cost = None
     if fallback is not None:
-        fb_cost = call_cost_usd(fallback["model"], int(fallback["input_tokens"]), int(fallback["output_tokens"]))
-        per_role["fallback"] = {"model": fallback["model"], "cost_usd": str(fb_cost) if fb_cost is not None else None}
-        if fb_cost is None:
-            unpriced.append("fallback")
+        chain = fallback if isinstance(fallback, list) else [fallback]
+        fb_cost = Decimal("0")
+        for i, step in enumerate(chain):
+            cost = call_cost_usd(step["model"], int(step["input_tokens"]), int(step["output_tokens"]))
+            per_role[f"fallback_{i}"] = {"model": step["model"], "cost_usd": str(cost) if cost is not None else None}
+            if cost is None:
+                unpriced.append(f"fallback_{i}")
+            else:
+                fb_cost += cost
     if unpriced:
         return {"per_role": per_role, "unpriced_roles": unpriced, "total_usd": None,
                 "total_with_retry_usd": None, "max_usd": None}

@@ -29,6 +29,17 @@ def _in_market_hours(now: datetime) -> bool:
     return now.weekday() < 5 and (9, 0) <= (now.hour, now.minute) < (15, 30)
 
 
+def _bot_active() -> bool:
+    """운영 봇(systemd) 가동 여부. 봇은 장외에도 30초/300초 간격으로 계좌 TR 을 부르고 리미터는 프로세스 내부 상태라
+    별도 프로세스와 직렬화되지 않는다(3차 리뷰 P1) — 기본은 가동 중 거부, 명시 우회 시 간격 하한을 올린다."""
+    import subprocess
+    try:
+        out = subprocess.run(["systemctl", "is-active", "qwq-ai-trader"], capture_output=True, text=True, timeout=5)
+    except Exception:
+        return True            # 확인 불가는 가동 중으로 간주(보수적)
+    return out.stdout.strip() == "active"
+
+
 class ReadOnlyTokenProvider:
     """봇과 같은 토큰 캐시를 **읽기만** 하는 공급자. 발급 POST·캐시 쓰기를 절대 하지 않는다 (재리뷰 P1).
 
@@ -128,9 +139,12 @@ async def _run(args) -> int:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
         return 2
 
+    # 내부 재시도(_api_get 최대 3회 전송 + 대기)까지 덮도록 여유를 타임아웃 기준으로 넓힌다 (3차 리뷰 P2)
+    effective_margin = max(float(args.market_margin_seconds), 3.0 * float(broker.config.timeout_seconds) + 15.0)
+
     async def fetch(start, end, *, fk100, nk100, tr_cont):
         # 매 전송 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
-        if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), args.market_margin_seconds):
+        if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), effective_margin):
             raise MarketHoursStop("장중 진입 임박/진입 — 수집 중단(확보한 페이지는 보존)")
         return await broker.get_period_rights(start, end, inqr_dvsn=args.inqr_dvsn, fk100=fk100, nk100=nk100,
                                               tr_cont=tr_cont)
@@ -178,6 +192,8 @@ def main() -> int:
     parser.add_argument("--max-pages", type=int, default=50)
     parser.add_argument("--min-interval", type=float, default=1.5)
     parser.add_argument("--allow-market-hours", action="store_true")
+    parser.add_argument("--allow-bot-running", action="store_true",
+                        help="운영 봇 가동 중에도 실행. 공유 직렬화가 없어 봇의 계좌 조회(장외 300초 간격)와 충돌할 수 있다 — 간격 하한 2.1초")
     parser.add_argument("--market-margin-seconds", type=float, default=90.0,
                         help="개장까지 이 여유보다 가까우면 전송하지 않는다(내부 재시도 시간 포함)")
     args = parser.parse_args()
@@ -188,6 +204,14 @@ def main() -> int:
     if _in_market_hours(now) and not args.allow_market_hours:
         print(json.dumps({"error": f"장중({now.isoformat()}) 실행 거부 — 운영 봇의 계좌 원장 TR 한도와 충돌한다"}, ensure_ascii=False))
         return 2
+    if _bot_active():
+        if not args.allow_bot_running:
+            print(json.dumps({"error": "운영 봇 가동 중 — 봇은 장외에도 계좌 TR 을 주기 호출하고 CLI 와 직렬화되지 않는다. "
+                                       "--allow-bot-running 으로만 우회(간격 ≥2.1초, 충돌 시 봇은 1회 재시도)"}, ensure_ascii=False))
+            return 2
+        if args.min_interval < 2.1:
+            print(json.dumps({"error": "--allow-bot-running 에서는 --min-interval ≥ 2.1 (잔고 TR 간격과 동일) 이어야 한다"}))
+            return 2
     return asyncio.run(_run(args))
 
 
