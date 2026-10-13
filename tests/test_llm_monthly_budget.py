@@ -785,3 +785,75 @@ async def test_forced_close_preserves_actual_transport_dispatch_evidence(tmp_pat
     status = manager(tmp_path).get_monthly_budget_status()
     assert status['unresolved_count'] == int(sent)
     assert status['reserved_usd'] == 0
+
+
+# --- admission_check 훅 (2026-10-13 비교 예약 입장 조건) ---------------------------------------
+
+def _policy_ledger(tmp_path, limit=100):
+    return ledger_type()(tmp_path / 'budget.sqlite3', limit, clock=Clock(datetime(2026, 10, 13, 3, tzinfo=timezone.utc)),
+                         policy_enabled=True)
+
+
+def test_admission_check_runs_inside_reservation_lock_with_actual_units(tmp_path):
+    ledger = _policy_ledger(tmp_path)
+    seen = []
+
+    def check(db, status, committed, units, now):
+        seen.append((status['policy_mode'], committed, units, now.utcoffset().total_seconds(), db.in_transaction))
+        assert db.execute('SELECT COUNT(*) FROM reservations').fetchone()[0] == 0
+
+    token = ledger.reserve('gpt-5-mini', 'p', '', 100, admission_check=check)
+    with sqlite3.connect(ledger.path) as db:
+        units = db.execute('SELECT reserved_units FROM reservations WHERE token=?', (token,)).fetchone()[0]
+    assert seen == [('normal', 0, units, 9 * 3600, True)]
+    ledger.settle(token, outcome='known', actual_cost_usd=0.0001)
+    assert ledger.status()['settled_count'] == 1
+
+
+def test_admission_rejection_commits_observation_without_reservation(tmp_path):
+    from src.utils.llm_budget import BudgetBlocked
+    ledger = _policy_ledger(tmp_path)
+
+    def reject(*args):
+        raise BudgetBlocked('custom_admission_reason')
+
+    with pytest.raises(BudgetBlocked, match='custom_admission_reason'):
+        ledger.reserve('gpt-5-mini', 'p', '', 100, admission_check=reject)
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute('SELECT COUNT(*) FROM reservations').fetchone()[0] == 0
+        assert db.execute('SELECT mode FROM policy_cursor').fetchone()[0] == 'normal'
+    assert list(ledger.lock_dir.iterdir()) == [] and ledger.active_reservations == {}
+    assert ledger.reserve('gpt-5-mini', 'p', '', 100)  # 다음 일반 예약은 영향 없음
+
+
+@pytest.mark.parametrize('statement', [
+    'UPDATE settings SET bound_breach=1', 'DELETE FROM reservations', 'COMMIT',
+    "INSERT INTO reservations VALUES ('" + 'b' * 32 + "','2026-10','gpt-5-mini',1,'settled',1,'x','x')",
+])
+def test_admission_check_cannot_write_or_end_the_budget_transaction(tmp_path, statement):
+    from src.utils.llm_budget import BudgetBlocked
+    ledger = _policy_ledger(tmp_path)
+    before = ledger.status()
+
+    def write(db, *args):
+        db.execute(statement)
+
+    with pytest.raises(BudgetBlocked, match='storage_unavailable'):
+        ledger.reserve('gpt-5-mini', 'p', '', 100, admission_check=write)
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute('SELECT COUNT(*) FROM reservations').fetchone()[0] == 0
+        assert db.execute('SELECT bound_breach FROM settings').fetchone()[0] == 0
+    assert ledger.status()['activated_at'] == before['activated_at']
+    token = ledger.reserve('gpt-5-mini', 'p', '', 100)
+    ledger.settle(token, outcome='not_sent')
+
+
+def test_existing_budget_blocks_apply_before_admission_check(tmp_path):
+    from src.utils.llm_budget import BudgetBlocked
+    ledger = _policy_ledger(tmp_path, limit=0)
+    called = []
+    with pytest.raises(BudgetBlocked, match='monthly_limit_exceeded'):
+        ledger.reserve('gpt-5-mini', 'p', '', 100, admission_check=lambda *a: called.append(a))
+    assert called == []
+    with pytest.raises(BudgetBlocked, match='invalid_admission_check'):
+        ledger.reserve('gpt-5-mini', 'p', '', 100, admission_check=1)
