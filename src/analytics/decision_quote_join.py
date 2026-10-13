@@ -77,8 +77,27 @@ def _positive_int(value: Any) -> Optional[int]:
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+VI_CHANNEL = "H0STMKO0"          # 장운영(VI·정지) 채널 — 체결 채널(H0STCNT0)은 VI 코드를 주지 않는다
+DEFAULT_MAX_STATE_AGE_SECONDS = 60.0
+UNVERIFIED_LEDGER = {"verified": False, "complete": None, "incomplete_reasons": ["ledger_not_verified"]}
+
+
+def _ledger_reasons(ledger_status: Optional[Dict[str, Any]]) -> List[str]:
+    """원장 검증·완전성이 확인되지 않으면 어떤 행도 평가 가능으로 집계하지 않는다 (리뷰 P1)."""
+    if not isinstance(ledger_status, dict):
+        return ["ledger_unverified"]
+    if ledger_status.get("verified") is not True:
+        return ["ledger_unverified"]
+    if ledger_status.get("complete") is not True:
+        return ["ledger_incomplete"]
+    return []
+
+
 def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any]], *,
-                   max_delay_seconds: float = DEFAULT_MAX_DELAY_SECONDS) -> List[Dict[str, Any]]:
+                   max_delay_seconds: float = DEFAULT_MAX_DELAY_SECONDS,
+                   max_state_age_seconds: float = DEFAULT_MAX_STATE_AGE_SECONDS,
+                   ledger_status: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    ledger_reasons = _ledger_reasons(ledger_status)
     quotes: Dict[str, List[tuple]] = {}
     states: Dict[str, List[tuple]] = {}
     for p in payloads:
@@ -97,17 +116,21 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
     out = []
     for d in decisions:
         symbol = d.get("symbol")
-        reasons: List[str] = []
+        result = d.get("result")
+        if not isinstance(result, dict):
+            result = {}
+        reasons: List[str] = list(ledger_reasons)
         row: Dict[str, Any] = {
             "decision_id": d.get("decision_id"), "signal_id": d.get("signal_id"), "symbol": symbol,
-            "stage": d.get("stage"), "approved": (d.get("result") or {}).get("approved"),
+            "stage": d.get("stage"), "approved": result.get("approved"),
             "decision_available_at": d.get("decision_available_at"),
             "first_quote_after": None, "market_state_at_quote": None,
         }
         try:
             decided = parse_time(d.get("decision_available_at"), "decision_available_at")
         except ValueError:
-            row.update(evaluable=False, reasons=["decision_time_missing"])
+            reasons.append("decision_time_missing")
+            row.update(evaluable=False, reasons=reasons)
             out.append(row)
             continue
         candidates = [q for q in quotes.get(symbol, []) if q[0] > decided]
@@ -117,11 +140,16 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
             at, q = candidates[0]
             delay = (at - decided).total_seconds()
             ask, ask_size = _positive_decimal(q.get("ask")), _positive_int(q.get("ask_size"))
+            provenance = q.get("provenance")
+            if not isinstance(provenance, dict):
+                provenance = {}
+            connection_id, generation = provenance.get("connection_id"), provenance.get("generation")
             row["first_quote_after"] = {
                 "quote_id": q.get("quote_id"), "observed_at": q.get("observed_at"), "delay_seconds": delay,
                 "ask": str(ask) if ask is not None else None, "ask_size": ask_size,
                 "bid": q.get("bid"), "bid_size": q.get("bid_size"),
-                "exchange_time": (q.get("provenance") or {}).get("exchange_time") if isinstance(q.get("provenance"), dict) else None,
+                "exchange_time": provenance.get("exchange_time"),
+                "connection_id": connection_id, "generation": generation,
             }
             if ask is None:
                 reasons.append("invalid_ask")
@@ -129,35 +157,59 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                 reasons.append("invalid_ask_size")
             if delay > max_delay_seconds:
                 reasons.append("stale_quote")
-            prior_states = [s for s in states.get(symbol, []) if s[0] <= at]
-            if prior_states:
-                s_at, s = prior_states[-1]
-                row["market_state_at_quote"] = {
-                    "observed_at": s.get("observed_at"), "age_seconds": (at - s_at).total_seconds(),
-                    "state_verdict": s.get("state_verdict"), "market_state_status": s.get("market_state_status"),
-                    "market_cls_code": s.get("market_cls_code"), "trht_yn": s.get("trht_yn"),
-                    "vi_cls_code": s.get("vi_cls_code"), "hour_cls_code": s.get("hour_cls_code"),
-                }
-                if s.get("market_state_status") != "raw_only":
-                    reasons.append("market_state_not_raw")
-            else:
+            if connection_id is None or generation is None:
+                reasons.append("quote_provenance_missing")
+            # 장 상태는 호가와 같은 연결·세대의 기록만 쓴다(재연결 전 상태를 새 호가에 붙이지 않음, 리뷰 P2).
+            # 채널(tr_id)별 최신 1건을 각각 보존한다 — 체결/장운영 행의 필드를 하나로 합치지 않는다.
+            latest_by_channel: Dict[str, tuple] = {}
+            for s_at, s in states.get(symbol, []):
+                if s_at > at:
+                    break
+                if connection_id is None or s.get("connection_id") != connection_id or s.get("generation") != generation:
+                    continue
+                tr_id = s.get("tr_id")
+                if isinstance(tr_id, str):
+                    latest_by_channel[tr_id] = (s_at, s)
+            if not latest_by_channel:
                 reasons.append("market_state_unknown")
+            else:
+                channels = {}
+                for tr_id, (s_at, s) in sorted(latest_by_channel.items()):
+                    age = (at - s_at).total_seconds()
+                    channels[tr_id] = {
+                        "observed_at": s.get("observed_at"), "age_seconds": age,
+                        "market_state_status": s.get("market_state_status"), "state_verdict": s.get("state_verdict"),
+                        "market_cls_code": s.get("market_cls_code"), "trht_yn": s.get("trht_yn"),
+                        "vi_cls_code": s.get("vi_cls_code"), "hour_cls_code": s.get("hour_cls_code"),
+                        "mkop_cls_code": s.get("mkop_cls_code"), "iscd_stat_cls_code": s.get("iscd_stat_cls_code"),
+                    }
+                    if s.get("market_state_status") != "raw_only":
+                        reasons.append(f"market_state_not_raw:{tr_id}")
+                    if age > max_state_age_seconds:
+                        reasons.append(f"market_state_stale:{tr_id}")
+                row["market_state_at_quote"] = channels
+                if VI_CHANNEL not in channels:
+                    reasons.append("market_state_vi_channel_missing")   # VI·정지 근거 없이 '진입 가능' 을 말하지 않는다
         row.update(evaluable=not reasons, reasons=reasons)
         out.append(row)
     return out
 
 
-def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     reasons: Dict[str, int] = {}
     for r in rows:
-        for reason in r.get("reasons") or []:
+        row_reasons = r.get("reasons")
+        if not isinstance(row_reasons, list):
+            row_reasons = []
+        for reason in row_reasons:
             reasons[reason] = reasons.get(reason, 0) + 1
     return {
         "schema_version": SCHEMA_VERSION,
+        "ledger": dict(ledger_status) if isinstance(ledger_status, dict) else dict(UNVERIFIED_LEDGER),
         "decisions": len(rows),
-        "evaluable": sum(1 for r in rows if r.get("evaluable")),
-        "approved_evaluable": sum(1 for r in rows if r.get("evaluable") and r.get("approved") is True),
+        "evaluable": sum(1 for r in rows if r.get("evaluable") is True),
+        "approved_evaluable": sum(1 for r in rows if r.get("evaluable") is True and r.get("approved") is True),
         "reasons": reasons,
-        # 관측 호가는 체결 보장이 아니다 — 이 표는 '응답 뒤 호가 존재·신선도·장 상태' 까지만 말한다
-        "note": "evaluable 은 호가·장 상태 자료 충족이며 체결 가능성·순수익 판정이 아니다",
+        # 관측 호가는 체결 보장이 아니다 — 이 표는 '응답 뒤 호가 존재·신선도·같은 연결의 장 상태 근거' 까지만 말한다
+        "note": "evaluable 은 검증된 완전한 원장에서 호가·장 상태 근거가 충족됐다는 뜻이며 체결 가능성·순수익 판정이 아니다",
     }
