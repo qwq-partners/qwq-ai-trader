@@ -246,11 +246,14 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                        pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
                        offer_records: Iterable[Mapping] = (), ledger_attempts: Iterable[Mapping] = (),
                        incomplete_records: Iterable[Mapping] = (), journal_status: Mapping | None = None,
+                       incomplete_journal_status: Mapping | None = None,
                        limits_from_manifest: bool = False) -> dict:
     """ledger_attempts: 그날 입장한 시도의 원장 상태(`ComparisonCallGuard.day_attempts`/`read_day_attempts`).
     pair 행 밖의 유료 시도(종료·취소·저장 실패)를 지출에 넣고, 상태가 미확정이면 총비용을 null 로 둔다(재리뷰 P1).
     incomplete_records: 작업자 incomplete 저널 레코드 — 결과 행이 없는 쌍은 미정산으로 표시한다.
-    journal_status: 모집단 저널의 결손 정보({missing, skipped_lines}) — 불완전하면 보고에 명시한다(재리뷰 P2)."""
+    journal_status: 모집단 저널의 결손 정보 — 불완전하면 보고에 명시한다.
+    incomplete_journal_status: 미완료 저널의 결손 정보 — 제공된 근거가 불완전하면 총지출은 null,
+    확인된 시도 비용의 부분합과 원래 행은 보존한다. 생략하면 기존 선택적 입력 동작을 유지한다."""
     offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
     ledger_attempts, incomplete_records = list(ledger_attempts), list(incomplete_records)
     offer_records = [r for r in offer_records if isinstance(r, Mapping) and _record_day(r) == day_kst]   # 그날 기록만
@@ -434,6 +437,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'ledger_cost_used_attempts': ledger_used,
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
+             'known_subtotal_usd': str(used),
              'total_usd': str(used) if not (unknown or unaccounted or incomplete_pairs) else None,
              'basis': 'unique attempt_id once across all pair runs of the day; '
                       'reconciled > original estimate > unknown; arm scenario costs are not summed'}
@@ -460,27 +464,33 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                                   'source': 'experiment_manifest' if limits_from_manifest else 'report_defaults'}
     if not limits_from_manifest:
         report['limitations'].append('selection_limits_not_from_experiment_manifest')
-    if journal_status is not None:
+    for journal_name, status_info, limitation in (
+            ('offer_journal', journal_status, 'population_journal_incomplete'),
+            ('incomplete_journal', incomplete_journal_status, 'incomplete_journal_incomplete')):
+        if status_info is None:
+            continue
         def _count(key):
-            value = journal_status.get(key)
+            value = status_info.get(key)
             return value if type(value) is int and value >= 0 else None     # 비음수 정수만 증거로 인정(None 은 증거 없음)
-        missing_j = journal_status.get('missing') is True
+        missing_j = status_info.get('missing') is True
         counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records',
                                                'write_failures')}
-        open_runs = journal_status.get('open_runs')
-        closed_runs = journal_status.get('closed_runs')
+        open_runs = status_info.get('open_runs')
+        closed_runs = status_info.get('closed_runs')
         runs_known = isinstance(open_runs, (list, tuple)) and isinstance(closed_runs, (list, tuple))
         evidence_ok = all(v is not None for v in counts.values()) and runs_known
         # 종료 표식이 없는 run(열린 파일)·종료 run 0 개(빈 파일)·결손 카운터>0 이면 완전으로 확정하지 않는다(4회차 P2)
         journal_complete = ((not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
                             and len(open_runs) == 0 and len(closed_runs) > 0)
-        report['offer_journal'] = {'missing': missing_j, **counts, 'complete': journal_complete,
+        report[journal_name] = {'missing': missing_j, **counts, 'complete': journal_complete,
                                    'open_runs': list(open_runs) if runs_known else None,
                                    'closed_runs': list(closed_runs) if runs_known else None,
                                    'completeness_evidence': 'run_id+per-file journal_seq gaps, journal_drop and journal_close markers'
                                    if evidence_ok else 'insufficient'}
         if not journal_complete:
-            report['limitations'].append('population_journal_incomplete')
+            report['limitations'].append(limitation)
+            if journal_name == 'incomplete_journal':
+                spend['total_usd'] = None     # 결손으로 사라진 유료 시도를 지출 0으로 확정하지 않는다
     report['duplicate_offers_rejected'] = sum(duplicate_offers.values())   # 재전달 거부 건수(분모와 별도)
     report['telegram_preview'] = (
         f"[모델비교 {day_kst}] 제공 {offered_n}·적격 {len(selection['eligible'])}·표본 {sampled_n}·"

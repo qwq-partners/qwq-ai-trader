@@ -40,6 +40,9 @@ def main(argv=None):
         pairs = [json.loads(line) for line in _read_lines(args.pairs, max_bytes=args.max_bytes) if line.strip()]
         if args.daily:
             offer_records, incomplete_records, journal_status, ledger_attempts = [], [], None, []
+            incomplete_journal_status = None
+            integrity_keys = ('missing', 'skipped_lines', 'sequence_gaps', 'dropped_records',
+                              'unsequenced_records', 'write_failures', 'open_runs', 'closed_runs')
             if args.offers or args.incomplete:
                 try:
                     from src.analytics.model_comparison_worker import read_offer_journal, read_incomplete_journal
@@ -51,14 +54,14 @@ def main(argv=None):
                 if read.get('missing'):
                     raise ValueError(f'offer journal missing: {args.offers}')   # 파일 부재는 축소 분모가 아니라 오류
                 offer_records = read['records']
-                journal_status = {k: read.get(k) for k in ('missing', 'skipped_lines', 'sequence_gaps', 'dropped_records',
-                                                           'unsequenced_records', 'write_failures', 'open_runs', 'closed_runs')}
+                journal_status = {k: read.get(k) for k in integrity_keys}
             if args.incomplete:
                 read_inc = read_incomplete_journal(args.incomplete, max_bytes=args.max_bytes)
                 read_inc = read_inc if isinstance(read_inc, dict) else {'records': list(read_inc), 'missing': False}
                 if read_inc.get('missing'):
                     raise ValueError(f'incomplete journal missing: {args.incomplete}')
                 incomplete_records = read_inc['records']
+                incomplete_journal_status = {k: read_inc.get(k) for k in integrity_keys}
             if args.budget_db:
                 from src.analytics.model_comparison_execution import read_day_attempts
                 ledger_attempts = read_day_attempts(args.budget_db, args.daily)
@@ -73,7 +76,8 @@ def main(argv=None):
                                         offered_envelopes=_jsonl(args.envelopes, args.max_bytes),
                                         exclusions=_jsonl(args.exclusions, args.max_bytes),
                                         offer_records=offer_records, incomplete_records=incomplete_records,
-                                        journal_status=journal_status, ledger_attempts=ledger_attempts, **limits)
+                                        journal_status=journal_status, ledger_attempts=ledger_attempts,
+                                        incomplete_journal_status=incomplete_journal_status, **limits)
             print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
             return 0
         payloads, status = [], None
