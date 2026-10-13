@@ -133,7 +133,7 @@ manifest 수치는 `worst_case_reservation(manifest)` 와 같음을 시험이 �
 - 지출(Codex #7 후): 그날 **모든 실행 행**(같은 decision_id 의 여러 pair 행 포함)의 고유 attempt_id 를 한 번씩. 시도별 비용 = 감사 대사액(`reconciled_lookup` — W1 `guard.lookup` 결과 또는 매핑) > 저장 추정 `api_cost_usd` > 불명. 조회 예외는 대사 여부를 모르므로 불명(`lookup_failed_attempts`). 필드 `original_estimated_usd`(저장 추정 합, 정보용)·`reconciled_usd`·`reconciled_attempts`·`unknown_attempts`·`pair_runs`, 불명이 하나라도 있으면 `total_usd=null`. 판단별 행은 최신 실행(`requested_at`, 동률은 입력 순서)이고 `pair_runs`·`prior_pair_ids` 를 싣는다.
 - `stop_conditions_reached`, `telegram_preview`(문자열만, 발송 함수 없음). CLI `--daily` 는 `--offers`(모집단·실제 접수 결과: 거부된 봉투는 한도와 무관하게 부적격)·`--incomplete`(결과 행 없는 쌍 → 지출 null)·`--budget-db`(원장 읽기 전용: pair 행 밖 시도 집계, 같은 attempt_id 의 원장 정산/대사액이 추정액보다 우선)·`--experiment-manifest`(실행 당시 입력 나이·일 표본·입력 크기 한도) 를 받는다. `outcomes` 는 여전히 받지 않는다. 저널 완전성은 `run_id+journal_seq` 빈틈과 `journal_drop` 마커로 판정하며 증거가 없으면 완전으로 표시하지 않는다.
 
-명시한 `--incomplete` 파일은 원래 행뿐 아니라 손상 줄·순서 결손·드롭·쓰기 실패·미종료 상태를 `incomplete_journal`로 전달한다. 증거가 불완전하면 행이 0개로 읽혀도 `spend.total_usd=null`이며, 확인된 시도 비용의 부분합은 `known_subtotal_usd`로 보존한다. 파일 미지정은 기존 선택적 입력, 명시한 파일 부재는 오류다. 봉인된 정상 저널에 미완료 쌍이 없을 때만 0원 확정이 가능하다.
+명시한 `--incomplete` 파일은 원래 행뿐 아니라 손상 줄·순서 결손·드롭·쓰기 실패·미종료 상태를 `incomplete_journal`로 전달한다. 증거가 불완전하면 행이 0개로 읽혀도 `spend.total_usd=null`이며, 집계 가능한 시도 비용의 부분합은 `known_subtotal_usd`로 보존한다(원래 API 추정액 포함 가능, 청구서 확정액 아님). `subtotal_uses_original_estimate`와 추정/대사 근거를 함께 보고, 중복/충돌 번호 진단도 확인한다. 파일 미지정은 기존 선택적 입력, 명시한 파일 부재는 오류다. 봉인된 정상 저널에 미완료 쌍이 없을 때만 0원 확정이 가능하다.
 
 ## SEE — 검증
 
