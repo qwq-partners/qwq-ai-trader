@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [66차 후속 PDS·검증·남은 작업](superpowers/plans/2026-10-13-comparison-evidence-remediation.md): LLM 대상 신규 관측 계약·용량, 비용 계산/실행 경계, 실제 수량 정책의 조건부 증분 계산. 운영·10월14일 파일럿 보존. 실제 시세/정책 재생 입력·공급자 어댑터와 순수익 검증은 별도다.
+
 > [66차 B 판단·호가 동시 관측 준비](research/concurrent-observation-design-2026-10-13.md): signal-window+장 상태 증거 초안의 CapturePlan 통합 검사 통과(미설치)와 사전 판독 규칙. [66차 C 모델 비교 비용 계획](research/model-comparison-plan-2026-10-13.md): 공표 요율·예비 비율 기반 비교 쌍 상한, 유료 호출 없음.
 
 > [판단 뒤 첫 호가 수신 시각·종료 기록·다음 실측 PDS](research/decision-quote-receipt-time-2026-10-13.md): PR #183/184 병합·운영 미배포, 10월14일 기술 파일럿과 이후 판단/호가 동시 실측을 구분한다. [KIS 공식 계좌 기준선 조사](operations/account-baseline-status-2026-10-13.md).

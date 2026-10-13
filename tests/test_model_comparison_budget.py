@@ -57,3 +57,97 @@ def test_candidate_controls_must_be_supported_by_each_model():
         _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})
     _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "low"})
     _validate_controls("gpt-5-mini", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})
+
+
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "1", float("nan"), float("inf"), None])
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens"])
+def test_token_counts_reject_invalid_values_before_pricing(field, bad):
+    values = {"input_tokens": 1, "output_tokens": 1, field: bad}
+    for model in ("gpt-5-mini", "unpriced-model"):
+        with pytest.raises(ValueError, match=field):
+            call_cost_usd(model, **values)
+    role = {"role": "bull", "model": "gpt-5-mini", **values}
+    with pytest.raises(ValueError, match=field):
+        decision_cost_usd([role])
+    with pytest.raises(ValueError, match=field):
+        decision_cost_usd(CURRENT, fallback=role)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, True, 1.5, "2", float("nan"), float("inf")])
+def test_attempt_count_is_strict_positive_integer(bad):
+    with pytest.raises(ValueError, match="max_attempts_per_role"):
+        decision_cost_usd(CURRENT, max_attempts_per_role=bad)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, "0.9", True, "NaN", "Infinity", None, "bad"])
+def test_retry_multiplier_must_be_finite_and_at_least_one(bad):
+    with pytest.raises(ValueError, match="retry_factor"):
+        decision_cost_usd(CURRENT, retry_factor=bad)
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("available_usd", -1), ("available_usd", True), ("available_usd", "NaN"),
+    ("available_usd", "Infinity"), ("available_usd", "bad"),
+    ("reserve_share", True), ("reserve_share", "NaN"), ("reserve_share", "Infinity"),
+    ("month_days_remaining", 1.5), ("month_days_remaining", True),
+    ("month_days_remaining", "2"), ("month_days_remaining", float("nan")),
+])
+def test_budget_inputs_reject_invalid_numeric_values(field, bad):
+    kwargs = dict(available_usd="10", reserve_share="0.5", current={"max_usd": "1"},
+                  candidate={"max_usd": "1"}, month_days_remaining=2)
+    kwargs[field] = bad
+    with pytest.raises(ValueError, match=field):
+        comparison_budget(**kwargs)
+
+
+@pytest.mark.parametrize("bad", [-1, True, "NaN", "Infinity", "bad"])
+@pytest.mark.parametrize("basis,key", [("max", "max_usd"), ("expected", "total_with_retry_usd")])
+def test_negative_or_nonfinite_pair_cost_is_not_hidden_by_other_side(bad, basis, key):
+    with pytest.raises(ValueError, match=key):
+        comparison_budget(available_usd="10", reserve_share=0, current={key: bad},
+                          candidate={key: "100"}, month_days_remaining=2, basis=basis)
+    with pytest.raises(ValueError, match=key):
+        comparison_budget(available_usd="10", reserve_share=0, current={key: None},
+                          candidate={key: bad}, month_days_remaining=2, basis=basis)
+
+
+def test_zero_inputs_and_unknown_cost_remain_distinct():
+    assert call_cost_usd("gpt-5-mini", 0, 0) == 0
+    result = decision_cost_usd(CURRENT, retry_factor="1")
+    assert result["total_with_retry_usd"] == result["total_usd"]
+    zero = comparison_budget(available_usd=0, reserve_share=0, current={"max_usd": 0},
+                             candidate={"max_usd": 0}, month_days_remaining=0)
+    assert Decimal(zero["comparison_budget_usd"]) == 0
+    assert zero["pair_cost_usd"] == "0" and zero["max_comparisons"] is None
+
+
+@pytest.mark.parametrize("operation", [
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 26, 0),
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 400, 0),
+    lambda: decision_cost_usd(CURRENT, retry_factor="1e999999999"),
+    lambda: comparison_budget(available_usd="1e100", reserve_share=0, current={"max_usd": 1},
+                              candidate={"max_usd": 1}, month_days_remaining=1),
+])
+def test_unsupported_numeric_range_has_consistent_value_error(operation):
+    with pytest.raises(ValueError):
+        operation()
+
+
+@pytest.mark.parametrize("side", ["current", "candidate"])
+@pytest.mark.parametrize("bad", [None, [], "bad", 1])
+def test_comparison_sides_must_be_explicit_dicts(side, bad):
+    kwargs = dict(available_usd=1, reserve_share=0, current={"max_usd": 1},
+                  candidate={"max_usd": 1}, month_days_remaining=1)
+    kwargs[side] = bad
+    with pytest.raises(ValueError, match=side):
+        comparison_budget(**kwargs)
+
+
+@pytest.mark.parametrize("roles", [
+    [{**CURRENT[0], "role": "fallback_0"}],
+    [CURRENT[0], CURRENT[0]],
+    [{**CURRENT[0], "role": None}],
+])
+def test_role_names_cannot_overwrite_cost_breakdown(roles):
+    with pytest.raises(ValueError, match="role"):
+        decision_cost_usd(roles, fallback=FALLBACK)

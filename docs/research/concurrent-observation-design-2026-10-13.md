@@ -1,47 +1,60 @@
-# 66차 B — 판단·호가 동시 관측 준비 (2026-10-13)
+# B — 실제 LLM 진입과 호가·장 상태 동시 관측 (2026-10-13)
 
-목적은 다음 작은 실측에서 **실제 LLM 판단 1건과 같은 종목·시간의 호가·장 상태를 평가 가능한 한 쌍**으로 확보하는 것이다. 기간을 늘리는 것보다 연결 한 쌍을 먼저 확인한다. 이번 단계는 준비·검증까지이며 새 날짜·배포 SHA·설정/연구 지문·단발 활성화는 10월14일 파일럿 결과와 배포 이후 상태를 확인해 확정한다. 기존 예약은 연장·재사용하지 않는다.
+목적은 **실제 LLM 검증에 진입한 신호 1건과 같은 종목·시간의 호가·장 상태**를 평가 가능한 한 쌍으로 확보하는 것이다. 신규 `runner-llm-window-v1`은 명시 설치 전용이며 기본 비활성이다. 구현·오프라인 검증과 실제 유량 검증은 별개다. **운영 배포·새 날짜 설치·예약은 하지 않았다.** 기존 10월14일 한 종목 기술 파일럿 및 기존 H1 계약은 그대로 둔다.
 
-## PLAN — 무엇이 이미 연결돼 있고 무엇이 남았나
+## PLAN — 기존 초안의 두 가지 결함
 
-| 구성 | 상태 | 근거 |
-|---|---|---|
-| 신호 단계부터 관측 | 있음 — `runner-signal-window-v1` 은 `quote_admission=signal_created` 로 LLM 거절·수량0·리스크 탈락도 `signal`/`emit_result`/gate trace 에 남긴다 | 10월8일 원장 signal 3·emit_result 3·gate 279 |
-| 장 상태 채널 | 있음 — `channels.market_state_evidence=true` 면 `_lease_channels` 가 후보마다 BOOK+체결(H0STCNT0)+장운영(H0STMKO0) 3채널을 배정하고 `accepts_market_state` 가 같은 lease·세대만 받는다. 윈도 버퍼는 `market_state` 레코드를 수용하고 CapturePlan 이 큐≥버퍼·저장 상한을 검사한다 | `quote_subscription.py`, `entry_observation_runtime.py` 293~338행 |
-| 판단 기록 | main 에만 있음(64차, 운영 미배포) — `decision_id`·`signal_id`·시도별 모델/비용/예약 토큰·`decision_available_at` | PR #183 |
-| 조인 | main 에만 있음(65차+PR #185) — 수신 시각 기준 첫 호가, 같은 연결·세대의 채널별 장 상태, 평가 불가 사유 | `scripts/report_decision_quotes.py` |
-| **남은 것** | (1) 장 상태 증거를 켠 signal-window 프로필과 그 용량 산정 (2) 판단 기록이 켜진 SHA 의 운영 배포 (3) 구독 요청·ACK·수신을 구분한 판독 규칙 | 아래 |
+기존 `runner-signal-window-v1`은 `signal_created`에서 최초 신호에 호가 lease를 배정한다. 최초 다섯 신호가 높은 점수 또는 국면 조건 때문에 모두 LLM을 우회하면 이후 실제 LLM 판단 종목에는 관측 몫이 없을 수 있다. 신호 모집단을 보존하는 목적에는 유효하지만 LLM 동시 관측의 배정 기준으로는 부족하다. 기존 계약의 의미는 바꾸지 않는다.
 
-## DO — 수집 설정 초안과 오프라인 통합 검사
+이전 40,000 버퍼/큐·상태 30,000 초안은 당시 설치 검사에는 통과했지만 **호가 유량·기타 기록의 명시 몫을 합산하지 않은 초안으로 폐기한다.** 예전 호가 22,177건 + 상태 30,000건만으로도 40,000을 넘는다. 12스캔 × (scan 1 + 선정 100 + gate 100)의 최소 메타 기록은 **2,412건**이다(이전 2,400 표기 정정). 상한 검사 통과는 실제 수집 적합성 증거가 아니다.
 
-10월8일 study(`20261008-signal-window-v1`)를 복사해 **채널 플래그·용량·일정만** 바꾼 초안을 실제 `CapturePlan.load`(manifest 경유)로 검증했다(스크래치 경로, 미설치).
+## DO — 신규 계약과 처리 흐름
 
-| 항목 | 10월8일 | 초안(검증 통과) | 이유 |
-|---|---|---|---|
-| `channels.market_state_evidence` | 없음 | `true`, `market_state_max_records` 30,000 | 후보 5개 × 3채널 = 15 + 운영 여유 10 ≤ 등록 상한 41 |
-| `buffer_capacity` / `queue_capacity` | 300,000 / 8,192 | **40,000 / 40,000** | 상태 증거 시 `queue ≥ buffer` 와 `buffer ≥ metadata(200×12=2,400)+max_records` 가 필수 |
-| `max_bytes` | 402,653,184 | 2,703,362,048 (= 40,000×(65,536+2,048)+2,048) | 같은 검사의 저장 상한(실사용 아님, 10월8일 실사용 14.7MB) |
-| 창 | 01:00→01:50(admission)→02:10Z | 01:00→01:30→01:50Z | `end − admission_end > markout 900초`, `as_of == end_at`, `fixed_at ≤ start` |
-| 스캔/후보 | 12스캔·선정 100·gate 100 | 동일 | 선정 품질 변경 없음 |
+| 항목 | 신규 계약 |
+|---|---|
+| 버전·배정 | `runner-llm-window-v1`, `quote_admission=llm_check_started` |
+| 관측 접점 | 엔진의 기존 점수·국면 조건을 통과한 뒤, 실제 `await llm_second_check` 직전. 송신·ACK·호가를 기다리지 않는다 |
+| 모집단 | 원래 scan/선정/gate/signal/emit_result를 보존한다. LLM 우회 신호는 배정 몫을 소비하지 않는다 |
+| 대상 | 선언한 창 안에서 기록된 live_screening 신호 중 실제 검증에 진입한 **최초 다섯 서로 다른 종목**. 반복 종목은 최초 `allocation_signal_id`에 연결하며 개별 `signal_id`와 거절 사유를 모두 남긴다 |
+| 시각 | admission 창은 `[start_at, admission_end_at)`, 전체 관측은 `[start_at, end_at)`. lease 만료는 고정 `end_at`, 반복 신호가 연장하지 않는다 |
+| 채널 | 기존 단일 연결 BOOK+체결+장운영 3채널. 등록 상한 41·운영 여유 10·운영 채널 우선·불명 등록 점유·같은 연결 해제 key 재사용 금지 유지 |
+| 호출 의미 | `llm_check_started`는 검증 함수 진입이다. 예산 거절·시간초과·실제 유료 호출 0건도 가능하다. paid call/모델/비용은 별도 판단 원장의 시도 기록으로 확인한다 |
+| 재생 | 신호 → LLM 진입 → 배정/거절의 순서, 후보·신호·종목·최초 배정 ID·고정 만료를 재계산한다. 다른 종목/신호로 바꾼 배정·lease와 누락된 배정은 거부한다. 구버전 연구는 신규 LLM 기록을 거부한다 |
 
-통과 수치는 **상한 검사**이며 실제 유량(10월8일 ws_quote 22,177 + 상태 레코드)이 버퍼 40,000 안에 드는지는 파일럿 결과로 확인한다. 10월14일 파일럿의 상태 레코드 수가 그 근거다. 운영 SHA·소스/설정 지문(`source_version_ref`·`configuration_ref`)은 배포 뒤 다시 묶는다.
+새 버전에는 `record_allocations`의 `ws_quote`, `market_state`, `other`를 모두 **양의 정수**로 명시한다. `channels.market_state_evidence=true`이고 `market_state_max_records`는 상태 몫과 같아야 한다. scan/선정/gate는 별도 계산 몫이며 그 밖의 신호·LLM 진입·배정·구독 이벤트·주문 준비 등은 `other`에 포함한다.
 
-## SEE — 판독 규칙(사전 고정)
+```text
+scan_metadata = max_scans × (1 + selection.max_candidates + gate.max_candidates)
+required_records = scan_metadata + ws_quote + market_state + other
+buffer_capacity ≥ required_records
+queue_capacity ≥ buffer_capacity
+max_bytes ≥ buffer_capacity × (max_record_bytes + 2048) + 2048
+```
+
+각 몫은 실행 중에도 강제한다. 어느 한 몫·큐·저장 상한을 넘기거나 구독을 완료하지 못하면 원장 전체를 incomplete로 남긴다. 남은 공간을 빌려 정상 표본으로 보이게 하지 않는다. 이 합산은 새 버전 전용이며 기존 연구·예약 파일럿 schema에는 소급 적용하지 않는다.
+
+LLM 시작·배정 기록은 신원·시각과 두 건의 공간·형식을 먼저 검사한 뒤 메모리와 저장 큐에 함께 등록한다. 등록 거절 시 고립된 시작 기록을 남기지 않고 원장을 incomplete로 표시한다. 이는 디스크 쓰기의 두 건 원자성을 보장하지 않는다. 저장 장애는 기존 미봉인/불완전 원장으로 처리한다. 기존 `order_ready` 사건 모집단과 재사용 구독기의 `order_ready_*` 실패 사유는 보존하며 LLM 배정 성공으로 해석하지 않는다.
+
+## SEE — 검증 및 판독
+
+오프라인 합성 검사는 다섯 우회 신호 뒤 eligible 종목, 다른 스캔의 동일 종목 재사용, 여섯 번째 거절, 닫힌 창/대기 중 만료, 운영 채널 우선과 부족, 재연결·이전 세대 거부, 범주별 기록 초과, 실제 설치→봉인→엄격 재생을 다룬다. 실제 엔진의 점수95·bull·점수84 우회와 점수90 중립 검증 경계도 실행한다. 거래 임계값·사이징·모델·예산·주문 정책은 변경하지 않는다. 중립 사이징을 사용한 반사실 경제성 비교는 별도 미완 과제다.
 
 | 상황 | 판독 |
 |---|---|
-| 판단 0건 | gate trace 로 미도달 사유(점수·국면·중복/보유·예산·쿨다운) 분포를 보고한다. 임계값·매수 중지·국면·위험 제한을 바꿔 표본을 만들지 않는다 |
-| 상태 미수신 | 그 종목의 판단은 `market_state_unknown` 으로 평가 불가. 사건이 없다고 정상·VI 없음으로 채우지 않는다 |
-| 구독 지연 | `quote_subscription` 레코드의 요청·ACK·첫 수신 시각을 각각 보고. ACK 는 수신이 아니다 |
-| 재연결 | 호가와 다른 `connection_id`/`generation` 의 상태는 쓰지 않는다(65차 조인 규칙) |
-| 용량 초과 | 봉인의 `incomplete_reasons`(`market_state_record_limit` 등) → 그 원장의 모든 행은 `ledger_incomplete` |
-| 조기 종료 | 미봉인 → `ledger_unverified`. 봉인 사실만으로 유효 표본·정상 시장을 인증하지 않는다 |
-| 판단 ID↔신호 ID↔종목·시각·세대 대조 | `signal_events.metadata.llm_decision.decision_id` ↔ 월 파일 `decision_id` ↔ 원장 `signal.signal_id` ↔ 같은 종목 첫 `ws_quote.provenance.received_at > decision_available_at` ↔ 그 호가의 연결·세대 |
+| 검증 진입 0건 | 기존 gate trace와 신호 모집단에서 미도달 사유를 보고한다. 표본을 만들려고 점수·국면·매수 중지·위험 제한을 바꾸지 않는다 |
+| 상태 미수신 | `market_state_unknown`. 사건 미수신을 정상·VI 없음으로 채우지 않는다 |
+| 구독 지연 | 배정·요청·ACK·실수신 시각을 구분한다. LLM 호출은 구독을 기다리지 않아 첫 쌍을 놓칠 수 있다 |
+| 재연결 | 동일 `connection_id`/`generation` 상태만 연결하며 재연결 공백은 incomplete로 보존한다 |
+| 용량 초과 | 봉인되더라도 모든 행은 `ledger_incomplete`. 미봉인은 `ledger_unverified` |
+| 판단 조인 | `signal_events.metadata.llm_decision.decision_id` ↔ 판단 원장 `decision_id`/`signal_id` ↔ 관측 신호/LLM 배정 ID ↔ 응답 이후 첫 실제 수신 호가 및 같은 연결·세대 상태 |
 
-H1 의 `order_ready` 대상 실험과 모델 비교의 `signal` 대상 관측은 같은 원장에서 서로 다른 분모로 보고하되 혼합하지 않는다.
+H1의 `order_ready` 실험, 전체 신호 모집단, LLM 진입/유료 호출 모집단은 각각 보고한다. 배정이나 봉인만으로 호가 수신·유료 호출·경제적 우위를 인증하지 않는다.
 
-## 시작 조건
+구독 송신은 기존 단일 조정기의 잠금과 간격을 공유한다. 운영 채널의 등록 몫은 우선 보존하지만 이미 진행 중인 직렬 송신 때문에 운영 등록이 지연될 수 있다. 실제 설치 전 지연·유량을 함께 확인한다.
 
-1. 10월14일 09:05 파일럿 종료·봉인·누락·상태 레코드 수·연결 세대·봇 건강 확인.
-2. 장외·미체결 0·복구 ready 에서 리뷰·CI 통과 고정 SHA(판단 기록 포함) 배포, 기록기 활성 로그 확인.
-3. 위 초안에 새 날짜·운영 SHA 지문을 묶어 설치기(`--check`)로 검증한 뒤 단발 활성화 예약 — 사용자 승인 범위 확인 뒤.
+## 남은 실제 검증과 시작 조건
+
+1. 기존 10월14일 기술 파일럿의 종료·봉인·누락·상태 유량·연결 세대·봇 건강을 확인한다.
+2. 독립 리뷰·CI를 통과한 고정 SHA의 배포 및 판단 기록 활성 상태를 별도 승인 범위에서 확인한다.
+3. 실제 호가/상태/기타 유량과 연구 창에 맞춰 새 명시 몫·새 날짜·소스/설정 지문을 확정하고 설치기 검사 후 별도 활성화한다. 이번 변경은 날짜나 용량 실측을 확정하지 않는다.
+4. 실제 LLM 진입→호가·상태 한 쌍과 응답 이후 실행 가능 가격을 확인해야 경제성 평가로 넘어갈 수 있다.

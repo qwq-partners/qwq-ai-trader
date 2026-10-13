@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 import hashlib
@@ -17,7 +18,8 @@ from .entry_price_shadow import build_report, _timestamp, KST
 
 
 READY_VERSION = 'runner-order-ready-window-v1'
-WINDOW_VERSIONS = ('runner-signal-window-v1', READY_VERSION)
+LLM_VERSION = 'runner-llm-window-v1'
+WINDOW_VERSIONS = ('runner-signal-window-v1', READY_VERSION, LLM_VERSION)
 
 
 def _now():
@@ -54,7 +56,12 @@ def validate_window_contract(context, observations=None):
             raise ValueError('market-state records require explicit capture contract')
     scans = ([r for r in observations['records'] if r.get('kind') == 'scan']
              if observations is not None else [])
-    if observations is not None and s.get('version') != READY_VERSION:
+    if observations is not None and s.get('version') != LLM_VERSION:
+        if any(r.get('kind') in ('llm_check_started', 'llm_check_admission')
+                or 'allocation_signal_id' in r or str(r.get('reason', '')).startswith('llm_check_')
+                for r in observations['records']):
+            raise ValueError('LLM admission requires explicit study version')
+    if observations is not None and s.get('version') not in (READY_VERSION, LLM_VERSION):
         if any(r.get('kind') == 'order_ready_admission' or (r.get('kind') == 'quote_subscription'
                 and ('signal_id' in r or 'order_id' in r
                 or str(r.get('reason', '')).startswith('order_ready_'))) for r in observations['records']):
@@ -64,10 +71,10 @@ def validate_window_contract(context, observations=None):
             raise ValueError('window population requires explicit window study')
         return
     if (type(s.get('max_scans')) is not int or not 1 <= s['max_scans'] <= 100
-            or s.get('quote_admission') != ('order_ready' if s.get('version') == READY_VERSION else 'signal_created')
+            or s.get('quote_admission') != ({READY_VERSION: 'order_ready', LLM_VERSION: 'llm_check_started'}.get(s.get('version'), 'signal_created'))
             or context.get('outcome_basis') != 'fixed_horizon_bid_markout'):
         raise ValueError('bounded signal-window contract required')
-    if s.get('version') == READY_VERSION:
+    if s.get('version') in (READY_VERSION, LLM_VERSION):
         channels = s.get('channels', {})
         channel_fields = set(('registration_cap external_reserved operational_headroom '
                               'max_candidates lease_seconds evidence_ref').split())
@@ -94,14 +101,16 @@ def validate_window_contract(context, observations=None):
             or capital.source_version_ref != s.get('source_version_ref')
             or capital.configuration_ref != s.get('configuration_ref')):
         raise ValueError('window time/capital policy binding mismatch')
-    if s.get('version') == READY_VERSION and s['channels']['lease_seconds'] < (end - start).total_seconds():
+    if s.get('version') in (READY_VERSION, LLM_VERSION) and s['channels']['lease_seconds'] < (end - start).total_seconds():
         raise ValueError('order-ready lease must span capture window')
+    if s.get('version') == LLM_VERSION:
+        _validate_llm_capacity(s)
     if observations is not None:
         # Seal/audit time may be later; it never extends the captured market window.
         # Prestart subscription ACKs remain valid evidence of an existing connection.
         for record in observations['records']:
             observed = _timestamp(record.get('observed_at'), 'window record observed_at')
-            if s.get('version') == READY_VERSION and (observed >= end or (observed < start
+            if s.get('version') in (READY_VERSION, LLM_VERSION) and (observed >= end or (observed < start
                     and record.get('kind') != 'quote_subscription')):
                 raise ValueError('order-ready record outside half-open capture window')
             if observed > end:
@@ -119,6 +128,115 @@ def validate_window_contract(context, observations=None):
                 raise ValueError('window population/time binding mismatch')
         if s.get('version') == READY_VERSION:
             _validate_ready_records(observations['records'], start, admission, end)
+        elif s.get('version') == LLM_VERSION:
+            limits = {**s['record_allocations'], 'scan_metadata': _scan_records(s)}
+            counts = dict.fromkeys(limits, 0)
+            for record in observations['records']:
+                category = _record_category(record)
+                counts[category] += 1
+                if counts[category] > limits[category]:
+                    raise ValueError('LLM replay exceeds declared record allocation')
+            _validate_llm_records(observations['records'], start, admission, end)
+
+
+def _scan_records(s):
+    return s['max_scans'] * (1 + s['selection_basis']['max_candidates']
+                             + s['entry_gate_trace']['max_candidates'])
+
+
+def _record_category(record):
+    kind = record.get('kind')
+    return ('scan_metadata' if kind in ('scan', 'selection_basis', 'entry_gate_trace')
+            else kind if kind in ('ws_quote', 'market_state') else 'other')
+
+
+def _validate_llm_capacity(s):
+    allocations = s.get('record_allocations')
+    if (type(allocations) is not dict or set(allocations) != {'ws_quote', 'market_state', 'other'}
+            or any(type(v) is not int or v <= 0 for v in allocations.values())):
+        raise ValueError('LLM explicit positive integer record allocations required')
+    if (s['channels'].get('market_state_evidence') is not True
+            or s['channels'].get('market_state_max_records') != allocations['market_state']):
+        raise ValueError('LLM market-state allocation binding mismatch')
+    total = _scan_records(s) + sum(allocations.values())
+    if (any(type(s.get(k)) is not int or s[k] <= 0 for k in
+            ('buffer_capacity', 'queue_capacity', 'max_bytes', 'max_record_bytes'))
+            or s['buffer_capacity'] < total or s['queue_capacity'] < s['buffer_capacity']
+            or s['max_bytes'] < s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048):
+        raise ValueError('LLM quote/state/other/scan capacity sum insufficient')
+
+
+def _llm_admission_record(record, signal, candidates, seen, symbols, start, admission, end):
+    sid, symbol = record.get('signal_id'), record.get('symbol')
+    if (signal is None or not isinstance(sid, str) or not sid
+            or not isinstance(symbol, str) or len(symbol) != 6 or not symbol.isascii() or not symbol.isdigit()
+            or not isinstance(signal.get('candidate_id'), str)
+            or not signal['candidate_id'].endswith(':' + symbol)
+            or _timestamp(signal.get('observed_at'), 'signal') > _timestamp(record.get('observed_at'), 'LLM')):
+        raise ValueError('LLM missing prior signal identity')
+    if sid in seen:
+        reason = 'llm_check_duplicate'
+    elif (record.get('source') != 'live_screening'
+            or candidates.get(signal['candidate_id']) != 'live_screening'
+            or record.get('strategy') != signal.get('strategy')):
+        reason = 'llm_check_outside_scope'
+    elif not start <= _timestamp(record['observed_at'], 'LLM') < admission:
+        reason = 'llm_check_admission_closed'
+    elif symbol in symbols:
+        reason = 'llm_check_reused'
+    elif len(symbols) >= 5:
+        reason = 'llm_check_limit'
+    else:
+        reason = 'llm_check_admitted'
+    allocated = reason in ('llm_check_admitted', 'llm_check_reused')
+    return dict(kind='llm_check_admission', observed_at=record['observed_at'],
+        signal_id=sid, candidate_id=signal['candidate_id'], symbol=symbol, tr_id='H0STASP0',
+        reason=reason, status='admitted' if allocated else 'unallocated',
+        allocation_signal_id=(symbols.get(symbol, sid) if allocated else None),
+        expires_at=end.isoformat())
+
+
+def _validate_llm_records(records, start, admission, end):
+    candidates, signals, symbols, admitted, seen = {}, {}, {}, {}, set()
+    pending = None
+    for record in records:
+        kind = record.get('kind')
+        if pending is not None:
+            if any(record.get(k) != v for k, v in pending.items()):
+                raise ValueError('LLM admission identity/order mismatch')
+            seen.add(record['signal_id'])
+            if record['reason'] == 'llm_check_admitted':
+                symbols[record['symbol']] = record['signal_id']
+                admitted[record['signal_id']] = record
+            pending = None
+            continue
+        if kind == 'scan':
+            candidates.update({c['candidate_id']: record.get('route_origin') for c in record.get('candidates', [])})
+        elif kind == 'signal':
+            sid = record.get('signal_id')
+            if not isinstance(sid, str) or not sid or record.get('candidate_id') not in candidates:
+                raise ValueError('LLM signal identity missing')
+            if sid in signals and any(signals[sid].get(k) != record.get(k) for k in
+                    ('candidate_id', 'strategy', 'price', 'event_timestamp', 'signal_target_price', 'signal_stop_price')):
+                raise ValueError('LLM conflicting signal identity')
+            signals.setdefault(sid, record)
+        elif kind == 'llm_check_started':
+            pending = _llm_admission_record(record, signals.get(record.get('signal_id')), candidates,
+                                            seen, symbols, start, admission, end)
+        elif kind in ('llm_check_admission', 'order_ready_admission'):
+            raise ValueError('LLM unexpected admission record')
+        elif kind == 'quote_subscription':
+            if record.get('status') == 'admitted' or 'order_id' in record:
+                raise ValueError('LLM unexpected lease identity')
+            if record.get('candidate_id') is not None or 'signal_id' in record or 'allocation_signal_id' in record:
+                identity = admitted.get(record.get('allocation_signal_id'))
+                if (identity is None or any(record.get(k) != identity.get(k) for k in
+                        ('candidate_id', 'signal_id', 'allocation_signal_id', 'symbol', 'tr_id'))
+                        or _timestamp(record.get('observed_at'), 'lease') < _timestamp(identity['observed_at'], 'LLM')
+                        or (record.get('expires_at') is not None and _timestamp(record['expires_at'], 'expiry') != end)):
+                    raise ValueError('LLM lease identity/time mismatch')
+    if pending is not None:
+        raise ValueError('LLM admission record missing')
 
 
 def _validate_ready_records(records, start, admission, end):
@@ -252,18 +370,20 @@ class CapturePlan:
             'source_version_ref configuration_ref fee_evidence_ref capital_evidence_ref capacity_evidence_ref '
             'journal_path buffer_capacity queue_capacity batch_size max_bytes max_record_bytes '
             'open_timeout_seconds close_timeout_seconds channels').split())
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v2','runner-first-scan-v3','runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             expected.add('selection_basis')
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             expected.add('entry_gate_trace')
-        if type(s) is dict and s.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+        if type(s) is dict and s.get('version') in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             expected.add('frame_diagnostics')
         if type(s) is dict and s.get('version') in WINDOW_VERSIONS:
             expected.update(('max_scans', 'quote_admission'))
+        if type(s) is dict and s.get('version') == LLM_VERSION:
+            expected.add('record_allocations')
         if (type(s) is not dict or set(s) != expected
-                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1')):
+                or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION)):
             raise ValueError('지원하지 않는 capture 계약/필드')
-        if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+        if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             from .kis_frame_diagnostics import validate_settings as validate_frame_settings
             validate_frame_settings(s['frame_diagnostics'])
         if s['version'] in WINDOW_VERSIONS:
@@ -296,14 +416,14 @@ class CapturePlan:
         if s['batch_size'] > s['queue_capacity'] or not 1 <= s['max_record_bytes'] <= MAX_LINE_BYTES-2048:
             raise ValueError('저장 batch/레코드 한도 위반')
         metadata_records = 1
-        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+        if s['version'] in ('runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             from .selection_basis import validate_settings
             selection = validate_settings(s['selection_basis'])
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
             record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
-            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1'):
+            if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
                 from .entry_gate_trace import validate_settings as validate_gate_settings
                 gate = validate_gate_settings(s['entry_gate_trace'])
                 if (gate['source_version_ref'] != s['source_version_ref']
@@ -347,6 +467,13 @@ class _WindowBuffer(EntryObservationBuffer):
                          selection_basis_settings=s.get('selection_basis'),
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
                          frame_diagnostics_settings=s.get('frame_diagnostics'))
+        self.llm_admission = s['version'] == LLM_VERSION
+        self.llm_quote_submit = None
+        self._llm_symbols = {}
+        self._llm_seen = set()
+        self._record_counts = {}
+        self._record_limits = ({**s['record_allocations'], 'scan_metadata': _scan_records(s)}
+                               if self.llm_admission else {})
         self.order_ready_admission = s['version'] == READY_VERSION
         self.order_ready_quote_submit = None
         self._ready_signals = {}
@@ -389,7 +516,23 @@ class _WindowBuffer(EntryObservationBuffer):
         if self.scan_scope == 'window' and now < self.start_at and record.get('kind') in ('ws_quote', 'market_state'):
             return False
         # Original first-scan contracts retain their preparation-stage quotes.
+        if self.llm_admission and record.get('kind') == 'llm_check_started':
+            return self._publish_llm_check(record)
+        category = _record_category(record)
+        if self.llm_admission and self._record_counts.get(category, 0) >= self._record_limits[category]:
+            self.mark_incomplete(category + '_record_limit')
+            return False
         recorded = super().publish(record)
+        if recorded and self.llm_admission:
+            self._record_counts[category] = self._record_counts.get(category, 0) + 1
+            try:
+                if record.get('kind') == 'scan':
+                    for candidate in record.get('candidates', []):
+                        self._ready_candidates[candidate['candidate_id']] = record.get('route_origin')
+                elif record.get('kind') == 'signal':
+                    self._ready_signals.setdefault(record['signal_id'], dict(record))
+            except Exception:
+                self.mark_incomplete('llm_check_admission_failed')
         if recorded and self.order_ready_admission:
             try:
                 if record.get('kind') == 'scan':
@@ -402,6 +545,46 @@ class _WindowBuffer(EntryObservationBuffer):
             except Exception:
                 self.mark_incomplete('order_ready_admission_failed')
         return recorded
+
+    def _publish_llm_check(self, record):
+        """시작/배정은 단일 event-loop 턴에서 검증하고 함께 기록한다. await 없음."""
+        if self._capture_closed:
+            return False
+        try:
+            signal = self._ready_signals.get(record.get('signal_id'))
+            admission = _llm_admission_record(record, signal, self._ready_candidates,
+                self._llm_seen, self._llm_symbols, self.start_at, self.admission_end, self.end_at)
+            if not self.start_at <= _timestamp(record.get('observed_at'), 'LLM') < self.end_at:
+                raise ValueError('LLM boundary timestamp outside capture')
+            # 두 번째 publish에서 시계/한도를 다시 검사하면 고립된 started가 남는다.
+            if self._record_counts.get('other', 0) + 2 > self._record_limits['other']:
+                self.mark_incomplete('other_record_limit')
+                return False
+            if len(self._records) + 2 > self.capacity:
+                self.mark_incomplete('llm_check_pair_buffer_limit')
+                return False
+            pair = deepcopy([record, admission])
+            for sequence, item in enumerate(pair, len(self._records) + 1):
+                item['sequence'] = sequence
+            if self._journal_sink is not None and not self._journal_sink.offer_pair(pair):
+                self.mark_incomplete('llm_check_pair_not_recorded')
+                return False
+            self._records.extend(pair)
+            self._record_counts['other'] = self._record_counts.get('other', 0) + 2
+        except Exception:
+            self.mark_incomplete('llm_check_admission_failed')
+            return False
+        self._llm_seen.add(record['signal_id'])
+        if admission['reason'] == 'llm_check_admitted':
+            self._llm_symbols[record['symbol']] = record['signal_id']
+            try:
+                if self.llm_quote_submit is None:
+                    self.mark_incomplete('llm_check_enrollment_unavailable')
+                else:
+                    self.llm_quote_submit(admission)
+            except Exception:
+                self.mark_incomplete('llm_check_enrollment_failed')
+        return True
 
     def _admit_order_ready(self, record):
         # 저장된 준비 이벤트의 순서로만 예약한다. 호가/미래 가격은 읽지 않는다.
@@ -484,7 +667,9 @@ class ObservationRuntime:
                     self.result = await self.journal.close(timeout_seconds=s['close_timeout_seconds'])
                     bot._entry_observation_close_result = self.result
                     return None
-            if self.buffer.order_ready_admission:
+            if getattr(self.buffer, 'llm_admission', False):
+                self.buffer.llm_quote_submit = feed._quote_subscription_owner.submit_llm_check
+            elif self.buffer.order_ready_admission:
                 self.buffer.order_ready_quote_submit = feed._quote_subscription_owner.submit_order_ready
             elif self.buffer.scan_scope == 'window':
                 self.buffer.signal_quote_submit = feed._quote_subscription_owner.submit

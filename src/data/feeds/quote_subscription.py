@@ -154,15 +154,18 @@ class QuoteSubscriptionCoordinator:
 
     def _record(self, status, key=None, *, candidate_id=None, reason=None, expires_at=None, frame_diagnostic=None):
         record = {"kind": "quote_subscription", "observed_at": (self.observer.current_time().isoformat()
-                  if getattr(self.observer, "order_ready_admission", False) else datetime.now(timezone.utc).isoformat()),
+                  if (getattr(self.observer, "order_ready_admission", False) or getattr(self.observer, "llm_admission", False)) else datetime.now(timezone.utc).isoformat()),
                   "status": status, "generation": self.generation,
                   "connection_id": self.connection_id, "candidate_id": candidate_id,
                   "tr_id": key[0] if key else None, "symbol": key[1] if key else None,
                   "reason": reason, "expires_at": expires_at}
         identity = self._ready_requests.get(candidate_id)
         if identity is not None:
-            record.update(candidate_id=identity['candidate_id'], signal_id=identity['signal_id'],
-                          order_id=identity['order_id'])
+            record.update(candidate_id=identity['candidate_id'], signal_id=identity['signal_id'])
+            if 'allocation_signal_id' in identity:
+                record['allocation_signal_id'] = identity['allocation_signal_id']
+            else:
+                record['order_id'] = identity['order_id']
         if frame_diagnostic is not None:
             record["frame_diagnostic"] = frame_diagnostic
         # 창 안의 용량 실패는 dropped_records, 창 밖의 기록은 의도적 제외다.
@@ -242,6 +245,12 @@ class QuoteSubscriptionCoordinator:
             self.end_observation()
             return False
         return True
+
+    def submit_llm_check(self, admission):
+        """신규 종목의 최초 LLM identity만 등록한다. 반복 신호는 원장 배정에 보존한다."""
+        if not getattr(self.observer, 'llm_admission', False):
+            return
+        self.submit_order_ready(admission)
 
     def submit_order_ready(self, admission):
         """준비 identity당 유한 예약만 한다. 주문 호출자는 송신/lock을 기다리지 않는다."""
@@ -344,7 +353,7 @@ class QuoteSubscriptionCoordinator:
                 self._candidate_status.pop(cid, None)
 
     def _desired(self):
-        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
+        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'llm_admission', False) or getattr(self.observer, 'static_pilot', False):
             self._ready_live()
         if self._observation_ended:
             self._leases.clear()
@@ -364,7 +373,7 @@ class QuoteSubscriptionCoordinator:
         return [(tr, symbol) for tr in (STATE_CHANNELS if self.market_state_evidence else (BOOK,))]
 
     async def _request(self, action, key):
-        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
+        if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'llm_admission', False) or getattr(self.observer, 'static_pilot', False):
             self._ready_live()
         if action == "subscribe" and self._observation_ended and key not in self._operational:
             return
@@ -382,7 +391,7 @@ class QuoteSubscriptionCoordinator:
             delay = self.interval - (self.clock() - self._last_send)
             if delay > 0:
                 await asyncio.sleep(delay)
-            if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'static_pilot', False):
+            if getattr(self.observer, 'order_ready_admission', False) or getattr(self.observer, 'llm_admission', False) or getattr(self.observer, 'static_pilot', False):
                 self._ready_live()
             if action == "subscribe" and self._observation_ended and key not in self._operational:
                 # 아직 송신하지 않은 로컬 예약만 제거. 이미 송신 중인 슬롯은 불명으로 보존.

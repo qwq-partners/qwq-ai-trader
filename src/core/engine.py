@@ -25,7 +25,7 @@ import sys
 
 from loguru import logger
 
-from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital
+from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital, capture_llm_check_started
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
@@ -2065,6 +2065,7 @@ class RiskManager:
             #   - LLM 거부 시 차단 대신 position_multiplier × _LLM_REJECT_SIZE_MULT(0.5) 완화
             if (self._LLM_CHECK_MIN <= _cv_score < self._LLM_BYPASS_AT
                     and _regime != "bull"):
+                capture_llm_check_started(getattr(self, "_entry_observation_owner", None), event)
                 _llm_ok = await self._cross_validator.llm_second_check(
                     symbol=event.symbol,
                     strategy=event.strategy.value if event.strategy else "",
