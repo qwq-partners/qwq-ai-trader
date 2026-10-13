@@ -49,10 +49,12 @@ class FakeGemini(GeminiClient):
 
 def setup(tmp_path, **kwargs):
     m = api()
-    ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW)
+    # 정책 v2(W1): 입장 검사는 정책이 켜진 원장의 normal 단계만 허용한다
+    ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
         experiment_id='R', daily_attempt_cap=20,
-        allowed_models=('gpt-5-mini', 'gemini-3.1-flash-lite-preview'), max_output_tokens=400))
+        allowed_models=('gpt-5-mini', 'gemini-3.1-flash-lite-preview'), max_output_tokens=400,
+        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
     op, ge = FakeOpenAI(**kwargs), FakeGemini()
     adapter = m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW)
     runner = m.PairedComparisonRunner(guard=guard, adapter=adapter, clock=lambda: NOW)

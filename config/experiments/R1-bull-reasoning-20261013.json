@@ -3,6 +3,64 @@
   "experiment_id": "R1-bull-reasoning-20261013",
   "enabled": false,
   "status": "draft_off_not_registered_not_scheduled",
+  "fixed_at": "2026-10-13T21:30:00+09:00",
+  "current": {
+    "model": "gpt-5-mini",
+    "reasoning_effort": "minimal",
+    "max_output_tokens": 400,
+    "temperature": 0.3,
+    "seed": 20260803,
+    "timeout_seconds": 12.0
+  },
+  "candidate": {
+    "model": "gpt-5-mini",
+    "reasoning_effort": "low",
+    "max_output_tokens": 400,
+    "temperature": 0.3,
+    "seed": 20260803,
+    "timeout_seconds": 12.0
+  },
+  "bear": {
+    "model": "gemini-3.1-flash-lite-preview",
+    "reasoning_effort": null,
+    "max_output_tokens": 400,
+    "temperature": 0.0,
+    "seed": null,
+    "timeout_seconds": 12.0
+  },
+  "fallback_chain": [
+    {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": null,
+      "max_output_tokens": 100,
+      "temperature": 0.3,
+      "seed": null,
+      "timeout_seconds": 10.0
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "reasoning_effort": null,
+      "max_output_tokens": 100,
+      "temperature": 0.3,
+      "seed": null,
+      "timeout_seconds": 10.0
+    }
+  ],
+  "execution_policy": {
+    "daily_attempt_cap": 10,
+    "max_output_tokens": 400,
+    "allowed_models": [
+      "gemini-3.1-flash-lite-preview",
+      "gemini-3.1-pro-preview",
+      "gpt-5-mini",
+      "gpt-5.6-sol"
+    ],
+    "experiment_usd_ceiling": "9.4011800",
+    "valid_from": "2026-10-15",
+    "valid_until": "2026-11-11",
+    "required_policy_mode": "normal"
+  },
+  "worker_contract_note": "current/candidate/bear/fallback_chain/fixed_at/execution_policy 는 ComparisonWorker.install_from_env 가 읽는 최상위 키이며 roles·budget 과 같은 값이다(enabled:false 유지).",
   "hypothesis": "Bull gpt-5-mini 의 reasoning_effort 만 minimal→low 로 바꾸면, 같은 입력·같은 Bear·같은 집계에서 응답 뒤 첫 호가 기준 조건부 가격 손익(비용 후)이 달라지는가. 1차 목적은 기술 표본 수집이며 경제성 판정용 표본 크기가 아니다.",
   "comparison_variable": "bull.reasoning_effort",
   "control_support": {

@@ -42,7 +42,9 @@ def manifest(**kw):
              "candidate": dict(controls["bull"], reasoning_effort="low"), "bear": controls["bear"],
              "fallback_chain": controls["fallback_chain"],
              "execution_policy": {"daily_attempt_cap": 20, "max_output_tokens": 400,
-                                  "allowed_models": sorted(set(MODELS.values()))}}
+                                  "allowed_models": sorted(set(MODELS.values())),
+                                  "experiment_usd_ceiling": "100", "valid_from": "2026-01-01",
+                                  "valid_until": "2027-12-31", "required_policy_mode": "normal"}}
     value.update(kw)
     return value
 
@@ -59,10 +61,10 @@ def build(tmp_path, *, ledger=None, op=None, ge=None, clock=None, man=None, **kw
     from src.analytics.model_comparison_runner import PairedComparisonRunner, SingleAttemptAdapter
     m = api()
     man = man or manifest()
-    ledger = ledger or MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW)
-    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
-        experiment_id=man["experiment_id"], daily_attempt_cap=20,
-        allowed_models=tuple(man["execution_policy"]["allowed_models"]), max_output_tokens=400))
+    ledger = ledger or MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW, policy_enabled=True)
+    policy = dict(man["execution_policy"], experiment_id=man["experiment_id"])
+    policy["allowed_models"] = tuple(policy["allowed_models"])
+    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
     op, ge = op or FakeOpenAI(), ge or FakeGemini()
     runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW),
                                     clock=lambda: NOW)
@@ -261,9 +263,10 @@ def test_cross_validator_to_worker_end_to_end_keeps_verdict_and_ids(tmp_path, mo
     m = api()
     recorder = DecisionRecorder(tmp_path / "decisions", enabled=True)
     set_decision_recorder(recorder)
-    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100)
+    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
-        experiment_id="R", daily_attempt_cap=20, allowed_models=tuple(sorted(set(MODELS.values()))), max_output_tokens=400))
+        experiment_id="R", daily_attempt_cap=20, allowed_models=tuple(sorted(set(MODELS.values()))), max_output_tokens=400,
+        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
     op, ge = GatedOpenAI(), FakeGemini()
     runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(openai=op, gemini=ge))
     worker = m.ComparisonWorker(runner, manifest=manifest(fixed_at="2026-01-01T00:00:00+00:00"), max_input_age_seconds=30.0)

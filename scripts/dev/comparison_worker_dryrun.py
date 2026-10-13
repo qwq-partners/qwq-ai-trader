@@ -55,10 +55,10 @@ def main() -> int:
                 "candidate": dict(controls["bull"], reasoning_effort="low"), "bear": controls["bear"],
                 "fallback_chain": controls["fallback_chain"]}
     with tempfile.TemporaryDirectory() as tmp:
-        ledger = MonthlyBudgetLedger(Path(tmp) / "budget.db", 100)
+        ledger = MonthlyBudgetLedger(Path(tmp) / "budget.db", 100, policy_enabled=True)
         guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
             experiment_id="DRYRUN", daily_attempt_cap=20, allowed_models=tuple(sorted(set(MODELS.values()))),
-            max_output_tokens=400))
+            max_output_tokens=400, experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
         runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(
             openai=_FakeOpenAI(_EMPTY), gemini=_FakeGemini(_EMPTY)))
         worker = ComparisonWorker(runner, manifest=manifest).start()
