@@ -332,3 +332,56 @@ def test_send_guard_runs_on_every_api_get_retry(monkeypatch):
     cli._install_send_guard(b, guard)
     r = asyncio.run(collect_window(lambda s, e, **k: b.get_period_rights(s, e, **k), "20250101", "20250131"))
     assert r["status"] == "aborted:BotStartedStop" and len(sent) == 1 and checks == [False, True]   # 재전송 0
+
+
+def test_min_interval_applies_to_internal_http_retries(monkeypatch, tmp_path):
+    """7차 리뷰 P1: 503 뒤 `_api_get` 내부 재시도도 --min-interval 만큼 띄운다(리미터 기본 간격이 아니라)."""
+    import json, sys
+    from types import SimpleNamespace
+    from pathlib import Path
+    from src.execution.broker import kis_kr
+    from src.utils import kis_rate_limit
+    cli = _cli_module()
+    kis_rate_limit.reset()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_in_market_hours", lambda now: False)
+    monkeypatch.setattr(cli, "_bot_active", lambda: True)
+    clock = [1000.0]
+    monkeypatch.setattr(cli, "_monotonic", lambda: clock[0])
+    sleeps = []
+    async def fake_sleep(d):
+        sleeps.append(round(d, 3)); clock[0] += d
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)          # cli·kis_kr 모두 같은 asyncio 모듈
+    monkeypatch.setattr(kis_rate_limit, "release_ledger", lambda: None)
+    monkeypatch.setattr(kis_kr.KISBroker, "is_connected", property(lambda self: True))
+
+    b = object.__new__(kis_kr.KISBroker)
+    b._token = "t"
+    b._token_mgr = SimpleNamespace(_access_token="t", _is_token_valid=lambda: True, invalidate=lambda: None)
+    b.config = SimpleNamespace(base_url="http://x", account_no="12345678", account_product_cd="01", env="prod",
+                               app_key="k", app_secret="s", timeout_seconds=10)
+    async def _no_limit(tr_id=""): ...
+    b._rate_limit = _no_limit
+    b._session = SimpleNamespace(closed=False)
+    class Resp:
+        def __init__(self, status, body, cont=""):
+            self.status, self._body, self.headers = status, body, ({"tr_cont": cont} if cont else {})
+        async def json(self): return dict(self._body)
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_a): return False
+    sent_at = []
+    seq = iter([Resp(503, {}), Resp(200, _page([_row()], "D"), "D")])     # 실제 _api_get 은 응답 헤더로 tr_cont 를 읽는다
+    def get(url, headers, params):
+        sent_at.append(clock[0]); return next(seq)
+    b._session.get = get
+    async def opener(): return b
+    monkeypatch.setattr(cli, "_open_readonly_broker", opener)
+    async def no_close(_b): ...
+    monkeypatch.setattr(cli, "_close_readonly_broker", no_close)
+    out = tmp_path / "out"; out.mkdir(mode=0o700)
+    monkeypatch.setattr(sys, "argv", ["prog", "--start", "2025-01-01", "--end", "2025-01-31", "--out-dir", str(out),
+                                      "--allow-bot-running", "--min-interval", "2.5"])
+    assert cli.main() == 0
+    assert len(sent_at) == 2 and sent_at[1] - sent_at[0] >= 2.5          # 503 재시도도 2.5초 뒤(백오프 1초만이 아님)
+    s = json.loads((out / "summary.json").read_text())
+    assert s["window_statuses"] == {"complete": 1} and s["http_attempts"] == 2 and s["pages_fetched"] == 1

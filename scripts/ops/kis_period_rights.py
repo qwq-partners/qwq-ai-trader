@@ -125,6 +125,11 @@ async def _open_readonly_broker():
     return broker
 
 
+def _monotonic() -> float:
+    import time
+    return time.monotonic()
+
+
 def _install_send_guard(broker, guard) -> None:
     """`_api_get` 은 타임아웃·401·5xx 에 최대 3회 전송하며 매 시도 직전 `_rate_limit` 을 부른다 — 거기에 가드를 걸어
     **재시도마다** 리미터 대기 뒤·전송 직전에 장중/봇 상태를 재검사한다. 가드가 던진 예외는 `_api_get` 의
@@ -172,14 +177,23 @@ async def _run(args) -> int:
     # 내부 재시도(_api_get 최대 3회 전송 + 대기)까지 덮도록 여유를 타임아웃 기준으로 넓힌다 (3차 리뷰 P2)
     effective_margin = max(float(args.market_margin_seconds), 3.0 * float(broker.config.timeout_seconds) + 15.0)
 
+    last_sent = [None]
+
     async def before_send():
-        # 매 전송(내부 재시도 포함) 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
+        # `--min-interval` 을 **모든 전송**(내부 5xx/401/타임아웃 재시도 포함)에 적용한다 — 공용 리미터의 기본 간격
+        # (약 1.05초)만으로는 봇과 동시 실행 조건(≥2.1초)이 오류 재시도에서 무너진다 (7차 리뷰 P1)
+        if last_sent[0] is not None:
+            wait = float(args.min_interval) - (_monotonic() - last_sent[0])
+            if wait > 0:
+                await asyncio.sleep(wait)
+        # 대기 뒤 매 전송 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
         if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), effective_margin):
             raise MarketHoursStop("장중 진입 임박/진입 — 수집 중단(확보한 페이지는 보존)")
         # main() 의 1회 검사만으로는 수집 도중의 자동 재시작·예약 기동을 못 본다 — 명시 우회가 없으면 매 전송 직전
         # 봇 상태를 다시 보고, 가동/확인 불가면 중단한다(남는 경쟁 창은 systemctl 응답~전송 사이 한 요청) (5차·6차 리뷰 P1)
         if not args.allow_bot_running and await asyncio.to_thread(_bot_active):
             raise BotStartedStop("수집 도중 운영 봇 기동/상태 확인 불가 — 수집 중단(확보한 페이지는 보존)")
+        last_sent[0] = _monotonic()
     _install_send_guard(broker, before_send)
 
     async def fetch(start, end, *, fk100, nk100, tr_cont):
