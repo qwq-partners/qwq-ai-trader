@@ -122,7 +122,7 @@ manifest(작업자가 읽는 키, W3 manifest 와 통합 시 정렬 필요): `ex
   최근 64)에도 둔다. 복구는 `restore_pair_result(..., evidence_path=그 저널)` 로만 한다.
 - 스레드 종료 시 원시 클라이언트의 aiohttp 세션을 작업자 루프에서 닫는다. 저널 봉인은 생산자 종료 뒤에 한다. 동기 저장이 지연되어 `stop()` 제한 시간을 넘으면 아직 살아 있는 생산자의 저널을 미리 닫지 않고 `journal_drained=False`를 반환한다. 이후 생산자가 종료되면 늦은 복구 행과 전이까지 배출하고 봉인한다. 강제 프로세스 종료·저장장치 장애까지 영속 기록을 보장하는 것은 아니다.
 
-저널의 `run_id`는 작업자 인스턴스마다 새로 만든다. 같은 프로세스의 새 작업자도 별도 번호 스트림을 사용하며, 입력 봉투의 프로세스 attestation ID는 바꾸지 않는다. 중복 시퀀스는 결손으로 처리해 이전 종료 표식으로 새 실행을 완료 처리하지 않는다.
+저널의 `run_id`는 작업자 인스턴스마다 새로 만든다. 같은 프로세스의 새 작업자도 별도 번호 스트림을 사용하며, 입력 봉투의 프로세스 attestation ID는 바꾸지 않는다. 종료 표식의 `journal_dropped_total`은 같은 run의 드롭 마커와 최댓값으로 합친다. 드롭 마커가 offers에만 남아도 incomplete 파일의 누락을 보존한다. 누계가 명시됐으나 잘못된 값이면 종료 증거로 인정하지 않는다. 중복 시퀀스는 결손으로 처리해 이전 종료 표식으로 새 실행을 완료 처리하지 않는다.
 
 저널(append-only JSONL, `journal_dir=` 주입, 기본 `Path.home()/.cache/ai_trader/comparison_worker`, KST 월 파일):
 - `offers-YYYY-MM.jsonl` — 종료 전 offer 마다 `{schema_version:"comparison-offer-v1", kind:"offer", recorded_at, decision_id,

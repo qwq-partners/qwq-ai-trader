@@ -107,3 +107,39 @@ def test_cli_missing_incomplete_file_is_an_error(tmp_path, capsys):
     assert main(['--pairs', str(pairs), '--daily', DAY,
                  '--incomplete', str(tmp_path / 'missing.jsonl')]) == 2
     assert 'incomplete journal missing' in json.loads(capsys.readouterr().out)['error']
+
+
+def test_writer_close_preserves_dropped_recovery_evidence_in_next_day_cli(tmp_path, monkeypatch, capsys):
+    from tests.test_model_comparison_worker import build
+    from src.analytics.model_comparison_worker import read_offer_journal
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    worker, ledger, *_ = build(tmp_path, journal_queue=1, journal_dir=tmp_path / 'journals')
+    old_row = {'pair_id': 'previous-day'}
+    old = {'schema_version': 'comparison-offer-v1', 'kind': 'incomplete_result',
+           'recorded_at': '2026-10-13T09:30:00+09:00', 'decision_id': 'old',
+           'pair_id': 'previous-day', 'row': old_row, 'row_sha256': row_sha256(old_row)}
+    worker._journal_put(old)
+    worker._journal_write(worker._journal.get_nowait())
+    worker._journal_put({'schema_version': 'comparison-offer-v1', 'kind': 'offer',
+                         'recorded_at': '2026-10-14T09:30:00+09:00', 'decision_id': 'new',
+                         'status': 'accepted', 'envelope': {}})
+    lost_row = {'pair_id': 'today-paid-lost'}
+    worker._journal_put(dict(old, recorded_at='2026-10-14T09:30:01+09:00',
+                             decision_id='new', pair_id=lost_row['pair_id'],
+                             row=lost_row, row_sha256=row_sha256(lost_row)), timeout=0)
+    assert worker.health()['journal_dropped'] == 1
+    worker._stop.set()
+    worker._producer_done.set()
+    worker._journal_run()  # Actual writer emits drop only to offers, and close to both touched files.
+    ledger.close()
+    incomplete, = worker.journal_dir.glob('incomplete-*.jsonl')
+    offers, = worker.journal_dir.glob('offers-*.jsonl')
+    assert read_offer_journal(offers, max_bytes=1 << 20)['dropped_records'] == 1
+    assert read_incomplete_journal(incomplete, max_bytes=1 << 20)['dropped_records'] == 1
+    pairs = tmp_path / 'pairs.jsonl'
+    pairs.write_text('')
+    assert main(['--pairs', str(pairs), '--daily', '2026-10-14', '--incomplete', str(incomplete)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['incomplete_journal']['complete'] is False
+    assert report['spend']['total_usd'] is None
+    assert report['spend']['known_subtotal_usd'] == '0'
