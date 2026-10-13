@@ -55,6 +55,7 @@ def test_role_controls_copy_operating_adversarial_and_fallback_conditions():
     assert [f["model"] for f in c["fallback_chain"]] == ["openai-heavy", "gemini-heavy"]
     assert all(f["max_output_tokens"] == 100 and f["timeout_seconds"] == 10.0 for f in c["fallback_chain"])
     assert c["empty_retries"] == 1 and c["strict_on_disagreement"] is False and c["fallback_system"] == ""
+    assert c["fallback_chain_timeout_seconds"] == 10.0     # 운영 SINGLE_FALLBACK_TIMEOUT 은 체인 전체 시한
     unknown = mci.operating_role_controls(object(), fallback_prompt_suffix="x", fallback_timeout=10.0)
     assert unknown["bull"]["model"] is None          # 원천에서 못 읽은 값은 추정하지 않는다
 
@@ -92,7 +93,7 @@ def test_completed_monthly_record_cannot_become_live_pair(tmp_path):
                     candidate=RoleControls("gpt-5-mini", 400, "low", 0.3, 20260803),
                     bear=RoleControls("gemini-3.1-flash-lite-preview", 400, None, 0.0),
                     neutral_sizing=None, pricing_basis="paired_live_shadow", fixed_at=T0.isoformat(),
-                    strict_on_disagreement=False)
+                    strict_on_disagreement=False, fallback_chain_timeout_seconds=10.0)
     with pytest.raises(ValueError, match="live"):
         spec.validate()
     labelled = replace(spec, evaluation_anchor="input_available_at", live_provenance="in_process_attested",
@@ -176,6 +177,8 @@ def test_handoff_happens_before_provider_await_and_id_propagates(monkeypatch, re
     assert env["common_context"] == row["inputs"]["common_context"] and env["input_available_at"] == row["inputs"]["collected_at"]
     assert cross.last_llm_decision["comparison_handoff"] == "accepted"
     assert env["role_controls"]["bull"]["model"] == "gpt-5-mini"
+    from src.core.cross_validator import SINGLE_FALLBACK_TIMEOUT
+    assert env["role_controls"]["fallback_chain_timeout_seconds"] == SINGLE_FALLBACK_TIMEOUT   # 운영 체인 시한 복사
 
 
 def test_handoff_failure_never_changes_verdict_or_metadata(monkeypatch, recorder):

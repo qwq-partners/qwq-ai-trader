@@ -53,15 +53,17 @@ def main() -> int:
                 "horizon_seconds": 900, "strict_on_disagreement": controls["strict_on_disagreement"],
                 "empty_retries": controls["empty_retries"], "current": controls["bull"],
                 "candidate": dict(controls["bull"], reasoning_effort="low"), "bear": controls["bear"],
-                "fallback_chain": controls["fallback_chain"]}
+                "fallback_chain": controls["fallback_chain"],
+                "fallback_chain_timeout_seconds": controls["fallback_chain_timeout_seconds"]}
     with tempfile.TemporaryDirectory() as tmp:
         ledger = MonthlyBudgetLedger(Path(tmp) / "budget.db", 100, policy_enabled=True)
         guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
             experiment_id="DRYRUN", daily_attempt_cap=20, allowed_models=tuple(sorted(set(MODELS.values()))),
-            max_output_tokens=400, experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
+            max_output_tokens=400, experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
+            pairs_per_day=1, max_common_context_bytes=16384))
         runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(
             openai=_FakeOpenAI(_EMPTY), gemini=_FakeGemini(_EMPTY)))
-        worker = ComparisonWorker(runner, manifest=manifest).start()
+        worker = ComparisonWorker(runner, manifest=manifest, journal_dir=Path(tmp) / "journal").start()
         from src.analytics.llm_decision_record import new_id, now_kst
         at = now_kst().isoformat()
         envelope = mci.build_envelope(
@@ -74,9 +76,15 @@ def main() -> int:
         while time.monotonic() < deadline and worker.health()["finished"] + worker.health()["incomplete"] < 1:
             time.sleep(0.01)
         health = worker.stop(20)
-        print(json.dumps({"offer": status, "health": health, "ledger": ledger.status()}, default=str,
-                         ensure_ascii=False, indent=1))
-        ok = status == "accepted" and health["finished"] == 1 and health["drained"] and not health["alive"]
+        from src.analytics.model_comparison_worker import read_offer_journal
+        journal = sorted(worker.journal_dir.glob("offers-*.jsonl"))
+        records = [r for path in journal for r in read_offer_journal(path, max_bytes=1 << 20)["records"]]
+        print(json.dumps({"offer": status, "health": health, "ledger": ledger.status(),
+                          "journal": {"paths": [str(p) for p in journal],
+                                      "records": [(r["kind"], r["status"]) for r in records]}},
+                         default=str, ensure_ascii=False, indent=1))
+        ok = (status == "accepted" and health["finished"] == 1 and health["drained"] and not health["alive"]
+              and health["journal_drained"] and [r["status"] for r in records] == ["accepted", "started", "finished"])
     return 0 if ok else 1
 
 

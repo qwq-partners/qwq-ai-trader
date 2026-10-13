@@ -8,14 +8,20 @@
   자동 재실행하지 않는다(러너가 `comparison_pair_incomplete_no_automatic_retry` 로 막는다 — 조회는 Task1 복구 도구).
 - 같은 decision_id 재전달은 이 작업자 안에서 rejected_duplicate, 재시작 뒤에는 러너가 저장된 결과를 돌려줘
   공급자 호출·예약·과금이 추가되지 않는다.
+- 하루 쌍 상한·입력 크기 상한은 offer 에서 큐에 넣기 전에 거부한다. 당일 입장 수는 start() 때 원장
+  `comparison_pairs.admission_day` 에서 읽어 메모리로 이어 센다(재시작 뒤에도 유지). 최종 판정은 러너 claim 이다.
 - stop(deadline): 새 수락을 닫고 시한 안에서 수락분을 처리한다. 시한을 넘기면 진행 중 작업을 취소하고 남은 큐를
   incomplete 로 센다. 공급자가 이미 받았을 수 있는 요청은 원장에 미해결로 남고 재전송하지 않는다.
+
+저널(append-only JSONL, `journal_dir`, KST 월 파일): `offers-YYYY-MM.jsonl` 에 offer(봉투 전체)·상태 전이,
+`incomplete-YYYY-MM.jsonl` 에 저장 실패한 원래 pair 행(복구 증거)을 쓴다. 운영 루프는 유한 큐에 넣기만 하고 저널
+스레드가 쓴다. 큐 포화는 journal_dropped, 쓰기 실패는 journal_failed 로 세며 판단·offer 결과를 바꾸지 않는다.
 """
 from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict, deque
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -27,13 +33,17 @@ from typing import Any
 from loguru import logger
 
 from . import model_comparison_input as mci
-from .model_comparison_runner import PairResultPersistenceError, PairSpec, PairedComparisonRunner, RoleControls
+from .model_comparison_runner import (PAIR_BLOCK_REASONS, PairResultPersistenceError, PairSpec,
+                                      PairedComparisonRunner, RoleControls, _json, context_bytes)
 
 COUNTERS = ("offered", "accepted", "rejected_full", "rejected_disabled", "rejected_stale", "rejected_duplicate",
             "rejected_unattested", "rejected_invalid", "rejected_control_mismatch",
-            "expired", "started", "finished", "incomplete")
+            "rejected_daily_pair_cap", "rejected_input_too_large",
+            "expired", "started", "finished", "incomplete", "blocked", "journal_dropped", "journal_failed")
 _INTEGRITY = {"unattested", "envelope_hash_mismatch", "context_hash_mismatch"}
 ENV_ENABLE, ENV_MANIFEST = "COMPARISON_WORKER", "COMPARISON_EXPERIMENT_MANIFEST"
+JOURNAL_VERSION = "comparison-offer-v1"
+_KST = timezone(timedelta(hours=9))
 
 
 def _kst_now():
@@ -45,10 +55,61 @@ def _time(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def row_sha256(row) -> str:
+    """pair 행의 정규화 JSON(sha256). 원장 저장 바이트와 같은 직렬화다."""
+    return hashlib.sha256(_json(row).encode()).hexdigest()
+
+
+def _read_journal(path, max_bytes, kinds, check=None) -> dict:
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+        raise ValueError("max_bytes must be a positive int")
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return {"path": str(path), "missing": True, "records": [], "skipped_lines": 0}
+    if size > max_bytes:
+        raise ValueError("journal_too_large")      # 일부만 읽은 분모는 보고하지 않는다
+    records, skipped = [], 0
+    for line in path.read_bytes().splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            skipped += 1
+            continue
+        if (not isinstance(record, dict) or record.get("schema_version") != JOURNAL_VERSION
+                or record.get("kind") not in kinds or (check is not None and not check(record))):
+            skipped += 1
+            continue
+        records.append(record)
+    return {"path": str(path), "missing": False, "records": records, "skipped_lines": skipped}
+
+
+def read_offer_journal(path, *, max_bytes) -> dict:
+    """offers-YYYY-MM.jsonl → {path, missing, records(offer/transition), skipped_lines(손상·형식 불일치 줄 수)}."""
+    return _read_journal(path, max_bytes, ("offer", "transition"))
+
+
+def _incomplete_ok(record) -> bool:
+    row = record.get("row")
+    try:
+        return (isinstance(row, dict) and record.get("pair_id") == row.get("pair_id")
+                and record.get("row_sha256") == row_sha256(row))
+    except (TypeError, ValueError):
+        return False
+
+
+def read_incomplete_journal(path, *, max_bytes) -> dict:
+    """incomplete-YYYY-MM.jsonl → 같은 형식. row_sha256 이 행과 맞지 않는 줄은 skipped 로 센다."""
+    return _read_journal(path, max_bytes, ("incomplete_result",), _incomplete_ok)
+
+
 class ComparisonWorker:
     def __init__(self, runner: PairedComparisonRunner, *, manifest: dict, max_queue: int = 8,
                  max_input_age_seconds: float = 5.0, max_concurrent_pairs: int = 1,
-                 shutdown_deadline_seconds: float = 20, clock=None):
+                 shutdown_deadline_seconds: float = 20, clock=None, journal_dir=None, journal_queue: int = 1024):
         if not isinstance(runner, PairedComparisonRunner):
             raise ValueError("PairedComparisonRunner_required")
         if max_concurrent_pairs != 1:
@@ -69,15 +130,24 @@ class ComparisonWorker:
         self._counts = dict.fromkeys(COUNTERS, 0)
         self._seen: "OrderedDict[str, None]" = OrderedDict()   # ponytail: 최근 4096 ID, 하루 판단 수보다 훨씬 크다
         self.last_errors: deque = deque(maxlen=32)
-        self.incomplete_results: deque = deque(maxlen=64)       # 저장 실패한 원래 pair 행(메모리, 재시작 시 소실)
+        self.incomplete_results: deque = deque(maxlen=64)       # 메모리 사본. 영속 증거는 incomplete 저널이다
         self._accepting, self._stop, self._abort = False, threading.Event(), threading.Event()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._current: asyncio.Task | None = None
+        self.policy = runner.guard.policy
+        # KST 날짜 → 그날 입장(또는 입장 예정)으로 센 pair_id. start() 때 원장에서 당일분을 채운다.
+        self._day_pairs: dict[str, set] = {}
+        self._fresh: dict[str, tuple[str, str]] = {}            # decision_id → 이번 offer 가 새로 센 (day, pair_id)
+        self.journal_dir = (Path(journal_dir) if journal_dir is not None
+                            else Path.home() / ".cache" / "ai_trader" / "comparison_worker")
+        self._journal: "queue.Queue[dict | None]" = queue.Queue(maxsize=int(journal_queue))
+        self._journal_thread: threading.Thread | None = None
         # 이 manifest 가 고정한 운영 조건 — 봉투의 실제 운영 조건과 다르면 비교가 아니다.
         self._expected_controls = {
             "bull": self.manifest["current"], "bear": self.manifest["bear"],
             "fallback_chain": self.manifest.get("fallback_chain", []),
+            "fallback_chain_timeout_seconds": self.manifest["fallback_chain_timeout_seconds"],
             "empty_retries": self.manifest["empty_retries"],
             "strict_on_disagreement": self.manifest["strict_on_disagreement"],
         }
@@ -93,45 +163,130 @@ class ComparisonWorker:
         return key
 
     def offer(self, envelope) -> str:
-        """비차단. 반환은 accepted 또는 rejected_* 하나다."""
+        """비차단. 반환은 accepted 또는 rejected_* 하나다. 저널 기록은 큐에 넣기만 한다(파일 I/O 없음)."""
         now = self.clock()
         with self._lock:
-            self._counts["offered"] += 1
-            if not self._accepting:
-                return self._note("rejected_disabled")
-            reason = mci.verify_envelope(envelope)
-            decision_id = envelope.get("decision_id") if isinstance(envelope, dict) else None
-            if reason is not None:
-                return self._note("rejected_unattested" if reason in _INTEGRITY else "rejected_invalid",
-                                  decision_id, reason)
-            if now < _time(envelope["handed_off_at"]):
-                return self._note("rejected_invalid", decision_id, "clock_reversal")
-            controls = envelope["role_controls"]
-            producer = envelope["producer"] if isinstance(envelope.get("producer"), dict) else {}
-            if (not isinstance(controls, dict)
-                    or any(controls.get(k) != v for k, v in self._expected_controls.items())
-                    or producer.get("experiment_id") != self.manifest["experiment_id"]
-                    or producer.get("config_sha256") != self.config_sha256
-                    or producer.get("source_sha256") != mci.source_sha256()
-                    or producer.get("run_id") != mci.RUN_ID or producer.get("pid") != os.getpid()):
-                return self._note("rejected_control_mismatch", decision_id, "control_or_producer_mismatch")
-            if (now - _time(envelope["input_available_at"])).total_seconds() > self.max_input_age_seconds:
-                return self._note("rejected_stale", decision_id, "input_too_old_at_offer")
-            if decision_id in self._seen:
-                return self._note("rejected_duplicate", decision_id)
+            status, decision_id, reason = self._decide(envelope, now)
+        self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "offer", "recorded_at": now.isoformat(),
+                           "decision_id": decision_id, "status": status, "reason": reason,
+                           "received_at": now.isoformat(),
+                           "envelope": dict(envelope) if isinstance(envelope, dict) else envelope})
+        return status
+
+    def _decide(self, envelope, now):
+        """(status, decision_id, reason). self._lock 안에서만 부른다."""
+        self._counts["offered"] += 1
+        decision_id = envelope.get("decision_id") if isinstance(envelope, dict) else None
+
+        def note(key, why=None):
+            self._note(key, decision_id, why)
+            return key, decision_id, why
+        if not self._accepting:
+            return note("rejected_disabled")
+        reason = mci.verify_envelope(envelope)
+        if reason is not None:
+            return note("rejected_unattested" if reason in _INTEGRITY else "rejected_invalid", reason)
+        if now < _time(envelope["handed_off_at"]):
+            return note("rejected_invalid", "clock_reversal")
+        controls = envelope["role_controls"]
+        producer = envelope["producer"] if isinstance(envelope.get("producer"), dict) else {}
+        if (not isinstance(controls, dict)
+                or any(controls.get(k) != v for k, v in self._expected_controls.items())
+                or producer.get("experiment_id") != self.manifest["experiment_id"]
+                or producer.get("config_sha256") != self.config_sha256
+                or producer.get("source_sha256") != mci.source_sha256()
+                or producer.get("run_id") != mci.RUN_ID or producer.get("pid") != os.getpid()):
+            return note("rejected_control_mismatch", "control_or_producer_mismatch")
+        if (now - _time(envelope["input_available_at"])).total_seconds() > self.max_input_age_seconds:
+            return note("rejected_stale", "input_too_old_at_offer")
+        if decision_id in self._seen:
+            return note("rejected_duplicate")
+        if context_bytes(envelope["common_context"]) > self.policy.max_common_context_bytes:
+            return note("rejected_input_too_large", "comparison_input_too_large")
+        pair_id = self.runner.pair_id(decision_id)
+        day = self.runner.guard.ledger.today().isoformat()
+        if day not in self._day_pairs:
+            self._day_pairs = {day: set()}          # 지난 날짜는 버린다. 이 프로세스만 입장시키므로 새 날은 0부터다
+        counted = self._day_pairs[day]
+        # 이미 센 pair(재시작 뒤 같은 판단 재전달)는 러너가 저장 결과를 돌려줘 지출이 없다 — 상한에 다시 세지 않는다.
+        if pair_id not in counted and len(counted) >= self.policy.pairs_per_day:
+            return note("rejected_daily_pair_cap", "comparison_daily_pair_cap")
+        try:
+            self._queue.put_nowait(dict(envelope, received_at=now.isoformat()))
+        except queue.Full:
+            return note("rejected_full")
+        if pair_id not in counted:
+            counted.add(pair_id)
+            self._fresh[decision_id] = (day, pair_id)
+        self._seen[decision_id] = None
+        while len(self._seen) > 4096:
+            self._seen.popitem(last=False)
+        return note("accepted")
+
+    def _resync(self, decision_id):
+        """러너가 claim 전에 실패했으면(원장 입장 없음) 그날 수에서 뺀다. 작업자 스레드에서만 원장을 읽는다."""
+        pair_id = self.runner.pair_id(decision_id) if isinstance(decision_id, str) else None
+        try:
+            day = self.runner.guard.ledger.today().isoformat()
+            admitted = self.runner.admitted_pair_ids(day)
+        except Exception:
+            return                                   # 확인 불가면 보수적으로 센 채 둔다(과소 사용)
+        with self._lock:
+            if pair_id not in admitted:
+                self._day_pairs.get(day, set()).discard(pair_id)
+
+    def _uncount(self, decision_id):
+        """러너에 닿지 못한 수락분(만료·종료)은 그날 쌍 수에서 뺀다. 입장 없이 상한을 소진하지 않게."""
+        day, pair_id = self._fresh.pop(decision_id, (None, None))
+        if day is not None:
+            self._day_pairs.get(day, set()).discard(pair_id)
+
+    # ── 저널 ────────────────────────────────────────────────
+    def _journal_put(self, record, timeout=None):
+        try:
+            if timeout is None:
+                self._journal.put_nowait(record)
+            else:
+                self._journal.put(record, timeout=timeout)
+        except queue.Full:
+            with self._lock:
+                self._note("journal_dropped", record.get("decision_id"), "journal_queue_full")
+
+    def _transition(self, decision_id, status, reason=None):
+        self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "transition", "decision_id": decision_id,
+                           "status": status, "reason": reason, "at": self.clock().isoformat(),
+                           "pair_id": self.runner.pair_id(decision_id) if isinstance(decision_id, str) else None},
+                          timeout=1.0)
+
+    def journal_path(self, kind: str, stamp: str) -> Path:
+        month = _time(stamp).astimezone(_KST).strftime("%Y-%m")
+        return self.journal_dir / f"{'incomplete' if kind == 'incomplete_result' else 'offers'}-{month}.jsonl"
+
+    def _journal_run(self):
+        while True:
+            record = self._journal.get()
+            if record is None:
+                return
             try:
-                self._queue.put_nowait(dict(envelope, received_at=now.isoformat()))
-            except queue.Full:
-                return self._note("rejected_full", decision_id)
-            self._seen[decision_id] = None
-            while len(self._seen) > 4096:
-                self._seen.popitem(last=False)
-            return self._note("accepted")
+                path = self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
+                line = json.dumps(record, sort_keys=True, ensure_ascii=True, default=str) + "\n"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as handle:
+                    handle.write(line)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception as error:   # 기록 실패는 판단·offer 결과를 바꾸지 않는다
+                with self._lock:
+                    self._note("journal_failed", record.get("decision_id"), f"journal_write:{type(error).__name__}")
 
     # ── 작업자 스레드 ────────────────────────────────────────
     def start(self) -> "ComparisonWorker":
         if self._thread is not None:
             raise RuntimeError("worker_already_started")
+        day = self.runner.guard.ledger.today().isoformat()
+        self._day_pairs = {day: set(self.runner.admitted_pair_ids(day))}   # 재시작 뒤에도 당일 상한 유지
+        self._journal_thread = threading.Thread(target=self._journal_run, name="comparison-journal", daemon=True)
+        self._journal_thread.start()
         self._thread = threading.Thread(target=lambda: asyncio.run(self._consume()), name="comparison-worker",
                                         daemon=True)   # 멈춘 공급자 호출이 프로세스 종료를 묶지 않게
         self._thread.start()
@@ -169,6 +324,7 @@ class ComparisonWorker:
                         bear=self._roles["bear"], pricing_basis="paired_live_shadow",
                         fixed_at=self.manifest["fixed_at"],
                         strict_on_disagreement=self.manifest["strict_on_disagreement"],
+                        fallback_chain_timeout_seconds=self.manifest["fallback_chain_timeout_seconds"],
                         fallback_prompt=(env["common_context"] + controls["fallback_prompt_suffix"]
                                          if self._fallback else None),
                         fallback_system=controls["fallback_system"], fallback_chain=self._fallback,
@@ -178,37 +334,45 @@ class ComparisonWorker:
                         evaluation_anchor="input_available_at", live_provenance="in_process_attested",
                         attestation=mci.attest_pair(**fields))
 
+    def _end(self, decision_id, status, reason=None, *, uncount=False):
+        with self._lock:
+            self._note(status, decision_id, reason)
+            if uncount:
+                self._uncount(decision_id)
+        self._transition(decision_id, status, reason)
+
     async def _process(self, env):
         decision_id = env.get("decision_id")
         if self._abort.is_set():
-            with self._lock:
-                self._note("incomplete", decision_id, "shutdown_not_started")
-            return
+            return self._end(decision_id, "incomplete", "shutdown_not_started", uncount=True)
         if (self.clock() - _time(env["input_available_at"])).total_seconds() > self.max_input_age_seconds:
-            with self._lock:
-                self._note("expired", decision_id, "input_too_old_at_dispatch")
-            return
+            return self._end(decision_id, "expired", "input_too_old_at_dispatch", uncount=True)
         with self._lock:
             self._counts["started"] += 1
+            self._fresh.pop(decision_id, None)   # 러너에 넘긴 뒤에는 입장 여부를 원장이 정한다
+        self._transition(decision_id, "started")
         try:
             await self.runner.run(self._spec(env))
         except asyncio.CancelledError:
-            with self._lock:
-                self._note("incomplete", decision_id, "cancelled_at_shutdown")
+            self._end(decision_id, "incomplete", "cancelled_at_shutdown")
             raise
         except PairResultPersistenceError as error:
+            row = error.result
             with self._lock:
-                self.incomplete_results.append(error.result)
-                self._note("incomplete", decision_id, "pair_result_unpersisted")
-            logger.warning(f"[비교작업자] pair 결과 저장 실패 — 원래 행 메모리 보존: {error.result.get('pair_id')}")
+                self.incomplete_results.append(row)
+            # 복구(restore_pair_result)가 요구하는 영속 증거. 작업자 스레드라 잠깐 기다려도 된다.
+            self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "incomplete_result",
+                               "recorded_at": self.clock().isoformat(), "decision_id": decision_id,
+                               "pair_id": row.get("pair_id"), "row_sha256": row_sha256(row), "row": row}, timeout=5.0)
+            self._end(decision_id, "incomplete", "pair_result_unpersisted")
+            logger.warning(f"[비교작업자] pair 결과 저장 실패 — 원래 행을 incomplete 저널에 보존: {row.get('pair_id')}")
         except Exception as error:
-            reason = getattr(error, "reason", None) or str(error) or type(error).__name__
-            with self._lock:
-                self._note("incomplete", decision_id, reason[:200])
-            logger.warning(f"[비교작업자] pair 미완료 (판단 영향 없음): {reason[:200]}")
+            reason = (getattr(error, "reason", None) or str(error) or type(error).__name__)[:200]
+            self._resync(decision_id)
+            self._end(decision_id, "blocked" if reason in PAIR_BLOCK_REASONS else "incomplete", reason)
+            logger.warning(f"[비교작업자] pair 미완료 (판단 영향 없음): {reason}")
         else:
-            with self._lock:
-                self._counts["finished"] += 1
+            self._end(decision_id, "finished")
 
     async def _close_clients(self):
         adapter = getattr(self.runner, "adapter", None)
@@ -240,10 +404,18 @@ class ComparisonWorker:
                         env = self._queue.get_nowait()
                     except queue.Empty:
                         break
-                    with self._lock:
-                        self._note("incomplete", env.get("decision_id"), "shutdown_not_started")
+                    self._end(env.get("decision_id"), "incomplete", "shutdown_not_started", uncount=True)
                 thread.join(2.0)
-        return {**self.health(), "drained": drained}
+        # 상태 전이·incomplete 증거가 모두 쓰인 뒤 돌려준다(저널 큐를 비운 뒤 종료).
+        journal = self._journal_thread
+        if journal is not None and journal.is_alive():
+            try:
+                self._journal.put(None, timeout=2.0)
+            except queue.Full:
+                pass
+            journal.join(5.0)
+        return {**self.health(), "drained": drained,
+                "journal_drained": journal is None or not journal.is_alive()}
 
     def health(self) -> dict:
         with self._lock:
@@ -251,6 +423,7 @@ class ComparisonWorker:
                     "alive": self._thread is not None and self._thread.is_alive(),
                     "experiment_id": self.manifest["experiment_id"], "queue_depth": self._queue.qsize(),
                     "max_queue": self._queue.maxsize, "incomplete_results": len(self.incomplete_results),
+                    "journal_dir": str(self.journal_dir), "journal_depth": self._journal.qsize(),
                     "last_errors": list(self.last_errors)}
 
 

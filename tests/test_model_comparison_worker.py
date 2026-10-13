@@ -41,10 +41,12 @@ def manifest(**kw):
              "empty_retries": controls["empty_retries"], "current": controls["bull"],
              "candidate": dict(controls["bull"], reasoning_effort="low"), "bear": controls["bear"],
              "fallback_chain": controls["fallback_chain"],
-             "execution_policy": {"daily_attempt_cap": 20, "max_output_tokens": 400,
+             "fallback_chain_timeout_seconds": controls["fallback_chain_timeout_seconds"],
+             "execution_policy": {"daily_attempt_cap": 40, "max_output_tokens": 400,
                                   "allowed_models": sorted(set(MODELS.values())),
                                   "experiment_usd_ceiling": "100", "valid_from": "2026-01-01",
-                                  "valid_until": "2027-12-31", "required_policy_mode": "normal"}}
+                                  "valid_until": "2027-12-31", "pairs_per_day": 20,
+                                  "max_common_context_bytes": 65536, "required_policy_mode": "normal"}}
     value.update(kw)
     return value
 
@@ -57,7 +59,7 @@ class Clock:
         return self.at
 
 
-def build(tmp_path, *, ledger=None, op=None, ge=None, clock=None, man=None, **kw):
+def build(tmp_path, *, ledger=None, op=None, ge=None, clock=None, man=None, runner_clock=lambda: NOW, **kw):
     from src.analytics.model_comparison_runner import PairedComparisonRunner, SingleAttemptAdapter
     m = api()
     man = man or manifest()
@@ -67,7 +69,7 @@ def build(tmp_path, *, ledger=None, op=None, ge=None, clock=None, man=None, **kw
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
     op, ge = op or FakeOpenAI(), ge or FakeGemini()
     runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW),
-                                    clock=lambda: NOW)
+                                    clock=runner_clock)
     worker = m.ComparisonWorker(runner, manifest=man, clock=clock or Clock(), **kw)
     return worker, ledger, op, ge
 
@@ -265,8 +267,9 @@ def test_cross_validator_to_worker_end_to_end_keeps_verdict_and_ids(tmp_path, mo
     set_decision_recorder(recorder)
     ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
-        experiment_id="R", daily_attempt_cap=20, allowed_models=tuple(sorted(set(MODELS.values()))), max_output_tokens=400,
-        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31'))
+        experiment_id="R", daily_attempt_cap=40, allowed_models=tuple(sorted(set(MODELS.values()))), max_output_tokens=400,
+        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
+        pairs_per_day=20, max_common_context_bytes=65536))
     op, ge = GatedOpenAI(), FakeGemini()
     runner = PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(openai=op, gemini=ge))
     worker = m.ComparisonWorker(runner, manifest=manifest(fixed_at="2026-01-01T00:00:00+00:00"), max_input_age_seconds=30.0)
@@ -306,6 +309,221 @@ def test_dryrun_entrypoint_runs_offline_under_isolation_guard(capsys):
     assert module.main() == 0
     out = json.loads(capsys.readouterr().out)
     assert out["offer"] == "accepted" and out["health"]["finished"] == 1 and out["ledger"]["settled_count"] == 3
+
+
+def capped(pairs_per_day=1, max_bytes=65536, **kw):
+    man = manifest(**kw)
+    man["execution_policy"] = dict(man["execution_policy"], pairs_per_day=pairs_per_day,
+                                   max_common_context_bytes=max_bytes)
+    return man
+
+
+def journal(worker, kind="offers"):
+    from src.analytics.model_comparison_worker import read_incomplete_journal, read_offer_journal
+    reader = read_offer_journal if kind == "offers" else read_incomplete_journal
+    return [r for p in sorted(worker.journal_dir.glob(f"{kind}-*.jsonl"))
+            for r in reader(p, max_bytes=1 << 22)["records"]]
+
+
+# --- P1 #1: 하루 쌍 상한·입력 크기는 offer 에서(큐 전) 거부되고 재시작 뒤에도 유지된다 --------------
+
+def test_offer_rejects_daily_cap_and_large_input_before_queue_and_cap_survives_restart(tmp_path):
+    man = capped(pairs_per_day=1, max_bytes=16384)
+    worker, ledger, op, ge = build(tmp_path, man=man)
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, "dec-1")) == "accepted"
+        assert wait(lambda: worker.health()["finished"] == 1)
+        calls = len(op.calls) + len(ge.calls)
+        assert worker.offer(envelope(worker, "dec-2")) == "rejected_daily_pair_cap"
+        big = envelope(worker, "dec-big", common_context="x" * 20000)
+        assert worker.offer(big) == "rejected_input_too_large"
+        assert worker.health()["queue_depth"] == 0
+    finally:
+        worker.stop(5)
+    assert len(op.calls) + len(ge.calls) == calls and ledger.status()["settled_count"] == 3
+    # 재시작: 당일 입장 수를 원장에서 복원 → 새 판단은 거부, 같은 판단 재전달은 저장 결과(지출 0).
+    again, *_ = build(tmp_path, ledger=ledger, op=op, ge=ge, man=man)
+    again.start()
+    try:
+        assert again.offer(envelope(again, "dec-3")) == "rejected_daily_pair_cap"
+        assert again.offer(envelope(again, "dec-1")) == "accepted"
+        assert wait(lambda: again.health()["finished"] == 1)
+    finally:
+        health = again.stop(5)
+    assert health["rejected_daily_pair_cap"] == 1 and len(op.calls) + len(ge.calls) == calls
+    assert ledger.status()["settled_count"] == 3
+    with ledger._connect(readonly=True) as db:
+        assert db.execute("SELECT COUNT(*) FROM comparison_pairs").fetchone()[0] == 1   # 거부분은 큐·원장에 없다
+
+
+def test_expired_accepted_offer_does_not_consume_the_daily_pair(tmp_path):
+    clock, op = Clock(), GatedOpenAI()
+    worker, ledger, *_ = build(tmp_path, clock=clock, op=op, man=capped(pairs_per_day=2), runner_clock=clock)
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, "dec-0")) == "accepted"
+        assert wait(lambda: worker.health()["started"] == 1)
+        assert worker.offer(envelope(worker, "dec-1")) == "accepted"
+        clock.at = NOW + timedelta(seconds=6)
+        op.gate.set()
+        assert wait(lambda: worker.health()["expired"] == 1)
+        assert worker.offer(envelope(worker, "dec-2", at=clock.at)) == "accepted"   # 만료분은 쌍 수에서 빠졌다
+        assert worker.offer(envelope(worker, "dec-3", at=clock.at)) == "rejected_daily_pair_cap"
+    finally:
+        worker.stop(5)
+
+
+def test_pair_failing_before_claim_frees_the_day_slot_after_ledger_resync(tmp_path):
+    clock = Clock()
+    worker, ledger, op, ge = build(tmp_path, clock=clock, man=capped(pairs_per_day=1))   # 러너 시계는 NOW 고정
+    worker.start()
+    try:
+        clock.at = NOW + timedelta(seconds=3)
+        future = envelope(worker, "dec-future", at=clock.at)        # 러너 시각보다 미래 입력 → claim 전 ValueError
+        assert worker.offer(future) == "accepted"
+        assert wait(lambda: worker.health()["incomplete"] == 1)
+        clock.at = NOW
+        assert worker.offer(envelope(worker, "dec-ok")) == "accepted"   # 원장 입장 없음 → 그날 수에서 빠졌다
+        assert wait(lambda: worker.health()["finished"] == 1)
+        assert worker.offer(envelope(worker, "dec-late")) == "rejected_daily_pair_cap"
+    finally:
+        worker.stop(5)
+    assert ledger.status()["settled_count"] == 3
+
+
+# --- P1 #3: manifest 의 체인 시한과 봉투 운영 값이 다르면 비교가 아니다 --------------------------------
+
+def test_fallback_chain_timeout_mismatch_is_control_mismatch_and_reaches_pair_spec(tmp_path):
+    worker, ledger, op, ge = build(tmp_path)
+    worker.start()
+    try:
+        env = envelope(worker)
+        other = envelope(worker, "dec-2", role_controls=dict(env["role_controls"], fallback_chain_timeout_seconds=12.0))
+        assert worker.offer(other) == "rejected_control_mismatch"
+        assert worker._spec(dict(env, received_at=NOW.isoformat())).fallback_chain_timeout_seconds == 10.0
+    finally:
+        worker.stop(5)
+    man = manifest()
+    man.pop("fallback_chain_timeout_seconds")
+    with pytest.raises(KeyError):
+        build(tmp_path, ledger=ledger, man=man)
+
+
+# --- P1 #4: offer·전이·incomplete 행은 영속 저널에 남는다 ---------------------------------------------
+
+def test_offers_transitions_and_rejections_are_journaled_off_loop(tmp_path, monkeypatch):
+    import builtins
+    worker, ledger, op, ge = build(tmp_path)
+    opened = []
+    real_open = builtins.open
+
+    def spy(*args, **kwargs):
+        opened.append(threading.current_thread().name)
+        return real_open(*args, **kwargs)
+    monkeypatch.setattr(builtins, "open", spy)
+    worker.start()
+    env = envelope(worker)
+    caller = threading.current_thread().name
+    before = len([t for t in opened if t == caller])
+    assert worker.offer(env) == "accepted" and worker.offer(env) == "rejected_duplicate"
+    assert worker.offer(envelope(worker, "dec-x", nonce=b"other")) == "rejected_unattested"
+    assert len([t for t in opened if t == caller]) == before         # 운영 루프(호출 스레드)는 파일을 열지 않는다
+    assert wait(lambda: worker.health()["finished"] == 1)
+    health = worker.stop(5)
+    monkeypatch.setattr(builtins, "open", real_open)
+    assert health["journal_drained"] is True and health["journal_dropped"] == health["journal_failed"] == 0
+    records = journal(worker)
+    offers = [r for r in records if r["kind"] == "offer"]
+    assert [r["status"] for r in offers] == ["accepted", "rejected_duplicate", "rejected_unattested"]
+    assert offers[0]["envelope"] == env and offers[0]["envelope"]["attestation"]["kind"] == "in_process_nonce"
+    assert offers[0]["received_at"] == NOW.isoformat() and offers[2]["reason"] == "unattested"
+    transitions = [(r["status"], r["pair_id"]) for r in records if r["kind"] == "transition"]
+    pair_id = worker.runner.pair_id("dec-1")
+    assert transitions == [("started", pair_id), ("finished", pair_id)]
+    assert [p.name for p in worker.journal_dir.glob("*.jsonl")] == ["offers-2026-10.jsonl"]   # KST 월
+
+
+def test_unpersisted_pair_row_is_journaled_and_restorable_without_provider_calls(tmp_path, monkeypatch):
+    from src.analytics import model_comparison_recovery as recovery
+    worker, ledger, op, ge = build(tmp_path)
+    original = ledger._connect
+
+    class Connection:
+        def __init__(self, db): self.db = db
+        def execute(self, sql, *args):
+            if sql.startswith("UPDATE comparison_pairs SET result="):
+                raise sqlite3.OperationalError("injected pair storage failure")
+            return self.db.execute(sql, *args)
+        def __getattr__(self, name): return getattr(self.db, name)
+
+    @contextmanager
+    def connect(**kwargs):
+        with original(**kwargs) as db:
+            yield Connection(db)
+    monkeypatch.setattr(ledger, "_connect", connect)
+    worker.start()
+    assert worker.offer(envelope(worker)) == "accepted"
+    assert wait(lambda: worker.health()["incomplete"] == 1)
+    worker.stop(5)
+    monkeypatch.setattr(ledger, "_connect", original)
+    (record,) = journal(worker, "incomplete")
+    (kept,) = worker.incomplete_results
+    assert record["row"] == kept and record["pair_id"] == kept["pair_id"]
+    statuses = [(r["status"], r["reason"]) for r in journal(worker) if r["kind"] == "transition"]
+    assert statuses[-1] == ("incomplete", "pair_result_unpersisted")
+    with ledger._connect(readonly=True) as db:
+        manifest_json = db.execute("SELECT manifest FROM comparison_pairs").fetchone()[0]
+    evidence = next(worker.journal_dir.glob("incomplete-*.jsonl"))
+    assert recovery.restore_pair_result(worker.runner.guard, kept["pair_id"], record["row"],
+                                        manifest_json=manifest_json, evidence_path=evidence)["restored"] is True
+    calls = len(op.calls) + len(ge.calls)
+    again, *_ = build(tmp_path, ledger=ledger, op=op, ge=ge)
+    again.start()
+    assert again.offer(envelope(again)) == "accepted"
+    assert wait(lambda: again.health()["finished"] == 1)
+    again.stop(5)
+    assert len(op.calls) + len(ge.calls) == calls
+
+
+def test_journal_full_or_unwritable_never_changes_offer_result(tmp_path):
+    blocked_dir = tmp_path / "not-a-dir"
+    blocked_dir.write_text("file in the way")
+    worker, *_ = build(tmp_path, journal_dir=blocked_dir / "journal")
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker)) == "accepted"
+        assert wait(lambda: worker.health()["finished"] == 1)
+    finally:
+        health = worker.stop(5)
+    assert health["journal_failed"] >= 1 and health["finished"] == 1
+    (tmp_path / "second").mkdir()
+    full, *_ = build(tmp_path / "second", journal_queue=1)
+    gate = threading.Event()
+    full._journal_run = gate.wait                  # 저널 소비를 멈춰 큐 포화를 결정적으로 만든다
+    full.start()
+    statuses = [full.offer(envelope(full, f"dec-{i}")) for i in range(3)]
+    assert statuses == ["accepted"] * 3 and full.health()["journal_dropped"] == 2
+    full._journal.get_nowait()
+    gate.set()
+    full.stop(5)
+
+
+def test_journal_readers_skip_corrupt_lines_and_refuse_partial_reads(tmp_path):
+    from src.analytics.model_comparison_worker import read_incomplete_journal, read_offer_journal
+    path = tmp_path / "offers-2026-10.jsonl"
+    good = {"schema_version": "comparison-offer-v1", "kind": "offer", "decision_id": "d", "status": "accepted"}
+    path.write_text(json.dumps(good) + "\n{broken\n" + json.dumps({"kind": "offer"}) + "\n")
+    out = read_offer_journal(path, max_bytes=1 << 20)
+    assert out["records"] == [good] and out["skipped_lines"] == 2 and out["missing"] is False
+    with pytest.raises(ValueError, match="journal_too_large"):
+        read_offer_journal(path, max_bytes=10)
+    assert read_offer_journal(tmp_path / "none.jsonl", max_bytes=10)["missing"] is True
+    bad_sha = tmp_path / "incomplete-2026-10.jsonl"
+    bad_sha.write_text(json.dumps({"schema_version": "comparison-offer-v1", "kind": "incomplete_result",
+                                   "pair_id": "p", "row_sha256": "0" * 64, "row": {"pair_id": "p"}}) + "\n")
+    out = read_incomplete_journal(bad_sha, max_bytes=1 << 20)
+    assert out["records"] == [] and out["skipped_lines"] == 1
 
 
 def test_bot_shutdown_stops_worker_before_llm_manager_closes_shared_ledger(monkeypatch):
