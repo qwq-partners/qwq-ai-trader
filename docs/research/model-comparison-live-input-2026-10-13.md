@@ -171,7 +171,7 @@ offer→실행→stop 을 한 번 돌려 health JSON 을 출력한다(네트워�
 - 출처 증명은 같은 프로세스 난수 범위다. 파일 전달·다른 프로세스는 비인증이며 지원하지 않는다.
 - 폴백 시한: P1 후속으로 러너가 `PairSpec.fallback_chain_timeout_seconds`(운영 `SINGLE_FALLBACK_TIMEOUT` 복사,
   `role_controls.fallback_chain_timeout_seconds`)를 체인 전체에 적용한다. 시도별 `timeout_seconds` 도 그대로 남는다.
-  manifest `known_control_differences` 의 "시도별 10초" 문장은 이제 낡았다(W3 소유 키라 이번에 고치지 않음).
+  manifest `known_control_differences` 의 "시도별 10초" 문장은 통합 때 현재 구현(체인 전체 10초)대로 고쳤다.
 - 하루 쌍 상한의 작업자 사전 검사는 이 프로세스가 유일한 입장자라는 가정의 메모리 카운트다. 다른 프로세스가 같은
   원장에 입장시키면 러너 claim 이 최종 차단한다(공급자 호출 전).
 - 공통 입력 원천 관측 시각(`source_observed_at`)은 여전히 None — `input_available_at` 은 구성 시각이지 원천 시각이 아니다.

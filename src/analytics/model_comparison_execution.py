@@ -33,6 +33,7 @@ import math
 import re
 import sqlite3
 import time
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 import uuid
 
@@ -139,10 +140,16 @@ class ComparisonRequest:
             raise ValueError("timeout_seconds는 유한한 양수여야 한다")
 
 
+_SETTLEMENTS = ("measured", "rejected_before_generation")
+
+
 @dataclass(frozen=True)
 class ComparisonAttemptResult:
     value: Any
     actual_cost_usd: Decimal | str | int | float | None
+    # measured: 사용량/미전송 근거의 측정 비용. rejected_before_generation: raw 클라이언트가 생성 전 거절
+    # (429/4xx + 사용량 필드 없음)로 분류한 응답 — LLMManager 와 같이 예약을 'rejected' 로 해제한다(재리뷰 P1).
+    settlement: str = "measured"
 
 
 def _ledger_cost(value) -> float | None:
@@ -186,18 +193,24 @@ def _json_value(value):
 
 def _result_json(result: ComparisonAttemptResult) -> str:
     _json_value(result.value)
+    if result.settlement not in _SETTLEMENTS:
+        raise ValueError("settlement 값이 허용 집합 밖이다")
     cost = result.actual_cost_usd
     kind = "decimal" if isinstance(cost, Decimal) else type(cost).__name__
     return json.dumps({"value": result.value, "cost_type": kind,
-                       "cost": str(cost) if isinstance(cost, Decimal) else cost},
+                       "cost": str(cost) if isinstance(cost, Decimal) else cost,
+                       "settlement": result.settlement},
                       sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def _read_result(payload: str) -> ComparisonAttemptResult:
     raw = json.loads(payload)
     cost = Decimal(raw["cost"]) if raw["cost_type"] == "decimal" else raw["cost"]
-    result = ComparisonAttemptResult(raw["value"], cost)
-    if _result_json(result) != payload:
+    result = ComparisonAttemptResult(raw["value"], cost, raw.get("settlement", "measured"))
+    expected = json.loads(_result_json(result))
+    got = dict(raw)
+    got.setdefault("settlement", "measured")     # settlement 키 이전에 저장된 응답(측정 비용) 호환
+    if expected != got:
         raise ValueError("응답 JSON 형식이 일치하지 않는다")
     _ledger_cost(cost)
     return result
@@ -310,7 +323,11 @@ class ComparisonCallGuard:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
             cost = _ledger_cost(result.actual_cost_usd)
             if reservation is not None:
-                if reconciled is not None:
+                if result.settlement == "rejected_before_generation":
+                    # 생성 전 거절은 예약 해제(released)·과금 0 — LLMManager 의 'rejected' 정산과 같은 의미
+                    if reservation["state"] == "released" and cost == 0.0:
+                        state, reason = "known", None
+                elif reconciled is not None:
                     # 원래 미확정 예약이 감사 대사로 정산됐다. 응답·원래 추정 비용은 바꾸지 않는다.
                     state, reason = "known_reconciled", None
                 elif cost is None and reservation["state"] == "unknown":
@@ -324,6 +341,22 @@ class ComparisonCallGuard:
                 "state": state, "reservation_token": token,
                 "result": result, "block_reason": reason,
                 "original_estimated_cost_usd": estimate, "reconciled": reconciled}
+
+    def day_attempts(self, day: str) -> list[dict]:
+        """KST 날짜 `day` 에 입장(슬롯 소비)한 모든 시도의 원장 상태·비용(읽기 전용). pair 행이 없는 시도도 포함한다.
+
+        일별 지출 보고가 pair 결과 행만 보면 공급자 호출 뒤 종료·저장 실패한 시도의 비용이 빠진다(재리뷰 P1).
+        """
+        _kst_date(day, "day")
+        try:
+            with self.ledger._connect(readonly=True) as db:
+                db.execute("BEGIN")
+                self._check_policy(db)
+                return _day_attempt_rows(self, db, day)
+        except BudgetBlocked:
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError, ArithmeticError):
+            raise BudgetStateError("comparison_storage_unavailable") from None
 
     def lookup(self, attempt_id: str) -> dict | None:
         """읽기 전용 복구 조회. known/unknown/known_reconciled만 정산 확인, pending_reconciliation은 재전송 금지.
@@ -517,7 +550,14 @@ class ComparisonCallGuard:
                 cost = _ledger_cost(result.actual_cost_usd)
             except (ValueError, ArithmeticError):
                 raise BudgetBlocked("comparison_invalid_measured_cost") from None
-            outcome = "unknown" if cost is None else "known"
+            if result.settlement == "rejected_before_generation":
+                if cost not in (None, 0.0):
+                    raise BudgetBlocked("comparison_invalid_measured_cost")
+                cost, outcome = 0.0, "rejected"      # 예약 해제, 과금 없음 — 공유 원장을 unknown 으로 막지 않는다
+            elif result.settlement != "measured":
+                raise BudgetBlocked("comparison_invalid_result")
+            else:
+                outcome = "unknown" if cost is None else "known"
             try:
                 result_payload = _result_json(result)
             except (ValueError, TypeError, RecursionError):
@@ -525,9 +565,9 @@ class ComparisonCallGuard:
             # 월 정산 전에 응답·토큰을 보존한다. 그 뒤 중단돼도 재전송 없이 대사한다.
             self._store_result(attempt_id, token, result_payload)
             settlement_attempted = True
-            self.ledger.settle(token, outcome=outcome, actual_cost_usd=cost)
+            self.ledger.settle(token, outcome=outcome, actual_cost_usd=cost if outcome == "known" else None)
             try:
-                self._record(slot, token, outcome)
+                self._record(slot, token, "known" if outcome == "rejected" else outcome)
             except Exception:
                 pass  # 응답과 월 정산은 이미 영속화됐다. 부가 기록 실패로 응답을 잃지 않는다.
             return result
@@ -536,8 +576,8 @@ class ComparisonCallGuard:
             if token is not None and not settlement_attempted:
                 settlement_attempted = True
                 try:
-                    self.ledger.settle(token, outcome=outcome if entered_dispatch else "not_sent",
-                                       actual_cost_usd=cost)
+                    final = outcome if entered_dispatch else "not_sent"
+                    self.ledger.settle(token, outcome=final, actual_cost_usd=cost if final == "known" else None)
                 except Exception:
                     self.ledger.abandon(token)
             reason = exc.reason if isinstance(exc, BudgetBlocked) else "comparison_attempt_interrupted"
@@ -547,3 +587,42 @@ class ComparisonCallGuard:
             except Exception:
                 pass  # 확정된 ID/슬롯은 남는다. 결과를 복구할 수 없어도 재전송은 금지한다.
             raise
+
+
+def _day_attempt_rows(guard, db, day: str) -> list[dict]:
+    rows = db.execute("SELECT r.* FROM comparison_requests r JOIN comparison_attempts a ON a.slot=r.slot "
+                      "WHERE a.admission_day=? ORDER BY r.attempt_id", (day,)).fetchall()
+    out = []
+    for row in rows:
+        record = guard._lookup_row(db, row)
+        result = record["result"]
+        value = result.value if result is not None and isinstance(result.value, dict) else {}
+        cost = None
+        if record["reconciled"] is not None:
+            cost = record["reconciled"]["actual_cost_usd"]
+        elif record["state"] == "known" and result is not None and result.actual_cost_usd is not None:
+            cost = str(_d(result.actual_cost_usd, "actual_cost_usd"))
+        out.append({"attempt_id": record["attempt_id"], "admission_day": day, "state": record["state"],
+                    "reservation_token": record["reservation_token"], "cost_usd": cost,
+                    "original_estimated_cost_usd": record["original_estimated_cost_usd"],
+                    "request_sent": value.get("request_sent"), "block_reason": record["block_reason"]})
+    return out
+
+
+def read_day_attempts(ledger_path, day: str) -> list[dict]:
+    """읽기 전용 CLI 용: 원장 SQLite 를 ro 로 열어 그날 입장 시도의 상태·비용을 돌려준다. 정책 검사·초기화·쓰기 없음."""
+    _kst_date(day, "day")
+    path = Path(ledger_path).expanduser()
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("existing absolute ledger path required")
+    shim = object.__new__(ComparisonCallGuard)    # _lookup_row 는 정적 _reconciled 만 쓴다
+    connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.1, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("BEGIN")
+        names = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"comparison_requests", "comparison_attempts", "reservations"} <= names:
+            return []
+        return _day_attempt_rows(shim, connection, day)
+    finally:
+        connection.close()

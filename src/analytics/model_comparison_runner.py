@@ -179,11 +179,16 @@ class SingleAttemptAdapter:
         end = self.clock()
         if not isinstance(response, LLMResponse):
             raise ValueError('invalid_provider_response')
-        cost, cost_basis = None, 'unknown'
+        cost, cost_basis, settlement = None, 'unknown', 'measured'
         tokens_valid = all(type(v) is int and v >= 0 for v in (response.input_tokens, response.output_tokens))
         identity_matches = response.model == request.model and response.requested_model == request.model and response.provider == provider
         if response.request_sent is False and response.billing_status == 'not_sent':
             cost, cost_basis = Decimal('0'), 'transport_not_sent'
+        elif (response.billing_status == 'rejected_before_generation' and response.request_sent is True
+              and response.usage_known is not True and response.success is not True):
+            # raw 클라이언트의 생성 전 거절 추론(429/4xx + 사용량 필드 없음). LLMManager 와 같이 예약을 해제하고
+            # 과금 0 으로 둔다 — unknown 으로 남기면 공유 월 원장의 운영 호출까지 막힌다(재리뷰 P1).
+            cost, cost_basis, settlement = Decimal('0'), 'rejected_before_generation_inferred', 'rejected_before_generation'
         elif identity_matches and response.usage_known is True and tokens_valid:
             quote = rate_quote(request.model, response.input_tokens, response.output_tokens, on_date=start.date())
             if quote is not None:
@@ -206,7 +211,7 @@ class SingleAttemptAdapter:
                  'output_tokens': response.output_tokens if response.usage_known is True and tokens_valid else None,
                  'cost_basis': cost_basis, 'api_cost_usd': str(cost) if cost is not None else None,
                  'finish_reason': response.finish_reason}
-        return ComparisonAttemptResult(value, cost)
+        return ComparisonAttemptResult(value, cost, settlement)
 
 
 def _sum_cost(attempts):

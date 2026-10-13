@@ -301,3 +301,90 @@ def test_oversized_common_context_is_rejected_at_offer(tmp_path, monkeypatch):
         assert _pair_rows(s.ledger, include_blocked=True) == []
     finally:
         _teardown(s)
+
+
+class _RejectedOpenAI(FakeOpenAI):
+    """raw 클라이언트가 429 등으로 '생성 전 거절'로 분류한 응답 — 사용량 없음·전송됨·실패."""
+    async def complete(self, prompt, system="", model=None, **kw):
+        from src.utils.llm import LLMProvider, LLMResponse
+        self.calls.append((prompt, system, model, kw))
+        return LLMResponse("", model, LLMProvider.OPENAI, success=False, error="HTTP 429", requested_model=model,
+                           resolved_model=None, usage_known=False, billing_status="rejected_before_generation",
+                           request_sent=True)
+
+
+def test_rejected_before_generation_releases_reservation_and_keeps_shared_ledger_open(tmp_path, monkeypatch):
+    """재리뷰 P1: 생성 전 거절은 unknown 정산이 아니라 예약 해제 — 공유 월 원장의 운영 호출이 막히지 않는다."""
+    s = _stack(tmp_path, monkeypatch, openai=_RejectedOpenAI())
+    try:
+        approved, meta = _decide(s, "sig-rejected")
+        assert approved is True and wait(lambda: s.worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(s.ledger)
+        bull = [a for arm in ("current", "candidate") for a in pair[arm]["attempts"] if a["role"].startswith("bull")]
+        assert bull and all(a["api_cost_usd"] == "0" and a["cost_basis"] == "rejected_before_generation_inferred"
+                            and a["ledger_state"] == "known" and a["success"] is False for a in bull)
+        status = s.ledger.status()
+        assert not status["blocked"] and status["unresolved_count"] == 0            # 운영 호출 계속 가능
+        token = s.ledger.reserve("gpt-5-mini", "operating prompt", "", 100, policy_priority="essential")
+        s.ledger.settle(token, outcome="not_sent")
+        day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+        ledger_attempts = s.guard.day_attempts(day)
+        assert {a["attempt_id"] for a in ledger_attempts} >= {a["attempt_id"] for a in bull}
+        assert all(a["state"] == "known" and a["cost_usd"] == "0" for a in ledger_attempts if a["attempt_id"] in {b["attempt_id"] for b in bull})
+    finally:
+        _teardown(s)
+
+
+def test_daily_spend_counts_ledger_attempts_outside_pair_rows_and_flags_incomplete(tmp_path, monkeypatch):
+    """재리뷰 P1: pair 행이 없는 유료 시도(종료·저장 실패)는 원장 시도로 집계하고 미확정이면 총비용 null."""
+    s = _stack(tmp_path, monkeypatch)
+    try:
+        _decide(s, "sig-spend")
+        assert wait(lambda: s.worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(s.ledger)
+        day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+        attempts = s.guard.day_attempts(day)
+        assert len(attempts) == 3 and all(a["state"] == "known" for a in attempts)
+        # pair 행을 숨겨도(저장 실패 가정) 원장 시도만으로 지출이 집계된다
+        report = daily.build_daily_report([], day_kst=day, offer_records=[], ledger_attempts=attempts)
+        assert report["spend"]["ledger_attempts_outside_pair_rows"] and report["spend"]["total_usd"] is not None
+        assert report["spend"]["total_usd"] == pair["total_comparison_cost_usd"]
+        # 미확정 상태(pending)가 하나라도 있으면 총비용은 null
+        pending = [dict(attempts[0], attempt_id="x:pending", state="pending", cost_usd=None)]
+        report2 = daily.build_daily_report([pair], day_kst=day, offer_records=[], ledger_attempts=attempts + pending)
+        assert report2["spend"]["total_usd"] is None and report2["spend"]["unaccounted_attempts"]
+        # incomplete 저널에 결과 행 없는 쌍이 있으면 총비용 null
+        inc = [{"kind": "incomplete_result", "recorded_at": pair["requested_at"], "pair_id": "pair-lost", "row": {}}]
+        report3 = daily.build_daily_report([pair], day_kst=day, offer_records=[], ledger_attempts=attempts,
+                                           incomplete_records=inc)
+        assert report3["spend"]["total_usd"] is None and report3["spend"]["incomplete_pairs_without_result"] == ["pair-lost"]
+        # 모집단 저널 결손은 보고에 명시
+        report4 = daily.build_daily_report([pair], day_kst=day, offer_records=[], ledger_attempts=attempts,
+                                           journal_status={"missing": False, "skipped_lines": 2})
+        assert report4["offer_journal"]["complete"] is False and "population_journal_incomplete" in report4["limitations"]
+        # read_day_attempts(읽기 전용 CLI 경로)도 같은 집합
+        from src.analytics.model_comparison_execution import read_day_attempts
+        assert {a["attempt_id"] for a in read_day_attempts(s.path, day)} == {a["attempt_id"] for a in attempts}
+    finally:
+        _teardown(s)
+
+
+def test_daily_cli_rejects_missing_offer_journal(tmp_path, monkeypatch, capsys):
+    import importlib.util, json as _json
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    path = Path(__file__).resolve().parents[1] / "scripts" / "report_model_comparison.py"
+    spec = importlib.util.spec_from_file_location("report_model_comparison_cli_e2e", path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    pairs = tmp_path / "pairs.jsonl"; pairs.write_text("")
+    rc = module.main(["--pairs", str(pairs), "--daily", "2026-10-13", "--offers", str(tmp_path / "none.jsonl")])
+    out = _json.loads(capsys.readouterr().out)
+    assert rc == 2 and "missing" in out["error"]
+
+
+def test_empty_string_price_is_rejected_not_zero():
+    """재리뷰 P2: `event.price or 0` 금지 패턴 제거 — None 만 0, 빈 문자열은 거부."""
+    from src.analytics.model_comparison_sizing import _money
+    import pytest
+    assert _money(0) == "0"
+    with pytest.raises(ValueError):
+        _money("")

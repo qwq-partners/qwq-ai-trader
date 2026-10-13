@@ -30,24 +30,41 @@ def main(argv=None):
     parser.add_argument('--envelopes', help='--daily 용 입력 봉투 JSONL (제공 분모·선정)')
     parser.add_argument('--exclusions', help='--daily 용 제외 JSONL ({decision_id, reason})')
     parser.add_argument('--offers', help='--daily 용 작업자 offer 원장 JSONL (모집단·제외; read_offer_journal 로 읽음)')
+    parser.add_argument('--incomplete', help='--daily 용 작업자 incomplete 저널 JSONL (결과 행 없는 쌍 → 지출 미확정)')
+    parser.add_argument('--budget-db', help='--daily 용 월 예산 원장 SQLite 경로(읽기 전용) — pair 행 밖 시도의 비용/상태')
     args = parser.parse_args(argv)
     try:
         if args.max_bytes <= 0:
             raise ValueError('max-bytes must be positive')
         pairs = [json.loads(line) for line in _read_lines(args.pairs, max_bytes=args.max_bytes) if line.strip()]
         if args.daily:
-            offer_records = []
-            if args.offers:
+            offer_records, incomplete_records, journal_status, ledger_attempts = [], [], None, []
+            if args.offers or args.incomplete:
                 try:
-                    from src.analytics.model_comparison_worker import read_offer_journal
+                    from src.analytics.model_comparison_worker import read_offer_journal, read_incomplete_journal
                 except ImportError as exc:
-                    raise ValueError(f'offer journal reader unavailable (read_offer_journal): {exc}') from None
+                    raise ValueError(f'journal reader unavailable (read_offer_journal): {exc}') from None
+            if args.offers:
                 read = read_offer_journal(args.offers, max_bytes=args.max_bytes)
-                offer_records = read['records'] if isinstance(read, dict) else list(read)
+                read = read if isinstance(read, dict) else {'records': list(read), 'missing': False, 'skipped_lines': 0}
+                if read.get('missing'):
+                    raise ValueError(f'offer journal missing: {args.offers}')   # 파일 부재는 축소 분모가 아니라 오류
+                offer_records = read['records']
+                journal_status = {'missing': False, 'skipped_lines': read.get('skipped_lines', 0)}
+            if args.incomplete:
+                read_inc = read_incomplete_journal(args.incomplete, max_bytes=args.max_bytes)
+                read_inc = read_inc if isinstance(read_inc, dict) else {'records': list(read_inc), 'missing': False}
+                if read_inc.get('missing'):
+                    raise ValueError(f'incomplete journal missing: {args.incomplete}')
+                incomplete_records = read_inc['records']
+            if args.budget_db:
+                from src.analytics.model_comparison_execution import read_day_attempts
+                ledger_attempts = read_day_attempts(args.budget_db, args.daily)
             result = build_daily_report(pairs, day_kst=args.daily,
                                         offered_envelopes=_jsonl(args.envelopes, args.max_bytes),
                                         exclusions=_jsonl(args.exclusions, args.max_bytes),
-                                        offer_records=offer_records)
+                                        offer_records=offer_records, incomplete_records=incomplete_records,
+                                        journal_status=journal_status, ledger_attempts=ledger_attempts)
             print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
             return 0
         payloads, status = [], None

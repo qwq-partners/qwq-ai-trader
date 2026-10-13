@@ -26,6 +26,13 @@ STOP_REASONS = frozenset({
 })
 
 
+def _same_day(value, day_kst) -> bool:
+    try:
+        return _kst_day(value) == day_kst
+    except (ValueError, TypeError):
+        return False
+
+
 def _kst_day(value) -> str:
     return _timestamp(value, 'time').astimezone(KST).date().isoformat()
 
@@ -212,8 +219,14 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                        exclusions: Iterable[Mapping] = (), reconciled_lookup: Callable | Mapping | None = None,
                        outcomes: Mapping | None = None, max_input_age_seconds: float = 5.0,
                        pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
-                       offer_records: Iterable[Mapping] = ()) -> dict:
+                       offer_records: Iterable[Mapping] = (), ledger_attempts: Iterable[Mapping] = (),
+                       incomplete_records: Iterable[Mapping] = (), journal_status: Mapping | None = None) -> dict:
+    """ledger_attempts: 그날 입장한 시도의 원장 상태(`ComparisonCallGuard.day_attempts`/`read_day_attempts`).
+    pair 행 밖의 유료 시도(종료·취소·저장 실패)를 지출에 넣고, 상태가 미확정이면 총비용을 null 로 둔다(재리뷰 P1).
+    incomplete_records: 작업자 incomplete 저널 레코드 — 결과 행이 없는 쌍은 미정산으로 표시한다.
+    journal_status: 모집단 저널의 결손 정보({missing, skipped_lines}) — 불완전하면 보고에 명시한다(재리뷰 P2)."""
     offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
+    ledger_attempts, incomplete_records = list(ledger_attempts), list(incomplete_records)
     from_offers, excluded_offers = offers_to_population(offer_records)
     offered_envelopes += from_offers
     exclusions += excluded_offers
@@ -300,6 +313,25 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                 for a in row[arm].get('attempts', []):
                     if isinstance(a, Mapping) and isinstance(a.get('attempt_id'), str):
                         unique.setdefault(a['attempt_id'], a)
+    # pair 행 밖 시도(원장에만 남은 유료 호출): 보고 행이 없어도 지출·미확정에 포함한다.
+    outside_rows, unaccounted = [], []
+    for la in ledger_attempts:
+        if not isinstance(la, Mapping) or not isinstance(la.get('attempt_id'), str):
+            continue
+        state = la.get('state')
+        if state in ('pending', 'pending_reconciliation', 'unknown'):
+            unaccounted.append({'attempt_id': la['attempt_id'], 'state': state})
+        if la['attempt_id'] in unique:
+            continue
+        outside_rows.append(la['attempt_id'])
+        unique[la['attempt_id']] = {'attempt_id': la['attempt_id'], 'api_cost_usd': la.get('cost_usd'),
+                                    'request_sent': la.get('request_sent'), 'ledger_state': state,
+                                    'source': 'ledger_only'}
+    row_pair_ids = {r.get('pair_id') for r in all_runs}
+    incomplete_pairs = sorted({rec.get('pair_id') for rec in incomplete_records
+                               if isinstance(rec, Mapping) and rec.get('kind') == 'incomplete_result'
+                               and isinstance(rec.get('pair_id'), str) and rec.get('pair_id') not in row_pair_ids
+                               and _same_day(rec.get('recorded_at'), day_kst)})
     estimated, reconciled, used = Decimal('0'), Decimal('0'), Decimal('0')
     unknown, reconciled_ids, lookup_failed = [], [], []
     for attempt_id, a in sorted(unique.items()):
@@ -324,7 +356,10 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'original_estimated_usd': str(estimated),
              'reconciled_usd': str(reconciled), 'reconciled_attempts': reconciled_ids,
              'unknown_attempts': unknown, 'lookup_failed_attempts': lookup_failed,
-             'total_usd': str(used) if not unknown else None,
+             'ledger_attempts_outside_pair_rows': outside_rows, 'unaccounted_attempts': unaccounted,
+             'incomplete_pairs_without_result': incomplete_pairs,
+             'ledger_attempts_supplied': bool(ledger_attempts),
+             'total_usd': str(used) if not (unknown or unaccounted or incomplete_pairs) else None,
              'basis': 'unique attempt_id once across all pair runs of the day; '
                       'reconciled > original estimate > unknown; arm scenario costs are not summed'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)
@@ -343,10 +378,19 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         'limitations': ['sizing_only_replay_not_executable_quantity', 'raw_market_state_not_exchange_certified',
                         'quote_depth_not_fill_vwap_or_slippage', 'not_realized_pnl_or_account_return'],
     }
+    if not ledger_attempts:
+        report['limitations'].append('spend_from_pair_rows_only_ledger_attempts_not_supplied')
+    if journal_status is not None:
+        missing_j = bool(journal_status.get('missing'))
+        skipped = int(journal_status.get('skipped_lines') or 0)
+        report['offer_journal'] = {'missing': missing_j, 'skipped_lines': skipped,
+                                   'complete': (not missing_j) and skipped == 0}
+        if missing_j or skipped:
+            report['limitations'].append('population_journal_incomplete')
     report['telegram_preview'] = (
         f"[모델비교 {day_kst}] 제공 {offered_n}·적격 {len(selection['eligible'])}·표본 {sampled_n}·"
         f"완료 {complete}·제외 {offered_n - complete}\n"
-        f"지출 {'$' + str(used) if not unknown else '미확정'} (원래 추정 ${estimated}"
+        f"지출 {'$' + str(used) if spend['total_usd'] is not None else '미확정'} (원래 추정 ${estimated}"
         + (f"·대사 ${reconciled}" if reconciled_ids else '') + ")"
         + (f" (불명 {len(unknown)}건)" if unknown else '') + "\n"
         f"조건부 경제성 계산 {economics.get('conditional_price_proxy', 0)}건 / 불가 "
