@@ -24,6 +24,7 @@ import json
 import hashlib
 import math
 import sqlite3
+import time
 from typing import Any, Awaitable, Callable
 import uuid
 
@@ -298,21 +299,57 @@ class ComparisonCallGuard:
         except (OSError, sqlite3.Error, TypeError, ValueError, ArithmeticError):
             raise BudgetStateError("comparison_storage_unavailable") from None
 
-    def _store_result(self, attempt_id: str, token: str, payload: str):
+    def _stored_result_matches(self, attempt_id: str, token: str, payload: str) -> bool:
         try:
-            with self.ledger._connect() as db:
-                db.execute("BEGIN IMMEDIATE")
+            with self.ledger._connect(readonly=True) as db:
+                db.execute("BEGIN")
                 self._check_policy(db)
-                changed = db.execute("UPDATE comparison_requests SET reservation_token=?,result_json=? "
-                                     "WHERE attempt_id=? AND result_json IS NULL AND block_reason IS NULL",
-                                     (token, payload, attempt_id)).rowcount
-                if changed != 1:
-                    raise BudgetStateError("comparison_storage_corrupt")
-                db.execute("COMMIT")
-        except BudgetBlocked:
-            raise
-        except (OSError, sqlite3.Error, TypeError, ValueError):
-            raise BudgetStateError("comparison_storage_unavailable") from None
+                row = db.execute("SELECT reservation_token,result_json,block_reason FROM comparison_requests "
+                                 "WHERE attempt_id=?", (attempt_id,)).fetchone()
+                return row is not None and tuple(row) == (token, payload, None)
+        except (BudgetBlocked, OSError, sqlite3.Error, TypeError, ValueError):
+            return False
+
+    def _write_result_once(self, attempt_id: str, token: str, payload: str):
+        with self.ledger._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._check_policy(db)
+            row = db.execute("SELECT reservation_token,result_json,block_reason FROM comparison_requests "
+                             "WHERE attempt_id=?", (attempt_id,)).fetchone()
+            if row is None or row["block_reason"] is not None:
+                raise BudgetStateError("comparison_storage_corrupt")
+            if row["result_json"] is not None:
+                if tuple(row) != (token, payload, None):
+                    raise BudgetStateError("comparison_result_mismatch")
+                return  # 이전 COMMIT 응답 유실도 같은 토큰·바이트일 때만 성공으로 복구한다.
+            changed = db.execute("UPDATE comparison_requests SET reservation_token=?,result_json=? "
+                                 "WHERE attempt_id=? AND result_json IS NULL AND block_reason IS NULL",
+                                 (token, payload, attempt_id)).rowcount
+            if changed != 1:
+                raise BudgetStateError("comparison_storage_corrupt")
+            db.execute("COMMIT")
+
+    def _store_result(self, attempt_id: str, token: str, payload: str):
+        # 오프라인 작업 프로세스에서만 사용한다. 동일 응답 쓰기에 한해 BUSY/LOCKED를
+        # 약 1초/최대 10회까지 재시도한다. 공급자 호출이나 월 정산은 재시도하지 않는다.
+        deadline = time.monotonic() + 1.0
+        for attempt in range(10):
+            try:
+                self._write_result_once(attempt_id, token, payload)
+                return
+            except BudgetBlocked:
+                raise
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                busy = isinstance(code, int) and (code & 0xFF) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+                remaining = deadline - time.monotonic()
+                if busy and attempt < 9 and remaining > 0:
+                    time.sleep(min(0.01, remaining))
+                    continue
+                # I/O 오류는 재쓰기하지 않는다. 이미 커밋된 동일 결과만 읽어서 확인한다.
+                if self._stored_result_matches(attempt_id, token, payload):
+                    return
+                raise BudgetStateError("comparison_storage_unavailable") from None
 
     def _mark_failed(self, attempt_id: str, token: str | None, reason: str):
         # 저장된 응답은 실패 처리로 덮어쓰지 않는다. 정산 여부는 월 원장에서 판독한다.

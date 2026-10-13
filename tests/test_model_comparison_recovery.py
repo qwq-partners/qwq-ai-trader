@@ -314,3 +314,140 @@ def test_daily_blocked_id_is_not_automatically_retried_on_next_day(tmp_path):
         asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="blocked"))
     assert len(calls) == 1
     assert guard.lookup("blocked")["state"] == "blocked"
+
+
+def test_real_200ms_result_write_contention_preserves_paid_response(tmp_path):
+    import threading
+    import time
+    ledger, policy, guard = setup(tmp_path)
+    locked = threading.Event()
+    calls = []
+
+    def hold_write_lock():
+        with sqlite3.connect(ledger.path, isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
+            locked.set()
+            time.sleep(0.2)
+            db.execute("ROLLBACK")
+
+    worker = threading.Thread(target=hold_write_lock)
+
+    async def dispatch(req):
+        calls.append(req)
+        worker.start()
+        assert locked.wait(2)
+        return ComparisonAttemptResult({"response": "paid", "responded_at": "original"}, "0.0001")
+
+    try:
+        result = asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="busy-response"))
+    finally:
+        worker.join(2)
+    assert not worker.is_alive()
+    assert result.value == {"response": "paid", "responded_at": "original"}
+    assert asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="busy-response")) == result
+    assert len(calls) == 1
+    assert ledger.status()["spent_usd"] == 0.0001
+    assert guard.lookup("busy-response")["state"] == "known"
+
+
+def test_identical_response_write_is_idempotent_but_changed_payload_is_rejected(tmp_path):
+    ledger, policy, guard = setup(tmp_path)
+
+    async def dispatch(req):
+        return ComparisonAttemptResult("paid", 0.0001)
+
+    asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="write-twice"))
+    with sqlite3.connect(ledger.path) as db:
+        token, payload = db.execute("SELECT reservation_token,result_json FROM comparison_requests").fetchone()
+    guard._store_result("write-twice", token, payload)
+    with pytest.raises(BudgetBlocked, match="comparison_result_mismatch"):
+        guard._store_result("write-twice", token, payload.replace('paid', 'changed'))
+    assert guard.lookup("write-twice")["result"].value == "paid"
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_nonbusy_write_error_is_not_retried_and_commit_ack_is_read_back(tmp_path, monkeypatch, committed):
+    ledger, policy, guard = setup(tmp_path)
+    original = guard._write_result_once
+    writes = []
+    calls = []
+
+    def fail_write(*args):
+        writes.append(args)
+        if committed:
+            original(*args)
+        error = sqlite3.OperationalError("simulated I/O acknowledgement failure")
+        error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+        raise error
+
+    async def dispatch(req):
+        calls.append(req)
+        return ComparisonAttemptResult({"response": "paid"}, 0.0001)
+
+    monkeypatch.setattr(guard, "_write_result_once", fail_write)
+    if committed:
+        result = asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="io-error"))
+        assert result.value == {"response": "paid"}
+        assert guard.lookup("io-error")["state"] == "known"
+    else:
+        with pytest.raises(BudgetBlocked, match="comparison_storage_unavailable"):
+            asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="io-error"))
+        assert guard.lookup("io-error")["state"] == "blocked"
+    assert len(writes) == len(calls) == 1
+    assert ledger.status()["spent_usd"] == 0.0001
+
+
+def test_long_writer_contention_stops_at_bounded_attempts_without_redispatch(tmp_path, monkeypatch):
+    import threading
+    import time
+    ledger, policy, guard = setup(tmp_path)
+    locked, release = threading.Event(), threading.Event()
+    original = guard._write_result_once
+    writes, calls = [], []
+
+    def hold_write_lock():
+        with sqlite3.connect(ledger.path, isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
+            locked.set()
+            release.wait(5)
+            db.execute("ROLLBACK")
+
+    def observed_write(*args):
+        writes.append(args)
+        return original(*args)
+
+    worker = threading.Thread(target=hold_write_lock)
+
+    async def dispatch(req):
+        calls.append(req)
+        worker.start()
+        assert locked.wait(2)
+        return ComparisonAttemptResult("paid", 0.0001)
+
+    monkeypatch.setattr(guard, "_write_result_once", observed_write)
+    started = time.monotonic()
+    try:
+        with pytest.raises(BudgetBlocked, match="comparison_storage_unavailable"):
+            asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="long-busy"))
+    finally:
+        elapsed = time.monotonic() - started
+        release.set()
+        worker.join(2)
+    assert 1 <= len(writes) <= 10
+    assert elapsed < 2.5  # 응답 쓰기 약1초와 기존 정산/실패기록 각100ms를 포함한 여유.
+    assert ledger.status()["unresolved_count"] == 1
+    with pytest.raises(BudgetBlocked):
+        asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="long-busy"))
+    assert len(calls) == 1
+
+
+def test_generic_connection_error_is_not_evidence_of_zero_spend(tmp_path):
+    ledger, policy, guard = setup(tmp_path)
+
+    async def dispatch(req):
+        raise ConnectionError("no verified not-sent evidence")
+
+    with pytest.raises(ConnectionError):
+        asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="connection-error"))
+    assert ledger.status()["unresolved_count"] == 1
+    assert ledger.status()["block_reason"] == "unresolved_usage"
