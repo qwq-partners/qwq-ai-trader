@@ -12,6 +12,8 @@ classify_market_state 는 kis_market_state 가 보존한 raw 필드만 읽는다
 """
 from __future__ import annotations
 
+import math
+
 from datetime import timedelta
 from decimal import Decimal, DecimalException
 from typing import Any, Mapping
@@ -248,7 +250,7 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
     try:
         at = _timestamp(now, 'now')
         if (isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, (int, float))
-                or not max_age_seconds > 0):
+                or not math.isfinite(max_age_seconds) or not 0 < max_age_seconds <= 86400):   # 유한·하루 이내(7회차 P2)
             basis.append('invalid_max_age')
             return out('unknown')
     except ValueError:

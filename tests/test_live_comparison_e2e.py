@@ -837,3 +837,26 @@ def test_market_state_conflict_detection_is_permutation_invariant():
     assert verdicts == {'normal_continuous'}                            # 최신 C 가 정상·무충돌
     verdicts2 = {classify(list(order) + [mko()])['verdict'] for order in permutations([a, b])}
     assert verdicts2 == {'unknown'}                                     # 최신 키가 충돌
+
+
+def test_ledger_block_reasons_and_infinite_max_age_are_handled():
+    """7회차 P2: 공유 원장 차단 사유(unresolved_usage·reservation_bound_breach)는 중단 조건으로 보고되고,
+    장 상태 분류의 max_age_seconds 는 유한·하루 이내가 아니면 예외 없이 unknown 이다."""
+    attempts = [{"attempt_id": "x:bull_current:0", "admission_day": "2026-10-13", "state": "blocked",
+                 "reservation_token": None, "cost_usd": None, "original_estimated_cost_usd": None,
+                 "request_sent": None, "block_reason": "unresolved_usage"}]
+    report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[], ledger_attempts=attempts)
+    assert report["stop_conditions_reached"] == ["unresolved_usage"]
+    pair = {"schema_version": "model-comparison-pair-v2", "pair_id": "p", "decision_id": "d",
+            "evaluation_anchor": "input_available_at", "input_available_at": "2026-10-13T01:00:00+00:00",
+            "requested_at": "2026-10-13T01:00:00+00:00", "policy": {},
+            "current": {"verdict": "unavailable", "decision_available_at": "2026-10-13T01:00:01+00:00",
+                        "attempts": [{"attempt_id": "p:bull_current:0", "error": "reservation_bound_breach", "api_cost_usd": "0"}]},
+            "candidate": {"verdict": "unavailable", "decision_available_at": "2026-10-13T01:00:01+00:00", "attempts": []}}
+    report2 = daily.build_daily_report([pair], day_kst="2026-10-13", offer_records=[])
+    assert report2["stop_conditions_reached"] == ["reservation_bound_breach"]
+    from tests.test_model_comparison_admission import cnt, mko, NOW
+    for bad in (float("inf"), float("nan"), 10 ** 12, 0, -1, True):
+        out = adm.classify_market_state([cnt(), mko()], now=NOW, max_age_seconds=bad,
+                                        expected_connection_id="c1", expected_generation=3)
+        assert out["verdict"] == "unknown"

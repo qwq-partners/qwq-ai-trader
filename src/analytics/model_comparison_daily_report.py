@@ -23,6 +23,7 @@ STOP_REASONS = frozenset({
     'comparison_daily_attempt_cap', 'comparison_policy_disabled', 'comparison_policy_mode_not_normal',
     'comparison_economy_threshold', 'comparison_experiment_ceiling', 'comparison_experiment_expired',
     'comparison_policy_mismatch', 'essential_budget_reserved', 'monthly_limit_exceeded',
+    'unresolved_usage', 'reservation_bound_breach',   # 공유 원장 자체의 차단 사유(7회차 P2)
 })
 
 
