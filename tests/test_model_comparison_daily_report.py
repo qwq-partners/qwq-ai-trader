@@ -95,7 +95,7 @@ def test_complete_pair_counts_unique_attempts_once_and_shows_latency_and_quantit
     report = daily.build_daily_report([pair('d1')], day_kst=DAY, offered_envelopes=[env('d1')])
     assert report['denominators']['complete'] == 1 and report['denominators']['excluded'] == 0
     # 공통 Bear 0.002 를 한 번만 센다: bull 0.001×2 + bear 0.002
-    assert report['spend']['original_estimated_known_usd'] == '0.004'
+    assert report['spend']['original_estimated_usd'] == '0.004'
     assert report['spend']['unique_attempts'] == 3
     arm = report['rows'][0]['candidate']
     assert arm['quantity'] == 200 and arm['queue_delay_ms'] == 120.0
@@ -116,7 +116,7 @@ def test_partial_result_and_missing_pair():
 def test_unknown_cost_then_reconciled_cost():
     row = pair('d1', bear_cost=None)
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')])
-    assert report['spend']['still_unknown_attempts'] == ['p:bear:0'] and report['spend']['total_usd'] is None
+    assert report['spend']['unknown_attempts'] == ['p:bear:0'] and report['spend']['total_usd'] is None
     assert '불명 1건' in report['telegram_preview']
     lookup = {'p:bear:0': {'reconciled': {'actual_cost_usd': '0.0025', 'reconciliation_id': 7}}}
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], reconciled_lookup=lookup)
@@ -174,3 +174,92 @@ def test_cli_daily_is_read_only(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out['schema_version'] == daily.SCHEMA_VERSION and out['denominators']['complete'] == 1
     assert report_main(['--pairs', str(pairs), '--daily', '2026-13-01']) == 2
+
+
+# ── 비용 대사 우선·여러 실행 행·차단 마커·모집단 원장 ────────────────────────
+
+def test_reconciled_cost_overrides_original_estimate():
+    row = pair('d1')
+    row['current']['attempts'][0]['api_cost_usd'] = '0.0001'      # p:bull_current:0 원래 추정
+    lookup = {'p:bull_current:0': {'state': 'known_reconciled', 'original_estimated_cost_usd': '0.0001',
+                                   'reconciled': {'actual_cost_usd': '0.00015', 'reconciliation_id': 3}}}
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], reconciled_lookup=lookup)
+    spend = report['spend']
+    # 0.00015(대사) + bull_candidate 0.001 + bear 0.002
+    assert spend['total_usd'] == '0.00315'
+    assert spend['original_estimated_usd'] == '0.0031'
+    assert spend['reconciled_usd'] == '0.00015'
+    assert spend['unknown_attempts'] == []
+    assert spend['reconciled_attempts'] == [{'attempt_id': 'p:bull_current:0', 'reconciliation_id': 3}]
+
+
+def test_lookup_failure_keeps_cost_unknown():
+    def broken(attempt_id):
+        raise RuntimeError('comparison_storage_unavailable')
+    report = daily.build_daily_report([pair('d1')], day_kst=DAY, offered_envelopes=[env('d1')],
+                                      reconciled_lookup=broken)
+    assert report['spend']['total_usd'] is None
+    assert len(report['spend']['unknown_attempts']) == 3
+
+
+def test_all_pair_runs_of_one_decision_are_counted_for_spend():
+    first = pair('d1', bear_cost=None)                    # 앞 실행: Bear 비용 불명
+    first['candidate'] = None
+    for a in first['current']['attempts']:
+        a['attempt_id'] = a['attempt_id'].replace('p:', 'p-old:')
+    first['pair_id'] = 'p-old'
+    second = pair('d1')
+    report = daily.build_daily_report([first, second], day_kst=DAY, offered_envelopes=[env('d1')])
+    spend = report['spend']
+    assert spend['unknown_attempts'] == ['p-old:bear:0']
+    assert spend['total_usd'] is None
+    assert spend['unique_attempts'] == 5
+    assert spend['original_estimated_usd'] == '0.005'   # 앞 bull 0.001 + 뒤 0.004
+    (row,) = report['rows']                                # 판단별 표시는 최신 행 하나
+    assert row['pair_id'] == 'p' and row['pair_runs'] == 2 and row['prior_pair_ids'] == ['p-old']
+    assert report['denominators']['complete'] == 1
+
+
+def test_blocked_marker_is_an_excluded_reason():
+    marker = {'schema_version': 'model-comparison-pair-blocked-v1', 'decision_id': 'd1',
+              'reason': 'comparison_daily_attempt_cap', 'pair_id': 'p'}
+    report = daily.build_daily_report([marker], day_kst=DAY, offered_envelopes=[env('d1')])
+    assert report['denominators']['excluded'] == 1 and report['denominators']['complete'] == 0
+    assert report['missing_reasons'] == {'comparison_daily_attempt_cap': 1}
+    assert report['stop_conditions_reached'] == ['comparison_daily_attempt_cap']
+
+
+def offer(decision_id, status='accepted', reason=None, **kw):
+    e = env(decision_id, **kw)
+    received = e.pop('received_at')
+    return {'schema_version': 'comparison-offer-v1', 'kind': 'offer', 'recorded_at': received,
+            'decision_id': decision_id, 'status': status, 'reason': reason, 'received_at': received,
+            'envelope': e}
+
+
+def test_offer_records_supply_population_and_exclusions():
+    records = [offer('d1', status='rejected_queue_full', reason='queue_full'),
+               offer('d2', at='2026-10-15T01:00:00+00:00'),
+               {'kind': 'transition', 'decision_id': 'd2', 'status': 'expired', 'reason': 'input_too_old',
+                'at': '2026-10-15T01:00:40+00:00', 'pair_id': None},
+               offer('d3', at='2026-10-15T01:10:00+00:00'),
+               dict(offer('dx'), envelope=env('other'))]
+    report = daily.build_daily_report([], day_kst=DAY, offer_records=records, pairs_per_day=3)
+    assert report['denominators']['offered'] == 3        # 봉투 decision_id 불일치 기록은 제외
+    assert report['missing_reasons'] == {'queue_full': 1, 'input_too_old': 1, 'pair_result_missing': 1}
+
+
+def test_cli_offers_requires_worker_reader(tmp_path, capsys, monkeypatch):
+    pairs = tmp_path / 'pairs.jsonl'
+    pairs.write_text(json.dumps(pair('d1')) + '\n')
+    offers = tmp_path / 'offers.jsonl'
+    offers.write_text(json.dumps(offer('d1')) + '\n')
+    from src.analytics import model_comparison_worker as worker
+    monkeypatch.delattr(worker, 'read_offer_journal', raising=False)
+    assert report_main(['--pairs', str(pairs), '--daily', DAY, '--offers', str(offers)]) == 2
+    assert 'read_offer_journal' in json.loads(capsys.readouterr().out)['error']
+    monkeypatch.setattr(worker, 'read_offer_journal',
+                        lambda path, *, max_bytes: [json.loads(l) for l in Path(path).read_text().splitlines()],
+                        raising=False)
+    assert report_main(['--pairs', str(pairs), '--daily', DAY, '--offers', str(offers)]) == 0
+    assert json.loads(capsys.readouterr().out)['denominators']['complete'] == 1

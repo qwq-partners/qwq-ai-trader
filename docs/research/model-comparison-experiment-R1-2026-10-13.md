@@ -64,7 +64,7 @@
 
 **미확정(unknown 유지)**: MKO `TRHT_YN`(설명 공란 — Y 만 보수적으로 차단, N 은 정상 근거로 쓰지 않음), MKO `EXCH_CLS_CODE`(공란), CNT `MRKT_TRTM_CLS_CODE`(공란), MKO `ANTC/MRKT_TRTM/DIVI`(동시호가 사건용, 분류 미사용), `???` 코드, F/P 예고·사이드카·서킷 해제의 연속매매 여부, ISCD 51~54·59 의 연속매매 영향.
 
-`normal_continuous` 조건: 같은 연결·세대의 최신 CNT 기록이 `now` 이전·`max_age` 이내이고 20/N/0/2, **그리고** 같은 연결·세대의 최신 MKO 기록이 112·VI N·종목상태 중립. `now` 이후 기록은 무시한다. 결측 이벤트(특히 사건식 MKO 의 침묵)·빈 값·오래된 상태·다른 연결/재연결 전 세대·다른 채널·미검증 레코드·미지 코드·여러 종목 혼합은 unknown, CNT 반대 근거는 not_normal, CNT 정상인데 MKO 반대이면 `channel_conflict` unknown. 구독 직후 MKO 첫 상태가 오는지는 10/14 파일럿 전 미확인이므로 **실제로는 unknown 이 기본값일 수 있다.**
+`normal_continuous` 조건: 같은 연결·세대의 최신 CNT 기록이 `now` 이전·`max_age` 이내이고 20/N/0/2, **그리고** 같은 연결·세대의 최신 MKO 기록이 112·VI N·종목상태 중립. `now` 이후 기록은 무시한다. 결측 이벤트(특히 사건식 MKO 의 침묵)·빈 값·오래된 상태·다른 연결/재연결 전 세대·다른 채널·미검증 레코드·미지 코드·여러 종목 혼합은 unknown, CNT 반대 근거는 not_normal, CNT 정상인데 MKO 반대이면 `channel_conflict` unknown. **채널별 최신(now 이전) 기록을 먼저 고른다** — 그 최신 기록이 미자격(`invalid_values`/`unsupported_layout`/스키마·해시 불일치)·다른 연결/세대이거나 채널에 시각 불명 기록이 있으면 그 채널은 `latest_record_unqualified:<tr>` unknown 이고, 더 이른 정상 기록으로 대체하지 않는다(정상 뒤 무효·세대 전환 = 지금 상태 불명). 무효 기록이 정상보다 이르면 영향 없음. 구독 직후 MKO 첫 상태가 오는지는 10/14 파일럿 전 미확인이므로 **실제로는 unknown 이 기본값일 수 있다.**
 
 ## Task4 DO — 조건부 결과 계산 (I5)
 
@@ -73,6 +73,7 @@
 - anchor = `policy.evaluation_anchor`, 기준시각 = `row[anchor]`. 행에 `evaluation_anchor` 가 있으면 일치해야 한다. `input_available_at` 은 `live_provenance='in_process_attested'` 필수, `requested_at` 이 있으면 입력 시각 이후여야 한다. `evaluation_at = anchor + horizon`, 스냅샷·정책 고정·FX 시각 ≤ anchor, arm 완료 ≥ anchor.
 - `requested_at` 은 legacy(작업자 dispatch 시각) — 계산은 유지하되 `assumptions` 에 `legacy_requested_at_anchor_is_worker_dispatch_time`.
 - arm 별: `row['admission'][arm]` 이 admission schema·`replay_id==sizing_replay_ref`·수량·판정 일치. 수량>0 arm 은 `admissible is True` 이고 **모든 게이트 이름이 passed**(일괄 True 표시는 대체 불가), `row['market_state'][arm]` 이 normal_continuous 이고 `evaluated_at == entry_quote.received_at`. 수량>0 arm 이 있으면 `market_state['exit']` 도 exit 호가 시각에 normal. 수량 0 arm 은 `sizing_quantity` failed 와 일치하면 현금(0)으로 계산한다.
+- 근거 출처 대조(Codex #6): 모든 arm 의 admission `snapshot_id == sizing_snapshot.ref`(아니면 `ADMISSION_SNAPSHOT_MISMATCH`), `anchor_at` 이 `row[evaluation_anchor]` 와 같은 순간(오프셋 표기 차이 허용, 아니면 `ADMISSION_ANCHOR_MISMATCH`), 판정에 쓴 게이트(수량>0 은 전 게이트, 수량 0 은 `sizing_quantity`)의 `as_of` 가 tz-aware 이고 anchor 이하(미래 `ADMISSION_GATE_FUTURE:<gate>`, 누락·naive·형식 오류 `ADMISSION_GATE_TIME_INVALID:<gate>`). `replay_admission` 결과는 `snapshot_id`·`anchor_at` 을 싣는다.
 - 하나라도 어긋나면 `net_delta_krw=None`, `arm_reasons={arm: [...]}`, `reasons=['arm:REASON', ...]`.
 - 기존 비용·FX·슬리피지·호가 잔량·`actual_execution=False` 검사는 그대로. `assumptions` 에 "표시 잔량은 체결/VWAP/슬리피지 인증 아님", "슬리피지·수수료는 가정", "판단 전 스냅샷 기준 재생", "raw 코드 판독은 거래소 인증 아님".
 
@@ -122,19 +123,25 @@ manifest 수치는 `worst_case_reservation(manifest)` 와 같음을 시험이 �
 
 ## Task5 — 일별 보고
 
-`build_daily_report(pair_rows, *, day_kst, offered_envelopes, exclusions, reconciled_lookup=None, outcomes=None)`:
+`build_daily_report(pair_rows, *, day_kst, offered_envelopes=(), exclusions=(), reconciled_lookup=None, outcomes=None, offer_records=())`:
+
+- `offer_records`(작업자 append-only offer 원장 `comparison-offer-v1`): `kind:offer` 기록의 봉투(+기록 `received_at`, 봉투 decision_id 가 기록과 다르면 무시)를 모집단으로, offer/transition 의 `rejected_*`·`expired`·`incomplete` 상태를 사유(`reason`, 없으면 상태)와 함께 제외로 쓴다. 기존 `offered_envelopes`/`exclusions` 와 합친다. CLI `--daily --offers <jsonl>` 은 `model_comparison_worker.read_offer_journal` 을 지연 import 하며 없으면 rc 2·명확한 오류.
+- 차단 마커 행(`model-comparison-pair-blocked-v1`, `reason`)은 그날 제공된 판단이면 그 사유로 excluded 분모에 들어간다(사유 우선순위: 차단 마커 > 명시 제외 > offer 원장).
 
 - 분모 `offered/eligible/sampled/complete/excluded`(excluded = offered − complete), `missing_reasons`(unattested_input·not_received·input_too_old·input_clock_reversal·common_context_too_large·daily_quota·pair_result_missing·partial_result·제외 사유), 중복 전달은 첫 봉투만.
 - 행별: 스키마, anchor(v1 은 `requested_at (legacy)`), provenance, 입력/큐/요청/평가 시각, arm 별 판정·시도별 요청/응답 모델·`model_identity`·추론·지연·전송 여부·비용, `queue_delay_ms`·`provider_latency_ms`(v2), 완료−입력 지연, 응답 뒤 첫 호가(`quote_evidence.first_quote_after`, report_pairs 결합 결과가 있을 때), 재생 수량, 시나리오 비용(합산 금지), 조건부 경제성(`compare_policy_outcomes` 결과 또는 null+`outcome_not_supplied`).
-- 지출: 고유 attempt_id 한 번씩(공통 Bear 중복 합산 금지). 원래 추정 known·unknown 목록·대사 비용(`reconciled_lookup` — W1 `guard.lookup` 결과 또는 매핑)·전부 확인될 때만 total.
+- 지출(Codex #7 후): 그날 **모든 실행 행**(같은 decision_id 의 여러 pair 행 포함)의 고유 attempt_id 를 한 번씩. 시도별 비용 = 감사 대사액(`reconciled_lookup` — W1 `guard.lookup` 결과 또는 매핑) > 저장 추정 `api_cost_usd` > 불명. 조회 예외는 대사 여부를 모르므로 불명(`lookup_failed_attempts`). 필드 `original_estimated_usd`(저장 추정 합, 정보용)·`reconciled_usd`·`reconciled_attempts`·`unknown_attempts`·`pair_runs`, 불명이 하나라도 있으면 `total_usd=null`. 판단별 행은 최신 실행(`requested_at`, 동률은 입력 순서)이고 `pair_runs`·`prior_pair_ids` 를 싣는다.
 - `stop_conditions_reached`, `telegram_preview`(문자열만, 발송 함수 없음). CLI `--daily` 는 `reconciled_lookup`/`outcomes` 를 받지 않는다(원장 접근 없음).
 
 ## SEE — 검증
 
 - RED: outcome 확장 시험 17개가 수정 전 코드에서 실패 → 수정 후 통과. admission 은 as-of 검사와 MKO 필수 조건을 일부러 제거한 변이에서 5개 실패. 일별 보고는 Bear 중복 합산·선정 역순 변이에서 3개 실패, CLI `--daily` 는 구현 전 실패.
+- Codex 독립 리뷰 후속(#5~#7, base `1e6feac`): 수정 전 코드에서 장 상태 7건(정상 뒤 무효/세대·연결 전환/시각 불명), 진입 근거 10건(다른 스냅샷·다른 anchor·미래/naive 게이트 시각·수량 0 arm), 일별 보고 2건 의미 재현(추정 $0.0001·대사 $0.00015 → 구 합계 $0.0031, 앞 실행 unknown 소실) + 신규 필드·offer 원장·차단 마커·CLI `--offers` 실패 → 수정 후 관련 5파일 184 passed.
 - 범위: 표본 0, 제외만 있는 날, 부분 결과·결과 누락, unknown→대사 비용, 예산 모드 변경 중단, KST 일/월 경계(10-31 23:59:59 / 11-01 00:00:00), 결과를 바꿔도 같은 선정, v1 legacy 표기, 조작된 스냅샷·나중 스냅샷 누설·재생 혼합, VI/정지/세대/채널/충돌/미지 코드.
 
 ## 한계
+
+- 일별 보고의 선정(첫 적격 봉투)과 작업자의 실제 수락이 다르면(예: 첫 봉투 큐 거절 뒤 두 번째 실행) 표본은 거절 사유로 제외되고 두 번째 실행은 daily_quota 로 남는다 — 선정 규칙 일치는 W-A 통합에서 확인 필요. `read_incomplete_journal` 은 아직 보고에 연결하지 않았다.
 
 - sizing_only 재생·raw 장 상태·호가 잔량은 실행 가능 수량·체결·실현손익·계좌 수익이 아니다.
 - **live readiness 차단**: 외부 게이트 unknown(→ net_delta 항상 null), MKO 첫 상태 수신 미확인, 위 미확정 코드 의미가 하나라도 있으면 차단. W1 admission 훅·W2 봉투/작업자 통합·독립 리뷰 미완료.

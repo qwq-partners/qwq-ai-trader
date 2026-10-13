@@ -62,6 +62,9 @@ def test_good_snapshot_passes_replayable_gates_but_external_state_keeps_unknown(
     # 외부 상태가 unknown 인 한 통과를 만들지 않는다.
     assert result['admissible'] is None
     assert result['quantity'] == replay['quantity'] == 200
+    # 경제성 계산이 행의 스냅샷·기준시각과 대조할 수 있도록 둘 다 싣는다.
+    assert result['snapshot_id'] == envelope['neutral_sizing']['snapshot_id']
+    assert result['anchor_at'] == envelope['input_available_at']
 
 
 def test_zero_quantity_from_exhausted_strategy_budget_fails_with_engine_reason(case):
@@ -169,7 +172,7 @@ def test_good_same_generation_evidence_is_normal_continuous():
     ([cnt(hour_cls_code=''), mko()], 'unknown', 'empty_value:H0STCNT0'),
     ([cnt(received_at='2026-10-15T01:00:01+00:00'), mko()], 'unknown', 'stale:H0STCNT0'),
     ([cnt(generation=2), mko()], 'unknown', 'other_connection_or_generation:H0STCNT0'),  # 재연결 전 세대
-    ([cnt(), mko(generation=2)], 'unknown', 'missing_events:H0STMKO0'),
+    ([cnt(), mko(generation=2)], 'unknown', 'latest_record_unqualified:H0STMKO0'),
     ([cnt(connection_id='c0'), mko()], 'unknown', 'other_connection_or_generation:H0STCNT0'),
     ([cnt(tr_id='H0STASP0'), mko()], 'unknown', 'unqualified_record:H0STASP0'),        # 다른 채널
     ([cnt(market_state_status='invalid_values'), mko()], 'unknown', 'unqualified_record:H0STCNT0'),
@@ -204,3 +207,41 @@ def test_invalid_parameters_are_unknown():
                                      expected_generation=3)['verdict'] == 'unknown'
     assert adm.classify_market_state([cnt(), mko()], now=NOW, max_age_seconds=True, expected_connection_id='c1',
                                      expected_generation=3)['verdict'] == 'unknown'
+
+
+LATER = {'received_at': '2026-10-15T01:00:09+00:00', 'local_frame_index': 11}
+
+
+@pytest.mark.parametrize('later', [
+    cnt(market_state_status='invalid_values', **LATER),
+    cnt(market_state_status='unsupported_layout', **LATER),
+    cnt(market_state_source_sha256='0' * 64, **LATER),
+    cnt(generation=4, **LATER),             # 세대 전환 뒤 상태 불명
+    cnt(connection_id='c2', **LATER),
+])
+def test_latest_unqualified_record_is_not_replaced_by_earlier_normal(later):
+    result = classify([cnt(), later, mko()])
+    assert result['verdict'] == 'unknown'
+    assert 'latest_record_unqualified:H0STCNT0' in result['basis']
+
+
+def test_latest_unqualified_market_operation_record_is_unknown():
+    later_mko = mko(market_state_status='invalid_values', received_at='2026-10-15T00:30:00+00:00')
+    result = classify([cnt(), mko(), later_mko])
+    assert result['verdict'] == 'unknown'
+    assert 'latest_record_unqualified:H0STMKO0' in result['basis']
+
+
+def test_unreadable_time_on_channel_record_makes_channel_unknown():
+    result = classify([cnt(), cnt(received_at='not-a-time'), mko()])
+    assert result['verdict'] == 'unknown'
+    assert 'invalid_received_at:H0STCNT0' in result['basis']
+
+
+def test_earlier_unqualified_record_does_not_block_later_normal():
+    earlier = cnt(market_state_status='invalid_values', received_at='2026-10-15T01:00:07+00:00', local_frame_index=9)
+    other_gen = cnt(generation=2, received_at='2026-10-15T01:00:06+00:00', local_frame_index=8)
+    assert classify([earlier, other_gen, cnt(), mko()])['verdict'] == 'normal_continuous'
+    # now 이후의 무효 기록은 판정에서 제외된다
+    future_bad = cnt(market_state_status='invalid_values', received_at='2026-10-15T01:00:30+00:00')
+    assert classify([cnt(), future_bad, mko()])['verdict'] == 'normal_continuous'

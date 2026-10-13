@@ -155,8 +155,15 @@ def _arm_summary(row, name, input_at):
     }
 
 
+_LOOKUP_FAILED = object()
+
+
 def _reconciled(lookup, attempt_id):
-    found = lookup(attempt_id) if callable(lookup) else (lookup or {}).get(attempt_id)
+    """대사 비용 (값, 참조). 조회 실패는 _LOOKUP_FAILED — 대사 여부를 모르므로 비용 불명으로 센다."""
+    try:
+        found = lookup(attempt_id) if callable(lookup) else (lookup or {}).get(attempt_id)
+    except Exception:   # guard.lookup 의 BudgetBlocked/BudgetStateError 등
+        return _LOOKUP_FAILED, None
     if isinstance(found, Mapping) and isinstance(found.get('reconciled'), Mapping):
         found = found['reconciled']   # guard.lookup(attempt_id) 전체를 넘긴 경우
     if isinstance(found, Mapping) and found.get('actual_cost_usd') is not None:
@@ -164,47 +171,106 @@ def _reconciled(lookup, attempt_id):
     return None, None
 
 
-def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_envelopes: Iterable[Mapping],
+BLOCKED_SCHEMA = 'model-comparison-pair-blocked-v1'
+OFFER_SCHEMA = 'comparison-offer-v1'
+
+
+def offers_to_population(records: Iterable[Mapping]) -> tuple[list, list]:
+    """작업자 offer 원장 레코드 → (offered_envelopes, exclusions).
+
+    offer 기록의 봉투에 기록 received_at 을 붙여 모집단으로 쓴다(봉투 decision_id 가 기록과 다르면
+    제외). rejected_*·expired·incomplete 상태(offer/transition)는 사유와 함께 제외로 보낸다.
+    """
+    envelopes, exclusions = [], []
+    for rec in records:
+        if not isinstance(rec, Mapping) or not isinstance(rec.get('decision_id'), str):
+            continue
+        status = rec.get('status')
+        if rec.get('kind') == 'offer':
+            envelope = rec.get('envelope')
+            if (rec.get('schema_version') != OFFER_SCHEMA or not isinstance(envelope, Mapping)
+                    or envelope.get('decision_id') != rec['decision_id']):
+                continue
+            envelopes.append(dict(envelope, received_at=rec.get('received_at')))
+        elif rec.get('kind') != 'transition':
+            continue
+        if isinstance(status, str) and (status.startswith('rejected') or status in ('expired', 'incomplete')):
+            reason = rec.get('reason')
+            exclusions.append({'decision_id': rec['decision_id'],
+                               'reason': reason if isinstance(reason, str) and reason else status})
+    return envelopes, exclusions
+
+
+def _run_key(index, raw):
+    try:
+        return (_timestamp(raw.get('requested_at'), 'requested_at').timestamp(), index)
+    except ValueError:
+        return (float('-inf'), index)
+
+
+def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_envelopes: Iterable[Mapping] = (),
                        exclusions: Iterable[Mapping] = (), reconciled_lookup: Callable | Mapping | None = None,
                        outcomes: Mapping | None = None, max_input_age_seconds: float = 5.0,
-                       pairs_per_day: int = 1, max_common_context_bytes: int | None = None) -> dict:
+                       pairs_per_day: int = 1, max_common_context_bytes: int | None = None,
+                       offer_records: Iterable[Mapping] = ()) -> dict:
+    offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
+    from_offers, excluded_offers = offers_to_population(offer_records)
+    offered_envelopes += from_offers
+    exclusions += excluded_offers
     selection = select_daily_sample(offered_envelopes, day_kst=day_kst,
                                     max_input_age_seconds=max_input_age_seconds, pairs_per_day=pairs_per_day,
                                     max_common_context_bytes=max_common_context_bytes)
-    rows, day_rows = [], {}
-    for raw in pair_rows:
-        if not isinstance(raw, Mapping) or raw.get('schema_version') not in PAIR_SCHEMAS:
+    offered_set = set(selection['offered'])
+    # 같은 판단의 여러 실행 행을 모두 보존한다(지출은 전부, 표시는 최신 행).
+    runs, blocked = {}, []
+    for index, raw in enumerate(pair_rows):
+        if not isinstance(raw, Mapping):
             continue
-        legacy = raw['schema_version'] == 'model-comparison-pair-v1'
-        anchor = 'requested_at' if legacy else raw.get('evaluation_anchor')
-        policy = raw.get('policy') if isinstance(raw.get('policy'), Mapping) else {}
-        input_at = raw.get('input_available_at', policy.get('input_available_at'))
+        if raw.get('schema_version') == BLOCKED_SCHEMA:
+            if raw.get('decision_id') in offered_set and isinstance(raw.get('reason'), str):
+                blocked.append({'decision_id': raw['decision_id'], 'reason': raw['reason']})
+            continue
+        if raw.get('schema_version') not in PAIR_SCHEMAS:
+            continue
+        anchor = 'requested_at' if raw['schema_version'] == 'model-comparison-pair-v1' else raw.get('evaluation_anchor')
         try:
             if _kst_day(raw.get(anchor)) != day_kst:
                 continue
         except (ValueError, TypeError):
             continue
-        day_rows[raw.get('decision_id')] = raw
-        outcome = (outcomes or {}).get(raw.get('decision_id'))
+        runs.setdefault(raw.get('decision_id'), []).append((_run_key(index, raw), raw))
+
+    rows, day_rows = [], {}
+    for decision_id, entries in runs.items():
+        entries.sort(key=lambda e: e[0])
+        raw = entries[-1][1]                      # 판단별 표시는 최신 실행 행
+        day_rows[decision_id] = raw
+        legacy = raw['schema_version'] == 'model-comparison-pair-v1'
+        anchor = 'requested_at' if legacy else raw.get('evaluation_anchor')
+        policy = raw.get('policy') if isinstance(raw.get('policy'), Mapping) else {}
+        input_at = raw.get('input_available_at', policy.get('input_available_at'))
+        outcome = (outcomes or {}).get(decision_id)
         economic = ({k: outcome.get(k) for k in ('status', 'net_delta_krw', 'evaluation_anchor', 'reasons',
                                                  'arm_reasons', 'actual_execution', 'assumptions')}
                     if isinstance(outcome, Mapping) else
                     {'status': 'not_evaluable', 'net_delta_krw': None, 'reasons': ['outcome_not_supplied'],
                      'actual_execution': False})
-        rows.append({'decision_id': raw.get('decision_id'), 'pair_id': raw.get('pair_id'),
+        rows.append({'decision_id': decision_id, 'pair_id': raw.get('pair_id'),
+                     'pair_runs': len(entries), 'prior_pair_ids': [e[1].get('pair_id') for e in entries[:-1]],
                      'schema_version': raw['schema_version'],
                      'evaluation_anchor': 'requested_at (legacy)' if legacy else anchor,
                      'live_provenance': raw.get('live_provenance'), 'pricing_basis': raw.get('pricing_basis'),
-                     'sampled': raw.get('decision_id') in selection['sampled'],
+                     'sampled': decision_id in selection['sampled'],
                      'input_available_at': input_at, 'enqueued_at': raw.get('enqueued_at'),
                      'requested_at': raw.get('requested_at'), 'evaluation_at': raw.get('evaluation_at'),
                      'current': _arm_summary(raw, 'current', input_at),
                      'candidate': _arm_summary(raw, 'candidate', input_at),
                      'conditional_economics': economic, 'actual_execution': False})
+    all_runs = [raw for entries in runs.values() for _, raw in entries]
 
-    # 분모별 상태: 완료 또는 하나의 사유
+    # 분모별 상태: 완료 또는 하나의 사유 (차단 마커가 가장 구체적인 사유)
     excluded_by = {}
-    for item in exclusions:
+    for item in (*blocked, *exclusions):
         if isinstance(item, Mapping) and isinstance(item.get('reason'), str):
             excluded_by.setdefault(item.get('decision_id'), item['reason'])
     status = dict(selection['ineligible'])
@@ -217,41 +283,50 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             status[decision_id] = excluded_by[decision_id]
         else:
             status[decision_id] = 'pair_result_missing' if row is None else 'partial_result'
-    missing = Counter(v for d, v in status.items() if v != 'complete' and d in selection['offered'])
+    missing = Counter(v for d, v in status.items() if v != 'complete' and d in offered_set)
     complete = sum(v == 'complete' for v in status.values())
     stop_found = sorted({r for r in excluded_by.values() if r in STOP_REASONS}
-                        | {a.get('error') for row in day_rows.values() for arm in ('current', 'candidate')
+                        | {a.get('error') for row in all_runs for arm in ('current', 'candidate')
                            if isinstance(row.get(arm), Mapping)
                            for a in row[arm].get('attempts', []) if isinstance(a, Mapping)
                            and a.get('error') in STOP_REASONS})
 
-    # 실제 지출: 고유 attempt_id 한 번씩 (공통 Bear 중복 합산 금지)
+    # 실제 지출: 그날 모든 실행 행의 고유 attempt_id 한 번씩 (공통 Bear·재실행 중복 합산 금지).
+    # 시도별 비용 = 감사 대사액 > 저장 추정액 > 불명.
     unique = {}
-    for row in day_rows.values():
+    for row in all_runs:
         for arm in ('current', 'candidate'):
             if isinstance(row.get(arm), Mapping):
                 for a in row[arm].get('attempts', []):
                     if isinstance(a, Mapping) and isinstance(a.get('attempt_id'), str):
                         unique.setdefault(a['attempt_id'], a)
-    known, reconciled, still_unknown, reconciled_ids = Decimal('0'), Decimal('0'), [], []
+    estimated, reconciled, used = Decimal('0'), Decimal('0'), Decimal('0')
+    unknown, reconciled_ids, lookup_failed = [], [], []
     for attempt_id, a in sorted(unique.items()):
-        if a.get('api_cost_usd') is not None:
-            known += Decimal(str(a['api_cost_usd']))
-            continue
-        value, ref = _reconciled(reconciled_lookup, attempt_id)
-        if value is None:
-            still_unknown.append(attempt_id)
-        else:
+        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None else None
+        if estimate is not None:
+            estimated += estimate
+        value, ref = _reconciled(reconciled_lookup, attempt_id) if reconciled_lookup is not None else (None, None)
+        if value is _LOOKUP_FAILED:
+            lookup_failed.append(attempt_id)
+            unknown.append(attempt_id)
+        elif value is not None:
             reconciled += value
+            used += value
             reconciled_ids.append({'attempt_id': attempt_id, 'reconciliation_id': ref})
-    spend = {'unique_attempts': len(unique),
+        elif estimate is not None:
+            used += estimate
+        else:
+            unknown.append(attempt_id)
+    spend = {'unique_attempts': len(unique), 'pair_runs': len(all_runs),
              'provider_sent_attempts': sum(a.get('request_sent') is True for a in unique.values()),
              'unknown_transmission_attempts': sum(a.get('request_sent') is None for a in unique.values()),
-             'original_estimated_known_usd': str(known),
+             'original_estimated_usd': str(estimated),
              'reconciled_usd': str(reconciled), 'reconciled_attempts': reconciled_ids,
-             'still_unknown_attempts': still_unknown,
-             'total_usd': str(known + reconciled) if not still_unknown else None,
-             'basis': 'unique_attempt_ids_once; arm scenario costs are not summed'}
+             'unknown_attempts': unknown, 'lookup_failed_attempts': lookup_failed,
+             'total_usd': str(used) if not unknown else None,
+             'basis': 'unique attempt_id once across all pair runs of the day; '
+                      'reconciled > original estimate > unknown; arm scenario costs are not summed'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)
     offered_n, sampled_n = len(selection['offered']), len(selection['sampled'])
     report = {
@@ -271,8 +346,9 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     report['telegram_preview'] = (
         f"[모델비교 {day_kst}] 제공 {offered_n}·적격 {len(selection['eligible'])}·표본 {sampled_n}·"
         f"완료 {complete}·제외 {offered_n - complete}\n"
-        f"지출 추정 ${known}" + (f" + 대사 ${reconciled}" if reconciled_ids else '')
-        + (f" (불명 {len(still_unknown)}건)" if still_unknown else '') + "\n"
+        f"지출 {'$' + str(used) if not unknown else '미확정'} (원래 추정 ${estimated}"
+        + (f"·대사 ${reconciled}" if reconciled_ids else '') + ")"
+        + (f" (불명 {len(unknown)}건)" if unknown else '') + "\n"
         f"조건부 경제성 계산 {economics.get('conditional_price_proxy', 0)}건 / 불가 "
         f"{len(rows) - economics.get('conditional_price_proxy', 0)}건 — 체결·실현손익 아님\n"
         f"중단 조건: {', '.join(stop_found) if stop_found else '없음'}")

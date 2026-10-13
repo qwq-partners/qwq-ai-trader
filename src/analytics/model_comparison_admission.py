@@ -234,6 +234,9 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
     normal_continuous 조건: (1) 같은 연결·세대의 H0STCNT0 최신 기록이 now 이전·max_age 이내이고
     20/N/0/2, (2) 같은 연결·세대의 H0STMKO0 최신 기록이 112 장개시·VI N·종목상태 중립.
     장운영 알림은 사건식이라 없으면 unknown 이다(침묵은 정상 근거가 아님).
+    채널별 최신(now 이전) 기록을 먼저 고른다. 그 기록이 미자격·다른 연결/세대이거나 채널에 시각
+    불명 기록이 있으면 그 채널은 unknown(latest_record_unqualified:<tr>)이며 이전 정상 기록으로
+    대체하지 않는다.
     """
     basis, refs = [], []
 
@@ -257,7 +260,9 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
     if not isinstance(records, (list, tuple)) or not records:
         basis.append('missing_events')
         return out('unknown')
-    latest = {}
+    # 채널별 최신 기록을 먼저 고르고, 그 최신 기록이 미자격이면 채널 전체를 unknown 으로 둔다.
+    # 이전 정상 기록으로 대체하지 않는다(정상 뒤 무효/세대 전환이 오면 지금 상태는 불명).
+    latest, untimed = {}, set()
     symbols = set()
     for raw in records:
         if not isinstance(raw, Mapping) or raw.get('kind') != 'market_state':
@@ -265,26 +270,37 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
             continue
         tr = raw.get('tr_id')
         spec = _TR_SPECS.get(tr)
-        if (spec is None or raw.get('schema_version') != _STATE_SCHEMA
-                or raw.get('market_state_schema') != _GUIDE_SCHEMA
-                or raw.get('market_state_source_sha256') != spec['source_sha256']
-                or raw.get('market_state_status') != 'raw_only'):
+        if spec is None:
             basis.append(f'unqualified_record:{tr}')
-            continue
-        if raw.get('connection_id') != expected_connection_id or raw.get('generation') != expected_generation:
-            basis.append(f'other_connection_or_generation:{tr}')
             continue
         try:
             received = _timestamp(raw.get('received_at'), 'received_at')
         except ValueError:
             basis.append(f'invalid_received_at:{tr}')
+            untimed.add(tr)   # 순서를 알 수 없는 기록이 최신일 수 있다
             continue
         if received > at:
             continue  # now 이후 기록은 판정에 쓰지 않는다
         symbols.add(raw.get('symbol'))
-        key = (received, raw.get('local_frame_index') or 0, raw.get('record_index') or 0)
+        problem = None
+        if (raw.get('schema_version') != _STATE_SCHEMA or raw.get('market_state_schema') != _GUIDE_SCHEMA
+                or raw.get('market_state_source_sha256') != spec['source_sha256']
+                or raw.get('market_state_status') != 'raw_only'):
+            problem = f'unqualified_record:{tr}'
+        elif raw.get('connection_id') != expected_connection_id or raw.get('generation') != expected_generation:
+            problem = f'other_connection_or_generation:{tr}'
+        key = (received, *(v if type(v) is int else -1
+                           for v in (raw.get('local_frame_index'), raw.get('record_index'))))
         if tr not in latest or key > latest[tr][0]:
-            latest[tr] = (key, raw)
+            latest[tr] = (key, raw, problem)
+    disqualified = set(untimed)
+    for tr in list(latest):
+        if latest[tr][2] is not None:
+            basis.append(latest[tr][2])
+            disqualified.add(tr)
+    for tr in sorted(disqualified):
+        basis.append(f'latest_record_unqualified:{tr}')
+        latest.pop(tr, None)
     if len(symbols) > 1:
         basis.append('mixed_symbols')
         return out('unknown')
@@ -298,10 +314,12 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
                          'source_sha256': raw.get('market_state_source_sha256')})
 
     cnt_state = 'unknown'
-    if 'H0STCNT0' not in latest:
+    if 'H0STCNT0' in disqualified:
+        pass  # 최신 기록 미자격 사유는 위에 기록했다
+    elif 'H0STCNT0' not in latest:
         basis.append('missing_events:H0STCNT0')
     else:
-        (received, _, _), cnt = latest['H0STCNT0']
+        (received, _, _), cnt, _ = latest['H0STCNT0']
         values = {k: cnt.get(k) for k in _CNT_NORMAL}
         if at - received > timedelta(seconds=max_age_seconds):
             basis.append('stale:H0STCNT0')
@@ -319,7 +337,9 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
                          if values[k] != _CNT_NORMAL[k])
 
     mko_state = 'unknown'
-    if 'H0STMKO0' not in latest:
+    if 'H0STMKO0' in disqualified:
+        pass
+    elif 'H0STMKO0' not in latest:
         basis.append('missing_events:H0STMKO0')
     else:
         mko = latest['H0STMKO0'][1]

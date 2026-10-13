@@ -112,13 +112,29 @@ def _market_reasons(states, key, quote_at):
     return reasons
 
 
-def _admission_reasons(row, name, arm):
-    """호출자가 붙인 증거의 구조·일관성 검사. 일괄 True 표시는 게이트 통과를 대신하지 않는다."""
+def _gate_time_reason(gate_name, gate, anchor):
+    try:
+        as_of = _timestamp(gate.get('as_of'), 'as_of')
+    except ValueError:
+        return f'ADMISSION_GATE_TIME_INVALID:{gate_name}'    # 누락·naive·형식 오류
+    return f'ADMISSION_GATE_FUTURE:{gate_name}' if as_of > anchor else None
+
+
+def _admission_reasons(row, name, arm, *, snapshot_ref, anchor):
+    """호출자가 붙인 증거의 구조·일관성 검사. 일괄 True 표시는 게이트 통과를 대신하지 않는다.
+
+    진입 근거는 이 행의 스냅샷(sizing_snapshot.ref)·기준시각(row[evaluation_anchor])에서 나온
+    것이어야 하고, 판정에 쓴 게이트의 as_of 는 tz-aware 이며 기준시각 이전이어야 한다.
+    """
     admissions = row.get('admission')
     admission = admissions.get(name) if isinstance(admissions, Mapping) else None
     if not isinstance(admission, Mapping) or admission.get('schema_version') != ADMISSION_SCHEMA:
         return ['ADMISSION_MISSING']
     reasons = []
+    if admission.get('snapshot_id') != snapshot_ref:
+        reasons.append('ADMISSION_SNAPSHOT_MISMATCH')
+    if not _same_time(admission.get('anchor_at'), anchor):
+        reasons.append('ADMISSION_ANCHOR_MISMATCH')
     if (admission.get('replay_id') != row[name]['sizing_replay_ref']
             or admission.get('quantity') != arm['quantity'] or admission.get('verdict') != arm['verdict']):
         reasons.append('ADMISSION_REPLAY_MISMATCH')
@@ -127,6 +143,8 @@ def _admission_reasons(row, name, arm):
         gate = gates.get('sizing_quantity')
         if not isinstance(gate, Mapping) or gate.get('status') != 'failed':
             reasons.append('ADMISSION_QUANTITY_INCONSISTENT')
+        elif _gate_time_reason('sizing_quantity', gate, anchor):
+            reasons.append(_gate_time_reason('sizing_quantity', gate, anchor))
         return reasons
     if admission.get('admissible') is not True:
         reasons.append('ADMISSION_NOT_PASSED')
@@ -134,8 +152,12 @@ def _admission_reasons(row, name, arm):
         gate = gates.get(gate_name)
         if not isinstance(gate, Mapping):
             reasons.append(f'ADMISSION_GATE_MISSING:{gate_name}')
-        elif gate.get('status') != 'passed':
+            continue
+        if gate.get('status') != 'passed':
             reasons.append(f'ADMISSION_GATE_NOT_PASSED:{gate_name}')
+        time_reason = _gate_time_reason(gate_name, gate, anchor)
+        if time_reason:
+            reasons.append(time_reason)
     return reasons
 
 
@@ -205,7 +227,8 @@ def compare_policy_outcomes(row: Mapping, *, fees: FeeCalculator | None) -> dict
         arms = {name: _arm(name, row, requested=requested, evaluation=evaluation,
                           snapshot_ref=snapshot_ref, policy=policy, fees=fees)
                 for name in ('current', 'candidate')}
-        arm_reasons = {name: _admission_reasons(row, name, arm) for name, arm in arms.items()}
+        arm_reasons = {name: _admission_reasons(row, name, arm, snapshot_ref=snapshot_ref, anchor=requested)
+                       for name, arm in arms.items()}
         for name, arm in arms.items():
             if arm['quantity'] > 0:
                 quote_at = _timestamp(row[name]['entry_quote']['received_at'], 'entry_quote.received_at')
