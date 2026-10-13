@@ -1112,8 +1112,9 @@ class LLMManager:
                 "resolved_model": response.resolved_model,
                 "request_sent": response.request_sent, "success": response.success,
                 "billing_status": response.billing_status, "usage_known": response.usage_known,
-                "input_tokens": response.input_tokens if response.request_sent else None,
-                "output_tokens": response.output_tokens if response.request_sent else None,
+                # 사용량이 보고된 시도만 토큰 수를 적는다 — 미확인(usage_known=False)은 None (4차 리뷰 P2)
+                "input_tokens": response.input_tokens if (response.request_sent and response.usage_known is True) else None,
+                "output_tokens": response.output_tokens if (response.request_sent and response.usage_known is True) else None,
                 "estimated_cost_usd": cost,
                 "budget_reservation_token": response.budget_reservation_token,
                 "budget_block_reason": response.budget_block_reason,

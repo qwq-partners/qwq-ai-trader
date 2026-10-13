@@ -227,7 +227,7 @@ def test_partial_timeout_keeps_completed_side(monkeypatch):
     assert result.failed is True
     bull, bear = result.meta["attempts"]
     assert bull["outcome"] == "success" and bull["responded_at"] is not None
-    assert bear["outcome"] == "timeout" and bear["responded_at"] is not None  # 기록 생성 시각(완료 시각 아님)
+    assert bear["outcome"] == "timeout" and bear["responded_at"] is None       # 미완료 — 완료 시각 없음
 
 
 def test_llm_manager_trail_collects_every_real_attempt(monkeypatch):
@@ -411,3 +411,43 @@ def test_invalid_decision_time_is_a_write_error_not_current_month(tmp_path):
         assert r.status_of(row["decision_id"]) == "write_error", bad
     assert not list((tmp_path / "d").glob("*.jsonl"))
     r.close()
+
+
+# ── 4차 리뷰 반영: 미확인 사용량 None / 취소 응답 메타 보존 ──
+
+def test_unknown_usage_tokens_are_none_not_zero():
+    row = attempt_record("bull", LLMProvider.OPENAI, None, _resp("", success=False, usage_known=False, input_tokens=0, output_tokens=0),
+                         role_system_sha256=None, role_suffix="x")
+    assert row["input_tokens"] is None and row["output_tokens"] is None and row["usage_known"] is False
+    from src.utils.llm import LLMManager, LLMUsage, _ATTEMPT_TRAIL
+    mgr = object.__new__(LLMManager); mgr.daily_usage = LLMUsage(); mgr._audit_attempt = lambda *a, **k: None
+    token = _ATTEMPT_TRAIL.set([])
+    try:
+        mgr._account_attempt(_resp("", success=False, usage_known=False, input_tokens=0, output_tokens=0), "t", "r")
+        assert _ATTEMPT_TRAIL.get()[0]["input_tokens"] is None
+    finally:
+        _ATTEMPT_TRAIL.reset(token)
+
+
+def test_timeout_row_keeps_request_metadata_from_cancelled_response(monkeypatch):
+    """P2: 취소 예외에 붙은 응답의 요청 추론 수준·예산 모드가 timeout 행에 남고 완료 시각은 None 이다."""
+    import src.core.adversarial_validator as av
+
+    class _Cancelled(_LLM):
+        async def complete_with(self, prompt, *, provider, **kwargs):
+            if provider == LLMProvider.GEMINI:
+                try:
+                    await asyncio.sleep(1.0)
+                except asyncio.CancelledError as e:
+                    e._llm_response = _resp("", success=False, usage_known=False, requested_thinking_level="low",
+                                            budget_policy_mode="economy")
+                    e._llm_trail = [{"budget_reservation_token": "tok-bear", "estimated_cost_usd": None, "request_sent": True}]
+                    raise
+            return _resp("APPROVE", provider=provider)
+
+    monkeypatch.setattr(av, "LLM_TIMEOUT", 0.05)
+    result = asyncio.run(AdversarialValidator(_Cancelled("APPROVE", "x")).validate("005930", "momentum", 90, {}, "bear", common_context="ctx"))
+    bear = result.meta["attempts"][1]
+    assert bear["outcome"] == "timeout" and bear["responded_at"] is None
+    assert bear["requested_thinking_level"] == "low" and bear["budget"]["policy_mode"] == "economy"
+    assert bear["calls"][0]["budget_reservation_token"] == "tok-bear"

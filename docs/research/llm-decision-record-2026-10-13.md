@@ -42,7 +42,7 @@ flowchart LR
 
 ## SEE
 
-- 시험 `tests/test_llm_decision_record.py` 25건(교차 리뷰 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2 반영 포함: 실제 wait_for 타임아웃에서 폴백 trail 보존, collected_at 분리, 잘못된 시각 write_error, 취소·예외에서 trail 보존, surrogate 직렬화, 폴백 일반 예외, 기록 실패 시 거절 유지, surrogate 해시, 부분 타임아웃, trail 2행, Decimal 합·결측 None, 저장 결과 조회, health 통계): 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
+- 시험 `tests/test_llm_decision_record.py` 27건(교차 리뷰 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2, 4차 P2 3 반영 포함: 미확인 사용량 None, 취소 응답 메타 보존, 실제 wait_for 타임아웃에서 폴백 trail 보존, collected_at 분리, 잘못된 시각 write_error, 취소·예외에서 trail 보존, surrogate 직렬화, 폴백 일반 예외, 기록 실패 시 거절 유지, surrogate 해시, 부분 타임아웃, trail 2행, Decimal 합·결측 None, 저장 결과 조회, health 통계): 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
 - 운영 미배포. 다음 관측(10월14일 09:00~09:05)은 운영 `161b394` 로 진행되며 이 기록은 그 뒤 배포 승인 시부터 쌓인다.
 
 ## 다음

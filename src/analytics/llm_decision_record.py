@@ -73,7 +73,11 @@ def _estimated_cost_usd(response) -> Optional[str]:
     try:
         from ..utils.llm_pricing import rate_quote
         model = getattr(response, "requested_model", None)
-        quote = rate_quote(model if model is not None else (getattr(response, "model", None) or ""), tokens_in, tokens_out)
+        if model is None:
+            model = getattr(response, "model", None)
+        if not isinstance(model, str):
+            return None
+        quote = rate_quote(model, tokens_in, tokens_out)
     except Exception:
         return None
     return None if quote is None else str(Decimal(str(quote.cost_usd)))
@@ -125,6 +129,11 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         outcome = "empty"
     else:
         outcome = "success"
+    usage_known = getattr(resp, "usage_known", None) is True
+    if timed_out and responded_at is None:
+        responded_at_value = None          # 완료 시각이 없다 — 기록 생성 시각으로 대체하지 않는다
+    else:
+        responded_at_value = responded_at if responded_at is not None else now_kst()
     resolved = getattr(resp, "resolved_model", None)
     requested_model = getattr(resp, "requested_model", None)
     if requested_model is None:
@@ -138,7 +147,7 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         "role": role,
         "provider": getattr(provider, "value", str(provider)) if provider is not None else None,
         "requested_at": _iso(requested_at),
-        "responded_at": _iso(responded_at if responded_at is not None else now_kst()),
+        "responded_at": _iso(responded_at_value),
         "latency_ms": getattr(resp, "latency_ms", None),
         "requested_model": requested_model,
         "requested_reasoning_effort": getattr(resp, "requested_reasoning_effort", None),
@@ -146,9 +155,10 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         # 공급자가 응답에 모델을 적어 준 경우만 확인된 신원이다. 요청 모델은 신원 증거가 아니다.
         "resolved_model": resolved,
         "model_identity": "provider_reported" if resolved else "unverified",
-        "input_tokens": _int_or_none(getattr(resp, "input_tokens", None)),
-        "output_tokens": _int_or_none(getattr(resp, "output_tokens", None)),
-        "reasoning_tokens": _int_or_none(getattr(resp, "reasoning_tokens", None)),
+        # 공급자가 사용량을 보고한 경우만 토큰 수를 적는다 — 미확인은 0 이 아니라 None (4차 리뷰 P2)
+        "input_tokens": _int_or_none(getattr(resp, "input_tokens", None)) if usage_known else None,
+        "output_tokens": _int_or_none(getattr(resp, "output_tokens", None)) if usage_known else None,
+        "reasoning_tokens": _int_or_none(getattr(resp, "reasoning_tokens", None)) if usage_known else None,
         "usage_known": getattr(resp, "usage_known", None),
         "billing_status": getattr(resp, "billing_status", None),
         # 최종 응답 1건의 추정 비용(Decimal 문자열). 재시도·폴백을 포함한 호출 전체는 calls 에 있다.

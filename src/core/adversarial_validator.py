@@ -133,9 +133,13 @@ def _attempts_from_slots(requested_at, slots):
     rows = []
     for role, provider, system, suffix in (("bull", LLMProvider.OPENAI, BULL_SYSTEM, BULL_SUFFIX),
                                             ("bear", LLMProvider.GEMINI, BEAR_SYSTEM, BEAR_SUFFIX)):
-        slot = slots.get(role) or {}
+        slot = slots.get(role)
+        if slot is None:
+            slot = {}
         done = "response" in slot
-        rows.append(safe_attempt_record(role, provider, requested_at, slot.get("response") if done else None,
+        # 미완료(취소)면 취소 예외에 붙은 응답 메타(요청 추론 수준·예산 모드)를 timeout 행에 보존한다 (4차 리뷰 P2)
+        payload = slot.get("response") if done else slot.get("cancelled_response")
+        rows.append(safe_attempt_record(role, provider, requested_at, payload,
                                         timed_out=not done, responded_at=slot.get("responded_at"),
                                         trail=slot.get("trail"),
                                         role_system_sha256=sha256_text(system), role_suffix=suffix))
@@ -224,6 +228,7 @@ class AdversarialValidator:
             except asyncio.CancelledError as error:
                 # 전체 타임아웃의 취소 — 미완료(timeout)로 남기되 이미 보낸 호출 내역은 보존한다 (재리뷰 P1)
                 slots[role]["trail"] = getattr(error, "_llm_trail", None)
+                slots[role]["cancelled_response"] = getattr(error, "_llm_response", None)
                 raise
             except BaseException as error:
                 slots[role].update(response=error, responded_at=now_kst())

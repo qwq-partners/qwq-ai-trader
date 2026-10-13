@@ -863,11 +863,11 @@ class CrossStrategyValidator:
                     return self._finish_decision(
                         adv.approved, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
                         market_regime=market_regime, common_context=common_context, stage="adversarial",
-                        attempts=list(adv.meta.get("attempts") or []),
+                        attempts=list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else [],
                         result={"confidence": adv.confidence, "reason": adv.reason, "failed": False,
                                 "disagreed": adv.disagreed, "bull": adv.bull_verdict, "bear": adv.bear_verdict})
                 # adv.failed면 폴백 (아래 단일 LLM 경로)
-                _adv_attempts = list(adv.meta.get("attempts") or [])
+                _adv_attempts = list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else []
                 _adv_failed_reason = adv.reason
             else:
                 _adv_attempts, _adv_failed_reason = [], None
@@ -891,12 +891,14 @@ class CrossStrategyValidator:
                                                             budget_priority="essential")
                 except asyncio.CancelledError as _cancel:
                     _single_slot["trail"] = getattr(_cancel, "_llm_trail", None)
+                    _single_slot["response"] = getattr(_cancel, "_llm_response", None)
                     raise
 
             try:
                 resp = await asyncio.wait_for(_single_call(), timeout=SINGLE_FALLBACK_TIMEOUT)
             except asyncio.TimeoutError:
-                _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at, None,
+                _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at,
+                                                           _single_slot.get("response"),
                                                            timed_out=True, role_system_sha256=None,
                                                            role_suffix=_single_suffix,
                                                            trail=_single_slot.get("trail"))]
