@@ -262,7 +262,7 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
         return out('unknown')
     # 채널별 최신 기록을 먼저 고르고, 그 최신 기록이 미자격이면 채널 전체를 unknown 으로 둔다.
     # 이전 정상 기록으로 대체하지 않는다(정상 뒤 무효/세대 전환이 오면 지금 상태는 불명).
-    latest, untimed, conflicted = {}, set(), set()
+    latest, untimed, conflicted, entries = {}, set(), set(), {}
     symbols = set()
     for raw in records:
         if not isinstance(raw, Mapping) or raw.get('kind') != 'market_state':
@@ -291,10 +291,15 @@ def classify_market_state(raw_state_record_or_list, *, now, max_age_seconds, exp
             problem = f'other_connection_or_generation:{tr}'
         key = (received, *(v if type(v) is int else -1
                            for v in (raw.get('local_frame_index'), raw.get('record_index'))))
-        if tr in latest and key == latest[tr][0] and (dict(raw) != dict(latest[tr][1]) or problem != latest[tr][2]):
-            conflicted.add(tr)       # 같은 수신 시각·번호에 내용이 다른 기록 — 입력 순서로 고르지 않고 불명으로 둔다(5회차 P2)
-        if tr not in latest or key > latest[tr][0]:
-            latest[tr] = (key, raw, problem)
+        entries.setdefault(tr, []).append((key, raw, problem))
+    # 채널별 최신 키를 먼저 확정한 뒤, 그 키의 모든 기록을 비교한다 — 입력 순서와 무관(6회차 P2).
+    for tr, items in entries.items():
+        top = max(item[0] for item in items)
+        same = [item for item in items if item[0] == top]
+        first = same[0]
+        if any(dict(item[1]) != dict(first[1]) or item[2] != first[2] for item in same[1:]):
+            conflicted.add(tr)       # 같은 수신 시각·번호에 내용이 다른 기록 — 불명으로 둔다
+        latest[tr] = first
     disqualified = set(untimed)
     for tr in conflicted:
         basis.append(f'conflicting_records:{tr}')

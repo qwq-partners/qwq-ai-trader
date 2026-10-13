@@ -60,6 +60,12 @@ def row_sha256(row) -> str:
     return hashlib.sha256(_json(row).encode()).hexdigest()
 
 
+def _record_stamp(record) -> str:
+    """offer 는 recorded_at, 전이/표식은 at. None 만 대체하고 빈 문자열은 그대로 넘겨 시각 파서가 거부하게 한다."""
+    stamp = record.get("recorded_at")
+    return record["at"] if stamp is None else stamp
+
+
 def _read_journal(path, max_bytes, kinds, check=None) -> dict:
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
         raise ValueError("max_bytes must be a positive int")
@@ -284,9 +290,10 @@ class ComparisonWorker:
             with self._lock:
                 self._note("journal_dropped", record.get("decision_id"), "journal_queue_full")
 
-    def _transition(self, decision_id, status, reason=None):
+    def _transition(self, decision_id, status, reason=None, *, admitted=None):
+        # admitted: 원장 입장 성공 여부(True/False/None=미확인). 보고서 표본 선정은 finished 또는 admitted=True 만 실행으로 본다(6회차 P2).
         self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "transition", "decision_id": decision_id,
-                           "status": status, "reason": reason, "at": self.clock().isoformat(),
+                           "status": status, "reason": reason, "admitted": admitted, "at": self.clock().isoformat(),
                            "pair_id": self.runner.pair_id(decision_id) if isinstance(decision_id, str) else None},
                           timeout=1.0)
 
@@ -295,7 +302,7 @@ class ComparisonWorker:
         return self.journal_dir / f"{'incomplete' if kind == 'incomplete_result' else 'offers'}-{month}.jsonl"
 
     def _journal_write(self, record, path=None):
-        path = path if path is not None else self.journal_path(record["kind"], record.get("recorded_at") or record["at"])
+        path = path if path is not None else self.journal_path(record["kind"], _record_stamp(record))
         with self._lock:
             self._journal_seq[str(path)] = self._journal_seq.get(str(path), 0) + 1
             record = dict(record, journal_seq=self._journal_seq[str(path)])
@@ -322,7 +329,7 @@ class ComparisonWorker:
                     marker = (dropped > self._dropped_written)
                     if marker:
                         drop_record = {"schema_version": JOURNAL_VERSION, "kind": "journal_drop", "run_id": mci.RUN_ID,
-                                       "dropped_total": dropped, "at": record.get("recorded_at") or record.get("at")}
+                                       "dropped_total": dropped, "at": _record_stamp(record)}
                 if marker:
                     self._journal_write(drop_record)
                     with self._lock:
@@ -393,12 +400,20 @@ class ComparisonWorker:
                         evaluation_anchor="input_available_at", live_provenance="in_process_attested",
                         attestation=mci.attest_pair(**fields))
 
-    def _end(self, decision_id, status, reason=None, *, uncount=False):
+    def _admitted(self, decision_id):
+        """원장 입장(claim) 성공 여부 — 작업자 스레드에서만 원장을 읽는다. 확인 불가는 None."""
+        try:
+            day = self.runner.guard.ledger.today().isoformat()
+            return self.runner.pair_id(decision_id) in self.runner.admitted_pair_ids(day)
+        except Exception:
+            return None
+
+    def _end(self, decision_id, status, reason=None, *, uncount=False, admitted=None):
         with self._lock:
             self._note(status, decision_id, reason)
             if uncount:
                 self._uncount(decision_id)
-        self._transition(decision_id, status, reason)
+        self._transition(decision_id, status, reason, admitted=admitted)
 
     async def _process(self, env):
         decision_id = env.get("decision_id")
@@ -423,15 +438,16 @@ class ComparisonWorker:
             self._journal_put({"schema_version": JOURNAL_VERSION, "kind": "incomplete_result",
                                "recorded_at": self.clock().isoformat(), "decision_id": decision_id,
                                "pair_id": row.get("pair_id"), "row_sha256": row_sha256(row), "row": row}, timeout=5.0)
-            self._end(decision_id, "incomplete", "pair_result_unpersisted")
+            self._end(decision_id, "incomplete", "pair_result_unpersisted", admitted=self._admitted(decision_id))
             logger.warning(f"[비교작업자] pair 결과 저장 실패 — 원래 행을 incomplete 저널에 보존: {row.get('pair_id')}")
         except Exception as error:
             reason = (getattr(error, "reason", None) or str(error) or type(error).__name__)[:200]
             self._resync(decision_id)
-            self._end(decision_id, "blocked" if reason in PAIR_BLOCK_REASONS else "incomplete", reason)
+            self._end(decision_id, "blocked" if reason in PAIR_BLOCK_REASONS else "incomplete", reason,
+                      admitted=self._admitted(decision_id))
             logger.warning(f"[비교작업자] pair 미완료 (판단 영향 없음): {reason}")
         else:
-            self._end(decision_id, "finished")
+            self._end(decision_id, "finished", admitted=True)
 
     async def _close_clients(self):
         adapter = getattr(self.runner, "adapter", None)

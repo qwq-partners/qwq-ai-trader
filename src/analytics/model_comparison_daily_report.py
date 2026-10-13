@@ -260,11 +260,14 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     executed, expired_before_start = set(), {}
     for r in offer_records:
         if r.get('kind') == 'transition' and isinstance(r.get('decision_id'), str):
-            if r.get('status') in ('started', 'finished', 'incomplete', 'blocked'):
+            # 실행 = 원장 입장 성공. finished 는 입장 뒤에만 가능하고, incomplete/blocked 는 admitted=True 일 때만(6회차 P2).
+            # started 는 claim 전 기록이라 실행 증거가 아니다.
+            if r.get('status') == 'finished' or (r.get('status') in ('incomplete', 'blocked') and r.get('admitted') is True):
                 executed.add(r['decision_id'])
-            elif r.get('status') == 'expired':
+            elif r.get('status') == 'expired' or (r.get('status') in ('incomplete', 'blocked') and r.get('admitted') is False):
+                # 실행 전(원장 입장 전) 끝난 판단: 그 사유로 부적격, 슬롯은 다음 판단에 돌아갔다(6회차 P2)
                 reason = r.get('reason')
-                expired_before_start[r['decision_id']] = reason if isinstance(reason, str) and reason else 'expired'
+                expired_before_start[r['decision_id']] = reason if isinstance(reason, str) and reason else r.get('status')
     offer_statuses, duplicate_offers = {}, Counter()
     for r in offer_records:
         if isinstance(r, Mapping) and r.get('kind') == 'offer' and isinstance(r.get('decision_id'), str):

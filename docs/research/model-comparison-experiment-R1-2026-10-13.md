@@ -141,7 +141,7 @@ manifest 수치는 `worst_case_reservation(manifest)` 와 같음을 시험이 �
 
 ## 한계
 
-- 일별 보고의 선정(첫 적격 봉투)과 작업자의 실제 수락이 다르면(예: 첫 봉투 큐 거절 뒤 두 번째 실행) 표본은 거절 사유로 제외되고 두 번째 실행은 daily_quota 로 남는다 — 선정 규칙 일치는 W-A 통합에서 확인 필요. `read_incomplete_journal` 은 아직 보고에 연결하지 않았다.
+- 일별 보고의 표본 선정은 작업자 저널의 실제 접수·실행 이력을 따른다(거부된 봉투는 그 사유로 부적격, `finished` 또는 원장 입장 `admitted=True` 전이가 있는 판단이 먼저 표본). `read_incomplete_journal` 은 `--incomplete` 로 연결돼 결과 행 없는 쌍이 지출을 미확정으로 만든다.
 
 - sizing_only 재생·raw 장 상태·호가 잔량은 실행 가능 수량·체결·실현손익·계좌 수익이 아니다.
 - **live readiness 차단**: 외부 게이트 unknown(→ net_delta 항상 null), MKO 첫 상태 수신 미확인, 위 미확정 코드 의미가 하나라도 있으면 차단. W1 admission 훅·W2 봉투/작업자 통합·독립 리뷰 미완료.

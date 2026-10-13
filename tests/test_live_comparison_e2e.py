@@ -744,3 +744,96 @@ def test_ledger_block_reason_reaches_stop_conditions_without_pair_rows():
     report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[], ledger_attempts=attempts)
     assert report["stop_conditions_reached"] == ["comparison_experiment_ceiling"]
     assert "중단 조건" in report["telegram_preview"]
+
+
+def test_reservation_token_is_linked_before_dispatch_so_a_kill_mid_call_still_reconciles(tmp_path, monkeypatch):
+    """6회차 P1: 토큰↔시도 연결은 공급자 호출 전에 영속된다. 호출 중 강제 종료를 흉내 내도 예약 대사가 known_reconciled 로 이어진다."""
+    import asyncio as _asyncio, sqlite3 as _sqlite3
+    from src.analytics.model_comparison_execution import ComparisonRequest
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, policy_enabled=True)
+    man = manifest()
+    policy = dict(man["execution_policy"], experiment_id=man["experiment_id"]); policy["allowed_models"] = tuple(policy["allowed_models"])
+    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
+    seen = {}
+    class Killed(BaseException):
+        pass
+    async def dispatch(req):
+        with _sqlite3.connect(ledger.path) as db:                     # 호출 "도중"의 저장소 상태
+            seen["token"] = db.execute("SELECT reservation_token FROM comparison_requests WHERE attempt_id='kill-attempt'").fetchone()[0]
+        raise Killed()
+    # 강제 종료 흉내: 예외 뒤의 어떤 정리(_mark_failed/_record/settle)도 돌지 않는다. 락 fd 만 프로세스 종료처럼 닫힌다.
+    monkeypatch.setattr(guard, "_mark_failed", lambda *a, **k: (_ for _ in ()).throw(Killed()))
+    def no_settle(*a, **k): raise Killed()
+    monkeypatch.setattr(ledger, "settle", no_settle)
+    try:
+        _asyncio.run(guard.call(ComparisonRequest("gpt-5-mini", "facts", "role", 100), dispatch=dispatch, attempt_id="kill-attempt"))
+    except Killed:
+        pass
+    assert seen["token"] and len(seen["token"]) == 32                  # 전송 전에 이미 연결됨
+    ledger.close()                                                      # 프로세스 종료 → 예약 락 해제 → 고아 예약(unknown)
+    reopened = MonthlyBudgetLedger(ledger.path, 100, policy_enabled=True)
+    guard2 = ComparisonCallGuard(ledger=reopened, policy=ComparisonExecutionPolicy(**policy))
+    record = guard2.lookup("kill-attempt")
+    assert record["reservation_token"] == seen["token"] and record["result"] is None
+    assert reopened.status()["blocked"] and reopened.status()["block_reason"] == "unresolved_usage"
+    evidence = tmp_path / "usage.txt"; evidence.write_text("export")
+    review = {"version": "llm-budget-reconciliation-v1", "activated_at": reopened.status()["activated_at"],
+              "reviewer_ref": "synthetic-operator", "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+              "adjustments": [{"token": seen["token"], "actual_cost_usd": 0.0003}], "clear_bound_breach": False}
+    preview = reconcile_budget(reopened.path, 100, review, evidence)
+    reconcile_budget(reopened.path, 100, review, evidence, apply=True, expected_state_sha256=preview["state_sha256"])
+    after = guard2.lookup("kill-attempt")
+    assert after["state"] == "known_reconciled" and after["reconciled"]["actual_cost_usd"] == "0.0003"
+    day = reopened.today().isoformat()
+    (la,) = [a for a in guard2.day_attempts(day) if a["attempt_id"] == "kill-attempt"]
+    assert la["cost_usd"] == "0.0003" and not reopened.status()["blocked"]
+    from src.utils.llm_budget import BudgetBlocked
+    import pytest
+    with pytest.raises(BudgetBlocked):                                  # 재전송 금지 유지
+        _asyncio.run(guard2.call(ComparisonRequest("gpt-5-mini", "facts", "role", 100), dispatch=dispatch, attempt_id="kill-attempt"))
+
+
+def test_failure_before_ledger_admission_is_not_an_executed_sample(tmp_path, monkeypatch):
+    """6회차 P2: claim 전 실패(started 만 남음, admitted=False)는 실행 표본이 아니고 다음 판단이 그 자리에 들어간다."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from datetime import timedelta as _td
+    from tests.test_model_comparison_worker import build, envelope, capped, Clock, NOW
+    clock = Clock()
+    worker, ledger, op, ge = build(tmp_path, clock=clock, man=capped(pairs_per_day=1), journal_dir=tmp_path / "j")
+    worker.start()
+    try:
+        clock.at = NOW + _td(seconds=3)
+        assert worker.offer(envelope(worker, "dec-future", at=clock.at)) == "accepted"   # 러너 시각보다 미래 → claim 전 실패
+        assert wait(lambda: worker.health()["incomplete"] == 1)
+        clock.at = NOW
+        assert worker.offer(envelope(worker, "dec-ok")) == "accepted"
+        assert wait(lambda: worker.health()["finished"] == 1)
+        (pair,) = _pair_rows(ledger)
+    finally:
+        worker.stop(10)
+    records = []
+    for f in sorted((tmp_path / "j").glob("offers-*.jsonl")):
+        records += worker_api().read_offer_journal(f, max_bytes=1 << 24)["records"]
+    future_t = [r for r in records if r.get("kind") == "transition" and r["decision_id"] == "dec-future"]
+    assert any(r["status"] == "started" for r in future_t) and any(r["status"] == "incomplete" and r.get("admitted") is False for r in future_t)
+    ok_t = [r for r in records if r.get("kind") == "transition" and r["decision_id"] == "dec-ok"]
+    assert any(r["status"] == "finished" and r.get("admitted") is True for r in ok_t)
+    day = _utc(pair["input_available_at"]).astimezone(KST).date().isoformat()
+    report = daily.build_daily_report([pair], day_kst=day, offer_records=records, max_input_age_seconds=30.0, pairs_per_day=1)
+    assert report["denominators"]["complete"] == 1 and report["denominators"]["offered"] == 2
+    assert "daily_quota" not in json.dumps(report) and "dec-future" not in json.dumps(report["rows"])
+
+
+def test_market_state_conflict_detection_is_permutation_invariant():
+    """6회차 P2: 동일 키 충돌 A/B 와 더 최신 정상 C 의 어떤 순열도 같은 판정(최신 C 가 정상이면 normal, 충돌이 최신이면 unknown)."""
+    from itertools import permutations
+    from datetime import datetime as _dt, timedelta as _td
+    from tests.test_model_comparison_admission import cnt, mko, classify
+    a, b = cnt(), cnt(trht_yn='Y')
+    later = (_dt.fromisoformat(a['received_at']) + _td(seconds=1)).isoformat()
+    c = cnt(received_at=later, local_frame_index=11)
+    verdicts = {classify(list(order) + [mko()])['verdict'] for order in permutations([a, b, c])}
+    assert verdicts == {'normal_continuous'}                            # 최신 C 가 정상·무충돌
+    verdicts2 = {classify(list(order) + [mko()])['verdict'] for order in permutations([a, b])}
+    assert verdicts2 == {'unknown'}                                     # 최신 키가 충돌

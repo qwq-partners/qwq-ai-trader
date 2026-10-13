@@ -491,7 +491,7 @@ class PairedComparisonRunner:
             reasons.append('api_cost_unknown')
         if not all(a.get('timing_valid') is True for a in attempts):
             reasons.append('attempt_timing_unverified')
-        return {'verdict': verdict, 'validation_verdict': validation_verdict or verdict,
+        return {'verdict': verdict, 'validation_verdict': verdict if validation_verdict is None else validation_verdict,
                 'approval_basis': approval_basis, 'unavailable_policy': 'fail_open_size_preserved',
                 'api_cost_scope': 'scenario_cost_including_shared_bear_do_not_sum_arms',
                 'bull_verdict': b, 'bear_verdict': r,

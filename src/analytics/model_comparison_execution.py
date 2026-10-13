@@ -471,6 +471,16 @@ class ComparisonCallGuard:
                     return
                 raise BudgetStateError("comparison_storage_unavailable") from None
 
+    @staticmethod
+    def _link_in_transaction(db, attempt_id: str, slot: str, token: str):
+        """MonthlyBudgetLedger.reserve 의 예약 트랜잭션 안에서만 호출된다(comparison_* UPDATE 만 허용)."""
+        changed = db.execute("UPDATE comparison_requests SET reservation_token=? WHERE attempt_id=? "
+                             "AND reservation_token IS NULL AND result_json IS NULL AND block_reason IS NULL",
+                             (token, attempt_id)).rowcount
+        if changed != 1:
+            raise BudgetStateError("comparison_storage_corrupt")
+        db.execute("UPDATE comparison_attempts SET reservation_token=?,state='reserved' WHERE slot=?", (token, slot))
+
     def _mark_failed(self, attempt_id: str, token: str | None, reason: str):
         # 저장된 응답은 실패 처리로 덮어쓰지 않는다. 정산 여부는 월 원장에서 판독한다.
         with self.ledger._connect() as db:
@@ -542,11 +552,13 @@ class ComparisonCallGuard:
         entered_dispatch = settlement_attempted = False
         outcome, cost = "unknown", None
         try:
+            # 예약과 같은 트랜잭션에서 시도 ID↔토큰을 영속한다(별도 쓰기 트랜잭션 없음 — 잠금 경합이 미전송 unknown 을
+            # 만들지 않고, 호출 중 강제 종료돼도 월 원장의 예약 대사가 이 시도에 연결된다) (6회차 P1).
             token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
                                         policy_priority="research", task="model_comparison",
                                         role=self.policy.experiment_id,
-                                        admission_check=self._admission_check)
-            # ID/슬롯이 이미 확정됐다. 전송 전 부가 쓰기는 하지 않는다.
+                                        admission_check=self._admission_check,
+                                        link_reservation=lambda db, tok: self._link_in_transaction(db, attempt_id, slot, tok))
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")
             entered_dispatch = True
