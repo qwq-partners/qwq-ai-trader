@@ -88,6 +88,10 @@ class ReadOnlyTokenProvider:
         self._reload()                                # 새 발급 대신 캐시 재읽기만
 
 
+class BotStartedStop(RuntimeError):
+    """수집 도중 운영 봇이 기동(또는 상태 확인 불가)해 중단 — 확보한 페이지는 보존 (5차 리뷰 P1)."""
+
+
 class MarketHoursStop(RuntimeError):
     """장중 진입(또는 진입 임박)으로 전송을 중단했다 — 운영 봇의 계좌 원장 TR 한도와 충돌하지 않기 위해."""
 
@@ -160,6 +164,10 @@ async def _run(args) -> int:
         # 매 전송 직전 재검사 — 08:59 에 시작한 다월·다페이지 조회가 개장 뒤 계속되지 않게 한다 (재리뷰 P1)
         if not args.allow_market_hours and _blocked_by_market_hours(datetime.now(KST), effective_margin):
             raise MarketHoursStop("장중 진입 임박/진입 — 수집 중단(확보한 페이지는 보존)")
+        # main() 의 1회 검사만으로는 수집 도중의 자동 재시작·예약 기동을 못 본다 — 명시 우회가 없으면 매 전송 직전
+        # 봇 상태를 다시 보고, 가동/확인 불가면 중단한다(남는 경쟁 창은 systemctl 응답~전송 사이 한 요청) (5차 리뷰 P1)
+        if not args.allow_bot_running and await asyncio.to_thread(_bot_active):
+            raise BotStartedStop("수집 도중 운영 봇 기동/상태 확인 불가 — 수집 중단(확보한 페이지는 보존)")
         return await broker.get_period_rights(start, end, inqr_dvsn=args.inqr_dvsn, fk100=fk100, nk100=nk100,
                                               tr_cont=tr_cont)
 

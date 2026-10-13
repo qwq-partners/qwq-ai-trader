@@ -113,7 +113,8 @@ def test_cli_runs_end_to_end_with_fake_broker_and_private_files(tmp_path, monkey
     monkeypatch.setattr(cli, "_open_readonly_broker", fake_open)
     out = tmp_path / "rights"
     args = SimpleNamespace(start="2025-01-01", end="2025-02-28", out_dir=str(out), inqr_dvsn="03", max_pages=10, min_interval=0,
-                           allow_market_hours=True, market_margin_seconds=90.0)
+                           allow_market_hours=True, market_margin_seconds=90.0, allow_bot_running=False)
+    monkeypatch.setattr(cli, "_bot_active", lambda: False)
     rc = asyncio.run(cli._run(args))
     assert rc == 0 and broker._session.closed is True
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
@@ -239,3 +240,45 @@ def test_pages_fetched_excludes_aborted_and_http_attempts_from_metrics():
     assert before is not None
     m.record_http_attempt("CTRGA011R", 0); m.record_http_attempt("CTRGA011R", 1)      # 1페이지 2전송(재시도 1)
     assert cli._http_attempts() - before == 2
+
+
+def test_bot_starting_mid_collection_aborts_before_next_send(monkeypatch, tmp_path):
+    """5차 리뷰 P1: 첫 검사 뒤 봇이 기동하면 다음 전송 직전에 중단하고 확보한 창은 보존한다. 우회 시엔 계속."""
+    import json, sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    cli = _cli_module()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(cli, "_in_market_hours", lambda now: False)
+    states = iter([False, False, True, True, True])      # main 1회 + 창1 전송 1회는 정지, 그 뒤 기동
+    monkeypatch.setattr(cli, "_bot_active", lambda: next(states, True))
+
+    class Broker:
+        def __init__(self):
+            self.calls = 0
+            self.config = SimpleNamespace(timeout_seconds=10)
+            self._session = SimpleNamespace(closed=False)
+        async def get_period_rights(self, start, end, *, inqr_dvsn, fk100, nk100, tr_cont):
+            self.calls += 1
+            return _page([_row()], "D")
+        async def close(self): ...
+    broker = Broker()
+    async def opener(): return broker
+    monkeypatch.setattr(cli, "_open_readonly_broker", opener)
+    async def no_wait(b): ...
+    monkeypatch.setattr(cli, "_close_readonly_broker", no_wait)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda s: real_sleep(0))          # 창 사이 대기 생략
+    out = tmp_path / "out"; out.mkdir(mode=0o700)
+    monkeypatch.setattr(sys, "argv", ["prog", "--start", "2025-01-01", "--end", "2025-03-31", "--out-dir", str(out),
+                                      "--min-interval", "1.05"])
+    assert cli.main() == 1 and broker.calls == 1                  # 2월 창 전송 직전 중단
+    s = json.loads((out / "summary.json").read_text())
+    assert s["window_statuses"] == {"complete": 1, "aborted:BotStartedStop": 1} and s["windows"] == 2   # 3월은 미조회
+
+    broker.calls = 0
+    out2 = tmp_path / "out2"; out2.mkdir(mode=0o700)
+    monkeypatch.setattr(cli, "_bot_active", lambda: True)
+    monkeypatch.setattr(sys, "argv", ["prog", "--start", "2025-01-01", "--end", "2025-03-31", "--out-dir", str(out2),
+                                      "--allow-bot-running", "--min-interval", "2.1"])
+    assert cli.main() == 0 and broker.calls == 3                  # 명시 우회는 계속
