@@ -117,6 +117,26 @@ def _parse_verdict(text: str, positive_token: str, negative_token: str) -> Optio
     return pos_at < neg_at
 
 
+# 역할별 사용자 프롬프트 접미 — 판단 기록(llm-decision-v1)이 역할 지시를 재생할 수 있게 상수로 둔다 (64차)
+BULL_SUFFIX = ("\n이 매수 후보의 지지 근거를 평가하라. "
+               "매수할 만하면 APPROVE, 아니면 REJECT로 시작하고 한 줄 사유를 적어라.")
+BEAR_SUFFIX = ("\n이 매수가 실패할 가장 그럴듯한 시나리오를 하나 제시하라. "
+               "그 시나리오가 치명적이면 REJECT, 감수 가능하면 ACCEPT로 시작하고 "
+               "시나리오를 한 줄로 적어라.")
+
+
+def _attempts(requested_at, bull_resp, bear_resp, *, timed_out=False):
+    """Bull/Bear 시도 기록 2건 — 요청 시각은 동시 발사 시각(gather 직전)이다."""
+    from ..analytics.llm_decision_record import attempt_record, sha256_text
+    from ..utils.llm import LLMProvider
+    return [
+        attempt_record("bull", LLMProvider.OPENAI, requested_at, bull_resp, timed_out=timed_out,
+                       role_system_sha256=sha256_text(BULL_SYSTEM), role_suffix=BULL_SUFFIX),
+        attempt_record("bear", LLMProvider.GEMINI, requested_at, bear_resp, timed_out=timed_out,
+                       role_system_sha256=sha256_text(BEAR_SYSTEM), role_suffix=BEAR_SUFFIX),
+    ]
+
+
 class AdversarialValidator:
     """Bull/Bear 교차 검증기"""
 
@@ -139,11 +159,7 @@ class AdversarialValidator:
 
     async def _ask_bull(self, context: str):
         from ..utils.llm import LLMProvider
-        prompt = (
-            context
-            + "\n이 매수 후보의 지지 근거를 평가하라. "
-            "매수할 만하면 APPROVE, 아니면 REJECT로 시작하고 한 줄 사유를 적어라."
-        )
+        prompt = context + BULL_SUFFIX
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.OPENAI, weight="light",
             system=BULL_SYSTEM, max_tokens=MAX_TOKENS,
@@ -156,12 +172,7 @@ class AdversarialValidator:
 
     async def _ask_bear(self, context: str):
         from ..utils.llm import LLMProvider
-        prompt = (
-            context
-            + "\n이 매수가 실패할 가장 그럴듯한 시나리오를 하나 제시하라. "
-            "그 시나리오가 치명적이면 REJECT, 감수 가능하면 ACCEPT로 시작하고 "
-            "시나리오를 한 줄로 적어라."
-        )
+        prompt = context + BEAR_SUFFIX
         return await self._llm.complete_with(
             prompt, provider=LLMProvider.GEMINI, weight="light",
             system=BEAR_SYSTEM, max_tokens=MAX_TOKENS,
@@ -197,6 +208,8 @@ class AdversarialValidator:
         context = (common_context if common_context is not None else
                    self._build_context(symbol, strategy, score, indicators,
                                        market_regime, sector, extra_context))
+        from ..analytics.llm_decision_record import now_kst
+        requested_at = now_kst()
 
         try:
             bull_resp, bear_resp = await asyncio.wait_for(
@@ -210,11 +223,14 @@ class AdversarialValidator:
         except asyncio.TimeoutError:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 타임아웃 ({LLM_TIMEOUT}s) — fail-open 통과")
-            return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True)
+            return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True,
+                                     meta={"attempts": _attempts(requested_at, None, None, timed_out=True)})
         except Exception as e:
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
-            return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True)
+            return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True,
+                                     meta={"attempts": _attempts(requested_at, e, e)})
+        meta = {"attempts": _attempts(requested_at, bull_resp, bear_resp)}
 
         budget_reasons = sorted({reason for resp in (bull_resp, bear_resp)
                                  if isinstance((reason := getattr(resp, "budget_block_reason", None)), str)
@@ -242,7 +258,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 True, 0.0, "양쪽 판정 불가 — fail-open",
                 bull_text=bull_text[:120], bear_text=bear_text[:120], failed=True,
-                budget_block_reason=budget_reason,
+                budget_block_reason=budget_reason, meta=meta,
             )
 
         # 한쪽만 응답 → 그 판정을 따르되 confidence를 낮춘다
@@ -255,7 +271,7 @@ class AdversarialValidator:
                 budget_block_reason=budget_reason,
                 reason=f"{side} 단독 판정 ({'승인' if single else '거부'})",
                 bull_verdict=bull_verdict, bear_verdict=bear_verdict,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
             self.stats["approved" if result.approved else "blocked"] += 1
             logger.info(f"[적대검증] {symbol} {result.reason} (편측 응답)")
@@ -268,7 +284,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 True, 1.0, "만장일치 승인",
                 bull_verdict=True, bear_verdict=True,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
 
         if not bull_verdict and not bear_verdict:
@@ -278,7 +294,7 @@ class AdversarialValidator:
             return AdversarialResult(
                 False, 1.0, reason,
                 bull_verdict=False, bear_verdict=False,
-                bull_text=bull_text[:120], bear_text=bear_text[:120],
+                bull_text=bull_text[:120], bear_text=bear_text[:120], meta=meta,
             )
 
         # 불일치
@@ -298,6 +314,7 @@ class AdversarialValidator:
             approved, 0.5, reason,
             bull_verdict=bull_verdict, bear_verdict=bear_verdict,
             bull_text=bull_text[:120], bear_text=bear_text[:120],
+            meta=meta,
             disagreed=True,
         )
 

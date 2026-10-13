@@ -1,0 +1,50 @@
+# 64차 — LLM 진입 판단의 재생 가능 기록 (llm-decision-v1)
+
+## PLAN — 무엇이 끊겨 있었나
+
+71차 공통 입력(`entry-llm-input-v1`)으로 Bull·Bear·단일 폴백이 같은 사실을 받지만, 어떤 판단이 어떤 입력·역할·모델로 내려졌고 비용이 얼마였으며 응답 뒤 어떤 가격이 있었는지는 서로 다른 곳에 흩어져 있었다.
+
+| 이미 있던 것 | 끊긴 곳 |
+|---|---|
+| 신호 원장 `signal_events`(signal_id·G3 거절·size_trace) | LLM 판단 결과는 `llm_second_check`·`llm_budget_validation` 플래그만, 입력·응답·모델·시도 단위 없음 |
+| 월 예산 원장 `reservations`(token·model·예약/정산 비용) | 어느 판단의 호출인지 연결 키 없음 |
+| `LLMResponse`(요청/실제 모델·토큰·지연·예산 모드) | 호출 직후 버려짐, 영속 안 됨 |
+| 관측 원장 `signal`/`ws_quote`/장 상태 | 판단 완료 시각이 없어 "응답 뒤 첫 호가" 조인 불가 |
+
+## DO — 최소 영속 기록
+
+`src/analytics/llm_decision_record.py` 가 판단 하나를 `llm-decision-v1` JSON 한 줄로 월별 파일 `~/.cache/ai_trader/llm_decisions/decisions-YYYY-MM.jsonl` 에 append 한다.
+
+```mermaid
+flowchart LR
+  S[신호 signal_id] --> C[cross_validator.llm_second_check]
+  C --> F[entry-llm-input-v1 공통 입력 1회]
+  F --> A[AdversarialValidator Bull/Bear]
+  A -->|attempts 2건| R[decision_record]
+  A -->|둘 다 판정 불가·실패| P[단일 폴백 1회]
+  P -->|attempts +1| R
+  R --> Q[DecisionRecorder 유한 큐 → 스레드 → JSONL]
+  R --> M[event.metadata.llm_decision → signal_events]
+  Q -. decision_available_at .-> J[오프라인 조인: 관측 원장 ws_quote·장 상태]
+```
+
+**기록 내용.** `decision_id`·`signal_id`·종목·전략·점수·레짐·`code_version`(applied_sha)·`context_version` / `inputs.common_context`(사실 블록 원문)·`common_context_sha256`·`source_observed_at=null`(원천 시각은 아직 없으며 현재 시각으로 채우지 않는다)·`collected_at` / `stage`(adversarial·single_fallback) / `attempts[]`: `attempt_id`·역할·공급자·요청/응답 시각·지연·요청 모델/추론 수준·**공급자가 보고한 실제 모델(없으면 `unverified`)**·토큰·`usage_known`·`billing_status`·추정 비용(단가표·사용량 보고가 있을 때만)·예산 `policy_mode/version/priority/block_reason/reservation_token`·결과 분류(success·empty·failed·timeout·budget_blocked·exception·not_sent)·역할 시스템 프롬프트 sha256·역할 접미 원문·응답 본문(2,000자 상한)+전체 sha256 / `result`(approved·confidence·reason·failed·disagreed·bull/bear) / `budget_context` / `decision_available_at` / `first_quote_after=null`.
+
+**재생.** `common_context + role_suffix` 가 실제 전송 프롬프트와 같다(시험으로 고정). 시스템 프롬프트는 상수(`BULL_SYSTEM`·`BEAR_SYSTEM`)의 sha256 으로 버전을 식별한다. 비밀정보·계좌 식별정보는 입력에 없다(사실 블록·역할 지시·응답 본문만).
+
+**정책.** 기록은 판단을 절대 막지 않는다. 큐(256)·파일(월 64MiB) 상한을 넘으면 기록을 버리고 `record_status`(`queued`/`dropped_queue_full`/`disabled`/`error`)를 신호 메타 `llm_decision` 에 남긴다 — 기록 실패를 성공처럼 보이게 하지 않는다. 기본 기록기는 `LLM_DECISION_RECORD=1` 일 때만 켜져 시험이 실제 홈에 쓰지 않고, 운영 런처(`run_trader` KR 초기화)가 `install_production_recorder()` 로 켠다(`LLM_DECISION_RECORD=0` 이면 끔). 재시도·폴백은 시도 단위로 각각 남고 비용은 예약 토큰으로 원장 한 행에 귀속된다(중복 합산 없음). 종료 시 큐에 남은 기록은 유실될 수 있다(스레드 daemon, 기록은 즉시 fsync).
+
+**응답 뒤 가격.** 별도 WebSocket 을 열지 않는다. 관측 원장의 `ws_quote`·장 상태 레코드를 `decision_available_at` 이후 첫 유효 호가로 조인하되, ask·수량·신선도·장 상태가 부족하면 평가 불가로 남긴다. 관측 호가는 체결 보장이 아니다.
+
+**바뀌지 않은 것.** 판단 모델·추론 수준·역할 프롬프트·판정 파서·호출 수·예산 정책·fail-open·거절 시 수량 배율. Bull/Bear 는 역할이 다르므로 이 기록을 모델 A/B 비교로 읽지 않는다.
+
+## SEE
+
+- 시험 `tests/test_llm_decision_record.py` 11건: 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
+- 운영 미배포. 다음 관측(10월14일 09:00~09:05)은 운영 `161b394` 로 진행되며 이 기록은 그 뒤 배포 승인 시부터 쌓인다.
+
+## 다음
+
+1. 배포 뒤 첫 `llm_second_check` 에서 `signal_events.metadata.llm_decision.record_status=queued` 와 월 파일의 행을 1건 대조한다.
+2. 관측 원장과의 조인 스크립트(decision_available_at → 첫 유효 ask/장 상태)는 다음 관측 자료가 있을 때 작성한다.
+3. 동일 입력·동일 역할의 모델/추론 비교는 이 기록을 바탕으로 비용 상한·평가 기준을 정한 뒤 별도 단계로 한다.

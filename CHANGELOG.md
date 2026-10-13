@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-13 — LLM 판단 재생 기록·계좌 기준선 결측 확정(64차, PR 대기·운영 미배포)
+
+- **B. 판단 기록(`llm-decision-v1`)**: `src/analytics/llm_decision_record.py` 신설. `cross_validator.llm_second_check` 가 `signal_id` 를 받아 공통 입력 원문·역할 프롬프트 지문·Bull/Bear/단일 폴백 시도별(요청/실제 모델·시각·지연·토큰·추정 비용·예산 모드·**예약 토큰**·결과 분류)·판단 결과·`decision_available_at` 을 월별 JSONL 에 append 하고, 엔진이 `event.metadata.llm_decision`(decision_id·record_status) 을 `signal_events` 에 남긴다. `LLMResponse.budget_reservation_token` 추가(정산 시 기록). 기록은 유한 큐+스레드로 판단을 지연시키지 않고 상한 초과·실패는 `record_status` 로 드러낸다. 기본 기록기는 옵트인, 운영 런처가 켠다(`LLM_DECISION_RECORD=0` 끔). 모델·추론·프롬프트·판정·예산 정책·fail-open 불변. 응답 뒤 첫 호가는 관측 원장과 오프라인 조인(별도 소켓 없음). [설계·흐름·한계](docs/research/llm-decision-record-2026-10-13.md), 시험 11건.
+- **A. 계좌 기준선**: 44차 비공개 KIS 조회(2025-01-01~2026-10-01, 46회·주문 2,651·체결 2,540, 금액/비용 대사 exact)와 2026-10-02 잔고로 확보/결측을 분리했다. 확보: 증권사 보고 실현손익(비용 포함)·비용·회전·끝 순자산·추정 청산 29건의 경제적 왕복 29/29(식별 인증 아님). 결측: 시작 순자산·외부 입출금·배당/이자·기타 운영비·현재 엔진 귀속 → 원화 순손익·TWR null 보존, CLI 미실행(null 을 0 으로 채우지 않음). 새 KIS 호출 0건. [상태 문서](docs/operations/account-baseline-status-2026-10-13.md), 금액은 `qwq-private` 비공개 JSON.
+- 운영 `161b394`·10월14일 관측 예약·매수 중지·예산 원장 불변.
+
 ## 2026-10-13 — 73차 한 종목 기술 파일럿과 잔여 작업
 
 - 07:32:58 PR #181/`161b394a` 운영 배포 후07:34 예약 확인. 로컬/CI/운영5373·독립 실제 Opus5 승인, PID1114252/NRestarts0·오류/pending0·기존 예산 활성화/사용액 보존.10월14일08:55 단발 활성화·09:00~09:05 기술 관측 예약 완료, 실수집/새20일/순수익은 미완료. 소비된 옛 drop-in은4개 자료 백업 뒤 정리, 나머지 보호13경로 동일.

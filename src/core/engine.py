@@ -1683,6 +1683,8 @@ class RiskManager:
             "memory_adj": meta.get("memory_adj"),
             "wiki_context_used": meta.get("wiki_context_used"),
             "llm_budget_validation": meta.get("llm_budget_validation"),
+            # 64차: LLM 판단 기록 조인 키 {decision_id, record_status, stage, attempts}
+            "llm_decision": meta.get("llm_decision"),
             # 진입 위험 스냅샷 (2026-09-14 T3) — signal_events 에서 risk 모드 주문을 골라낸다
             "entry_risk": meta.get("entry_risk"),
         }
@@ -2070,8 +2072,14 @@ class RiskManager:
                     indicators=_meta.get("indicators") or {},
                     market_regime=_regime,
                     sector=_meta.get("sector", ""),
+                    signal_id=event.id,
                 )
                 _llm_ctx = dict(getattr(self._cross_validator, "last_llm_context", {}) or {})
+                # 64차: 판단 기록 ID·기록 상태를 신호 메타에 남겨 signal_events ↔ llm-decision 원장을 조인한다
+                _decision = getattr(self._cross_validator, "last_llm_decision", None)
+                if isinstance(_decision, dict) and _decision:
+                    event.metadata = event.metadata if event.metadata is not None else {}
+                    event.metadata["llm_decision"] = dict(_decision)
                 _budget_ctx = getattr(self._cross_validator, "last_llm_budget_status", {})
                 if isinstance(_budget_ctx, dict) and _budget_ctx:
                     event.metadata = event.metadata if event.metadata is not None else {}

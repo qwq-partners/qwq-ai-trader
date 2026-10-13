@@ -230,6 +230,7 @@ class LLMResponse:
     budget_policy_mode: Optional[str] = None
     budget_policy_version: Optional[str] = None
     budget_priority: Optional[str] = None
+    budget_reservation_token: Optional[str] = None  # 64차: 월 예산 원장 reservations.token 연결 (정산 시 기록)
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -1025,6 +1026,11 @@ class LLMManager:
                 "monthly_limit_usd": self.config.monthly_budget_usd}
 
     def _settle_monthly(self, token: Optional[str], response: LLMResponse, model: str) -> None:
+        # 64차: 판단 기록이 예산 원장 행과 조인할 수 있게 응답에 예약 토큰을 남긴다 (정산 결과와 무관)
+        try:
+            response.budget_reservation_token = token
+        except Exception:
+            pass
         if token is None or self.monthly_budget is None:
             return
         try:
