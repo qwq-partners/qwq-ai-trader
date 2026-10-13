@@ -524,8 +524,11 @@ def install_from_env(cross_validator, *, env=None) -> ComparisonWorker | None:
         policy["allowed_models"] = tuple(policy["allowed_models"])
         guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
         openai, gemini = _raw_clients()
+        age = manifest.get("max_input_age_seconds")
+        if isinstance(age, bool) or not isinstance(age, (int, float)) or not (0 < float(age) <= 60):
+            raise ValueError("manifest.max_input_age_seconds must be a number in (0, 60]")   # 보고서와 같은 값을 쓴다(5회차 P2)
         worker = ComparisonWorker(PairedComparisonRunner(guard=guard, adapter=SingleAttemptAdapter(
-            openai=openai, gemini=gemini)), manifest=manifest)
+            openai=openai, gemini=gemini)), manifest=manifest, max_input_age_seconds=float(age))
         mci.source_sha256()   # 첫 판단 전에 소스 지문을 미리 계산해 운영 루프에서 파일을 읽지 않게 한다
         attach(worker.start(), cross_validator)
         logger.info(f"[비교작업자] 시작: experiment={manifest['experiment_id']}")

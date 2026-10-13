@@ -693,3 +693,54 @@ def test_explicit_empty_nonce_and_decision_id_are_rejected():
         mci.build_envelope(decision_id="d", signal_id="s", symbol="005930", strategy="m", score=90.0, market_regime="x",
                            common_context="c", role_controls={}, neutral_sizing=None, producer={},
                            input_available_at="2026-10-13T00:00:00+00:00", handed_off_at="2026-10-13T00:00:00+00:00", nonce=b"")
+
+
+def test_conflicting_same_key_market_state_records_are_unknown_regardless_of_order():
+    """5회차 P2: 같은 수신 시각·번호에 정상/거래정지 기록이 함께 오면 입력 순서와 무관하게 unknown."""
+    from tests.test_model_comparison_admission import cnt, mko, classify
+    good, halted = cnt(), cnt(trht_yn='Y')
+    for order in ([good, halted, mko()], [halted, good, mko()]):
+        out = classify(order)
+        assert out['verdict'] == 'unknown' and 'conflicting_records:H0STCNT0' in out['basis']
+    assert classify([good, mko()])['verdict'] == 'normal_continuous'
+
+
+def test_install_from_env_passes_manifest_input_age_and_rejects_bad_values(tmp_path, monkeypatch):
+    """5회차 P2: 설치기는 manifest 의 max_input_age_seconds 를 작업자에 넘기고(보고서와 동일), 잘못된 값은 거부한다."""
+    import json as _json
+    from types import SimpleNamespace
+    from tests.test_model_comparison_worker import manifest as _manifest, FakeOpenAI as _Op, FakeGemini as _Ge
+    m = worker_api()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, policy_enabled=True)
+    from src.utils import llm as llm_module
+    monkeypatch.setattr(llm_module, "get_llm_manager", lambda: SimpleNamespace(monthly_budget=ledger))
+    monkeypatch.setattr(m, "_raw_clients", lambda: (_Op(), _Ge()))
+    created = {}
+    real = m.ComparisonWorker
+    class Spy(real):
+        def __init__(self, *a, **kw):
+            created.update(kw); super().__init__(*a, **kw)
+    monkeypatch.setattr(m, "ComparisonWorker", Spy)
+    cross = SimpleNamespace(_comparison_handoff=None, _comparison_producer_config=None)
+    man = _manifest(enabled=True, max_input_age_seconds=2.5); path = tmp_path / "R.json"; path.write_text(_json.dumps(man))
+    worker = m.install_from_env(cross, env={"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)})
+    try:
+        assert worker is not None and created["max_input_age_seconds"] == 2.5 and cross._comparison_handoff is not None
+    finally:
+        if worker is not None:
+            worker.stop(5)
+    bad = _manifest(enabled=True, max_input_age_seconds=0); path.write_text(_json.dumps(bad))
+    cross2 = SimpleNamespace(_comparison_handoff=None, _comparison_producer_config=None)
+    assert m.install_from_env(cross2, env={"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)}) is None
+    assert cross2._comparison_handoff is None
+
+
+def test_ledger_block_reason_reaches_stop_conditions_without_pair_rows():
+    """5회차 P2: pair 저장이 실패해도 원장 시도의 차단 사유가 중단 조건으로 보고된다."""
+    attempts = [{"attempt_id": "x:bull_current:0", "admission_day": "2026-10-13", "state": "blocked",
+                 "reservation_token": None, "cost_usd": None, "original_estimated_cost_usd": None,
+                 "request_sent": None, "block_reason": "comparison_experiment_ceiling"}]
+    report = daily.build_daily_report([], day_kst="2026-10-13", offer_records=[], ledger_attempts=attempts)
+    assert report["stop_conditions_reached"] == ["comparison_experiment_ceiling"]
+    assert "중단 조건" in report["telegram_preview"]

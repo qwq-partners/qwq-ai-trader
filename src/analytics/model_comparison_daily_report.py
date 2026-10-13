@@ -353,7 +353,9 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                         | {a.get('error') for row in all_runs for arm in ('current', 'candidate')
                            if isinstance(row.get(arm), Mapping)
                            for a in row[arm].get('attempts', []) if isinstance(a, Mapping)
-                           and a.get('error') in STOP_REASONS})
+                           and a.get('error') in STOP_REASONS}
+                        | {la.get('block_reason') for la in ledger_attempts            # pair 저장 실패 뒤에도 원장 증거로 집계(5회차 P2)
+                           if isinstance(la, Mapping) and la.get('block_reason') in STOP_REASONS})
 
     # 실제 지출: 그날 모든 실행 행의 고유 attempt_id 한 번씩 (공통 Bear·재실행 중복 합산 금지).
     # 시도별 비용 = 감사 대사액 > 저장 추정액 > 불명.
