@@ -29,6 +29,14 @@
 - 계산 가능: **거래 기간의 증권사 보고 실현손익(비용 포함)**. 미실현·입출금·배당·운영비가 빠진 값이라 계좌 순수익률이나 TWR 이 아니다.
 - null 보존: `account_net_profit_krw`, `account_twr`, `current_engine_attributed_profit`, 운영비 차감 후 손익. `account-net-return-v1` 입력은 시작 순자산·외부흐름이 없어 만들 수 없고 CLI(`scripts/report_account_net_return.py`)는 실행하지 않았다(`_money` 는 null 을 거부한다 — 억지로 0 을 넣지 않는다).
 
+## 66차 — 권리조회(CTRGA011R) 수집 도구
+
+`scripts/ops/kis_period_rights.py --start 2025-01-01 --end 2026-10-01 --out-dir <비공개 경로>` 가 월 단위 창마다 모든 페이지를 회수한다(공식 샘플 파라미터, 응답 헤더 `tr_cont` F/M 이면 `ctx_area_fk100/nk100` 으로 다음 페이지, D/E/부재면 종료). 창별 상태는 `complete`/`empty`/`partial_max_pages`(공식 샘플의 재귀 상한 도달은 완료가 아님)/`partial_page_repeat`(같은 연속조회 키 반복)/`error`/`malformed` 로 구분하고, 원본 응답·금액·식별자는 out-dir(비공개) 에만 저장하며 표준 출력은 상태·행 수만 낸다. 장중(09:00~15:30 KST)에는 실행을 거부한다 — 운영 봇과 계좌 원장 TR 초당 1건 한도를 공유하므로(`CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가). 요약(`summarize_rights`)은 권리유형별 행 수·`last_alct_amt` 합(Decimal 문자열)·파싱 불가 건수만 집계하고 해석하지 않는다.
+
+**해석 금지.** 조회 성공 ≠ 소득 확정. `last_alct_amt` 의 세전/세후·실제 지급·보존기간·예수금/CMA 이자 포함 여부는 지급 증빙 대사 전 미확인. 권리 이벤트의 현금은 외부 입출금·이체가 아니다. `loan_int` 는 대출이자 비용이다.
+
+실조회 결과는 아래 "실조회 기록" 절에 상태·건수만 적는다(금액은 비공개 summary.json).
+
 ## 다음 완료 조건
 
 0. KIS `CTRGA011R`를 월 단위로 읽기 전용 조회하되 모든 페이지를 회수하고, 빈 응답/오류/보존범위를 구분한다. 총량 상한/페이지 반복이면 부분 완료로 남기며, 한 건의 현금 지급 명세와 금액 의미를 대사하기 전 계좌 소득으로 승격하지 않는다. 이 단계는 단순 사용자 자료 대기로 두지 않는다.

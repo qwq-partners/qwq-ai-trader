@@ -2052,6 +2052,24 @@ class KISBroker(BaseBroker):
             return self._load_overseas_cache(cano)
 
     @kis_request_metrics.observe_operation("account_summary")
+    async def get_period_rights(self, start_yyyymmdd: str, end_yyyymmdd: str, *, inqr_dvsn: str = "03",
+                                fk100: str = "", nk100: str = "", tr_cont: str = "") -> Dict[str, Any]:
+        """기간별계좌권리현황조회 CTRGA011R — 읽기 전용 1페이지 (66차).
+
+        공식 샘플(open-trading-api examples_llm/domestic_stock/period_rights)의 파라미터를 그대로 쓴다.
+        페이지 순회·완료 판정은 호출부(`src.analytics.kis_period_rights`)가 응답 헤더 `_tr_cont` 와
+        `ctx_area_fk100/nk100` 으로 한다. 주문·설정 변경 없음.
+        """
+        await kis_rate_limit.acquire("CTRGA011R")
+        url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/period-rights"
+        params = {
+            "INQR_DVSN": inqr_dvsn, "CANO": self.config.account_no, "ACNT_PRDT_CD": self.config.account_product_cd,
+            "INQR_STRT_DT": start_yyyymmdd, "INQR_END_DT": end_yyyymmdd,
+            "CUST_RNCNO25": "", "HMID": "", "RGHT_TYPE_CD": "", "PDNO": "", "PRDT_TYPE_CD": "",
+            "CTX_AREA_NK100": nk100, "CTX_AREA_FK100": fk100,
+        }
+        return await self._api_get(url, "CTRGA011R", params, tr_cont=tr_cont)
+
     async def get_account_balance(self) -> Dict[str, Any]:
         """
         계좌 잔고 조회
