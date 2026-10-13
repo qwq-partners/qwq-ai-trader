@@ -327,13 +327,13 @@ class ComparisonCallGuard:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
             cost = _ledger_cost(result.actual_cost_usd)
             if reservation is not None:
-                if result.settlement == "rejected_before_generation":
+                if reconciled is not None:
+                    # 검증된 감사 대사가 원래 응답의 정산 유형보다 우선한다. 원래 응답/추정액은 보존한다.
+                    state, reason = "known_reconciled", None
+                elif result.settlement == "rejected_before_generation":
                     # 생성 전 거절은 예약 해제(released)·과금 0 — LLMManager 의 'rejected' 정산과 같은 의미
                     if reservation["state"] == "released" and cost == 0.0:
                         state, reason = "known", None
-                elif reconciled is not None:
-                    # 원래 미확정 예약이 감사 대사로 정산됐다. 응답·원래 추정 비용은 바꾸지 않는다.
-                    state, reason = "known_reconciled", None
                 elif cost is None and reservation["state"] == "unknown":
                     state, reason = "unknown", None
                 elif cost is not None and reservation["state"] == "settled":
@@ -481,20 +481,35 @@ class ComparisonCallGuard:
             raise BudgetStateError("comparison_storage_corrupt")
         db.execute("UPDATE comparison_attempts SET reservation_token=?,state='reserved' WHERE slot=?", (token, slot))
 
+    @staticmethod
+    def _preserved_token(row, token: str | None):
+        if row is None:
+            raise BudgetStateError("comparison_storage_corrupt")
+        stored = row["reservation_token"]
+        if stored is not None and token is not None and stored != token:
+            raise BudgetStateError("comparison_reservation_mismatch")
+        return stored if stored is not None else token
+
     def _mark_failed(self, attempt_id: str, token: str | None, reason: str):
         # 저장된 응답은 실패 처리로 덮어쓰지 않는다. 정산 여부는 월 원장에서 판독한다.
         with self.ledger._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._check_policy(db)
+            row = db.execute("SELECT reservation_token FROM comparison_requests WHERE attempt_id=?",
+                             (attempt_id,)).fetchone()
+            token = self._preserved_token(row, token)
             db.execute("UPDATE comparison_requests SET reservation_token=?,block_reason=? "
                        "WHERE attempt_id=? AND result_json IS NULL", (token, reason, attempt_id))
             db.execute("COMMIT")
+            return token
 
     def _record(self, slot: str, token: str | None, state: str):
         try:
             with self.ledger._connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 self._check_policy(db)
+                row = db.execute("SELECT reservation_token FROM comparison_attempts WHERE slot=?", (slot,)).fetchone()
+                token = self._preserved_token(row, token)
                 changed = db.execute("UPDATE comparison_attempts SET reservation_token=?,state=? WHERE slot=?",
                                      (token, state, slot)).rowcount
                 if changed != 1:
@@ -601,8 +616,11 @@ class ComparisonCallGuard:
                     self.ledger.abandon(token)
             reason = exc.reason if isinstance(exc, BudgetBlocked) else "comparison_attempt_interrupted"
             try:
-                self._mark_failed(attempt_id, token, reason)
-                self._record(slot, token, "unknown" if entered_dispatch else "blocked")
+                stored_token = self._mark_failed(attempt_id, token, reason)
+                # reserve COMMIT 후 반환 전 오류라면 token은 None이어도 영속 예약은 남아 있다.
+                # 연결만 회수하며 여기서 정산하거나 전송을 재시도하지 않는다.
+                uncertain_reservation = token is None and stored_token is not None
+                self._record(slot, stored_token, "unknown" if entered_dispatch or uncertain_reservation else "blocked")
             except Exception:
                 pass  # 확정된 ID/슬롯은 남는다. 결과를 복구할 수 없어도 재전송은 금지한다.
             raise
