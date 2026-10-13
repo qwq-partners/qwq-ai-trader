@@ -69,3 +69,18 @@ attestation: {"kind": "in_process_nonce", "nonce_sha256": ...}  — 같은 프�
 - 새 테스트는 `monkeypatch.setattr(Path, "home", lambda: tmp_path)` 로 격리하고 네트워크를 쓰지 않는다.
 - 각 워커는 자기 파일의 관련 테스트와 `python -m py_compile` 을 돌리고 명령·rc·건수를 보고한다. 전체 verify 는 코디네이터가 통합 후 돈다.
 - 구현≠검증≠병합≠배포≠수익성 입증. 근거 없는 항목은 unknown/미완료로 남긴다.
+
+## 2차 수정 — Codex 독립 리뷰(PR #190, head `1e6feac`) 반례 7건 반영 계약
+
+리뷰 지적은 코디네이터가 코드로 확정했다(작업자 offer 에 일/크기 제한·파일 기록 없음, 복구가 `error` 키로 검사 생략·행 수준 값 미검증, 폴백이 시도당 시한, 장 상태가 무효 최신 기록을 걸러낸 뒤 옛 정상값 선택, 경제성 근거의 스냅샷/시각 미대조, 비용 집계의 추정 우선·행 덮어쓰기). 분담: **W-A** #1 실행 제한·#2 복구 무결성·#3 폴백 체인 시한·#4 영속 저널, **W-B** #5 최신 장 상태 우선·#6 경제성 근거 일관성·#7 비용 집계. 코디네이터: 통합·E2E 를 실제 저널 산출물 기반으로 교체·전체 verify·Codex 재리뷰.
+
+| 계약 | 값 |
+|---|---|
+| 정책 v2 추가 필드 | `pairs_per_day: int ≥1`, `max_common_context_bytes: int ≥1` (기본값 없음, 저장 정책 JSON 포함) |
+| 호출 전 제한 | 러너 `_claim` 의 `BEGIN IMMEDIATE` 안에서 KST 당일 `comparison_pairs` 입장 수(`admission_day` 열) ≥ `pairs_per_day` → `BudgetBlocked('comparison_daily_pair_cap')`, 입력 바이트 초과 → `comparison_input_too_large`; 차단된 pair 는 `result={"schema_version":"model-comparison-pair-blocked-v1","reason",...}` 로 고정(다음날 자동 재실행 없음). 작업자 `offer()` 도 같은 조건을 전송 전에 검사(`rejected_daily_pair_cap`/`rejected_input_too_large`), 일 카운트는 영속 저장소에서 읽는다 |
+| 폴백 체인 시한 | `PairSpec.fallback_chain_timeout_seconds`(필수) = 운영 `SINGLE_FALLBACK_TIMEOUT`; `_arm` 폴백 루프 전체를 하나의 `asyncio.timeout` 으로 감싼다. 봉투 `role_controls.fallback_chain_timeout_seconds`·manifest 키 동일 |
+| 작업자 저널 | `journal_dir`(기본 `~/.cache/ai_trader/comparison_worker/`) 의 `offers-YYYY-MM.jsonl`·`incomplete-YYYY-MM.jsonl`(KST 월), 레코드 `comparison-offer-v1` `{kind:"offer", recorded_at, decision_id, status, reason, received_at, envelope}` / `{kind:"transition", decision_id, status, reason, at, pair_id}` / `{kind:"incomplete_result", recorded_at, pair_id, row_sha256, row}`. 운영 루프는 큐에 넣기만, 작업자 스레드가 쓴다. 읽기 `read_offer_journal(path, *, max_bytes)`·`read_incomplete_journal(path, *, max_bytes)` |
+| 복구 | `restore_pair_result(guard, pair_id, result_row, *, manifest_json, evidence_path)`: 저장 응답 **전체 키** 일치(`error` 유무 무관), 파생 필드 재계산 일치, 경제성 플래그 강제, 행 sha256 이 incomplete 저널에 있어야 복원 |
+| 장 상태 | 채널별 **최신 레코드 먼저 선택** → 그 레코드가 미자격/빈 값/다른 세대/시각 불명이면 채널 unknown(옛 정상값 대체 금지) |
+| 경제성 근거 | admission 결과 `snapshot_id`·`anchor_at` 필수; outcome 은 `snapshot_id == sizing_snapshot.ref`, `anchor_at == row[anchor]`, 모든 게이트 `as_of ≤ anchor` 검사(`ADMISSION_SNAPSHOT_MISMATCH`/`ADMISSION_ANCHOR_MISMATCH`/`ADMISSION_GATE_FUTURE`) |
+| 비용 보고 | 시도별 대사액 우선 → 추정액 → unknown; 그날 모든 행의 고유 attempt 1회 집계(같은 판단 여러 실행 포함, `pair_runs`); blocked 마커 행은 excluded 분모; `build_daily_report(..., offer_records=)` 로 저널 레코드에서 모집단/제외 유도, CLI `--daily --offers` |
