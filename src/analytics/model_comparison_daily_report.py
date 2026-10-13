@@ -253,7 +253,8 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     incomplete_records: 작업자 incomplete 저널 레코드 — 결과 행이 없는 쌍은 미정산으로 표시한다.
     journal_status: 모집단 저널의 결손 정보 — 불완전하면 보고에 명시한다.
     incomplete_journal_status: 미완료 저널의 결손 정보 — 제공된 근거가 불완전하면 총지출은 null,
-    확인된 시도 비용의 부분합과 원래 행은 보존한다. 생략하면 기존 선택적 입력 동작을 유지한다."""
+    계산 가능한 시도 비용의 부분합(원래 추정액을 포함할 수 있으며 청구 검증액이 아님)과 원래 행은
+    보존한다. 생략하면 기존 선택적 입력 동작을 유지한다."""
     offered_envelopes, exclusions = list(offered_envelopes), list(exclusions)
     ledger_attempts, incomplete_records = list(ledger_attempts), list(incomplete_records)
     offer_records = [r for r in offer_records if isinstance(r, Mapping) and _record_day(r) == day_kst]   # 그날 기록만
@@ -393,6 +394,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
                                and isinstance(rec.get('pair_id'), str) and rec.get('pair_id') not in row_pair_ids
                                and _same_day(rec.get('recorded_at'), day_kst)})
     estimated, reconciled, used = Decimal('0'), Decimal('0'), Decimal('0')
+    subtotal_uses_original_estimate = False
     unknown, reconciled_ids, lookup_failed = [], [], []
     ledger_by_id = {la['attempt_id']: la for la in ledger_attempts
                     if isinstance(la, Mapping) and isinstance(la.get('attempt_id'), str)}
@@ -425,6 +427,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             reconciled_ids.append({'attempt_id': attempt_id, 'reconciliation_id': ref})
         elif estimate is not None:
             used += estimate
+            subtotal_uses_original_estimate = True   # 0도 원래 추정액을 사용한 경우다
         else:
             unknown.append(attempt_id)
     spend = {'unique_attempts': len(unique), 'pair_runs': len(all_runs),
@@ -438,9 +441,12 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
              'known_subtotal_usd': str(used),
+             'subtotal_uses_original_estimate': subtotal_uses_original_estimate,
              'total_usd': str(used) if not (unknown or unaccounted or incomplete_pairs) else None,
              'basis': 'unique attempt_id once across all pair runs of the day; '
-                      'reconciled > original estimate > unknown; arm scenario costs are not summed'}
+                      'reconciled > original estimate > unknown; arm scenario costs are not summed; '
+                      'known_subtotal_usd is computable cost including any original estimates used, '
+                      'not verified invoice charges'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)
     offered_n, sampled_n = len(selection['offered']), len(selection['sampled'])
     report = {
@@ -475,6 +481,8 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         missing_j = status_info.get('missing') is True
         counts = {key: _count(key) for key in ('skipped_lines', 'sequence_gaps', 'dropped_records', 'unsequenced_records',
                                                'write_failures')}
+        # 부가 진단: 중복은 reader가 이미 skipped_lines에 반영한다. 옛 호출자의 완전성 증거에 새 키를 요구하지 않는다.
+        diagnostics = {key: _count(key) for key in ('duplicate_sequences', 'conflicting_sequences')}
         open_runs = status_info.get('open_runs')
         closed_runs = status_info.get('closed_runs')
         runs_known = isinstance(open_runs, (list, tuple)) and isinstance(closed_runs, (list, tuple))
@@ -482,7 +490,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         # 종료 표식이 없는 run(열린 파일)·종료 run 0 개(빈 파일)·결손 카운터>0 이면 완전으로 확정하지 않는다(4회차 P2)
         journal_complete = ((not missing_j) and evidence_ok and all(v == 0 for v in counts.values())
                             and len(open_runs) == 0 and len(closed_runs) > 0)
-        report[journal_name] = {'missing': missing_j, **counts, 'complete': journal_complete,
+        report[journal_name] = {'missing': missing_j, **counts, **diagnostics, 'complete': journal_complete,
                                    'open_runs': list(open_runs) if runs_known else None,
                                    'closed_runs': list(closed_runs) if runs_known else None,
                                    'completeness_evidence': 'run_id+per-file journal_seq gaps, journal_drop and journal_close markers'

@@ -42,7 +42,8 @@ def main(argv=None):
             offer_records, incomplete_records, journal_status, ledger_attempts = [], [], None, []
             incomplete_journal_status = None
             integrity_keys = ('missing', 'skipped_lines', 'sequence_gaps', 'dropped_records',
-                              'unsequenced_records', 'write_failures', 'open_runs', 'closed_runs')
+                              'unsequenced_records', 'write_failures', 'open_runs', 'closed_runs',
+                              'duplicate_sequences', 'conflicting_sequences')
             if args.offers or args.incomplete:
                 try:
                     from src.analytics.model_comparison_worker import read_offer_journal, read_incomplete_journal
