@@ -28,7 +28,7 @@ flowchart LR
   Q -. decision_available_at .-> J[오프라인 조인: 관측 원장 ws_quote·장 상태]
 ```
 
-**기록 내용.** `decision_id`·`signal_id`·종목·전략·점수·레짐·`code_version`(applied_sha)·`context_version` / `inputs.common_context`(사실 블록 원문)·`common_context_sha256`·`source_observed_at=null`(원천 시각은 아직 없으며 현재 시각으로 채우지 않는다)·`collected_at` / `stage`(adversarial·single_fallback) / `attempts[]`: `attempt_id`·역할·공급자·요청/응답 시각·지연·요청 모델/추론 수준·**공급자가 보고한 실제 모델(없으면 `unverified`)**·토큰·`usage_known`·`billing_status`·추정 비용(단가표·사용량 보고가 있을 때만)·예산 `policy_mode/version/priority/block_reason/reservation_token`·결과 분류(success·empty·failed·timeout·budget_blocked·exception·not_sent)·역할 시스템 프롬프트 sha256·역할 접미 원문·응답 본문(2,000자 상한)+전체 sha256 / `result`(approved·confidence·reason·failed·disagreed·bull/bear) / `budget_context` / `decision_available_at` / `first_quote_after=null`.
+**기록 내용.** `decision_id`·`signal_id`·종목·전략·점수·레짐·`code_version`(applied_sha)·`context_version` / `inputs.common_context`(사실 블록 원문)·`common_context_sha256`·`source_observed_at=null`(원천 시각은 아직 없으며 현재 시각으로 채우지 않는다)·`collected_at`(공통 입력 구성 시각, 모르면 null — 판단 완료 시각으로 대체하지 않음) / `stage`(adversarial·single_fallback) / `attempts[]`: `attempt_id`·역할·공급자·요청/응답 시각·지연·요청 모델/추론 수준·**공급자가 보고한 실제 모델(없으면 `unverified`)**·토큰·`usage_known`·`billing_status`·추정 비용(단가표·사용량 보고가 있을 때만)·예산 `policy_mode/version/priority/block_reason/reservation_token`·결과 분류(success·empty·failed·timeout·budget_blocked·exception·not_sent)·역할 시스템 프롬프트 sha256·역할 접미 원문·응답 본문(2,000자 상한)+전체 sha256 / `result`(approved·confidence·reason·failed·disagreed·bull/bear) / `budget_context` / `decision_available_at` / `first_quote_after=null`.
 
 **실제 호출 전부.** `LLMManager.complete()`/`complete_with()` 는 한 호출 동안 실제 공급자 시도(빈 응답 재시도, 공급자 폴백)마다 `_account_attempt` 지점에서 trail 1행(공급자·요청/실제 모델·전송 여부·토큰·Decimal 비용·**예약 토큰**·차단 사유·지연)을 쌓아 응답 `attempt_trail` 로 붙인다. 시도 기록의 `calls`/`calls_count`/`calls_estimated_cost_usd`/`calls_cost_complete` 가 이것이다 — 최종 응답 1건의 비용과 호출 전체 비용을 구분한다. Bull/Bear 는 역할별 완료 시각을 따로 보관해 한쪽이 전체 제한 시간을 넘겨도 먼저 끝난 쪽의 응답·비용은 남고 미완료 쪽만 `timeout` 이다.
 
@@ -42,7 +42,7 @@ flowchart LR
 
 ## SEE
 
-- 시험 `tests/test_llm_decision_record.py` 22건(교차 리뷰 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3 반영 포함: 취소·예외에서 trail 보존, surrogate 직렬화, 폴백 일반 예외, 기록 실패 시 거절 유지, surrogate 해시, 부분 타임아웃, trail 2행, Decimal 합·결측 None, 저장 결과 조회, health 통계): 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
+- 시험 `tests/test_llm_decision_record.py` 25건(교차 리뷰 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2 반영 포함: 실제 wait_for 타임아웃에서 폴백 trail 보존, collected_at 분리, 잘못된 시각 write_error, 취소·예외에서 trail 보존, surrogate 직렬화, 폴백 일반 예외, 기록 실패 시 거절 유지, surrogate 해시, 부분 타임아웃, trail 2행, Decimal 합·결측 None, 저장 결과 조회, health 통계): 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
 - 운영 미배포. 다음 관측(10월14일 09:00~09:05)은 운영 `161b394` 로 진행되며 이 기록은 그 뒤 배포 승인 시부터 쌓인다.
 
 ## 다음

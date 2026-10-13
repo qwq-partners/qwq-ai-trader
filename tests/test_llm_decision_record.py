@@ -362,3 +362,52 @@ def test_empty_string_requested_model_is_preserved_in_trail(monkeypatch):
         assert _ATTEMPT_TRAIL.get()[0]["requested_model"] == ""      # "" 를 다른 모델로 바꾸지 않는다
     finally:
         _ATTEMPT_TRAIL.reset(token)
+
+
+# ── 3차 리뷰 반영: 폴백 타임아웃 trail 보존(실제 wait_for) / collected_at / 시각 검증 ──
+
+def test_fallback_timeout_through_wait_for_keeps_trail_and_token(monkeypatch, recorder):
+    """P1: wait_for 가 취소를 TimeoutError 로 바꿔도 이미 보낸 호출의 예약 토큰이 timeout 행에 남는다."""
+    import src.core.cross_validator as cv
+    from src.utils.llm import LLMManager, LLMUsage
+    mgr = object.__new__(LLMManager)
+    mgr.daily_usage = LLMUsage()
+    monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
+
+    async def slow_impl(prompt, task, system, **kwargs):
+        mgr._account_attempt(_resp("", budget_reservation_token="tok-slow"), "t", "r")   # 빈 응답(과금) 뒤 재시도 지연
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(mgr, "_complete_impl", slow_impl, raising=False)
+    monkeypatch.setattr(cv, "SINGLE_FALLBACK_TIMEOUT", 0.05)
+    cross = _cross(monkeypatch, _LLM("unparseable", "unparseable"))
+    cross._adversarial = None          # 적대 검증 없음 → 단일 폴백만
+    cross._llm_manager = mgr
+    assert asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="sig-t")) is True
+    row = _records(recorder)[0]
+    single = row["attempts"][-1]
+    assert single["role"] == "single" and single["outcome"] == "timeout"
+    assert single["calls_count"] == 1 and single["calls"][0]["budget_reservation_token"] == "tok-slow"
+
+
+def test_collected_at_is_context_build_time_not_decision_time(monkeypatch, recorder):
+    cross = _cross(monkeypatch, _LLM("APPROVE", "ACCEPT"))
+    asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="s"))
+    row = _records(recorder)[0]
+    assert row["inputs"]["collected_at"] is not None
+    assert row["inputs"]["collected_at"] <= row["decision_available_at"]
+    bare = decision_record(signal_id=None, symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
+                           stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
+    assert bare["inputs"]["collected_at"] is None                    # 모르면 None, 판단 시각으로 대체하지 않음
+
+
+def test_invalid_decision_time_is_a_write_error_not_current_month(tmp_path):
+    r = DecisionRecorder(tmp_path / "d", enabled=True)
+    for bad in ("", 0, None, "nope"):
+        row = decision_record(signal_id="s", symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
+                              stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
+        row["decision_available_at"] = bad
+        assert r.submit(row) == "queued" and r.flush(5.0)
+        assert r.status_of(row["decision_id"]) == "write_error", bad
+    assert not list((tmp_path / "d").glob("*.jsonl"))
+    r.close()

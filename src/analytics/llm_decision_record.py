@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections import OrderedDict
 import queue
 import threading
@@ -189,7 +190,8 @@ def safe_attempt_record(role: str, provider: Any, requested_at: Optional[datetim
 def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, score: Any, market_regime: Any,
                     common_context: Optional[str], stage: str, attempts: List[Dict[str, Any]],
                     approved: Optional[bool], result: Dict[str, Any], budget_context: Optional[Dict[str, Any]],
-                    decision_available_at: Optional[datetime] = None) -> Dict[str, Any]:
+                    decision_available_at: Optional[datetime] = None,
+                    collected_at: Optional[datetime] = None) -> Dict[str, Any]:
     """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다."""
     try:
         from ..utils.entry_risk import applied_sha
@@ -213,7 +215,8 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
             "common_context_sha256": sha256_text(common_context),
             # 원천 관측 시각은 71차 기준 아직 확보되지 않았다 — 현재 시각으로 채우지 않는다.
             "source_observed_at": None,
-            "collected_at": _iso(available),
+            # 공통 입력을 구성한 시각(호출 전). 모르면 None — 판단 완료 시각으로 대체하지 않는다.
+            "collected_at": _iso(collected_at),
         },
         "stage": stage,
         "attempts": attempts,
@@ -281,12 +284,15 @@ class DecisionRecorder:
 
     # ── 쓰기 ───────────────────────────────────────────────
     def _path_for(self, record: Dict[str, Any]) -> Path:
-        stamp = record.get("decision_available_at") or now_kst().isoformat()
-        return self.directory / f"decisions-{str(stamp)[:7]}.jsonl"
+        stamp = record.get("decision_available_at")
+        if not isinstance(stamp, str) or not re.match(r"^\d{4}-\d{2}-", stamp):
+            raise ValueError(f"decision_available_at 가 ISO 시각이 아니다: {stamp!r}")   # write_error 로 집계
+        return self.directory / f"decisions-{stamp[:7]}.jsonl"
 
     def _write(self, record: Dict[str, Any]) -> None:
-        path = self._path_for(record)
+        path = None
         try:
+            path = self._path_for(record)          # 잘못된 시각은 여기서 ValueError → write_error 집계
             # ensure_ascii=True: 응답의 단독 surrogate 등 비정상 문자도 이스케이프돼 인코딩 예외가 없다 (재리뷰 P2)
             line = (json.dumps(record, ensure_ascii=True, default=str) + "\n").encode("utf-8")
             path.parent.mkdir(parents=True, exist_ok=True)

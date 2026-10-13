@@ -16,6 +16,10 @@ from loguru import logger
 import json
 
 
+# 단일 LLM 폴백의 시한(초) — 시험에서 monkeypatch 가능하게 상수로 둔다 (64차)
+SINGLE_FALLBACK_TIMEOUT = 10.0
+
+
 class CrossStrategyValidator:
     """
     크로스 전략 검증 게이트
@@ -828,6 +832,8 @@ class CrossStrategyValidator:
                                  "symbol_wiki": symbol_wiki, "disclosure": disclosure_ctx,
                                  "panel_risks": panel_risks},
             )
+            from ..analytics.llm_decision_record import now_kst as _now_kst
+            self._decision_collected_at = _now_kst()   # 공통 입력 구성 시각 — 판단 완료 시각과 구분 (3차 리뷰 P2)
             prompt = (
                 common_context
                 + "\n이 매수 시그널을 승인하시겠습니까? "
@@ -876,17 +882,24 @@ class CrossStrategyValidator:
             from ..analytics.llm_decision_record import safe_attempt_record as attempt_record, now_kst
             _single_requested_at = now_kst()
             _single_suffix = prompt[len(common_context):]
+            _single_slot: Dict[str, Any] = {}
+
+            async def _single_call():
+                # wait_for 는 취소를 새 TimeoutError 로 바꾸므로, 취소 시점에 trail 을 슬롯에 보존한다 (3차 리뷰 P1)
+                try:
+                    return await self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100,
+                                                            budget_priority="essential")
+                except asyncio.CancelledError as _cancel:
+                    _single_slot["trail"] = getattr(_cancel, "_llm_trail", None)
+                    raise
+
             try:
-                resp = await asyncio.wait_for(
-                    self._llm_manager.complete(prompt, task=LLMTask.STRATEGY_ANALYSIS, max_tokens=100,
-                                               budget_priority="essential"),
-                    timeout=10.0,
-                )
-            except asyncio.TimeoutError as _to:
+                resp = await asyncio.wait_for(_single_call(), timeout=SINGLE_FALLBACK_TIMEOUT)
+            except asyncio.TimeoutError:
                 _attempts = _adv_attempts + [attempt_record("single", None, _single_requested_at, None,
                                                            timed_out=True, role_system_sha256=None,
                                                            role_suffix=_single_suffix,
-                                                           trail=getattr(_to, "_llm_trail", None))]
+                                                           trail=_single_slot.get("trail"))]
                 return self._finish_decision(
                     True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
                     market_regime=market_regime, common_context=common_context, stage="single_fallback",
@@ -943,7 +956,8 @@ class CrossStrategyValidator:
             record = decision_record(signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
                                      market_regime=market_regime, common_context=common_context, stage=stage,
                                      attempts=attempts, approved=approved, result=result,
-                                     budget_context=self._budget_context.get())
+                                     budget_context=self._budget_context.get(),
+                                     collected_at=getattr(self, "_decision_collected_at", None))
             status = get_decision_recorder().submit(record)
             self.last_llm_decision = {"decision_id": record["decision_id"], "record_status": status,
                                       "stage": stage, "attempts": len(attempts)}
