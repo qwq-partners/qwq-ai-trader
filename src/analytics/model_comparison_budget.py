@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN, ROUND_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_UP
 from typing import Any, Dict, List, Optional
 
 from ..utils.llm_pricing import rate_quote
@@ -14,8 +14,22 @@ from ..utils.llm_pricing import rate_quote
 SCHEMA_VERSION = "model-comparison-budget-v1"
 
 
-def _d(value: Any) -> Decimal:
-    return Decimal(str(value))
+def _d(value: Any, name: str = "value") -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        raise ValueError(f"{name} 값은 유한한 0 이상 숫자여야 한다")
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{name} 값은 유한한 0 이상 숫자여야 한다") from None
+    if not result.is_finite() or result < 0:
+        raise ValueError(f"{name} 값은 유한한 0 이상 숫자여야 한다")
+    return result
+
+
+def _integer(value: Any, name: str, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name} 값은 {minimum} 이상 정수여야 한다")
+    return value
 
 
 _MICRO = Decimal("0.000000001")
@@ -23,6 +37,8 @@ _MICRO = Decimal("0.000000001")
 
 def call_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Optional[Decimal]:
     """한 호출의 추정 비용 — 공표 요율을 Decimal 로 직접 계산하고 1e-9 단위로 올림(보수적). 단가표에 없으면 None."""
+    _integer(input_tokens, "input_tokens")
+    _integer(output_tokens, "output_tokens")
     quote = rate_quote(model, input_tokens, output_tokens)          # 모델 존재·장문 구간 판정은 기존 단가표 로직을 따른다
     if quote is None:
         return None
@@ -41,9 +57,13 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
       사용량이 있으면 둘 다 과금된다) — 경로상 최대 비용(상한).
     단가 없는 역할이 있으면 둘 다 None 이고 unpriced_roles 에 적는다.
     """
+    retry_factor = _d(retry_factor, "retry_factor")
+    if retry_factor < 1:
+        raise ValueError("retry_factor는 1 이상이어야 한다")
+    _integer(max_attempts_per_role, "max_attempts_per_role", 1)
     per_role, unpriced, total = {}, [], Decimal("0")
     for r in roles:
-        cost = call_cost_usd(r["model"], int(r["input_tokens"]), int(r["output_tokens"]))
+        cost = call_cost_usd(r["model"], r["input_tokens"], r["output_tokens"])
         per_role[r["role"]] = {"model": r["model"], "cost_usd": str(cost) if cost is not None else None}
         if cost is None:
             unpriced.append(r["role"])
@@ -54,7 +74,7 @@ def decision_cost_usd(roles: List[Dict[str, Any]], *, retry_factor: Decimal = De
         chain = fallback if isinstance(fallback, list) else [fallback]
         fb_cost = Decimal("0")
         for i, step in enumerate(chain):
-            cost = call_cost_usd(step["model"], int(step["input_tokens"]), int(step["output_tokens"]))
+            cost = call_cost_usd(step["model"], step["input_tokens"], step["output_tokens"])
             per_role[f"fallback_{i}"] = {"model": step["model"], "cost_usd": str(cost) if cost is not None else None}
             if cost is None:
                 unpriced.append(f"fallback_{i}")
@@ -75,15 +95,18 @@ def comparison_budget(*, available_usd: Any, reserve_share: Any, current: Dict[s
 
     basis="max"(기본) 는 경로상 최대 비용으로 상한을 내고, "expected" 는 평균 가정이다 — 둘을 섞지 않는다.
     """
-    avail = _d(available_usd)
-    share = _d(reserve_share)
-    if not (Decimal("0") <= share < Decimal("1")) or avail < 0 or int(month_days_remaining) < 0:
-        raise ValueError("reserve_share ∈ [0,1), available_usd ≥ 0, month_days_remaining ≥ 0")
+    avail = _d(available_usd, "available_usd")
+    share = _d(reserve_share, "reserve_share")
+    _integer(month_days_remaining, "month_days_remaining")
+    if share >= 1:
+        raise ValueError("reserve_share는 [0, 1) 범위여야 한다")
     if basis not in ("max", "expected"):
         raise ValueError("basis 는 max 또는 expected")
     key = "max_usd" if basis == "max" else "total_with_retry_usd"
     budget = (avail * (Decimal("1") - share)).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
     cur, cand = current.get(key), candidate.get(key)
+    cur = _d(cur, key) if cur is not None else None
+    cand = _d(cand, key) if cand is not None else None
     if cur is None or cand is None:
         return {"schema_version": SCHEMA_VERSION, "basis": basis, "comparison_budget_usd": str(budget), "pair_cost_usd": None,
                 "max_comparisons": None, "per_day_cap": None,
