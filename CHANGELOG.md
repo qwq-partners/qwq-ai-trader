@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-13 — 판단 기록 ↔ 관측 원장 조인 도구(65차, PR 대기·운영 미배포)
+
+- `src/analytics/decision_quote_join.py` + `scripts/report_decision_quotes.py`: `llm-decision-v1` 의 `decision_available_at` 이후 같은 종목 **첫 `ws_quote`**(지연·ask·수량·bid·거래소 시각)와 그 시점 이전 마지막 `market_state`(status·verdict·장 구분·거래정지·VI 코드) 를 붙여 판단별 행과 요약을 낸다. ask≤0/수량≤0/지연 초과(기본 60초)/장 상태 없음·raw 아님/판단 뒤 호가 없음을 `reasons` 로 남기고 `evaluable` 은 자료 충족일 뿐 체결 가능성·순수익 판정이 아니다. 장 상태 어휘는 해석하지 않고 보고한다.
+- 원장 시각 계약: tz 없는 `observed_at` 은 UTC naive 로 읽고 현재 시각으로 대체하지 않는다. 원장은 envelope 의 `record` payload 만 관대하게 읽되 `--study-sha256` 을 주면 기존 strict 리더로 해시 체인을 먼저 검증한다. 네트워크·운영 상태 접근 없음, 입력 불변.
+- 시험 4건(첫 호가 선택·UTC 해석·사유 5종·장 상태 최신 선택·로더/요약). 10월8일 실제 원장에 합성 판단 1건(005490, 10:25:23.3 가정)으로 스모크 실행: 0.578초 뒤 첫 ask 313,000원·813주를 찾았고 그 원장에는 `market_state` 레코드가 없어 `market_state_unknown`(실제 판단 기록은 64차 배포 뒤, 장 상태는 73차 관측부터).
+- 운영 `161b394`·10월14일 관측 예약·매수 중지 불변.
+
 ## 2026-10-13 — LLM 판단 재생 기록·계좌 기준선 결측 확정(64차, PR 대기·운영 미배포)
 
 - **B. 판단 기록(`llm-decision-v1`)**: `src/analytics/llm_decision_record.py` 신설. `cross_validator.llm_second_check` 가 `signal_id` 를 받아 공통 입력 원문·역할 프롬프트 지문·Bull/Bear/단일 폴백 시도별(요청/실제 모델·시각·지연·토큰·추정 비용·예산 모드·**예약 토큰**·결과 분류)·판단 결과·`decision_available_at` 을 월별 JSONL 에 append 하고, 엔진이 `event.metadata.llm_decision`(decision_id·record_status) 을 `signal_events` 에 남긴다. `LLMResponse.budget_reservation_token` 추가(정산 시 기록). 기록은 유한 큐+스레드로 판단을 지연시키지 않고, 시도 기록 생성 예외도 판정을 바꾸지 않는다(`record_error` 행). `record_status` 는 큐 수락 결과이며 저장 결과는 `status_of`·월 파일·`/api/health.llm_decision_record` 로 확인한다. `LLMManager` 가 한 호출의 실제 공급자 시도(재시도·폴백)마다 trail 을 쌓아 응답에 붙여 비용·예약 토큰 누락이 없고, Bull/Bear 는 역할별 완료 시각으로 부분 타임아웃을 구분한다. 비용은 Decimal 문자열, 결측은 None. 기본 기록기는 옵트인, 운영 런처가 켠다(`LLM_DECISION_RECORD=0` 끔). 모델·추론·프롬프트·판정·예산 정책·fail-open 불변. 응답 뒤 첫 호가는 관측 원장과 오프라인 조인(별도 소켓 없음). [설계·흐름·한계](docs/research/llm-decision-record-2026-10-13.md), 시험 27건. 교차 공급자 리뷰(Codex, `scripts/dev/codex_review.sh`, 요청 gpt-6-astra/high) 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2, 4차 P2 3(미확인 사용량 토큰 None·취소 응답 메타를 timeout 행에 보존·`or` 패턴 제거) 반영(취소·예외에서도 trail·예약 토큰 보존 — `wait_for` 가 취소를 TimeoutError 로 바꾸므로 폴백 호출도 슬롯에 보존, 직렬화 예외 집계·`ensure_ascii`, 단일 폴백 일반 예외 기록, 공통 입력 구성 시각 `collected_at` 분리, 잘못된 시각은 write_error, `or` 기본값 제거). 시험 27건.

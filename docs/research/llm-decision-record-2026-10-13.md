@@ -45,8 +45,12 @@ flowchart LR
 - 시험 `tests/test_llm_decision_record.py` 27건(교차 리뷰 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2, 4차 P2 3 반영 포함: 미확인 사용량 None, 취소 응답 메타 보존, 실제 wait_for 타임아웃에서 폴백 trail 보존, collected_at 분리, 잘못된 시각 write_error, 취소·예외에서 trail 보존, surrogate 직렬화, 폴백 일반 예외, 기록 실패 시 거절 유지, surrogate 해시, 부분 타임아웃, trail 2행, Decimal 합·결측 None, 저장 결과 조회, health 통계): 결과 분류·모델 신원·예약 토큰·본문 절단+전체 해시·`source_observed_at` null·월별 파일·큐/파일 상한 drop·옵트인 기본값·Bull/Bear 시도 2건·편측 예외 기록·적대 기록(signal_id·재생 가능 프롬프트)·폴백 3시도·기록 실패 시 판정 불변·signal_id 없는 기록. 기존 공통 입력·예산·전송 계약 시험 포함 181건 통과, 격리 위반 0.
 - 운영 미배포. 다음 관측(10월14일 09:00~09:05)은 운영 `161b394` 로 진행되며 이 기록은 그 뒤 배포 승인 시부터 쌓인다.
 
+## 조인 도구 (65차)
+
+`scripts/report_decision_quotes.py --decisions <decisions-YYYY-MM.jsonl> --ledger <engine.jsonl> [--study-sha256 <sha>]` 가 판단별로 `first_quote_after`(지연·ask·ask_size·bid·거래소 시각)와 `market_state_at_quote`(status·verdict·장 구분·정지·VI 코드·나이)를 붙이고 `reasons`(`no_quote_after_decision`·`invalid_ask`·`invalid_ask_size`·`stale_quote`·`market_state_unknown`·`market_state_not_raw`·`decision_time_missing`)를 남긴다. `evaluable` 은 자료 충족이며 체결 보장·순수익 판정이 아니다. 원장 `observed_at` 이 tz 없으면 UTC 로 읽는다(원장 계약). 장 상태 어휘는 해석하지 않는다.
+
 ## 다음
 
 1. 배포 뒤 첫 `llm_second_check` 에서 `signal_events.metadata.llm_decision.record_status=queued` 와 월 파일의 행을 1건 대조한다.
-2. 관측 원장과의 조인 스크립트(decision_available_at → 첫 유효 ask/장 상태)는 다음 관측 자료가 있을 때 작성한다.
+2. 다음 관측 자료가 생기면 위 조인 도구로 '응답 후 진입 가능 가격' 표를 내고, 부족한 행은 사유별로 보고한다.
 3. 동일 입력·동일 역할의 모델/추론 비교는 이 기록을 바탕으로 비용 상한·평가 기준을 정한 뒤 별도 단계로 한다.
