@@ -1,6 +1,8 @@
 """65차 — 판단 기록 ↔ 관측 원장 조인: 첫 호가·신선도·같은 연결의 채널별 장 상태·원장 완전성·평가 불가 사유 (합성 자료)."""
 import json
 
+import pytest
+
 from src.analytics.decision_quote_join import join_decisions, load_decisions, load_ledger_payloads, parse_time, summarize
 from src.analytics.kis_market_state import parse_market_state
 
@@ -21,7 +23,7 @@ def _env(payload, row=1):
 def _quote(symbol, observed_at, ask="313000", ask_size=12, qid="q1", conn=CONN):
     return {"kind": "ws_quote", "symbol": symbol, "observed_at": observed_at, "ask": ask, "ask_size": ask_size,
             "bid": "312500", "bid_size": 40, "quote_id": qid,
-            "provenance": {"exchange_time": "090100", **conn}}
+            "provenance": {"exchange_time": "090100", "received_at": observed_at + "+00:00", **conn}}
 
 
 def _state(symbol, observed_at, tr_id, *, conn=CONN, status=None, vi="0"):
@@ -35,7 +37,8 @@ def _state(symbol, observed_at, tr_id, *, conn=CONN, status=None, vi="0"):
     parsed = parse_market_state(tr_id, fields)
     if status is not None:
         parsed["market_state_status"] = status
-    return dict(parsed, kind="market_state", symbol=symbol, observed_at=observed_at, **conn)
+    return dict(parsed, kind="market_state", symbol=symbol, observed_at=observed_at,
+                received_at=observed_at + "+00:00", **conn)
 
 
 def test_naive_ledger_times_are_utc_and_first_quote_after_decision_is_picked():
@@ -183,3 +186,168 @@ def test_cli_rejects_empty_or_malformed_sha(tmp_path):
     proc = subprocess.run([sys.executable, str(script), "--decisions", str(dec), "--ledger", str(led), "--max-delay-seconds", "nan"],
                           capture_output=True, text=True)
     assert proc.returncode == 2
+
+
+def _received_quote(received, observed, qid="q1"):
+    q = _quote("005490", observed, qid=qid)
+    q["provenance"]["received_at"] = received
+    return q
+
+
+@pytest.mark.asyncio
+async def test_strict_cli_preserves_receipt_clock_through_sealed_journal(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    from src.analytics.entry_observation import EntryObservationBuffer
+    from src.analytics.entry_observation_journal import ObservationJournal
+
+    buffer = EntryObservationBuffer(evaluation_epoch="synthetic", capacity=100)
+    ledger = tmp_path / "engine.jsonl"
+    journal = await ObservationJournal.open(buffer, ledger, study_ref="synthetic",
+                                           study_sha256="a" * 64, queue_capacity=20,
+                                           batch_size=5, max_bytes=100000, max_record_bytes=10000)
+    for payload in [
+        _state("005490", "2026-10-14T00:00:59", "H0STMKO0"),
+        _received_quote("2026-10-14T08:59:59.9+09:00", "2026-10-13T23:59:59.95+00:00", "before"),
+        _received_quote("2026-10-14T09:01:00.2+09:00", "2026-10-14T00:01:00.3+00:00", "after"),
+    ]:
+        assert buffer.publish(payload)
+    assert (await journal.close())["sealed"]
+    decisions = tmp_path / "decisions.jsonl"
+    decisions.write_text(json.dumps(_decision()) + "\n")
+    before = ledger.read_bytes(), decisions.read_bytes()
+    script = Path(__file__).resolve().parents[1] / "scripts/report_decision_quotes.py"
+    result = subprocess.run([sys.executable, str(script), "--decisions", str(decisions),
+                             "--ledger", str(ledger), "--study-sha256", "a" * 64],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["summary"]["schema_version"] == "decision-quote-join-v2"
+    assert report["summary"]["time_basis"] == "local_received_at"
+    assert report["summary"]["ledger"]["complete"] is True
+    assert report["summary"]["evaluable"] == 1
+    assert report["rows"][0]["first_quote_after"]["quote_id"] == "after"
+    assert report["rows"][0]["first_quote_after"]["delay_seconds"] == pytest.approx(0.2)
+    assert (ledger.read_bytes(), decisions.read_bytes()) == before
+
+
+def test_newer_unique_state_clears_older_tie_and_unrelated_bad_receipt_is_isolated():
+    states = [_state("005490", "2026-10-14T00:00:57", "H0STMKO0", vi="1"),
+              _state("005490", "2026-10-14T00:00:57", "H0STMKO0", vi="2"),
+              _state("005490", "2026-10-14T00:00:59", "H0STMKO0", vi="0")]
+    bad = _quote("000660", "2026-10-14T00:01:00.2")
+    bad["provenance"]["received_at"] = None
+    rows = join_decisions([_decision()], states + [bad, _quote("005490", "2026-10-14T00:01:00.2")],
+                          ledger_status=OK_LEDGER)
+    assert rows[0]["evaluable"] is True
+    assert rows[0]["market_state_at_quote"]["H0STMKO0"]["vi_cls_code"] == "0"
+    assert summarize(rows)["ledger_time_error_reasons_by_symbol"] == {
+        "000660": {"ledger_receipt_time_invalid": 1}}
+
+
+def test_delayed_copy_does_not_turn_predecision_receipt_into_postdecision_quote():
+    before = _received_quote("2026-10-14T00:00:59.9+00:00", "2026-10-14T00:01:00.2", "before")
+    after = _received_quote("2026-10-14T00:01:00.3+00:00", "2026-10-14T00:01:00.4", "after")
+    s = _state("005490", "2026-10-14T00:00:58", "H0STMKO0")
+    row = join_decisions([_decision()], [before, after, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is True
+    q = row["first_quote_after"]
+    assert q["quote_id"] == "after" and q["delay_seconds"] == pytest.approx(0.3)
+    assert q["received_at"] == "2026-10-14T00:01:00.3+00:00"
+    assert q["observed_at"] == "2026-10-14T00:01:00.4"
+    assert q["capture_delay_seconds"] == pytest.approx(0.1)
+    assert q["delivery_delay_seconds"] == pytest.approx(0.4)
+
+
+def test_first_quote_uses_receipt_order_when_copy_order_differs():
+    first = _received_quote("2026-10-14T00:01:00.1+00:00", "2026-10-14T00:01:00.9", "first")
+    later = _received_quote("2026-10-14T00:01:00.2+00:00", "2026-10-14T00:01:00.3", "later")
+    row = join_decisions([_decision()], [later, first], ledger_status=OK_LEDGER)[0]
+    assert row["first_quote_after"]["quote_id"] == "first"
+    assert row["first_quote_after"]["delay_seconds"] == pytest.approx(0.1)
+
+
+def test_state_received_after_quote_cannot_leak_through_later_copy_time():
+    q = _received_quote("2026-10-14T00:01:00.05+00:00", "2026-10-14T00:01:00.2")
+    old = _state("005490", "2026-10-14T00:00:59", "H0STMKO0", vi="0")
+    future = _state("005490", "2026-10-14T00:01:00.1", "H0STMKO0", vi="1")
+    row = join_decisions([_decision()], [old, future, q], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is True
+    s = row["market_state_at_quote"]["H0STMKO0"]
+    assert s["vi_cls_code"] == "0" and s["age_seconds"] == pytest.approx(1.05)
+    assert s["received_at"] == "2026-10-14T00:00:59+00:00"
+
+
+@pytest.mark.parametrize("kind", ["ws_quote", "market_state"])
+@pytest.mark.parametrize("bad", [None, "not-a-time", "2026-10-14T00:01:00"])
+def test_receipt_time_missing_invalid_or_naive_never_falls_back_to_copy_time(kind, bad):
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    s = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    (q["provenance"] if kind == "ws_quote" else s)["received_at"] = bad
+    row = join_decisions([_decision()], [q, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "ledger_receipt_time_invalid" in row["reasons"]
+
+
+@pytest.mark.parametrize("kind", ["ws_quote", "market_state"])
+def test_receipt_later_than_copy_is_a_clock_error(kind):
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    s = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    (q["provenance"] if kind == "ws_quote" else s)["received_at"] = "2026-10-14T00:01:01+00:00"
+    row = join_decisions([_decision()], [q, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "ledger_clock_order_invalid" in row["reasons"]
+
+
+def test_equal_decision_receipt_is_excluded_and_duplicate_first_receipts_are_ambiguous():
+    equal = _received_quote("2026-10-14T00:01:00+00:00", "2026-10-14T00:01:00.1")
+    row = join_decisions([_decision()], [equal], ledger_status=OK_LEDGER)[0]
+    assert row["first_quote_after"] is None and "no_quote_after_decision" in row["reasons"]
+    q1 = _received_quote("2026-10-14T00:01:00.2+00:00", "2026-10-14T00:01:00.3", "q1")
+    q2 = _received_quote("2026-10-14T00:01:00.2+00:00", "2026-10-14T00:01:00.4", "q2")
+    s = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    row = join_decisions([_decision()], [q1, q2, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "quote_receipt_time_ambiguous" in row["reasons"]
+
+
+def test_equal_quote_state_receipt_cannot_establish_prior_state():
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    old = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    equal = _state("005490", "2026-10-14T00:01:00.2", "H0STMKO0", vi="1")
+    row = join_decisions([_decision()], [q, old, equal], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "market_state_quote_time_ambiguous:H0STMKO0" in row["reasons"]
+    assert row["market_state_at_quote"]["H0STMKO0"]["vi_cls_code"] == "0"
+
+
+def test_delivery_delay_still_rejects_an_old_quote_even_with_prompt_receipt():
+    q = _received_quote("2026-10-14T00:01:00.2+00:00", "2026-10-14T00:02:05")
+    s = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    row = join_decisions([_decision()], [q, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "stale_quote" in row["reasons"]
+    assert row["first_quote_after"]["delay_seconds"] == pytest.approx(0.2)
+
+
+def test_decision_time_must_have_an_explicit_timezone():
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    s = _state("005490", "2026-10-14T00:00:59", "H0STMKO0")
+    row = join_decisions([_decision(decided="2026-10-14T00:01:00")], [q, s], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "decision_time_missing" in row["reasons"]
+
+
+def test_latest_state_is_selected_by_receipt_and_its_age_uses_receipt():
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    old = _state("005490", "2026-10-14T00:00:59.8", "H0STMKO0", vi="1")
+    old["received_at"] = "2026-10-14T00:00:58+00:00"
+    newer = _state("005490", "2026-10-14T00:00:59.2", "H0STMKO0", vi="0")
+    newer["received_at"] = "2026-10-14T00:00:59+00:00"
+    row = join_decisions([_decision()], [newer, old, q], ledger_status=OK_LEDGER)[0]
+    state = row["market_state_at_quote"]["H0STMKO0"]
+    assert row["evaluable"] is True
+    assert state["vi_cls_code"] == "0" and state["age_seconds"] == pytest.approx(1.2)
+
+
+def test_latest_state_receipt_ties_are_not_arbitrarily_treated_as_proven():
+    q = _quote("005490", "2026-10-14T00:01:00.2")
+    s1 = _state("005490", "2026-10-14T00:00:59", "H0STMKO0", vi="0")
+    s2 = _state("005490", "2026-10-14T00:00:59", "H0STMKO0", vi="1")
+    row = join_decisions([_decision()], [q, s1, s2], ledger_status=OK_LEDGER)[0]
+    assert row["evaluable"] is False and "market_state_receipt_time_ambiguous:H0STMKO0" in row["reasons"]

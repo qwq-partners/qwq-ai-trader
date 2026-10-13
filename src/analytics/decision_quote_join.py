@@ -1,6 +1,6 @@
 """판단 기록(llm-decision-v1) ↔ 관측 원장(ws_quote·market_state) 오프라인 조인 — 65차.
 
-각 판단의 `decision_available_at` 이후 같은 종목의 **첫 호가**와 그 시점 이전의 마지막 장 상태를 찾아
+각 판단의 `decision_available_at` 이후 같은 종목에서 **실제 수신한 첫 호가**와 수신 시점 이전의 마지막 장 상태를 찾아
 "응답 뒤 진입 가능 가격" 표의 입력을 만든다. 관측 호가는 체결 보장이 아니며, ask·수량·신선도·장 상태가
 부족하면 `evaluable=False` 와 사유를 남긴다. 장 상태 어휘(state_verdict)는 해석하지 않고 그대로 보고한다 —
 정규장 코드만으로 연속매매/VI 부재를 확정하지 않는다. 네트워크·운영 상태 접근 없음.
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional
 
-SCHEMA_VERSION = "decision-quote-join-v1"
+SCHEMA_VERSION = "decision-quote-join-v2"
 DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_DELAY_SECONDS = 60.0
 
@@ -25,6 +25,16 @@ def parse_time(value: Any, label: str) -> datetime:
         raise ValueError(f"{label}: 시각 누락")
     parsed = datetime.fromisoformat(value)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _aware_time(value: Any, label: str) -> datetime:
+    """수신/판단 시각은 명시 시간대 필수. observed_at의 옛 UTC 계약을 소급 적용하지 않는다."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label}: 시각 누락")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{label}: 시간대 누락")
+    return parsed
 
 
 def _read_lines(path, *, max_bytes: int) -> Iterable[bytes]:
@@ -132,18 +142,37 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
     states: Dict[str, List[tuple]] = {}
     # 시각이 손상된 레코드는 조용히 버리지 않는다 — 그 종목의 판단은 '첫 호가/최신 상태' 를 믿을 수 없다 (재리뷰 P2)
     time_errors: Dict[str, int] = {}
+    time_error_reasons: Dict[str, Dict[str, int]] = {}
+
+    def clock_error(symbol, reason):
+        time_errors[symbol] = time_errors.get(symbol, 0) + 1
+        counts = time_error_reasons.setdefault(symbol, {})
+        counts[reason] = counts.get(reason, 0) + 1
+
     for p in payloads:
+        if p.get("kind") not in ("ws_quote", "market_state"):
+            continue
         symbol = p.get("symbol")
         if not isinstance(symbol, str):
             symbol = "<missing_symbol>"
         try:
-            at = parse_time(p.get("observed_at"), f"{p.get('kind')} observed_at")
+            observed = parse_time(p.get("observed_at"), f"{p.get('kind')} observed_at")
         except ValueError:
-            time_errors[symbol] = time_errors.get(symbol, 0) + 1
+            clock_error(symbol, "ledger_record_time_invalid")
+            continue
+        provenance = p.get("provenance") if p.get("kind") == "ws_quote" else p
+        try:
+            at = _aware_time(provenance.get("received_at") if isinstance(provenance, dict) else None,
+                             f"{p.get('kind')} received_at")
+        except ValueError:
+            clock_error(symbol, "ledger_receipt_time_invalid")
+            continue
+        if at > observed:
+            clock_error(symbol, "ledger_clock_order_invalid")
             continue
         if symbol == "<missing_symbol>":
             continue
-        (quotes if p.get("kind") == "ws_quote" else states).setdefault(symbol, []).append((at, p))
+        (quotes if p.get("kind") == "ws_quote" else states).setdefault(symbol, []).append((at, observed, p))
     for bucket in (quotes, states):
         for rows in bucket.values():
             rows.sort(key=lambda item: item[0])
@@ -155,8 +184,10 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
         if not isinstance(result, dict):
             result = {}
         reasons: List[str] = list(ledger_reasons)
-        if time_errors.get(symbol) or time_errors.get("<missing_symbol>"):
-            reasons.append("ledger_record_time_invalid")
+        for scope in (symbol, "<missing_symbol>"):
+            for reason in time_error_reasons.get(scope, {}):
+                if reason not in reasons:
+                    reasons.append(reason)
         row: Dict[str, Any] = {
             "decision_id": d.get("decision_id"), "signal_id": d.get("signal_id"), "symbol": symbol,
             "stage": d.get("stage"), "approved": result.get("approved"),
@@ -164,7 +195,7 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
             "first_quote_after": None, "market_state_at_quote": None,
         }
         try:
-            decided = parse_time(d.get("decision_available_at"), "decision_available_at")
+            decided = _aware_time(d.get("decision_available_at"), "decision_available_at")
         except ValueError:
             reasons.append("decision_time_missing")
             row.update(evaluable=False, reasons=reasons)
@@ -174,8 +205,11 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
         if not candidates:
             reasons.append("no_quote_after_decision")
         else:
-            at, q = candidates[0]
+            at, observed, q = candidates[0]
+            if len(candidates) > 1 and candidates[1][0] == at:
+                reasons.append("quote_receipt_time_ambiguous")
             delay = (at - decided).total_seconds()
+            delivery_delay = (observed - decided).total_seconds()
             ask, ask_size = _positive_decimal(q.get("ask")), _positive_int(q.get("ask_size"))
             provenance = q.get("provenance")
             if not isinstance(provenance, dict):
@@ -183,6 +217,9 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
             connection_id, generation = provenance.get("connection_id"), provenance.get("generation")
             row["first_quote_after"] = {
                 "quote_id": q.get("quote_id"), "observed_at": q.get("observed_at"), "delay_seconds": delay,
+                "received_at": provenance.get("received_at"),
+                "delivery_delay_seconds": delivery_delay,
+                "capture_delay_seconds": (observed - at).total_seconds(),
                 "ask": str(ask) if ask is not None else None, "ask_size": ask_size,
                 "bid": q.get("bid"), "bid_size": q.get("bid_size"),
                 "exchange_time": provenance.get("exchange_time"),
@@ -192,34 +229,50 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                 reasons.append("invalid_ask")
             if ask_size is None:
                 reasons.append("invalid_ask_size")
-            if delay > max_delay_seconds:
+            if delay > max_delay_seconds or delivery_delay > max_delay_seconds:
                 reasons.append("stale_quote")
             if connection_id is None or generation is None:
                 reasons.append("quote_provenance_missing")
             # 장 상태는 호가와 같은 연결·세대의 기록만 쓴다(재연결 전 상태를 새 호가에 붙이지 않음, 리뷰 P2).
             # 채널(tr_id)별 최신 1건을 각각 보존한다 — 체결/장운영 행의 필드를 하나로 합치지 않는다.
             latest_by_channel: Dict[str, tuple] = {}
-            for s_at, s in states.get(symbol, []):
+            tied_channels = set()
+            for s_at, s_observed, s in states.get(symbol, []):
                 if s_at > at:
                     break
                 if connection_id is None or s.get("connection_id") != connection_id or s.get("generation") != generation:
                     continue
                 tr_id = s.get("tr_id")
                 if isinstance(tr_id, str):
-                    latest_by_channel[tr_id] = (s_at, s)
+                    # 같은 수신 시각만으로 선후를 증명하지 않는다. 로컬 순번은 거래소 순서가 아니다.
+                    if s_at == at:
+                        reason = f"market_state_quote_time_ambiguous:{tr_id}"
+                        if reason not in reasons:
+                            reasons.append(reason)
+                        continue
+                    previous = latest_by_channel.get(tr_id)
+                    if previous is not None and previous[0] == s_at:
+                        tied_channels.add(tr_id)
+                    else:
+                        tied_channels.discard(tr_id)
+                    latest_by_channel[tr_id] = (s_at, s_observed, s)
             if not latest_by_channel:
                 reasons.append("market_state_unknown")
             else:
                 channels = {}
-                for tr_id, (s_at, s) in sorted(latest_by_channel.items()):
+                for tr_id, (s_at, s_observed, s) in sorted(latest_by_channel.items()):
                     age = (at - s_at).total_seconds()
                     channels[tr_id] = {
                         "observed_at": s.get("observed_at"), "age_seconds": age,
+                        "received_at": s.get("received_at"),
+                        "capture_delay_seconds": (s_observed - s_at).total_seconds(),
                         "market_state_status": s.get("market_state_status"), "state_verdict": s.get("state_verdict"),
                         "market_cls_code": s.get("market_cls_code"), "trht_yn": s.get("trht_yn"),
                         "vi_cls_code": s.get("vi_cls_code"), "hour_cls_code": s.get("hour_cls_code"),
                         "mkop_cls_code": s.get("mkop_cls_code"), "iscd_stat_cls_code": s.get("iscd_stat_cls_code"),
                     }
+                    if tr_id in tied_channels:
+                        reasons.append(f"market_state_receipt_time_ambiguous:{tr_id}")
                     if s.get("market_state_status") != "raw_only":
                         reasons.append(f"market_state_not_raw:{tr_id}")
                     missing = _missing_fields(tr_id, s)
@@ -234,6 +287,7 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
         out.append(row)
     if out:
         out[0].setdefault("_ledger_time_errors", dict(time_errors))   # 요약용 — 첫 행에 집계를 싣는다
+        out[0].setdefault("_ledger_time_error_reasons", time_error_reasons)
     return out
 
 
@@ -248,8 +302,10 @@ def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, A
     time_errors = rows[0].get("_ledger_time_errors") if rows and isinstance(rows[0].get("_ledger_time_errors"), dict) else {}
     return {
         "schema_version": SCHEMA_VERSION,
+        "time_basis": "local_received_at",
         "ledger": dict(ledger_status) if isinstance(ledger_status, dict) else dict(UNVERIFIED_LEDGER),
         "ledger_record_time_errors_by_symbol": time_errors,
+        "ledger_time_error_reasons_by_symbol": rows[0].get("_ledger_time_error_reasons", {}) if rows else {},
         "decisions": len(rows),
         "evaluable": sum(1 for r in rows if r.get("evaluable") is True),
         "approved_evaluable": sum(1 for r in rows if r.get("evaluable") is True and r.get("approved") is True),

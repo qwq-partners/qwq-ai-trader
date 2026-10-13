@@ -1838,6 +1838,14 @@ class UnifiedTradingBot:
             except Exception as e:
                 logger.error(f"LLM 종료 실패: {type(e).__name__}")
 
+            # 마지막 LLM 호출의 기록까지 저장하되 추가 종료 대기는 최대 5초다.
+            try:
+                from src.analytics.llm_decision_record import close_decision_recorder
+                if not await close_decision_recorder(timeout=5.0):
+                    logger.warning("[판단기록] 종료 저장 미완료: 시간 초과 또는 기록 실패/파일 상한")
+            except Exception as e:
+                logger.error(f"[판단기록] 종료 실패: {type(e).__name__}")
+
             # 토큰 매니저 정리
             if self._token_manager:
                 try:
