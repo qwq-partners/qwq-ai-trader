@@ -9,7 +9,7 @@ import threading
 import pytest
 
 from src.analytics import model_comparison_input as mci
-from src.analytics.model_comparison_worker import read_incomplete_journal, read_offer_journal
+from src.analytics.model_comparison_worker import read_incomplete_journal, read_offer_journal, row_sha256
 from tests.test_model_comparison_worker import build, envelope, FakeOpenAI, wait
 
 
@@ -208,3 +208,63 @@ def test_cancellation_before_claim_records_no_admission(tmp_path, monkeypatch):
     assert record["reason"] == "cancelled_at_shutdown" and record["admitted"] is False
     assert not worker.runner.admitted_pair_ids(ledger.today().isoformat())
     assert not op.calls and not ge.calls
+
+
+def test_real_close_preserves_drops_in_incomplete_stream_without_drop_marker(tmp_path):
+    worker, *_ = build(tmp_path, journal_queue=1)
+    path = tmp_path / "incomplete.jsonl"
+    row = {"pair_id": "previous-day", "decision_id": "previous-day"}
+    worker._journal_write({"schema_version": "comparison-offer-v1", "kind": "incomplete_result",
+                           "run_id": worker._journal_run_id, "pair_id": row["pair_id"], "row": row,
+                           "row_sha256": row_sha256(row), "recorded_at": "2026-10-13T09:00:00+09:00"}, path)
+    # The next day's recovery row is dropped by the real bounded queue. Its drop
+    # marker can be written to offers only; this incomplete stream has the old row.
+    worker._journal_put({"kind": "offer", "at": "2026-10-14T09:00:00+09:00"})
+    next_row = {"pair_id": "next-day", "decision_id": "next-day"}
+    worker._journal_put({"schema_version": "comparison-offer-v1", "kind": "incomplete_result",
+                         "decision_id": "next-day", "pair_id": next_row["pair_id"],
+                         "row": next_row, "row_sha256": row_sha256(next_row),
+                         "recorded_at": "2026-10-14T09:00:00+09:00"})
+    worker._journal_write({"schema_version": "comparison-offer-v1", "kind": "journal_drop",
+                           "run_id": worker._journal_run_id, "at": "2026-10-14T09:00:00+09:00",
+                           "dropped_total": worker.health()["journal_dropped"]}, tmp_path / "offers.jsonl")
+    worker._journal_write({"schema_version": "comparison-offer-v1", "kind": "journal_close",
+                           "run_id": worker._journal_run_id, "at": "2026-10-14T09:00:00+09:00"}, path)
+    read = read_incomplete_journal(path, max_bytes=1 << 20)
+    assert read["dropped_records"] == 1
+    assert [r["row"]["decision_id"] for r in read["records"]] == ["previous-day"]
+    assert read["skipped_lines"] == 0 and read["open_runs"] == []
+
+
+@pytest.mark.parametrize("marker,closing,expected", [(2, 5, 5), (5, 2, 5), (5, 5, 5), (0, 0, 0)])
+def test_drop_marker_and_close_use_per_run_high_water(tmp_path, marker, closing, expected):
+    path = tmp_path / "offers.jsonl"
+    base = {"schema_version": "comparison-offer-v1", "run_id": "legacy"}
+    rows = [dict(base, kind="journal_drop", journal_seq=1, dropped_total=marker),
+            dict(base, kind="journal_close", journal_seq=2, final_seq=2,
+                 journal_failed_total=0, journal_dropped_total=closing)]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    read = read_offer_journal(path, max_bytes=1 << 20)
+    assert read["dropped_records"] == expected
+    assert read["skipped_lines"] == 0
+
+
+@pytest.mark.parametrize("invalid", [None, -1, True, "1", 1.5])
+def test_invalid_close_drop_count_is_incomplete_evidence(tmp_path, invalid):
+    path = tmp_path / "incomplete.jsonl"
+    close = {"schema_version": "comparison-offer-v1", "kind": "journal_close", "run_id": "legacy",
+             "journal_seq": 1, "final_seq": 1, "journal_failed_total": 0, "journal_dropped_total": invalid}
+    path.write_text(json.dumps(close) + "\n")
+    read = read_incomplete_journal(path, max_bytes=1 << 20)
+    assert read["skipped_lines"] == 1
+    assert read["closed_runs"] == [] and read["open_runs"] == ["legacy"]
+
+
+def test_legacy_close_without_drop_count_remains_readable(tmp_path):
+    path = tmp_path / "offers.jsonl"
+    close = {"schema_version": "comparison-offer-v1", "kind": "journal_close", "run_id": "legacy",
+             "journal_seq": 1, "final_seq": 1, "journal_failed_total": 0}
+    path.write_text(json.dumps(close) + "\n")
+    read = read_offer_journal(path, max_bytes=1 << 20)
+    assert read["dropped_records"] == 0 and read["skipped_lines"] == 0
+    assert read["closed_runs"] == ["legacy"] and read["open_runs"] == []

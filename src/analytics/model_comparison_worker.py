@@ -108,6 +108,14 @@ def _read_journal(path, max_bytes, kinds, check=None) -> dict:
                 dropped[run] = max(dropped.get(run, 0), total)
             continue
         if record.get("kind") == "journal_close":
+            # Every touched stream gets this cumulative count, including incomplete
+            # files whose journal_drop marker was written only to the offers stream.
+            total = record.get("journal_dropped_total", 0)  # absent on legacy close records
+            if type(total) is not int or total < 0:
+                skipped += 1
+                continue
+            if isinstance(run, str):
+                dropped[run] = max(dropped.get(run, 0), total)
             final, failed_total = record.get("final_seq"), record.get("journal_failed_total")
             if isinstance(run, str) and type(final) is int and type(failed_total) is int:
                 closed[run] = {"final_seq": final, "journal_failed_total": failed_total}
