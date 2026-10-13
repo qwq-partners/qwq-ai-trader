@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-13 — 비교 실행·중립 수량 재생 후속(로컬 검증·독립 리뷰 완료, 운영 미배포):** [PDS·코드 흐름·복구·남은 우선순위](docs/research/model-comparison-runner-2026-10-13.md). 안정 ID로 중복 전송을 막고 응답을 회수하며, 실제 LLM 직전 입력으로 기존 사이징을 재생한다. 같은 Bull 역할의 단일 변경·공통 Bear·명시 폴백을 별도 작업자에 연결하고 응답별 첫 호가를 보고한다. UTC 전체5758·KST 관련147통과, 실제 Claude Opus5 독립 통합 리뷰 종결. **sizing_only·raw 상태이므로 순손익은 null; 운영161b394·10월14일 파일럿·매수 중지·기존 월100 보존, 운영/유료 비교 실행 없음.** CI/병합 정본은 링크를 따른다. 아래는 당시 이력이다.
+> **2026-10-13 — 비교 실행·중립 수량 재생 후속(로컬 검증·독립 리뷰 완료, 운영 미배포):** [PDS·코드 흐름·복구·남은 우선순위](docs/research/model-comparison-runner-2026-10-13.md), [PR #189 CI·병합 정본](https://github.com/qwq-partners/qwq-ai-trader/pull/189). 안정 ID로 중복 전송을 막고 응답을 회수하며, 실제 LLM 직전 입력으로 기존 사이징을 재생한다. 같은 Bull 역할의 단일 변경·공통 Bear·명시 폴백을 별도 작업자에 연결하고 응답별 첫 호가를 보고한다. UTC 전체5758·KST 관련147통과, 실제 Claude Opus5 독립 통합 리뷰 종결. **sizing_only·raw 상태이므로 순손익은 null; 운영161b394·10월14일 파일럿·매수 중지·기존 월100 보존, 운영/유료 비교 실행 없음.** 아래는 당시 이력이다.
 
 > **2026-10-13 — 66차 후속 구현·로컬 검증 완료, 운영 미배포:** [PDS·범위·검증](docs/superpowers/plans/2026-10-13-comparison-evidence-remediation.md), [PR #188 최종 리뷰·CI·병합 상태](https://github.com/qwq-partners/qwq-ai-trader/pull/188). [B](docs/research/concurrent-observation-design-2026-10-13.md)는 실제 LLM 검증 진입의 최초5종목 관측·반복 종목 재사용·호가/상태/기타 합산 용량을 새 명시 계약으로 분리한다. [C](docs/research/model-comparison-plan-2026-10-13.md)는 soft-reject 수량 정책·개별 응답 뒤 가격·API 비용의 증분 비교, 영속 일 시도 상한과 월 원장 예약/정산 경계를 다룬다. 실제 어댑터/중립 사이징 재생·실수익 비교는 미완료. **운영161b394·10월14일 고정 파일럿·매수 중지·월100 기존 집계 보존, 이번 배포/예약/유료 비교 호출 없음.** 아래는 당시 이력이다.
 
