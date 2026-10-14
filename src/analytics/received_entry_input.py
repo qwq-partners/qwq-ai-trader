@@ -7,7 +7,7 @@ from typing import Mapping
 from .entry_price_shadow import build_report, _mapping, _text, _timestamp
 
 
-def _subscription_stream_complete(records, report_at):
+def _subscription_stream_complete(records, report_at, *, market_state_evidence=False):
     """구독 기록이 있는 수집본만 연결 계약 검사. 기존 오프라인 가격 대리치는 유지.
 
     후보의 배정 여부는 승인 근거가 아니다. 실제 공유 운영 BOOK도 현재 채널 ACK와
@@ -49,6 +49,14 @@ def _subscription_stream_complete(records, report_at):
             cid = record.get("candidate_id")
             if cid is not None and (cid not in candidates or record.get("symbol") != candidates[cid]):
                 return False
+            if record.get("tr_id") == "H0STMKO0":
+                symbol = record.get("symbol")
+                if (market_state_evidence is not True
+                        or status not in ("requested", "acknowledged", "observed",
+                                          "unsubscribe_requested", "released")
+                        or not isinstance(symbol, str) or len(symbol) != 6
+                        or not symbol.isascii() or not symbol.isdigit()):
+                    return False
             generation, connection = record.get("generation"), record.get("connection_id")
             if type(generation) is int and generation == 0 and connection is None and status in ("desired", "unallocated", "allocated", "expired"):
                 continue  # 연결 전 대기 기록은 호가/채널 증거로 쓰지 않는다.
@@ -63,7 +71,10 @@ def _subscription_stream_complete(records, report_at):
                 return False
             key = record.get("tr_id"), record.get("symbol")
             if status in ("requested", "acknowledged", "observed", "unsubscribe_requested", "released"):
-                if key[0] not in ("H0STCNT0", "H0STASP0", "H0NXCNT0", "H0NXASP0") or not isinstance(key[1], str):
+                allowed = {"H0STCNT0", "H0STASP0", "H0NXCNT0", "H0NXASP0"}
+                if market_state_evidence is True:
+                    allowed.add("H0STMKO0")
+                if key[0] not in allowed or not isinstance(key[1], str):
                     return False
                 if status == "requested":
                     if key in channels:
@@ -137,7 +148,12 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
         from .kis_frame_diagnostics import build_frame_report, validate_study_binding
         validate_study_binding(observations, payload)
         build_frame_report(observations, as_of=audit_at.isoformat())
-    subscription_gap = not _subscription_stream_complete(records, report_at)
+    channels = capture.get("channels") if isinstance(capture, dict) else None
+    subscription_gap = not _subscription_stream_complete(
+        records, report_at,
+        market_state_evidence=(isinstance(channels, dict)
+                               and channels.get("market_state_evidence") is True),
+    )
     # 정렬해서 자료를 복구하지 않는다. 원래 버퍼의 연속 순서가 없으면 연결 불가다.
     for seq, record in enumerate(records, 1):
         _mapping(record, "record")
@@ -181,6 +197,10 @@ def prepare_received_input(context: Mapping, observations: Mapping, evaluation_i
             subscription_gap |= record.get("status") == "connection_gap"
         elif kind == 'order_ready_admission':
             # 위의 명시 버전/identity 검증만 적용한다. 배정은 연결 승인/가격 증거가 아니다.
+            pass
+        elif kind in ('llm_check_started', 'llm_check_admission', 'market_state'):
+            # validate_window_contract already checked the LLM replay and raw-state opt-in.
+            # These records do not establish order readiness or session eligibility.
             pass
         elif kind == 'entry_gate_trace':
             # Validated above. Actual pre-signal checks do not establish order eligibility.
