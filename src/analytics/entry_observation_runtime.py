@@ -658,6 +658,10 @@ class ObservationRuntime:
             if now() >= plan.start_at or _read(plan.study_path) != plan.study_bytes:
                 raise ValueError('원장 준비 중 시작 시각/연구 지문 변경')
             feed.enable_quote_observation(self.buffer, **s['channels'])
+            if getattr(self.buffer, 'llm_admission', False) and self.buffer.rest_market_state_evidence:
+                # Stopped feed only: measure existing demand before reporting readiness.
+                # No candidate is selected and no socket/API is started here.
+                await feed._apply_subscriptions()
             if pilot:
                 # Feed is stopped: this updates local demand only, with no socket/API.
                 await feed._apply_subscriptions()
@@ -702,6 +706,47 @@ class ObservationRuntime:
             await self.journal.close(timeout_seconds=s['close_timeout_seconds'])
             raise
         return self
+
+    def llm_readiness(self):
+        """Actual process bindings and bounded counters; no symbols/account values."""
+        b, j = self.buffer, self.journal
+        feed = self.bot.ws_feed
+        owner = feed._quote_subscription_owner
+        snapshot = owner.snapshot()
+        socket = getattr(feed, '_ws', None)
+        connected = (owner._send is not None and getattr(feed, '_connected', False) is True
+                     and getattr(feed, '_should_connect', False) is True
+                     and socket is not None and socket.closed is False)
+        pristine = (owner._send is None and owner.generation == 0 and socket is None
+                    and getattr(feed, '_connected', False) is False)
+        callback = getattr(b, 'llm_quote_submit', None)
+        risk = getattr(getattr(self.bot, 'engine', None), 'risk_manager', None)
+        bound = (b.llm_admission and callback == owner.submit_llm_check
+                 and owner.observer is b and b._journal_sink is j and j.buffer is b
+                 and getattr(self.bot, '_entry_price_observer', None) is b
+                 and getattr(risk, '_entry_observation_owner', None) is self.bot)
+        return dict(version=LLM_VERSION if b.llm_admission else None,
+            quote_admission='llm_check_started' if b.llm_admission else None,
+            llm_hook_bound=bool(bound), rest_market_state_evidence=b.rest_market_state_evidence,
+            market_state_evidence=owner.market_state_evidence,
+            market_state_max_records=owner.market_state_max_records,
+            start_at=b.start_at.isoformat(), admission_end_at=b.admission_end.isoformat(),
+            end_at=b.end_at.isoformat(), max_scans=b.max_scans,
+            selection_max_candidates=b.selection_basis_settings['max_candidates'],
+            gate_max_candidates=b.entry_gate_trace_settings['max_candidates'],
+            max_candidates=owner.max_candidates, lease_seconds=owner.lease_seconds,
+            registration_cap=owner.cap, external_reserved=owner.reserved,
+            operational_headroom=owner.headroom,
+            operational_initialized=owner._operational_initialized,
+            operational_demand=snapshot['operational_demand'],
+            required_new_channels=owner.max_candidates * (3 if owner.market_state_evidence else 1),
+            connected=connected, connection_pristine=pristine, generation=owner.generation,
+            operational_stream_ready=bool(owner._operational_initialized
+                and connected and snapshot['operational_missing'] == 0),
+            record_allocations=dict(b._record_limits), buffer_capacity=b.capacity,
+            queue_capacity=j._queue.maxsize, batch_size=j._batch_size,
+            max_record_bytes=j._max_record_bytes, max_bytes=j._max_bytes,
+            dropped_records=b._dropped, incomplete_reasons=sorted(b._incomplete_reasons))
 
     def watch_tasks(self, tasks):
         # 보조/일회성 작업의 정상 반환은 관측 경로의 종료가 아니다.

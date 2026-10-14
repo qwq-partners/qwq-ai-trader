@@ -97,12 +97,53 @@ def activation_profile(name):
             datetime(2026,10,13,23,55,tzinfo=timezone.utc),
             datetime(2026,10,13,23,57,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261015-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261015-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261015-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261015-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261015-llm-window-v1-entry-capture.conf'),
+            '2026-10-15-engine-llm-window-v1',
+            datetime(2026,10,14,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,14,23,57,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
 
 
 def capture_prepared(cfg, projection):
     if not cfg.engine_only:
         return True
+    if cfg.evaluation_epoch == '2026-10-15-engine-llm-window-v1':
+        llm = projection.get('llm')
+        if (projection.get('scan_scope') != 'window' or projection.get('capture_closed') is not False
+                or type(llm) is not dict):
+            return False
+        expected = dict(version='runner-llm-window-v1', quote_admission='llm_check_started',
+            llm_hook_bound=True, rest_market_state_evidence=True, market_state_evidence=True,
+            market_state_max_records=50000, operational_initialized=True,
+            start_at='2026-10-15T00:00:00+00:00', admission_end_at='2026-10-15T00:10:00+00:00',
+            end_at='2026-10-15T00:26:00+00:00', max_scans=4,
+            selection_max_candidates=100, gate_max_candidates=100,
+            max_candidates=5, registration_cap=41, external_reserved=0, operational_headroom=10,
+            required_new_channels=15, buffer_capacity=110000, queue_capacity=110000,
+            batch_size=64, max_record_bytes=65536, max_bytes=7434242048, dropped_records=0)
+        if any(type(llm.get(k)) is not type(v) or llm[k] != v for k,v in expected.items()):
+            return False
+        allocations = llm.get('record_allocations')
+        if (type(allocations) is not dict
+                or allocations != dict(ws_quote=50000, market_state=50000, other=8000, scan_metadata=804)
+                or any(type(v) is not int for v in allocations.values())
+                or llm.get('incomplete_reasons') != []
+                or type(llm.get('lease_seconds')) not in (int,float) or llm['lease_seconds'] != 1560):
+            return False
+        if any(type(llm.get(k)) is not int or llm[k] < 0 for k in ('operational_demand','generation')):
+            return False
+        fits = llm['operational_demand'] + 15 + 10 <= 41
+        fresh = (llm.get('connected') is False and llm['generation'] == 0
+                 and llm.get('connection_pristine') is True)
+        live = (llm.get('connected') is True and llm['generation'] > 0
+                and llm.get('operational_stream_ready') is True)
+        return fits and (fresh or live)
     if cfg.evaluation_epoch != '2026-10-14-market-state-pilot-v1':
         return projection.get('scan_scope') == 'window'
     pilot = projection.get('pilot', {})
@@ -225,6 +266,8 @@ def load_config(profile='20261002'):
         if type(raw[name]) is not str or not re.fullmatch('[0-9a-f]{40}', raw[name]):
             raise GuardError()
     if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
+        raise GuardError()
+    if profile == '20261015-llm-window-v1' and raw['old_head'] != raw['new_head']:
         raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
@@ -367,6 +410,8 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
     try:
         window()
+        if cfg.evaluation_epoch == '2026-10-15-engine-llm-window-v1' and cfg.old_head != cfg.new_head:
+            raise GuardError()
         phase = 'receipt'
         trusted_dir(cfg.state_dir, trusted_uid)
         write_new(cfg.state_dir/'activation.receipt',json.dumps({
@@ -536,6 +581,8 @@ def main():
             cfg = load_config('20261008-signal-window-v1')
         elif sys.argv[1:] == ['--profile', '20261014-market-state-pilot-v1']:
             cfg = load_config('20261014-market-state-pilot-v1')
+        elif sys.argv[1:] == ['--profile', '20261015-llm-window-v1']:
+            cfg = load_config('20261015-llm-window-v1')
         else:
             raise GuardError()
         result = activate(cfg)
