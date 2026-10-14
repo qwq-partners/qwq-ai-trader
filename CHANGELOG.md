@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-14 — main Verify의 작업자 시험 동기화 수정
+
+- 문서 PR #194 병합 후 main `29b5bbb`의 Verify에서 모델 비교 시험 1건이 DB 조회 오류로 실패했다. 실행 중 외부 DB polling을 가짜 공급자 진입 Event로 바꾸고, 종료 후 정확한 입장 ID 집합을 확인한다.
+- 제품 예산/DB 보호는 그대로다. 통제 잠금 반례 실패→통과, 관련 45건·반복 40건·전체 6311건 통과, 비밀정보 검사 통과·독립 리뷰 승인. [원인·검증·최종 상태 정본](docs/operations/llm-capture-2026-10-15.md#plandosee--2212-main-verify-실패-후속). 운영 배포·재시작·예약 변경 없음.
+
 ## 2026-10-14 21:59 KST — 단발 LLM 관측 운영 배포·예약 완료
 
 - PR #193/main `5444509` 운영 배포: 로컬/CI/운영6311 passed, 실제 Claude Opus5 종결 승인, PID1720809·NRestarts0·복구ready·pending0·판단 기록 활성.

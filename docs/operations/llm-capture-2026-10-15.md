@@ -94,3 +94,16 @@ study SHA256 `94193c07bf7b35307617984a23d98e1f89c08befa0721a75a9f17abbb8adc2ac`,
 오프라인 조인은 응답 후의 첫 호가와 같은 연결·세대의 상태를 검사한다. REST 원문 존재와 장운영 사건 부재를 정상 연속매매로 승격하지 않는다. 기술적 수집 완료와 경제성 평가 가능은 별개이며, 자료가 모여도 수수료·수량·시간차·자본 및 계좌 기준선의 결측을 해결하기 전 순수익을 확정하지 않는다.
 
 기존 별도 토스 보존정리 서비스는21:00 점검 당시 failed 상태였다. 이번 엔진 전용 관측 경로와 별개이며 이 작업에서 변경하지 않았다. 별도 유지보수 점검 항목으로 남긴다.
+
+
+## PLAN→DO→SEE — 22:12 main Verify 실패 후속
+
+PR #194의 검사는22:07 KST 통과했지만, 문서 병합 뒤 main `29b5bbb`의 별도 [Verify 실행38569310753](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/38569310753)은22:12 KST 실패했다. 6310 passed/1 failed/2 skipped/2 xfailed이며 실패는 `test_expired_accepted_offer_frees_slot_and_report_follows_worker_execution` 한 건이다. 이전 완료 보고 뒤 실행된 실패로, PR 검사 성공과 병합 후 검사를 구분해 추적한다.
+
+**PLAN:** 실패한 시험의 동시성 경계를 재현하고, 제품의 예산 보호를 완화하지 않는 최소 변경으로 고친다. 운영5444509와 내일 예약은 유지한다. 이번 수정은 테스트와 문서만이며 배포 대상이 아니다.
+
+**DO:** 작업자의 `started`는 원장 입장 전 증가한다. 기존 두 시험은 이를 본 뒤 실행 중 원장을5ms 간격으로 조회했고, 조회 함수는 schema 검사도 수행해 작업자의 claim/예약 쓰기와 경쟁할 수 있었다. 저장소 접근이 실패하면 제품은 `comparison_pair_storage_unavailable`로 보수적으로 거부한다. 원래 CI 로그에는 내부 SQLite 오류 코드가 없으므로 그 실행의 정확한 코드/SQL까지 확정하지 않는다.
+
+가짜 공급자의 진입 Event로 claim·해당 요청 예약 이후를 기다리도록 바꿨다. 작업자 종료/`drained` 확인 뒤 정확한 입장 ID 집합을 검사하므로 영속 결과 검증은 유지·강화된다. DB timeout, 재시도, 예산 한도, 생산자 호출이나 실제 운영 파일은 변경하지 않는다.
+
+**SEE:** 실행 중 외부 조회에 실제 SQLite EXCLUSIVE 잠금을 주입한 통제 반례는 변경 전 같은 `BudgetStateError`로 실패했고 내부 `SQLITE_BUSY`를 확인했다. 변경 뒤 같은 통제에서 두 시험 모두 통과했다. 이것은 경쟁 경로의 재현이며 원래 CI 오류 코드의 복원이 아니다. 관련45건, KST 두 시험 각각20회/합계40건 통과, 격리 위반0. 독립 Astra/high 요청 리뷰(실제 model/effort metadata 미노출)는 추가 P1/P2 없이 승인했다. UTC 전체 verify는 6311 passed/2 skipped/2 xfailed, 224.83초, rc0이며 비밀정보 검사 통과·운영 상태/외부 네트워크 접근 시도0이다. PR CI·병합 후 main 실행의 최종 결과는 해당 PR/Actions를 정본으로 확인한다. 이전 실패 실행은 이력으로 보존하며 새 main 통과까지 확인한 뒤 해결 완료로 보고한다.

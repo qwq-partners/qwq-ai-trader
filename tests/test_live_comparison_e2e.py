@@ -602,11 +602,13 @@ def test_expired_accepted_offer_frees_slot_and_report_follows_worker_execution(t
     try:
         assert worker.offer(envelope(worker, "dec-0")) == "accepted"
         assert wait(lambda: worker.health()["started"] == 1)
-        assert wait(lambda: worker.runner.admitted_pair_ids(ledger.today().isoformat()))
+        assert op.entered.wait(5)  # Synchronize with dispatch without competing for the worker's DB lock.
         op.gate.set()
         assert wait(lambda: worker.health()["finished"] == 1)
     finally:
-        worker.stop(10)
+        health = worker.stop(10)
+    assert health["drained"] is True
+    assert worker.runner.admitted_pair_ids(ledger.today().isoformat()) == {worker.runner.pair_id("dec-0")}
     # 두 번째 작업자: A(dec-1) 수락 → 실행 전 만료 → B(dec-2) 수락·실행. 일 상한은 1 이지만 하루 입장은 dec-0 로 이미 1.
     # 따라서 같은 날 두 번째 입장은 러너가 차단한다 — 여기서는 보고서의 '실행 이력 우선' 규칙만 검증하기 위해
     # 레코드 수준에서 A 만료·B 실행을 구성한다.
