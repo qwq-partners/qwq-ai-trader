@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-15 — 순수익 개선 일정·관측별 판독 준비
+
+- 사용자 승인 우선순위를 [실행 일정](docs/superpowers/plans/2026-10-14-profitability-priority-schedule.md)으로 고정하고 [착수/검증 기록](docs/research/profitability-kickoff-2026-10-14.md)에 기존294검사·설치study 대조·월 전체 판단 혼입 공백을 남긴다.
+- P1의 정확한 관측 신호별 판단 분리·결측 판독을 `report_capture_readiness.py`로 구현했다. 비동기 기록 미확정·null 신호 제외·봉인/전체 시간 범위/경제성 분리, 신규11·전체UTC6322·KST관련89검사와 독립 리뷰 통과. 기존 수집 타이머 외 후속 AI 자동 실행은 미등록이며, 운영5444509·매수 중지·월100·유료 비교OFF·10월15일 수집을 유지한다.
+
 ## 2026-10-14 — main Verify의 작업자 시험 동기화 수정
 
 - 문서 PR #194 병합 후 main `29b5bbb`의 Verify에서 모델 비교 시험 1건이 DB 조회 오류로 실패했다. 실행 중 외부 DB polling을 가짜 공급자 진입 Event로 바꾸고, 종료 후 정확한 입장 ID 집합을 확인한다.

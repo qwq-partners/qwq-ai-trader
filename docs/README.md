@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [순수익 개선 일정 및 착수](superpowers/plans/2026-10-14-profitability-priority-schedule.md): 기존10월15일 수집 후09:35 판독, 진입 가격→선정 기여→위험·교체·청산 순서. [실제 준비 근거와 입력 결측](research/profitability-kickoff-2026-10-14.md). 후속 AI 자동 재개 미등록, 운영 재배포 없음.
+
 > [10월14일22:12 main Verify 실패 후속](operations/llm-capture-2026-10-15.md#plandosee--2212-main-verify-실패-후속): 시험의 동시 DB 조회 제거·종료 후 영속 결과 확인, 테스트/문서 변경만. 운영 버전과 내일 예약을 유지하며 병합 후 main 검사까지 확인한다.
 
 > **10월14일21:59 운영 확정:** [10월15일 단발 관측 배포·설치·인계](operations/llm-capture-2026-10-15.md). 운영5444509/PID1720809, 08:55 활성화·09:26 종료 예약 완료, once 미소비. 다음은 실제 봉인·판단/호가 조인 판독이며 문서 후속 병합으로 운영 SHA를 바꾸지 않는다. 아래 개발 안내의 미배포·미예약 표시는 당시 이력이다.
