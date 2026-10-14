@@ -73,9 +73,11 @@ study SHA256: `9720ea6db3ed36b5f4843ef6bfe55a619519415bfb2210b74196d567f968c01d`
 - 일반 order-ready/LLM 창은 발행 시각으로 포함 여부를 판단하고, 실제 수신 시각은 따로 보존한다. 창 직전 수신한 배치가 창 안의 admission/lease 생성 후 발행되는 실제 경로도 확인했다. 기존 코드도 행은 저장했으나 잘못 복사한 observed_at 때문에 검증에서 거부했다. 일반 창에 received_at>=start를 새로 강제하는 변경은 이번 범위에 없다. 파일럿은 별도로 수신 구간까지 검사하며 기존 계약을 유지한다. 판단/상태 조인은 원래 received_at·같은 연결/세대·최대 나이를 계속 검사한다.
 - 과거 원장의 시각 역행과 장운영0건은 이 코드 수정으로 복구되지 않는다.
 
-### 다음 근거 수집 설계 후보 — 미구현·미활성
+### 다음 근거 수집 설계 후보 — 판독 당시 미구현·미활성
 
-공식 [현재가 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_price/chk_inquire_price.py)는 `iscd_stat_cls_code`·`temp_stop_yn`·`vi_cls_code`·`ovtm_vi_cls_code` 필드의 존재를 확인해 준다. 현재 `KISKRBroker.get_quote()`는 같은 응답의 상태 필드와 요청/응답 시각을 반환하지 않는다. 필드 존재는 실제 코드의 정상 의미·거래소 as-of·원자적 스냅샷을 보장하지 않는다.
+후속 [REST 근거 보존 구현](rest-market-state-evidence-2026-10-14.md)은 아래 후보의 원문 보존 경로를 구현했다. 운영 활성화·미래 날짜 설치기·상태 의미 확정은 아직 별도다. 아래는 설계 당시 기록이다.
+
+공식 [현재가 예제](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_price/chk_inquire_price.py)는 `iscd_stat_cls_code`·`temp_stop_yn`·`vi_cls_code`·`ovtm_vi_cls_code` 필드의 존재를 확인해 준다. 현재 `KISBroker.get_quote()`는 같은 응답의 상태 필드와 요청/응답 시각을 반환하지 않는다. 필드 존재는 실제 코드의 정상 의미·거래소 as-of·원자적 스냅샷을 보장하지 않는다.
 
 권고 순서는 추가 REST 호출 없이 기존 응답의 raw 상태·요청 시작/응답 수신 시각·종목/TR·공식 스키마 근거를 별도 관측 기록으로 보존하는 방안부터 검증하는 것이다. 정확히 LLM 진입 당시 자료를 얻는다는 보장은 없으므로 신선한 동일 종목 자료가 없는 판단은 그대로 UNKNOWN이다. 확보 비율이 부족할 때만 일별·종목별 상한과 현재 REST 제한 영향을 고려한 별도 조회를 설계한다. 이번 세션에서 해당 경로를 구현하거나 조회하지 않았다.
 
