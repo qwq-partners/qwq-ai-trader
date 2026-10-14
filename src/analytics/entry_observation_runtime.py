@@ -19,6 +19,7 @@ from .entry_price_shadow import build_report, _timestamp, KST
 
 READY_VERSION = 'runner-order-ready-window-v1'
 LLM_VERSION = 'runner-llm-window-v1'
+LLM_RETAINED_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 WINDOW_VERSIONS = ('runner-signal-window-v1', READY_VERSION, LLM_VERSION)
 
 
@@ -476,7 +477,10 @@ class _WindowBuffer(EntryObservationBuffer):
                          max_scans=s.get('max_scans'), scan_admission_ref=s['scan_admission_ref'],
                          selection_basis_settings=s.get('selection_basis'),
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
-                         frame_diagnostics_settings=s.get('frame_diagnostics'))
+                         frame_diagnostics_settings=s.get('frame_diagnostics'),
+                         retained_memory_limit_bytes=(LLM_RETAINED_MEMORY_LIMIT_BYTES
+                             if s['version'] == LLM_VERSION else None),
+                         max_record_bytes=s['max_record_bytes'] if s['version'] == LLM_VERSION else None)
         self.rest_market_state_evidence = s.get('rest_market_state_evidence') is True
         self.llm_admission = s['version'] == LLM_VERSION
         self.llm_quote_submit = None
@@ -519,8 +523,12 @@ class _WindowBuffer(EntryObservationBuffer):
         return super().begin_scan()
 
     def publish(self, record):
+        if self._capture_closed:
+            return False
         now = self.current_time()
         if self.ended:
+            return False
+        if not self._retention_input_allowed(record):
             return False
         # Window quotes start at the declared boundary; subscription ACKs and
         # gaps before it remain necessary evidence for the existing session.
@@ -574,13 +582,15 @@ class _WindowBuffer(EntryObservationBuffer):
             if len(self._records) + 2 > self.capacity:
                 self.mark_incomplete('llm_check_pair_buffer_limit')
                 return False
-            pair = deepcopy([record, admission])
-            for sequence, item in enumerate(pair, len(self._records) + 1):
-                item['sequence'] = sequence
+            prepared = self._prepare_retained_records([record, admission])
+            if prepared is None:
+                return False
+            pair, charge = prepared
             if self._journal_sink is not None and not self._journal_sink.offer_pair(pair):
                 self.mark_incomplete('llm_check_pair_not_recorded')
                 return False
             self._records.extend(pair)
+            self.retained_memory_bytes += charge
             self._record_counts['other'] = self._record_counts.get('other', 0) + 2
         except Exception:
             self.mark_incomplete('llm_check_admission_failed')
@@ -746,6 +756,8 @@ class ObservationRuntime:
             record_allocations=dict(b._record_limits), buffer_capacity=b.capacity,
             queue_capacity=j._queue.maxsize, batch_size=j._batch_size,
             max_record_bytes=j._max_record_bytes, max_bytes=j._max_bytes,
+            retained_memory_limit_bytes=b.retained_memory_limit_bytes,
+            retained_memory_bytes=b.retained_memory_bytes, memory_exhausted=b.memory_exhausted,
             dropped_records=b._dropped, incomplete_reasons=sorted(b._incomplete_reasons))
 
     def watch_tasks(self, tasks):

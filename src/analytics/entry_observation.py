@@ -11,6 +11,7 @@ from decimal import Decimal
 import hashlib
 import json
 import math
+import sys
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -40,7 +41,8 @@ class EntryObservationBuffer:
     """한 이벤트 루프용 유한 메모리 버퍼. 가득 차면 새 기록을 버리고 결손을 보존한다."""
 
     def __init__(self, *, evaluation_epoch: str, capacity: int, scan_scope="all", scan_admission_ref=None, max_scans=None,
-                 selection_basis_settings=None, entry_gate_trace_settings=None, frame_diagnostics_settings=None):
+                 selection_basis_settings=None, entry_gate_trace_settings=None, frame_diagnostics_settings=None,
+                 retained_memory_limit_bytes=None, max_record_bytes=None):
         if not isinstance(evaluation_epoch, str) or not evaluation_epoch.strip():
             raise ValueError("evaluation_epoch 필요")
         if type(capacity) is not int or capacity <= 0:
@@ -51,6 +53,15 @@ class EntryObservationBuffer:
                 or not scan_admission_ref.strip() or len(scan_admission_ref) > 200))
                 or (scan_scope == "all" and scan_admission_ref is not None)):
             raise ValueError("첫 스캔 범위에는 명시한 사전 규약 참조 필요")
+        if ((retained_memory_limit_bytes is None) != (max_record_bytes is None)
+                or (retained_memory_limit_bytes is not None and
+                    (type(retained_memory_limit_bytes) is not int or retained_memory_limit_bytes <= 0
+                     or type(max_record_bytes) is not int or max_record_bytes <= 0))):
+            raise ValueError('paired positive memory and record byte limits required')
+        self.retained_memory_limit_bytes = retained_memory_limit_bytes
+        self.retained_memory_bytes = 0
+        self.memory_exhausted = False
+        self._retained_max_record_bytes = max_record_bytes
         self.scan_scope = scan_scope
         self.scan_admission_ref = scan_admission_ref
         if ((scan_scope == 'window' and (type(max_scans) is not int or not 1 <= max_scans <= 100))
@@ -118,8 +129,100 @@ class EntryObservationBuffer:
         if not self._capture_closed and len(self._incomplete_reasons) < 16:
             self._incomplete_reasons.add(reason)
 
+    def _memory_rejected(self, count, reason):
+        self._dropped += count
+        self.mark_incomplete(reason)
+        return False
+
+    def _record_object_size(self, record, maximum):
+        """Bounded built-in JSON tree; repeated references are charged each time.
+
+        Depth/node/size checks precede traversal and serialization. No user-defined
+        __sizeof__, iterator or deepcopy hooks can run, including on dict keys.
+        """
+        total, nodes = 0, 0
+        def visit(value, depth):
+            nonlocal total, nodes
+            kind = type(value)
+            if kind not in (dict, list, str, int, float, bool, type(None)) or depth > 6:
+                raise ValueError('unsupported capture object')
+            nodes += 1
+            total += sys.getsizeof(value)
+            if nodes > self._retained_max_record_bytes or total > maximum:
+                raise ValueError('capture object bound')
+            if kind is float and not math.isfinite(value):
+                raise ValueError('nonfinite capture value')
+            if kind is dict:
+                for key, item in value.items():
+                    if type(key) is not str:
+                        raise ValueError('capture key type')
+                    visit(key, depth + 1)
+                    visit(item, depth + 1)
+            elif kind is list:
+                for item in value:
+                    visit(item, depth + 1)
+        visit(record, 0)
+        # Conservatively reserve more than an amortized retained-list slot.
+        return total + sys.getsizeof([None])
+
+    def _retention_input_allowed(self, record, count=1, sequence=None):
+        if self.retained_memory_limit_bytes is None:
+            return True
+        if self.memory_exhausted:
+            return self._memory_rejected(count, 'retained_memory_limit')
+        try:
+            if type(record) is not dict:
+                raise ValueError('capture record type')
+            self._record_object_size(record, self._retained_max_record_bytes * 32)
+            # Lazy import avoids the journal -> buffer module dependency cycle.
+            from .entry_observation_journal import _record_shape, _json
+            checked = {**record, 'sequence': len(self._records) + 1 if sequence is None else sequence}
+            _record_shape(checked, self._retained_max_record_bytes)
+            if len(_json(checked)) > self._retained_max_record_bytes:
+                raise ValueError('capture serialized size')
+        except Exception:
+            return self._memory_rejected(count, 'record_memory_guard_rejected')
+        return True
+
+    def _prepare_retained_records(self, records):
+        """Prepare without side effects; caller commits bytes only with retention.
+
+        The limit covers retained record trees, not total process RSS, transient
+        journal encoding, or unrelated subscription/cohort bookkeeping.
+        """
+        guarded = self.retained_memory_limit_bytes is not None
+        if not guarded:
+            copied = [deepcopy(record) for record in records]
+            for sequence, record in enumerate(copied, len(self._records) + 1):
+                record['sequence'] = sequence
+            return copied, 0
+        if self.memory_exhausted:
+            self._memory_rejected(len(records), 'retained_memory_limit')
+            return None
+        pending = [{**record, 'sequence': sequence}
+                   for sequence, record in enumerate(records, len(self._records) + 1)]
+        for record in pending:
+            if not self._retention_input_allowed(record, len(records), record['sequence']):
+                return None
+        try:
+            remaining = self.retained_memory_limit_bytes - self.retained_memory_bytes
+            charge = sum(self._record_object_size(record, remaining) for record in pending)
+            if charge > remaining:
+                raise ValueError('retained memory limit')
+            copied = [deepcopy(record) for record in pending]
+            charge = sum(self._record_object_size(record, remaining) for record in copied)
+            if charge > remaining:
+                raise ValueError('retained memory limit')
+            return copied, charge
+        except Exception:
+            self.memory_exhausted = True
+            self._memory_rejected(len(records), 'retained_memory_limit')
+            return None
+
     def publish(self, record: dict) -> bool:
         if self._capture_closed:
+            return False
+        if not self._retention_input_allowed(record):
             return False
         kind = record.get("kind")
         if self.scan_scope in ("first", "window"):
@@ -140,9 +243,13 @@ class EntryObservationBuffer:
         if len(self._records) >= self.capacity:
             self._dropped += 1
             return False
-        copied = deepcopy(record)
-        copied["sequence"] = len(self._records) + 1
+        prepared = self._prepare_retained_records([record])
+        if prepared is None:
+            return False
+        copies, charge = prepared
+        copied = copies[0]
         self._records.append(copied)
+        self.retained_memory_bytes += charge
         if self.scan_scope in ("first", "window"):
             if kind == "scan":
                 self._cohort_candidates.update(c["candidate_id"] for c in copied["candidates"])
