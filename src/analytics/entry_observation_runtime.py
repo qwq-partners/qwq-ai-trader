@@ -19,7 +19,7 @@ from .entry_price_shadow import build_report, _timestamp, KST
 
 READY_VERSION = 'runner-order-ready-window-v1'
 LLM_VERSION = 'runner-llm-window-v1'
-LLM_RETAINED_MEMORY_LIMIT_BYTES = 384 * 1024 * 1024
+LLM_RETAINED_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 WINDOW_VERSIONS = ('runner-signal-window-v1', READY_VERSION, LLM_VERSION)
 
 

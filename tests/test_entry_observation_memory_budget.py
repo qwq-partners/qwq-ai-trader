@@ -84,7 +84,7 @@ def test_disabled_base_guard_preserves_existing_contract():
 
 def test_llm_pair_memory_failure_is_atomic(tmp_path, monkeypatch):
     _, _, b, _, _ = setup(tmp_path, monkeypatch)
-    assert b.retained_memory_limit_bytes == 384 * 1024 * 1024
+    assert b.retained_memory_limit_bytes == 512 * 1024 * 1024
     scan = obs.capture_scan(b, [stock()], 'regular')
     obs.capture_signal(b, scan, event('synthetic', '900001'))
     before = (list(b._records), dict(b._record_counts), set(b._cohort_signals),
