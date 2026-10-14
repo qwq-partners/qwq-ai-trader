@@ -20,14 +20,18 @@ def raw_output():
                 ignored_sensitive_field='DO_NOT_COPY')
 
 
-async def get_quote(monkeypatch, output=None, *, rt_cd='0'):
+async def get_quote(monkeypatch, output=None, *, rt_cd='0', clock_failure_at=None):
     broker = object.__new__(kis_kr.KISBroker)
     broker.config = SimpleNamespace(base_url='https://synthetic.invalid')
     monkeypatch.setattr(kis_kr.KISBroker, 'is_connected', property(lambda self: True))
     clock = [START]
+    reads = [0]
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
+            reads[0] += 1
+            if reads[0] == clock_failure_at:
+                raise TypeError('synthetic unsupported observation clock')
             return clock[0] if tz is not None else clock[0].replace(tzinfo=None)
     monkeypatch.setattr(kis_kr, 'datetime', Clock)
     calls = []
@@ -74,6 +78,13 @@ async def test_optional_snapshot_failure_preserves_existing_price(monkeypatch):
     result = await get_quote(monkeypatch)
     assert result['price'] == 310000 and 'market_state_snapshot' not in result
     assert await get_quote(monkeypatch, rt_cd='1') == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failed_read', [1, 2])
+async def test_metadata_clock_failure_still_requests_and_returns_price(monkeypatch, failed_read):
+    result = await get_quote(monkeypatch, clock_failure_at=failed_read)
+    assert result['price'] == 310000 and 'market_state_snapshot' not in result
 
 
 @pytest.mark.parametrize('value', [False, 1, 'true', None])

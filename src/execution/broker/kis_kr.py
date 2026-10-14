@@ -34,6 +34,14 @@ from ...utils import audit_log
 from ...utils.session import is_kr_market_holiday
 
 
+def _quote_observation_time() -> Optional[str]:
+    """부가 관측 시계 실패가 기존 현재가 요청/반환을 막지 않게 한다."""
+    try:
+        return datetime.now(timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
 # KIS 구 TR → 신 TR 전환 스위치 (2026-09-21)
 #
 # 기본값 legacy 는 현행 구 TR 그대로이며 요청 본문·헤더·파싱이 전환 전과 완전히 같다.
@@ -2222,9 +2230,9 @@ class KISBroker(BaseBroker):
             }
 
             # 논리 호출 구간: 내부 리미터·토큰 갱신·재시도를 포함한다.
-            request_started_at = datetime.now(timezone.utc).isoformat()
+            request_started_at = _quote_observation_time()
             data = await self._api_get(url, tr_id, params)
-            response_available_at = datetime.now(timezone.utc).isoformat()
+            response_available_at = _quote_observation_time()
 
             rt_cd = data.get("rt_cd", "")
             if str(rt_cd) != "0":
