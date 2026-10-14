@@ -94,8 +94,10 @@ def _decisions(raw):
                     "decision_available_at", "result"}
         if type(item) is not dict or item.get("schema_version") != "llm-decision-v1" or not required <= set(item):
             raise ValueError("invalid llm-decision-v1 row")
-        if any(not isinstance(item[k], str) or not item[k] for k in
-               ("decision_id", "signal_id", "symbol", "strategy", "stage")) or not isinstance(item["result"], dict):
+        if (any(not isinstance(item[k], str) or not item[k] for k in
+                ("decision_id", "symbol", "strategy", "stage"))
+                or (item["signal_id"] is not None and (not isinstance(item["signal_id"], str) or not item["signal_id"]))
+                or not isinstance(item["result"], dict)):
             raise ValueError("invalid decision identity")
         _aware_time(item["decision_available_at"], "decision_available_at")
         rows.append(item)
@@ -119,14 +121,19 @@ def _select(rows, starts, end, audit_at):
     by_id, by_signal = {}, {}
     for row in rows:
         by_id.setdefault(row["decision_id"], []).append(row)
-        by_signal.setdefault(row["signal_id"], []).append(row)
+        if row["signal_id"] is not None:
+            by_signal.setdefault(row["signal_id"], []).append(row)
     duplicate_ids = sorted(key for key, value in by_id.items() if len(value) > 1)
     ambiguous_signals = sorted(key for key, value in by_signal.items() if len(value) > 1)
-    matched, excluded, invalid = [], 0, {"decision_before_started": 0, "decision_identity_mismatch": 0,
+    matched, excluded, unlinked, invalid = [], 0, 0, {"decision_before_started": 0, "decision_identity_mismatch": 0,
                                          "late_decision": 0, "after_analysis_as_of": 0}
     invalid_ids = set(duplicate_ids) | set(ambiguous_signals)
     late_ids = []
     for row in rows:
+        if row["signal_id"] is None:
+            excluded += 1
+            unlinked += 1
+            continue
         signal = starts.get(row["signal_id"])
         if signal is None:
             excluded += 1
@@ -148,7 +155,7 @@ def _select(rows, starts, end, audit_at):
             late_ids.append(row["decision_id"])
             continue
         matched.append(row)
-    return matched, {"matched": len(matched), "excluded": excluded,
+    return matched, {"matched": len(matched), "excluded": excluded, "unlinked_monthly_decisions": unlinked,
                      "missing_signal_ids": sorted(set(starts) - {r["signal_id"] for r in matched}),
                      "late_decision_ids": sorted(late_ids), "ambiguous_decision_ids": duplicate_ids,
                      "ambiguous_signal_ids": ambiguous_signals, "invalid": invalid}

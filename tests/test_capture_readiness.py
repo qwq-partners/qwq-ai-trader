@@ -16,7 +16,7 @@ def _decision(signal_id, symbol, strategy, when, decision_id):
     }
 
 
-def _capture(tmp_path):
+def _capture(tmp_path, *, same_symbol=False):
     """Create a sealed real LLM-window journal, without sockets or providers."""
     from src.analytics import entry_observation as obs
     import src.analytics.entry_observation_journal as journal
@@ -37,7 +37,12 @@ def _capture(tmp_path):
             clock[0] = plan.start_at
             scan = obs.capture_scan(runtime.buffer, [stock("900001"), stock("900002")], "regular")
             enter(runtime.buffer, scan, "sig-a", "900001")
-            enter(runtime.buffer, scan, "sig-b", "900002")
+            if same_symbol:
+                clock[0] += timedelta(microseconds=1)
+                scan = obs.capture_scan(runtime.buffer, [stock("900001")], "regular")
+                enter(runtime.buffer, scan, "sig-b", "900001")
+            else:
+                enter(runtime.buffer, scan, "sig-b", "900002")
             await asyncio.gather(*bot.ws_feed._quote_subscription_owner._tasks)
             clock[0] = plan.end_at - timedelta(microseconds=1)
             await runtime.close()
@@ -119,6 +124,56 @@ def test_late_and_identity_mismatched_decisions_remain_unsettled(tmp_path):
     assert report["decisions"]["invalid"]["decision_identity_mismatch"] == 1
     assert report["decision_snapshot_unsettled"] is True
     assert report["quote_join"]["summary"]["evaluable"] == 0
+
+
+def test_null_signal_monthly_row_is_counted_unlinked_without_blocking_cohort(tmp_path):
+    from src.analytics.capture_readiness import build_capture_readiness
+
+    study, ledger, start, _ = _capture(tmp_path)
+    decisions = tmp_path / "decisions.jsonl"
+    decisions.write_text("\n".join(json.dumps(row) for row in [
+        _decision("sig-a", "900001", "gap_and_go", (start.replace(microsecond=1)).isoformat(), "linked"),
+        _decision(None, "MONTH", "other", (start.replace(microsecond=1)).isoformat(), "unlinked"),
+    ]) + "\n")
+
+    report = build_capture_readiness(study, ledger, decisions_path=decisions)
+
+    assert report["decisions"]["matched"] == 1
+    assert report["decisions"]["excluded"] == 1
+    assert report["decisions"]["unlinked_monthly_decisions"] == 1
+    decisions.write_text(json.dumps(_decision(None, "MONTH", "other", start.isoformat(), "only-null")) + "\n")
+    null_only = build_capture_readiness(study, ledger, decisions_path=decisions)
+    assert null_only["decisions"]["matched"] == 0
+    assert null_only["decisions"]["unlinked_monthly_decisions"] == 1
+
+
+def test_same_symbol_distinct_started_signal_ids_are_both_valid_cohort_members(tmp_path):
+    from src.analytics.capture_readiness import build_capture_readiness
+
+    study, ledger, start, _ = _capture(tmp_path, same_symbol=True)
+    decisions = tmp_path / "decisions.jsonl"
+    decisions.write_text("\n".join(json.dumps(row) for row in [
+        _decision("sig-a", "900001", "gap_and_go", (start.replace(microsecond=2)).isoformat(), "first"),
+        _decision("sig-b", "900001", "gap_and_go", (start.replace(microsecond=3)).isoformat(), "second"),
+    ]) + "\n")
+
+    report = build_capture_readiness(study, ledger, decisions_path=decisions)
+
+    assert report["llm_started_count"] == 2
+    assert report["decisions"]["matched"] == 2
+    assert {row["signal_id"] for row in report["quote_join"]["rows"]} == {"sig-a", "sig-b"}
+
+
+def test_non_string_non_null_signal_id_is_malformed(tmp_path):
+    from src.analytics.capture_readiness import build_capture_readiness
+
+    study, ledger, start, _ = _capture(tmp_path)
+    decisions = tmp_path / "decisions.jsonl"
+    row = _decision("sig-a", "900001", "gap_and_go", start.isoformat(), "bad-signal")
+    row["signal_id"] = 1
+    decisions.write_text(json.dumps(row) + "\n")
+    with pytest.raises(ValueError, match="invalid decision identity"):
+        build_capture_readiness(study, ledger, decisions_path=decisions)
 
 
 def test_partial_or_wrong_study_inputs_fail_closed_and_unsealed_is_not_technical_ready(tmp_path):
