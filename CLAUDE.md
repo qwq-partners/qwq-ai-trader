@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-14 — 최초 LLM 판단 단발 관측 설치기 개발:** [PLAN→DO→SEE·고정 창·자원·코드 흐름·다음 순서](docs/research/llm-capture-installer-2026-10-14.md). 10월15일 08:55 준비/09:00~09:10 최초5종목 입장/09:26 종료의 고정 profile, 기존 REST 원문 보존, 동일 SHA 사전 배포 조건과 실제 callback·자원·소켓 준비 판정을 구현한다. 실제 설치/예약/배포 없음, 비교 작업자 OFF·KR 매수 중지 유지. 검증/독립 리뷰 상태는 연결 문서가 정본이다. 자원 실측·운영 study 근거 확보는 별도 남아 있다.
+> **2026-10-14 — 최초 LLM 판단 단발 관측 설치기 개발:** [PLAN→DO→SEE·고정 창·자원·코드 흐름·다음 순서](docs/research/llm-capture-installer-2026-10-14.md). 10월15일 08:55 준비/09:00~09:10 최초5종목 입장/09:26 종료의 고정 profile, 기존 REST 원문 보존, 동일 SHA 사전 배포 조건과 실제 callback·자원·소켓 준비 판정을 구현한다. 실제 설치/예약/배포 없음, 비교 작업자 OFF·KR 매수 중지 유지. 검증/독립 리뷰·CI·병합 상태는 [PR #192](https://github.com/qwq-partners/qwq-ai-trader/pull/192)와 연결 문서가 정본이다. 자원 실측·운영 study 근거 확보는 별도 남아 있다.
 
 > **2026-10-14 — 기존 REST 장 상태 원문 보존 구현(통합 검증·독립 리뷰 완료·운영 미배포):** [PDS·공식 근거·흐름·남은 순서](docs/research/rest-market-state-evidence-2026-10-14.md). 추가 API 요청 없이 현재가 응답의 상태4필드·응답종목·논리 호출 구간을 보존한다. 명시 LLM 관측 opt-in만 기존 rest_quote에 저장하고, 응답 뒤 첫 호가에 별도 원문 가용/결측 진단을 붙인다. 항상 UNKNOWN·시장 판정 사용 불가, 기존 WS/경제성 게이트 불변. 최종 전체6122·관련244·KST107검사와 실제 Claude Opus5 독립 종결 리뷰 통과(P0/P1 0). 최종 [PR #191/CI·병합](https://github.com/qwq-partners/qwq-ai-trader/pull/191)은 PR 정본 참조. 이번 운영 조회/변경·배포·예약·유료 비교 없음. 다음은 장외 배포 가드→미래 날짜 설치기→작은 동시 실측·상태 의미 검증이다.
 

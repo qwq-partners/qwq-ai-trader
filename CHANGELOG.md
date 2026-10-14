@@ -4,7 +4,7 @@
 
 - 10월15일 08:55 준비, 09:00~09:10 입장/09:26 종료를 고정하고 기존 REST 상태 보존·50,000/50,000/8,000 기록 할당·사전 배포 SHA·이전 소비 자료를 검사하는 별도 설치기를 추가한다. 디스크 여유·배타 설치·실패 disarm·재시도 금지를 검증한다.
 - 현재 프로세스의 RiskManager/관측 callback 연결·실효 자원·초기화된 운영 구독 수요·현재 피드/소켓/ACK를 확인한다. 기존의 단순 window 준비 판정으로 새 profile을 통과시키지 않는다. 종료 중 이전 ACK가 남는 독립 리뷰 반례도 회귀로 추가했다.
-- [PDS·검증·독립 리뷰·다음 순서](docs/research/llm-capture-installer-2026-10-14.md). --check의 payload 검사와 apply의 runtime 검증을 구분하며 RAM 안전/수익성은 미검증이다. 운영 배포·설치·유료 비교는 실행하지 않았다.
+- [PDS·검증·독립 리뷰·다음 순서](docs/research/llm-capture-installer-2026-10-14.md) · [PR #192 최종 검증/CI/병합 정본](https://github.com/qwq-partners/qwq-ai-trader/pull/192). --check의 payload 검사와 apply의 runtime 검증을 구분하며 RAM 안전/수익성은 미검증이다. 운영 배포·설치·유료 비교는 실행하지 않았다.
 
 ## 2026-10-14 — 기존 REST 현재가의 장 상태 근거 보존 (기본 OFF·운영 미배포)
 
