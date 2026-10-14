@@ -25,12 +25,13 @@ from .selection_source_status import SCAN_FIELDS, RUN_FIELDS, ORDER
 from .entry_gate_trace import TRACE_FIELDS, STEP_FIELDS, STAGES, SCAN_FIELDS as GATE_SCAN_FIELDS
 
 from .kis_frame_diagnostics import FIELDS as FRAME_FIELDS, validate_settings as validate_frame_settings, validate_diagnostic
+from .kis_rest_market_state import SNAPSHOT_FIELDS
 
 MAX_LINE_BYTES = 1024 * 1024
 ZERO_HASH = "0" * 64
 FIELDS = {
     "scan": "scan_id observed_at session route_origin population_scope candidates scan_admission_ref selection_basis_expected selection_basis_max_candidates selection_basis_max_terms",
-    "rest_quote": "candidate_id observed_at requested_at source source_as_of quote",
+    "rest_quote": "candidate_id observed_at requested_at source source_as_of quote market_state_snapshot rest_market_state_status",
     "signal": "candidate_id signal_id observed_at event_timestamp strategy price signal_target_price signal_stop_price",
     "emit_result": "candidate_id signal_id observed_at emitted",
     "order_ready": "signal_id symbol order_id observed_at requested_quantity order_reference_price order_type risk_stop_pct effective_stop_pct base_stop_source effective_stop_source crash_cap_applied is_core strategy stop_snapshot_ref capital_budget capital_snapshot capital_snapshot_ref capital_snapshot_status stop_basis stop_resolved_at_stage fill_applied transport_status",
@@ -45,6 +46,7 @@ FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' 
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))
 FIELDS['entry_gate_trace'] = ' '.join(sorted(TRACE_FIELDS))
 NESTED = {
+    "market_state_snapshot": SNAPSHOT_FIELDS,
     "candidates": set("symbol price score screened_at change_pct volume atr_pct candidate_id".split()),
     "quote": set("price open high low volume change_pct".split()),
     "provenance": set(("tr_id exchange_time hour_class_code received_at message_count source_as_of connection_id generation "

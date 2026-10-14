@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional
 
+from .kis_rest_market_state import associate_snapshot
+
 SCHEMA_VERSION = "decision-quote-join-v2"
 DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_DELAY_SECONDS = 60.0
@@ -69,7 +71,7 @@ def load_decisions(path, *, max_bytes: int = DEFAULT_MAX_BYTES) -> List[Dict[str
 
 
 def load_ledger_payloads(path, *, max_bytes: int = DEFAULT_MAX_BYTES,
-                         kinds=("ws_quote", "market_state")) -> List[Dict[str, Any]]:
+                         kinds=("ws_quote", "market_state", "rest_quote")) -> List[Dict[str, Any]]:
     """관측 원장 envelope(row/previous_hash/kind/payload/hash)의 record payload 만 모은다(관대한 읽기).
     해시 체인 검증은 `read_observation_journal`(strict) 로 따로 한다."""
     payloads = []
@@ -140,6 +142,7 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
     ledger_reasons = _ledger_reasons(ledger_status)
     quotes: Dict[str, List[tuple]] = {}
     states: Dict[str, List[tuple]] = {}
+    rest_records = [p for p in payloads if p.get("kind") == "rest_quote"]
     # 시각이 손상된 레코드는 조용히 버리지 않는다 — 그 종목의 판단은 '첫 호가/최신 상태' 를 믿을 수 없다 (재리뷰 P2)
     time_errors: Dict[str, int] = {}
     time_error_reasons: Dict[str, Dict[str, int]] = {}
@@ -194,6 +197,7 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
             "failed": result.get("failed"), "verdict": result.get("verdict"),
             "decision_available_at": d.get("decision_available_at"),
             "first_quote_after": None, "market_state_at_quote": None,
+            "rest_market_state_at_quote": None,
         }
         try:
             decided = _aware_time(d.get("decision_available_at"), "decision_available_at")
@@ -226,6 +230,9 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
                 "exchange_time": provenance.get("exchange_time"),
                 "connection_id": connection_id, "generation": generation,
             }
+            row["rest_market_state_at_quote"] = associate_snapshot(
+                rest_records, symbol=symbol, quote_at=at.astimezone(timezone.utc).isoformat(),
+                max_age_seconds=max_state_age_seconds, ledger_status=ledger_status)
             if ask is None:
                 reasons.append("invalid_ask")
             if ask_size is None:
@@ -294,12 +301,22 @@ def join_decisions(decisions: List[Dict[str, Any]], payloads: List[Dict[str, Any
 
 def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     reasons: Dict[str, int] = {}
+    rest_reasons: Dict[str, int] = {}
+    rest_available = 0
     for r in rows:
         row_reasons = r.get("reasons")
         if not isinstance(row_reasons, list):
             row_reasons = []
         for reason in row_reasons:
             reasons[reason] = reasons.get(reason, 0) + 1
+        rest = r.get("rest_market_state_at_quote")
+        if isinstance(rest, dict):
+            rest_available += rest.get("raw_available") is True
+            excluded = rest.get("reasons", [])
+        else:
+            excluded = ["no_associated_quote"]
+        for reason in excluded:
+            rest_reasons[reason] = rest_reasons.get(reason, 0) + 1
     time_errors = rows[0].get("_ledger_time_errors") if rows and isinstance(rows[0].get("_ledger_time_errors"), dict) else {}
     return {
         "schema_version": SCHEMA_VERSION,
@@ -307,6 +324,9 @@ def summarize(rows: List[Dict[str, Any]], *, ledger_status: Optional[Dict[str, A
         "ledger": dict(ledger_status) if isinstance(ledger_status, dict) else dict(UNVERIFIED_LEDGER),
         "ledger_record_time_errors_by_symbol": time_errors,
         "ledger_time_error_reasons_by_symbol": rows[0].get("_ledger_time_error_reasons", {}) if rows else {},
+        "rest_raw_available": rest_available,
+        "rest_raw_unavailable": len(rows) - rest_available,
+        "rest_diagnostic_reasons": rest_reasons,
         "decisions": len(rows),
         "evaluable": sum(1 for r in rows if r.get("evaluable") is True),
         # Engine fail-open permission is distinct from a completed model approval.

@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from functools import wraps
 from pathlib import Path
@@ -32,6 +32,14 @@ from ...core.types import (
 from ...risk import kill_switch, order_unknown
 from ...utils import audit_log
 from ...utils.session import is_kr_market_holiday
+
+
+def _quote_observation_time() -> Optional[str]:
+    """부가 관측 시계 실패가 기존 현재가 요청/반환을 막지 않게 한다."""
+    try:
+        return datetime.now(timezone.utc).isoformat()
+    except Exception:
+        return None
 
 
 # KIS 구 TR → 신 TR 전환 스위치 (2026-09-21)
@@ -2221,14 +2229,17 @@ class KISBroker(BaseBroker):
                 "fid_input_iscd": symbol.zfill(6),
             }
 
+            # 논리 호출 구간: 내부 리미터·토큰 갱신·재시도를 포함한다.
+            request_started_at = _quote_observation_time()
             data = await self._api_get(url, tr_id, params)
+            response_available_at = _quote_observation_time()
 
             rt_cd = data.get("rt_cd", "")
             if str(rt_cd) != "0":
                 return {}
 
             output = data.get("output", {})
-            return {
+            quote = {
                 "symbol": symbol,
                 "name": str(output.get("hts_kor_isnm", "") or "").strip(),
                 "price": float(output.get("stck_prpr", "0") or "0"),
@@ -2244,6 +2255,14 @@ class KISBroker(BaseBroker):
                 "ovtm_vol": int(output.get("ovtm_untp_vol", "0") or "0"),
                 "ovtm_change_pct": float(output.get("ovtm_untp_prdy_ctrt", "0") or "0"),
             }
+            # 부가 관측 오류는 기존 현재가 반환/매매 흐름으로 전파하지 않는다.
+            try:
+                from ...analytics.kis_rest_market_state import build_snapshot
+                quote["market_state_snapshot"] = build_snapshot(params["fid_input_iscd"], output,
+                    request_started_at=request_started_at, response_available_at=response_available_at)
+            except Exception:
+                logger.warning("[가격관측] REST 상태 메타데이터 생성 실패")
+            return quote
 
         except Exception as e:
             logger.exception(f"현재가 조회 오류: {e}")
