@@ -20,11 +20,14 @@ def row(**fields):
 
 @pytest.mark.parametrize('field', ['exchange_time', 'hour_class_code', 'market_class_code'])
 def test_oversized_book_metadata_rejected_before_copy_or_journal(monkeypatch, field):
+    # These are nested BOOK provenance fields, not unsupported top-level keys.
+    control = guarded()
+    assert control.publish(row(provenance={field: '090001'}))
     b = guarded()
     offered = []
     b._journal_sink = SimpleNamespace(offer=offered.append, failure_reason=None)
     monkeypatch.setattr(obs, 'deepcopy', lambda _: pytest.fail('copied rejected input'))
-    assert b.publish(row(**{field: 'x' * 100000})) is False
+    assert b.publish(row(provenance={field: 'x' * 100000})) is False
     assert b._records == [] and offered == [] and b.retained_memory_bytes == 0
     assert b._dropped == 1 and not b.capture_status()['complete']
 
@@ -113,7 +116,7 @@ def test_llm_malformed_record_preserves_quota_cohort_and_journal(tmp_path, monke
     _, _, b, _, _ = setup(tmp_path, monkeypatch)
     offered = []
     b._journal_sink = SimpleNamespace(offer=offered.append, failure_reason=None)
-    assert not b.publish(row(exchange_time='x' * (b._retained_max_record_bytes + 1)))
+    assert not b.publish(row(provenance={'exchange_time': 'x' * (b._retained_max_record_bytes + 1)}))
     assert not b._records and not b._record_counts and not b._cohort_candidates
     assert not offered and b.retained_memory_bytes == 0
     assert not b.capture_status()['complete']

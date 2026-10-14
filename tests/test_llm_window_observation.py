@@ -111,8 +111,9 @@ async def test_replay_rejects_forged_admission_and_old_contract(tmp_path, monkey
 @pytest.mark.parametrize('kind,limit', [('ws_quote',100), ('market_state',100), ('other',500)])
 def test_record_allocation_overflow_marks_whole_ledger_incomplete(tmp_path,monkeypatch,kind,limit):
     _,_,b,_,_=setup(tmp_path,monkeypatch)
-    for _ in range(limit): assert b.publish(dict(kind=kind,observed_at=obs._now()))
-    assert not b.publish(dict(kind=kind,observed_at=obs._now()))
+    record_kind = 'quote_subscription' if kind == 'other' else kind
+    for _ in range(limit): assert b.publish(dict(kind=record_kind,observed_at=obs._now()))
+    assert not b.publish(dict(kind=record_kind,observed_at=obs._now()))
     assert not b.capture_status()['complete']
     assert f'{kind}_record_limit' in b.capture_status()['incomplete_reasons']
 

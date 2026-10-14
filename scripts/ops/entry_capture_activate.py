@@ -126,8 +126,12 @@ def capture_prepared(cfg, projection):
             selection_max_candidates=100, gate_max_candidates=100,
             max_candidates=5, registration_cap=41, external_reserved=0, operational_headroom=10,
             required_new_channels=15, buffer_capacity=110000, queue_capacity=110000,
-            batch_size=64, max_record_bytes=65536, max_bytes=7434242048, dropped_records=0)
+            batch_size=64, max_record_bytes=65536, max_bytes=7434242048, dropped_records=0,
+            retained_memory_limit_bytes=384 * 1024 * 1024, memory_exhausted=False)
         if any(type(llm.get(k)) is not type(v) or llm[k] != v for k,v in expected.items()):
+            return False
+        if (type(llm.get('retained_memory_bytes')) is not int
+                or not 0 <= llm['retained_memory_bytes'] <= llm['retained_memory_limit_bytes']):
             return False
         allocations = llm.get('record_allocations')
         if (type(allocations) is not dict

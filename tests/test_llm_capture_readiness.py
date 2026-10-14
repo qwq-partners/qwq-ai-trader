@@ -73,6 +73,29 @@ async def test_real_preparation_checks_hook_actual_resources_and_unconnected_cap
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('field,value', [
+    ('retained_memory_limit_bytes', None),
+    ('retained_memory_limit_bytes', 384 * 1024 * 1024 + 1),
+    ('retained_memory_bytes', -1),
+    ('retained_memory_bytes', True),
+    ('retained_memory_bytes', 384 * 1024 * 1024 + 1),
+    ('memory_exhausted', True),
+    ('memory_exhausted', None),
+])
+async def test_activation_rejects_missing_unbounded_or_exhausted_memory(tmp_path, field, value):
+    r, bot, _ = await installed(tmp_path)
+    try:
+        data = json.loads((await projection(bot)).text)
+        data['llm'].update(retained_memory_limit_bytes=384 * 1024 * 1024,
+                           retained_memory_bytes=0, memory_exhausted=False)
+        assert prepared(data)
+        data['llm'][field] = value
+        assert not prepared(data)
+    finally:
+        await r.close('test_finished')
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('defect', ['hook', 'engine_hook', 'rest', 'state', 'version', 'owner',
     'uninitialized', 'capacity', 'queue', 'buffer', 'allocation', 'bytes', 'record_bytes',
     'drop', 'gap', 'scan_gap', 'disconnected_generation', 'connected_unready', 'end', 'writer', 'projection'])
