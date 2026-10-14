@@ -1153,8 +1153,14 @@ class KISWebSocketFeed:
             if parsed['market_state_status'] == 'raw_only' and (
                     tr_id == 'H0STMKO0' or not owner.accepts((tr_id, fields[0]), generation)):
                 self._managed_data_count += 1  # 연결 생존만 확인; 운영 가격 coverage와 별개
+            # observed_at is publication time, after subscription evidence and any
+            # earlier batch callbacks; received_at retains the original frame time.
+            observed_at = (owner.observer.current_time()
+                if (getattr(owner.observer, 'order_ready_admission', False)
+                    or getattr(owner.observer, 'llm_admission', False))
+                else datetime.now(timezone.utc)).isoformat()
             owner.publish_market_state(dict(parsed, kind="market_state", symbol=fields[0],
-                observed_at=received_at, received_at=received_at, connection_id=owner.connection_id,
+                observed_at=observed_at, received_at=received_at, connection_id=owner.connection_id,
                 generation=generation, local_frame_index=local_frame_index,
                 message_count=count, record_index=record_index))
             if parsed['market_state_status'] != 'raw_only':

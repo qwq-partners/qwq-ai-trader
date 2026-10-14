@@ -1,6 +1,8 @@
 """Single synthetic socket only: market-state evidence must never become a price signal."""
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +55,182 @@ async def receive(f, q, data):
 
 def states(b):
     return [r for r in b.export()['records'] if r['kind'] == 'market_state']
+
+
+def advancing_capture_clock(monkeypatch):
+    """Advance local publication clocks while retaining each frame's receipt."""
+    from src.analytics import entry_observation, entry_observation_journal
+    from src.data.feeds import kis_websocket, quote_subscription
+    clock = [datetime(2026, 10, 14, tzinfo=timezone.utc)]
+
+    def now(tz=None):
+        value = clock[0]
+        clock[0] += timedelta(milliseconds=1)
+        return value
+
+    for module in (kis_websocket, quote_subscription):
+        monkeypatch.setattr(module, 'datetime', SimpleNamespace(now=now))
+    monkeypatch.setattr(entry_observation, '_now', lambda: now().isoformat())
+    monkeypatch.setattr(entry_observation_journal, '_timestamp', lambda: now().isoformat())
+    return clock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tr', [PRICE, STATUS])
+async def test_first_state_receipt_preserved_in_chronological_sealed_report(tmp_path, monkeypatch, tr):
+    from src.analytics.kis_frame_diagnostics import build_frame_report
+    from test_entry_observation_journal import opened, read
+    clock = advancing_capture_clock(monkeypatch)
+    b, journal, path = await opened(tmp_path, queue_capacity=100)
+    f, _, q = await feed_setup(b)
+    try:
+        received = clock[0]
+        await receive(f, q, frame(tr))
+        q.end_observation()
+        assert (await journal.close())['sealed']
+        loaded = read(path)
+        assert loaded['complete']
+        # This must accept the real persisted producer output, not a sorted copy.
+        assert build_frame_report(loaded, as_of=clock[0].isoformat())['source_complete']
+        state = next(r for r in loaded['records'] if r['kind'] == 'market_state')
+        assert state['received_at'] == received.isoformat()
+        assert datetime.fromisoformat(state['observed_at']) > received
+        times = [datetime.fromisoformat(r['observed_at']) for r in loaded['records']]
+        assert times == sorted(times)
+        # A historical reversal must still fail; the reader must not repair it.
+        state['observed_at'] = received.isoformat()
+        with pytest.raises(ValueError, match='관측 인과'):
+            build_frame_report(loaded, as_of=clock[0].isoformat())
+    finally:
+        await journal.close()
+        await f.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_batch_state_publication_after_interleaved_subscription_preserves_receipt(tmp_path, monkeypatch):
+    from src.analytics.kis_frame_diagnostics import build_frame_report
+    from test_entry_observation_journal import opened, read
+    clock = advancing_capture_clock(monkeypatch)
+    b, journal, path = await opened(tmp_path, queue_capacity=100)
+    f, _, q = await feed_setup(b)
+    first_callback, enrolled = asyncio.Event(), asyncio.Event()
+    seen = []
+
+    async def price(event):
+        seen.append(event.symbol)
+        if len(seen) == 1:
+            first_callback.set()
+            await enrolled.wait()
+
+    async def enroll_during_callback():
+        await first_callback.wait()
+        await q.enroll('interleaved', ['000660'])
+        enrolled.set()
+
+    f.on_market_data(price)
+    await q.set_operational(['005930'], PRICE, BOOK)
+    task = asyncio.create_task(enroll_during_callback())
+    try:
+        received = clock[0]
+        batch = '0|H0STCNT0|002|' + '^'.join(fields(PRICE) + fields(PRICE))
+        await asyncio.wait_for(receive(f, q, batch), 2)
+        await task
+        q.end_observation()
+        assert (await journal.close())['sealed']
+        loaded = read(path)
+        assert build_frame_report(loaded, as_of=clock[0].isoformat())['source_complete']
+        rows = [r for r in loaded['records'] if r['kind'] == 'market_state']
+        assert [r['record_index'] for r in rows] == [1, 2]
+        assert {r['received_at'] for r in rows} == {received.isoformat()}
+        assert seen == ['005930', '005930']
+        assert any(r.get('symbol') == '000660' and rows[0]['sequence'] < r['sequence'] < rows[1]['sequence']
+                   for r in loaded['records'])
+        times = [datetime.fromisoformat(r['observed_at']) for r in loaded['records']]
+        assert times == sorted(times)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await journal.close()
+        await f.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tr', [PRICE, STATUS])
+@pytest.mark.parametrize('window', ['order_ready', 'llm'])
+async def test_state_publication_uses_subscription_owner_window_clock(tmp_path, monkeypatch, tr, window):
+    from src.analytics.entry_observation_runtime import _WindowBuffer
+    from test_entry_observation_runtime import load
+    from test_llm_window_observation import llm_plan
+    from test_order_ready_window_observation import ready_plan
+
+    def change(c):
+        (llm_plan if window == 'llm' else ready_plan)(c)
+        s = c['capture']
+        s['channels'].update(market_state_evidence=True, market_state_max_records=100)
+        s['queue_capacity'] = s['buffer_capacity']
+        s['max_bytes'] = s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048
+
+    p, _ = load(tmp_path, change)
+    clock = advancing_capture_clock(monkeypatch)
+    clock[0] = p.start_at
+    b = _WindowBuffer(p, lambda: clock[0] + timedelta(seconds=1))
+    f, _, q = await feed_setup(b)
+    try:
+        received = clock[0]
+        await receive(f, q, frame(tr))
+        state = states(b)[0]
+        observed = next(r for r in b.export()['records'] if r.get('status') == 'observed')
+        assert state['received_at'] == received.isoformat()
+        assert datetime.fromisoformat(state['observed_at']) >= received + timedelta(seconds=1)
+        assert state['observed_at'] >= observed['observed_at']
+    finally:
+        await f.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tr', [PRICE, STATUS])
+@pytest.mark.parametrize('timing', ['inside', 'receipt_before_start', 'publication_at_end'])
+async def test_delayed_state_publication_keeps_pilot_receipt_and_end_boundaries(tmp_path, monkeypatch, tr, timing):
+    from src.analytics import kis_market_state
+    from src.analytics.entry_observation_runtime import ObservationRuntime
+    from test_market_state_pilot_contract import NOW, plan
+    p = plan(tmp_path)
+    clock = advancing_capture_clock(monkeypatch)
+    clock[0] = NOW
+    f = make_feed()
+    bot = SimpleNamespace(market='kr', dry_run=False, ws_feed=f)
+    runtime = await ObservationRuntime.install(bot, p, now=lambda: clock[0])
+    q = f._quote_subscription_owner
+    q.interval = 0
+    try:
+        assert await f.connect()
+        received = p.start_at + timedelta(seconds=1)
+        published = p.start_at + timedelta(seconds=2)
+        if timing == 'receipt_before_start':
+            received = p.start_at - timedelta(milliseconds=1)
+        elif timing == 'publication_at_end':
+            received = p.end_at - timedelta(milliseconds=3)
+            published = p.end_at
+        original = kis_market_state.parse_market_state
+
+        def delayed_parse(*args):
+            parsed = original(*args)
+            clock[0] = published
+            return parsed
+
+        monkeypatch.setattr(kis_market_state, 'parse_market_state', delayed_parse)
+        clock[0] = received
+        await receive(f, q, frame(tr, '005490'))
+        rows = states(runtime.buffer)
+        if timing == 'inside':
+            assert len(rows) == 1
+            assert rows[0]['received_at'] == received.isoformat()
+            assert datetime.fromisoformat(rows[0]['observed_at']) >= published
+        else:
+            assert rows == []
+    finally:
+        await runtime.close()
+        await f.disconnect()
 
 
 @pytest.mark.asyncio
