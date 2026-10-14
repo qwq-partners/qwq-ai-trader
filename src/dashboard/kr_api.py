@@ -977,6 +977,11 @@ class KRAPIHandler:
         if (runtime.journal.failure_reason is not None
                 or (not closed and not runtime.journal._thread.is_alive())):
             return web.json_response({'status': 'unavailable'}, status=503)
+        try:
+            llm = ({'llm': runtime.llm_readiness()}
+                   if getattr(runtime.buffer, 'llm_admission', False) else {})
+        except Exception:
+            return web.json_response({'status': 'unavailable'}, status=503)
         return web.json_response({
             'schema_version': 'entry-observation-readiness-v1',
             'study_sha256': runtime.plan.study_sha256,
@@ -986,6 +991,7 @@ class KRAPIHandler:
             'capture_closed': closed,
             **({'pilot': runtime.bot.ws_feed._quote_subscription_owner.pilot_snapshot()}
                if runtime.buffer.scan_scope == 'pilot' else {}),
+            **llm,
         }, headers={'Cache-Control': 'no-store'})
 
     async def get_entry_anchors(self, request):

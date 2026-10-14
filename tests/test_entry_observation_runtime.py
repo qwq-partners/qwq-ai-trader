@@ -57,6 +57,8 @@ class Feed:
     def enable_quote_observation(self, observer, **contract):
         from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
         self._quote_subscription_owner = QuoteSubscriptionCoordinator(observer, **contract)
+    async def _apply_subscriptions(self):
+        await self._quote_subscription_owner.set_operational([], 'H0STCNT0', 'H0STASP0')
 
 
 def owner():
