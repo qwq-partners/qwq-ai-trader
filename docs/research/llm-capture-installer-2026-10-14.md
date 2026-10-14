@@ -44,15 +44,16 @@ flowchart TD
 
 파일럿 5분/1종목 호가903·상태856건을 26분/5종목으로 단순 환산하면 각각23,478·22,256건이다. 50,000은 이 참고치 약2배일 뿐 최대 유량의 증거가 아니다. 자원 상한은 선할당 크기가 아니며 원장 상한으로 RAM 안전을 증명할 수 없다. **최대 유량/RSS 검증 및 실제 설치 당시 자원 여유 확인은 남아 있다.** 도구도 `memory_safety_verified:false`를 반환한다. 자원 확인 없이 설치 준비 완료로 승격하지 않는다.
 
-운영 study의 수수료·자본 숫자는 이번에 생성하지 않았다. 테스트 숫자는 합성이다. 실제 study 생성 시 소스 SHA와 설정 지문의 계산 기준, 수수료/자본 근거, 기준 고정시각을 기록해야 한다. 자료 부족은 null/결측 판정을 유지하며 임의 값으로 채우지 않는다.
+운영 study의 수수료·자본 숫자는 이번에 생성하지 않았다. 테스트 숫자는 합성이다. 실제 study 생성 시 소스 SHA·수수료/자본 근거·기준 고정시각을 기록해야 한다. 새 profile의 `configuration_ref`는 `sha256:` + 설치 manifest의 `protected_hashes` 두 파일 목록을 `json.dumps(sort_keys=True,separators=(",",":"),allow_nan=False)`와 끝 개행으로 직렬화한 바이트의 SHA-256이다. 개별 파일 해시는 준비/활성화 가드가 배포된 설정과 대조한다. gate와 capital의 설정 참조도 같은 값이어야 하며 임의의 형식상 유효한 해시를 허용하지 않는다. 자료 부족은 null/결측 판정을 유지하며 임의 값으로 채우지 않는다.
 
 ## SEE — 검증과 리뷰
 
 - 관련 기존 baseline 481 passed / 2 skipped, rc0. 새 준비 API 누락 반례가 실패한 뒤 실제 projection을 구현했다.
 - 독립 중간 리뷰가 실제 피드 종료와 구독 소유자 잠금 사이의 오래된 ACK 승격(P2)을 재현했다. 동일 종료 경계의 회귀를 실패 상태에서 추가하고 현재 피드·소켓 상태 검사로 수정했다.
 - 통합 관련6파일 **539 passed / 2 skipped**, rc0(12.91초). 한국 시간대 신규2파일 **166 passed**, rc0(4.91초).
-- `TZ=UTC PYTHONDONTWRITEBYTECODE=1 QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`: **6288 passed / 2 skipped / 2 xfailed / 3 warnings**, rc0(229.72초). 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 로그는 개발 환경 `/tmp/qwq-llm-installer-full-verify.txt`, `/tmp/qwq-llm-installer-targeted.txt`, `/tmp/qwq-llm-installer-kst.txt`.
+- `TZ=UTC PYTHONDONTWRITEBYTECODE=1 QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`: 최초 통합 **6288 passed / 2 skipped / 2 xfailed / 3 warnings**, rc0(229.72초). 문법·비밀정보 검사 통과, 운영 상태/외부 네트워크 접근 시도0. 로그는 개발 환경 `/tmp/qwq-llm-installer-full-verify.txt`, `/tmp/qwq-llm-installer-targeted.txt`, `/tmp/qwq-llm-installer-kst.txt`.
 - 중간 리뷰어가 연결 종료 수정 후 실제 경계3검사를 재실행해3 passed(rc0), 해당P2 종결·추가P1/P2 없음. 독립 최종 리뷰의 완료 여부·실제 모델·판정과 CI/병합 상태는 PR 정본에서 확인한다. 시험 통과만으로 병합 승인을 대신하지 않는다.
+- 독립 최종 A/B 검토는 실제 **Claude Opus5**, 요청xhigh(실효 effort 미노출), 도구0, 각각104.2/95.5초·rc0로 완료되어 **APPROVE/P0·P1 없음**을 반환했다. A의 설정지문 결속 의견은 임의 해시가 통과하는 반례를 red로 확인한 뒤 보호 파일 목록 해시에 결속했다. 후속 설치기·readiness **167 passed**, rc0(5.46초). 이 보강 후 전체 검증·종결 리뷰 결과는 PR 정본에 기록한다. `math` 잔존 참조는0, shape 오류와 값 오류의 진단 코드는 의도된 구분, 고정 capacity 숫자 중복은 기존 강제 상수와 같아 변경하지 않는다. B의 lease 의견은 기존 `submit_order_ready`가 남은 절대 창으로 deadline을 자르고 종료 시 leases를 해제하는 코드와 새 고정날짜 봉인 시험으로 대조했다. 추가 배포 승인이 아니다.
 - 준비 설치기 작업자·중간 리뷰어는 각각 요청 Astra/high, 실제 모델/실효 effort metadata 미노출. 역할과 작업트리를 분리했고 코디네이터가 diff와 실제 검증 증거를 대조한다. 최종 critical review는 별도 제공자에 정제된 소스만 전달한다. 최초 외부 A/B 검토는 각각360.8/361.1초 절대 기한에서 중단됐다(직전 모델 진행0.9/1.8초, 완료 판정 없음). 같은 Opus5/xhigh·권한·설정의 짧은 control은5.1초/rc0/실제Opus5로 완료됐다. 호출 불가로 간주하거나 모델을 낮추지 않고 입력을약58/55KB에서33/30KB의 변경 중심 범위로 줄였다. 시간초과 실행을 승인으로 세지 않는다.
 
 ## 다음 순서

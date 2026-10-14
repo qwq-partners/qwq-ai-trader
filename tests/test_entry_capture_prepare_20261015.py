@@ -103,6 +103,16 @@ def test_payload_exact_frozen_bindings(m):
     doc,files=payloads(m); m.validate_payload(doc,files)
 
 
+def test_rehashed_unrelated_configuration_fingerprint_is_rejected(m):
+    doc,files=payloads(m)
+    study=m.document(files['study'])
+    for target in (study['capture'],study['capture']['entry_gate_trace'],study['capital_policy']):
+        target['configuration_ref']='sha256:'+'f'*64
+    repin_study(m,doc,files,study)
+    with pytest.raises(m.GuardError,match='study_configuration_binding_mismatch'):
+        m.validate_payload(doc,files)
+
+
 @pytest.mark.parametrize('key,change',[
     ('once',{'receipt_path':'/tmp/receipt'}),('once',{'latest_start_at':'2026-10-15T23:57:00+00:00'}),
     ('activation',{'new_head':'b'*40}),('activation',{'input_hashes':{}}),
@@ -386,7 +396,7 @@ def test_missing_existing_parent_rejected_before_consuming_attempt(m,tmp_path,mo
 def study_context(m, head='a'*40):
     """합성 검증 입력; 비용/자본 수치는 운영값이나 실수익 근거가 아니다."""
     source='commit:'+head
-    config='sha256:'+'c'*64
+    config='sha256:'+m.sha(m.raw(manifest(m)['protected_hashes']))
     capture=dict(version='runner-llm-window-v1',study_ref=m.EPOCH,
         start_at='2026-10-15T00:00:00+00:00',admission_end_at='2026-10-15T00:10:00+00:00',
         end_at='2026-10-15T00:26:00+00:00',scan_admission_ref='synthetic-first-five',

@@ -243,7 +243,12 @@ def validate_payload(m,files):
                   toss_uid=997,toss_gid=987,study_sha256=sha(files['study']),evaluation_epoch=EPOCH)
     expected.update({k:str(v) for k,v in activation_paths().items()})
     require(document(files['activation'])==expected,'activation_contract_mismatch')
-    validate_study(document(files['study']),m['engine_head'])
+    study=document(files['study'])
+    validate_study(study,m['engine_head'])
+    # Fingerprint the exact protected-file inventory (canonical JSON + newline),
+    # whose individual file hashes runtime_guards checks against the deployed tree.
+    require(study['capture']['configuration_ref']=='sha256:'+sha(raw(m['protected_hashes'])),
+            'study_configuration_binding_mismatch')
 
 
 def _fields(value, names, code='study_contract_mismatch'):
