@@ -1,5 +1,11 @@
 # QWQ AI Trader — 기술 문서
 
+> [10월14일 파일럿 판독·시각 정합화·배포 판단](research/market-state-pilot-readout-2026-10-14.md): 호가903/체결상태856/장운영0, 봉인과 평가 가능 분리, 초기 상태 근거·미래 동시 관측 설치기 우선순위.
+
+> [PR #190 결함 6건 수정 PDS·흐름·검증](research/model-comparison-review-fixes-2026-10-14.md): 늦은 기록 보존·저널 완전성·비용 대사 복구·표본 분모. 기본 OFF·운영 미배포, 실수익 입증은 별도다.
+
+> [실시간 비교 준비 — 입력 봉투·작업자(W2)](research/model-comparison-live-input-2026-10-13.md) · [R1 실험 명세·진입 조건·장 상태·일별 보고(W3)](research/model-comparison-experiment-R1-2026-10-13.md) · [구현 분담·인터페이스 계약](superpowers/plans/2026-10-13-live-comparison-implementation-plan.md) · [인계 원문](superpowers/plans/2026-10-13-live-comparison-claude-handoff.md) · [10월14일 판단 체크리스트](operations/pilot-decision-checklist-2026-10-14.md): 예산 보호/비용 복구는 러너 문서 "실패·복구 절차" 절. 기본 OFF·운영 미배포·유료 비교 없음.
+
 > [비교 실행·중립 수량 재생 PDS/복구/다음 순서](research/model-comparison-runner-2026-10-13.md): 중복 과금 방지·판단 전 기존 사이징 재생·명시 별도 비교 작업자/읽기 전용 보고. 순수익/진입 가능성 미검증, 운영/파일럿 보존.
 
 > [66차 후속 PDS·검증·남은 작업](superpowers/plans/2026-10-13-comparison-evidence-remediation.md): LLM 대상 신규 관측 계약·용량, 비용 계산/실행 경계, 실제 수량 정책의 조건부 증분 계산. 운영·10월14일 파일럿 보존. 실제 시세/정책 재생 입력·공급자 어댑터와 순수익 검증은 별도다.

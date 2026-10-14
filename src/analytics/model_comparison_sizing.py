@@ -181,7 +181,7 @@ def capture_policy_sizing(risk_manager, event) -> dict[str, Any]:
         'policy_source_sha256': policy_source_hash(),
         'config_sha256': _digest(config), 'config': config, 'state': state,
         'signal': {'signal_id': event.id, 'symbol': event.symbol, 'strategy': strategy,
-                   'strength': event.strength.value, 'price': _money(event.price or 0),
+                   'strength': event.strength.value, 'price': _money(0 if event.price is None else event.price),   # None 만 기본값, '' 등은 거부
                    'timestamp': event.timestamp.isoformat(),
                    'has_nested_signal': event.signal is not None,
                    'metadata_aliased': event.signal is not None and event.metadata is not None

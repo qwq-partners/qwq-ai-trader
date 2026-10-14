@@ -16,8 +16,8 @@ NOW = datetime(2026, 10, 13, 3, tzinfo=timezone.utc)
 
 
 def setup(tmp_path):
-    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW)
-    policy = ComparisonExecutionPolicy("identity-study", 10, ("gpt-5-mini",), 400)
+    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW, policy_enabled=True)
+    policy = ComparisonExecutionPolicy("identity-study", 10, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31", 10, 16384)
     return ledger, policy, ComparisonCallGuard(ledger=ledger, policy=policy)
 
 
@@ -34,7 +34,7 @@ def test_completed_id_recovers_json_result_and_does_not_consume_another_slot(tmp
         return ComparisonAttemptResult({"answer": "approve", "tokens": [1, 2]}, Decimal("0.0001"))
 
     expected = asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="decision/bull/current/1"))
-    reopened = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW)
+    reopened = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True)
     restored = ComparisonCallGuard(ledger=reopened, policy=policy)
     recovered = asyncio.run(restored.call(request(), dispatch=dispatch, attempt_id="decision/bull/current/1"))
     assert recovered == expected
@@ -133,7 +133,7 @@ def test_cancellation_and_restart_do_not_retry_interrupted_id(tmp_path):
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="cancelled"))
-    restored = ComparisonCallGuard(ledger=MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW), policy=policy)
+    restored = ComparisonCallGuard(ledger=MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True), policy=policy)
     with pytest.raises(BudgetBlocked):
         asyncio.run(restored.call(request(), dispatch=dispatch, attempt_id="cancelled"))
     assert len(calls) == 1
@@ -203,7 +203,7 @@ def test_result_storage_failure_never_redispatches_and_preserves_known_charge(tm
     with pytest.raises(BudgetBlocked):
         asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id="store-error"))
     assert ledger.status()["spent_usd"] == 0.0001
-    restored = ComparisonCallGuard(ledger=MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW), policy=policy)
+    restored = ComparisonCallGuard(ledger=MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True), policy=policy)
     if after_commit:
         result = asyncio.run(restored.call(request(), dispatch=dispatch, attempt_id="store-error"))
         assert result.value["responded_at"] == "2026-10-13T03:00:00+00:00"
@@ -238,7 +238,7 @@ def test_settlement_commit_ack_loss_recovers_from_durable_money_evidence(tmp_pat
 
 def _crash_in_provider(path, policy):
     import os
-    ledger = MonthlyBudgetLedger(path, 100, clock=lambda: NOW)
+    ledger = MonthlyBudgetLedger(path, 100, clock=lambda: NOW, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=policy)
 
     async def dispatch(req):
@@ -297,8 +297,8 @@ def test_seed_is_bound_to_stable_id(tmp_path):
 
 def test_daily_blocked_id_is_not_automatically_retried_on_next_day(tmp_path):
     now = [NOW]
-    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: now[0])
-    policy = ComparisonExecutionPolicy("one-per-day", 1, ("gpt-5-mini",), 400)
+    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: now[0], policy_enabled=True)
+    policy = ComparisonExecutionPolicy("one-per-day", 1, ("gpt-5-mini",), 400, "1", "2026-10-13", "2026-10-31", 10, 16384)
     guard = ComparisonCallGuard(ledger=ledger, policy=policy)
     calls = []
 

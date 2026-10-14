@@ -1,0 +1,273 @@
+{
+  "schema_version": "model-comparison-experiment-manifest-v1",
+  "experiment_id": "R1-bull-reasoning-20261013",
+  "enabled": false,
+  "status": "draft_off_not_registered_not_scheduled",
+  "fixed_at": "2026-10-13T21:30:00+09:00",
+  "current": {
+    "model": "gpt-5-mini",
+    "reasoning_effort": "minimal",
+    "max_output_tokens": 400,
+    "temperature": 0.3,
+    "seed": 20260803,
+    "timeout_seconds": 12.0
+  },
+  "candidate": {
+    "model": "gpt-5-mini",
+    "reasoning_effort": "low",
+    "max_output_tokens": 400,
+    "temperature": 0.3,
+    "seed": 20260803,
+    "timeout_seconds": 12.0
+  },
+  "bear": {
+    "model": "gemini-3.1-flash-lite-preview",
+    "reasoning_effort": null,
+    "max_output_tokens": 400,
+    "temperature": 0.0,
+    "seed": null,
+    "timeout_seconds": 12.0
+  },
+  "fallback_chain": [
+    {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": null,
+      "max_output_tokens": 100,
+      "temperature": 0.3,
+      "seed": null,
+      "timeout_seconds": 10.0
+    },
+    {
+      "model": "gemini-3.1-pro-preview",
+      "reasoning_effort": null,
+      "max_output_tokens": 100,
+      "temperature": 0.3,
+      "seed": null,
+      "timeout_seconds": 10.0
+    }
+  ],
+  "execution_policy": {
+    "daily_attempt_cap": 10,
+    "max_output_tokens": 400,
+    "allowed_models": [
+      "gemini-3.1-flash-lite-preview",
+      "gemini-3.1-pro-preview",
+      "gpt-5-mini",
+      "gpt-5.6-sol"
+    ],
+    "experiment_usd_ceiling": "9.4011800",
+    "valid_from": "2026-10-15",
+    "valid_until": "2026-11-11",
+    "pairs_per_day": 1,
+    "max_common_context_bytes": 16384,
+    "required_policy_mode": "normal"
+  },
+  "fallback_chain_timeout_seconds": 10.0,
+  "worker_contract_note": "current/candidate/bear/fallback_chain/fixed_at/execution_policy 는 ComparisonWorker.install_from_env 가 읽는 최상위 키이며 roles·budget 과 같은 값이다(enabled:false 유지).",
+  "hypothesis": "Bull gpt-5-mini 의 reasoning_effort 만 minimal→low 로 바꾸면, 같은 입력·같은 Bear·같은 집계에서 응답 뒤 첫 호가 기준 조건부 가격 손익(비용 후)이 달라지는가. 1차 목적은 기술 표본 수집이며 경제성 판정용 표본 크기가 아니다.",
+  "comparison_variable": "bull.reasoning_effort",
+  "control_support": {
+    "source": "src/utils/llm.py _OPENAI_EFFORTS['gpt-5-mini'] = {minimal, low, medium, high} (2026-10-12 검증 주석)",
+    "minimal": true,
+    "low": true
+  },
+  "roles": {
+    "bull_current": {
+      "model": "gpt-5-mini",
+      "reasoning_effort": "minimal",
+      "max_output_tokens": 400,
+      "temperature": 0.3,
+      "seed": 20260803,
+      "timeout_seconds": 12.0
+    },
+    "bull_candidate": {
+      "model": "gpt-5-mini",
+      "reasoning_effort": "low",
+      "max_output_tokens": 400,
+      "temperature": 0.3,
+      "seed": 20260803,
+      "timeout_seconds": 12.0
+    },
+    "bear": {
+      "model": "gemini-3.1-flash-lite-preview",
+      "reasoning_effort": null,
+      "max_output_tokens": 400,
+      "temperature": 0.0,
+      "seed": null,
+      "timeout_seconds": 12.0
+    },
+    "fallback_chain": [
+      {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": null,
+        "max_output_tokens": 100,
+        "temperature": 0.3,
+        "seed": null,
+        "timeout_seconds": 10.0
+      },
+      {
+        "model": "gemini-3.1-pro-preview",
+        "reasoning_effort": null,
+        "max_output_tokens": 100,
+        "temperature": 0.3,
+        "seed": null,
+        "timeout_seconds": 10.0
+      }
+    ]
+  },
+  "operating_source_of_controls": {
+    "bull": "src/core/adversarial_validator.py _ask_bull: OPENAI light(config openai_model_light=gpt-5-mini), MAX_TOKENS=400, reasoning_effort=minimal, retry_on_empty=1, seed=VERDICT_SEED 20260803, LLM_TIMEOUT 12.0",
+    "bear": "src/core/adversarial_validator.py _ask_bear: GEMINI light(config gemini_model_light=gemini-3.1-flash-lite-preview), MAX_TOKENS=400, temperature=0.0, retry_on_empty=1, reasoning 미전달",
+    "fallback": "src/core/cross_validator.py:910 LLMManager.complete(task=STRATEGY_ANALYSIS, max_tokens=100) → src/utils/llm.py:688 primary OPENAI heavy(gpt-5.6-sol) → fallback GEMINI heavy(gemini-3.1-pro-preview), temperature 기본 0.3(gpt-5/6 는 미전송), system 없음, SINGLE_FALLBACK_TIMEOUT 10.0 은 두 공급자 합산 시한",
+    "strict_on_disagreement": "src/core/adversarial_validator.py STRICT_ON_DISAGREEMENT=False (get_adversarial_validator 기본값)"
+  },
+  "known_control_differences": [
+    "운영 폴백 10초(SINGLE_FALLBACK_TIMEOUT)는 primary+fallback 합산 시한이며, 비교 runner 도 2차 수정부터 fallback_chain_timeout_seconds(10.0)로 체인 전체에 같은 시한을 적용한다. 각 폴백 시도의 timeout_seconds 는 그 안의 상한이다.",
+    "gpt-5/6 계열에는 OpenAIClient 가 temperature 를 보내지 않는다(src/utils/llm.py:438). Gemini 값은 운영과 같다."
+  ],
+  "fallback_system": "",
+  "fallback_prompt_suffix_worst_case": "\n이 매수 시그널을 승인하시겠습니까? 위 매크로 리스크가 해당 종목/전략에 직접 영향 가능 시 보수적으로 NO. YES 또는 NO로 답하고, 한 줄 사유를 적어주세요.",
+  "strict_on_disagreement": false,
+  "pairs_per_day": 1,
+  "concurrent_pairs": 1,
+  "horizon_seconds": 900,
+  "evaluation_anchor": "input_available_at",
+  "max_input_age_seconds": 5,
+  "empty_retries": 1,
+  "max_common_context_bytes": 16384,
+  "max_trading_days": 20,
+  "valid_from": "2026-10-15",
+  "valid_until": "2026-11-11",
+  "validity_note": "KST 날짜, 양끝 포함. 10/15~11/11 은 KRX 20거래일 후보이며 휴장일은 활성화 검토 때 is_kr_market_holiday 로 다시 확인한다. 늦게 활성화하면 남은 기간만 쓰고, 연장·한도 보충은 새 실험 ID·새 정책 검토로만 한다.",
+  "budget": {
+    "formula": "attempts_per_pair = (1+empty_retries) 공통 Bear + 2 arm × [(1+empty_retries) Bull + len(fallback_chain) 폴백]; 시도별 예약 = llm_budget.reserve 식(입력 2×(prompt바이트+system바이트+256) 토큰, 출력 상한·Gemini 2배) × llm_pricing.rate_quote, _units 올림; prompt 바이트 = max_common_context_bytes + 역할 접미",
+    "attempts_per_pair": 10,
+    "daily_attempt_cap": 10,
+    "reservation_usd_ceiling_per_pair": "0.4700590",
+    "experiment_usd_ceiling": "9.4011800",
+    "experiment_ceiling_formula": "max_trading_days 20 × pairs_per_day 1 × reservation_usd_ceiling_per_pair",
+    "per_attempt": [
+      {
+        "role": "bear:0",
+        "model": "gemini-3.1-flash-lite-preview",
+        "input_tokens": 34570,
+        "output_reserve_tokens": 800,
+        "reservation_usd": "0.0098425"
+      },
+      {
+        "role": "bear:1",
+        "model": "gemini-3.1-flash-lite-preview",
+        "input_tokens": 34570,
+        "output_reserve_tokens": 800,
+        "reservation_usd": "0.0098425"
+      },
+      {
+        "role": "bull_current:0",
+        "model": "gpt-5-mini",
+        "input_tokens": 33998,
+        "output_reserve_tokens": 400,
+        "reservation_usd": "0.0092995"
+      },
+      {
+        "role": "bull_current:1",
+        "model": "gpt-5-mini",
+        "input_tokens": 33998,
+        "output_reserve_tokens": 400,
+        "reservation_usd": "0.0092995"
+      },
+      {
+        "role": "current_fallback:0",
+        "model": "gpt-5.6-sol",
+        "input_tokens": 33698,
+        "output_reserve_tokens": 100,
+        "reservation_usd": "0.136792"
+      },
+      {
+        "role": "current_fallback:1",
+        "model": "gemini-3.1-pro-preview",
+        "input_tokens": 33698,
+        "output_reserve_tokens": 200,
+        "reservation_usd": "0.069796"
+      },
+      {
+        "role": "bull_candidate:0",
+        "model": "gpt-5-mini",
+        "input_tokens": 33998,
+        "output_reserve_tokens": 400,
+        "reservation_usd": "0.0092995"
+      },
+      {
+        "role": "bull_candidate:1",
+        "model": "gpt-5-mini",
+        "input_tokens": 33998,
+        "output_reserve_tokens": 400,
+        "reservation_usd": "0.0092995"
+      },
+      {
+        "role": "candidate_fallback:0",
+        "model": "gpt-5.6-sol",
+        "input_tokens": 33698,
+        "output_reserve_tokens": 100,
+        "reservation_usd": "0.136792"
+      },
+      {
+        "role": "candidate_fallback:1",
+        "model": "gemini-3.1-pro-preview",
+        "input_tokens": 33698,
+        "output_reserve_tokens": 200,
+        "reservation_usd": "0.069796"
+      }
+    ],
+    "accounting": "운영 월 USD100 원장(같은 MonthlyBudgetLedger)에 예약·정산 — 별도 금전 원장 없음. 실험 상한은 유효기간 전체에 고정되며 KST 월초 운영 리셋이나 실험 ID 변경으로 보충되지 않는다(I1). 80% 절약·95% 필수 보호·100% 중단은 운영 정책 그대로이고 비교 예약은 이번 예약 포함 80% 초과 시 거부된다(I1 comparison_economy_threshold).",
+    "not_used": "10/13 과거 가용액 $99.70 과 기존 비용표의 일 쌍 수는 쓰지 않는다. 현재 잔액은 활성화 시점 원장 조회로만 확인한다."
+  },
+  "selection_rule": "그날(KST) 실제 llm_second_check 유료 호출에 도달해 봉투가 만들어진 판단(stage=unavailable 은 봉투 없음) 중 attestation.kind=in_process_nonce, received_at−input_available_at 0~5초, common_context ≤ max_common_context_bytes 인 첫 1건. 순서 (input_available_at, decision_id). 응답·호가·손익은 선정에 쓰지 않는다(model_comparison_daily_report.select_daily_sample).",
+  "exclusion_rules": [
+    "비용 unknown·타임아웃·요청/응답 모델 불일치·입력 오래됨·장 상태 unknown/not_normal·진입 조건 unknown/failed(수량>0 arm)·호가 결측은 분모(offered/sampled/complete)에 남기고 조건부 경제성만 null+사유로 제외한다.",
+    "선정 규칙을 통과하지 못한 봉투는 offered 에 남고 missing_reasons 로 집계된다.",
+    "같은 표본으로 임계값·선정 규칙·지평을 조정하지 않는다. 기술 결함 수정과 가설/버전 변경을 구분하고, 가설 변경은 새 실험 ID 로만 한다."
+  ],
+  "stop_conditions": [
+    "comparison_daily_attempt_cap — 당일 중단",
+    "comparison_policy_mode_not_normal — 운영 예산 모드 ≠ normal, 중단",
+    "comparison_economy_threshold — 이번 예약 포함 월 80% 초과, 중단",
+    "comparison_experiment_ceiling — 실험 USD 상한, 영구 중단",
+    "comparison_experiment_expired — valid_until 경과, 영구 중단",
+    "comparison_policy_mismatch — 저장 정책과 manifest 불일치, 영구 중단(리셋 탈출구 없음)",
+    "comparison_policy_disabled · essential_budget_reserved · monthly_limit_exceeded"
+  ],
+  "source_fingerprints": {
+    "base_head": "c4e48e7c7ef4151f1c14bb72735560b8401a3578",
+    "policy_source_hash_at_base": "903126b82860506bb18f2375f695985c13b97dd61e6e1d3e638930ab557dd78b",
+    "files_sha256_at_base": {
+      "src/core/adversarial_validator.py": "d1522d09e852edfd0ead2a01b1b80a2b8cfff09e97c335b0a33d245c11266fad",
+      "src/core/entry_llm_context.py": "382c2d0550b06e316bd2433d055b4700bcf58c902842876aac65caaadbf90ed7",
+      "src/utils/llm.py": "5b429e712f488705c046c9ad69bbbe25d336fbbef51db91dd714f4c1797a93fa",
+      "src/utils/llm_pricing.py": "af47f3ba814375674fc4e469bab9cbb3bfa721270f5c6913c8eda67e9a48a90b",
+      "src/utils/llm_budget.py": "fad85a0bd12634625112d2f0faf7ed7570af8d82003afa59deedb37ddaa9b0d9",
+      "config/default.yml": "c7cc2b76645277107dfdb82532e398af61bb1e37b7248ca4cfc2a5657b545a5c"
+    },
+    "pending_at_activation": {
+      "integrated_head": null,
+      "policy_source_hash": null,
+      "src/core/cross_validator.py": null,
+      "src/core/engine.py": null,
+      "src/analytics/model_comparison_runner.py": null,
+      "src/analytics/model_comparison_execution.py": null,
+      "src/analytics/model_comparison_input.py": null,
+      "src/analytics/model_comparison_worker.py": null,
+      "src/analytics/model_comparison_sizing.py": null,
+      "src/utils/llm_budget.py": null
+    },
+    "note": "W1/W2 가 같은 날 수정하는 파일은 base 값이 의미가 없어 자리만 둔다. 활성화 검토 때 통합 head 에서 채우고 운영 배포 SHA 와 다르면 활성화하지 않는다."
+  },
+  "live_readiness": {
+    "ready": false,
+    "blockers": [
+      "진입 조건 외부 게이트(보유 수·pending·쿨다운·매수 중지·증권사 한도 등)는 재생 불가라 unknown → 현재 코드에서 조건부 경제성 net_delta 는 항상 null",
+      "장운영(H0STMKO0)은 사건식이라 구독 직후 상태 수신 여부가 10/14 파일럿 전 미확인 — 수신이 없으면 장 상태 unknown",
+      "KIS 코드 의미 미확정: H0STMKO0 TRHT_YN·EXCH_CLS_CODE 설명 공란, F/P 예고·사이드카·서킷 해제·'???' 코드, ISCD 51~54·59 의 연속매매 영향, H0STCNT0 MRKT_TRTM_CLS_CODE 설명 공란",
+      "W1 예산 admission 훅·W2 입력 봉투/작업자 통합과 독립 리뷰 미완료"
+    ]
+  }
+}

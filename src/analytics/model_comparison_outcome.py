@@ -4,6 +4,10 @@
 검증한 재생/원천 참조를 받아 일관성을 검사한다. 참조 문자열만으로 원본의 진실성이나
 체결을 인증하지 않는다. 판단 후 수량을 역산하거나 오프라인 응답 시간을 과거 진입
 시각으로 쓰는 입력은 받지 않는다. 실자료 연결 전의 순수 계산 경계다.
+
+v2(2026-10-13): 평가 기준시각은 policy.evaluation_anchor(requested_at=legacy 작업자 dispatch,
+input_available_at=공통 입력 구성 시각)이며, arm 별 진입 조건 재생(model_comparison_admission.
+replay_admission)과 장 상태 분류(classify_market_state)가 모두 통과한 arm 만 계산한다.
 """
 from __future__ import annotations
 
@@ -12,6 +16,8 @@ from decimal import Decimal, DecimalException
 from typing import Mapping
 
 from .entry_price_shadow import _mapping, _number, _text, _timestamp
+from .model_comparison_admission import (ADMISSION_SCHEMA, EXTERNAL_GATES, MARKET_STATE_SCHEMA,
+                                         REPLAYABLE_GATES)
 from ..utils.fee_calculator import FeeCalculator, FeeConfig
 
 
@@ -78,17 +84,96 @@ def _arm(name, row, *, requested, evaluation, snapshot_ref, policy, fees):
             'trade_pnl_krw': str(trade_pnl), 'api_cost_usd': str(cost)}
 
 
+ANCHORS = ('requested_at', 'input_available_at')
+ASSUMPTIONS = (
+    'quote_size_is_displayed_top_of_book_not_fill_vwap_or_slippage_certification',
+    'explicit_slippage_bps_and_fee_schedule_are_assumptions_not_measured_costs',
+    'sizing_and_admission_replay_use_pre_llm_snapshot_not_order_time_state',
+    'market_state_is_raw_kis_code_reading_not_exchange_certification',
+)
+
+
+def _same_time(value, expected):
+    try:
+        return _timestamp(value, 'evaluated_at') == expected
+    except ValueError:
+        return False
+
+
+def _market_reasons(states, key, quote_at):
+    state = states.get(key) if isinstance(states, Mapping) else None
+    if not isinstance(state, Mapping) or state.get('schema_version') != MARKET_STATE_SCHEMA:
+        return ['MARKET_STATE_MISSING']
+    reasons = []
+    if state.get('verdict') != 'normal_continuous':
+        reasons.append(f"MARKET_STATE_NOT_NORMAL:{state.get('verdict')}")
+    if not _same_time(state.get('evaluated_at'), quote_at):
+        reasons.append('MARKET_STATE_TIME_MISMATCH')
+    return reasons
+
+
+def _gate_time_reason(gate_name, gate, anchor):
+    try:
+        as_of = _timestamp(gate.get('as_of'), 'as_of')
+    except ValueError:
+        return f'ADMISSION_GATE_TIME_INVALID:{gate_name}'    # 누락·naive·형식 오류
+    return f'ADMISSION_GATE_FUTURE:{gate_name}' if as_of > anchor else None
+
+
+def _admission_reasons(row, name, arm, *, snapshot_ref, anchor):
+    """호출자가 붙인 증거의 구조·일관성 검사. 일괄 True 표시는 게이트 통과를 대신하지 않는다.
+
+    진입 근거는 이 행의 스냅샷(sizing_snapshot.ref)·기준시각(row[evaluation_anchor])에서 나온
+    것이어야 하고, 판정에 쓴 게이트의 as_of 는 tz-aware 이며 기준시각 이전이어야 한다.
+    """
+    admissions = row.get('admission')
+    admission = admissions.get(name) if isinstance(admissions, Mapping) else None
+    if not isinstance(admission, Mapping) or admission.get('schema_version') != ADMISSION_SCHEMA:
+        return ['ADMISSION_MISSING']
+    reasons = []
+    if admission.get('snapshot_id') != snapshot_ref:
+        reasons.append('ADMISSION_SNAPSHOT_MISMATCH')
+    if not _same_time(admission.get('anchor_at'), anchor):
+        reasons.append('ADMISSION_ANCHOR_MISMATCH')
+    if (admission.get('replay_id') != row[name]['sizing_replay_ref']
+            or admission.get('quantity') != arm['quantity'] or admission.get('verdict') != arm['verdict']):
+        reasons.append('ADMISSION_REPLAY_MISMATCH')
+    gates = admission.get('gates') if isinstance(admission.get('gates'), Mapping) else {}
+    if arm['quantity'] == 0:
+        gate = gates.get('sizing_quantity')
+        if not isinstance(gate, Mapping) or gate.get('status') != 'failed':
+            reasons.append('ADMISSION_QUANTITY_INCONSISTENT')
+        elif _gate_time_reason('sizing_quantity', gate, anchor):
+            reasons.append(_gate_time_reason('sizing_quantity', gate, anchor))
+        return reasons
+    if admission.get('admissible') is not True:
+        reasons.append('ADMISSION_NOT_PASSED')
+    for gate_name in (*REPLAYABLE_GATES, *EXTERNAL_GATES):
+        gate = gates.get(gate_name)
+        if not isinstance(gate, Mapping):
+            reasons.append(f'ADMISSION_GATE_MISSING:{gate_name}')
+            continue
+        if gate.get('status') != 'passed':
+            reasons.append(f'ADMISSION_GATE_NOT_PASSED:{gate_name}')
+        time_reason = _gate_time_reason(gate_name, gate, anchor)
+        if time_reason:
+            reasons.append(time_reason)
+    return reasons
+
+
 def compare_policy_outcomes(row: Mapping, *, fees: FeeCalculator | None) -> dict:
     """같은 선행 스냅샷에서 별도로 검증한 두 정책 재생의 가격 손익 차이.
 
     누락 행도 decision_id와 사유를 보존한다. 수량은 이 함수가 생성하거나 검증된
     엔진 출력이라고 인증하지 않는다. 조건부 계산 결과를 실현손익으로 쓰면 안 된다.
     """
-    result = {'schema_version': 'model-policy-outcome-v1',
+    result = {'schema_version': 'model-policy-outcome-v2',
               'decision_id': row.get('decision_id') if isinstance(row, Mapping) else None,
               'status': 'not_evaluable', 'actual_execution': False,
               'evidence_validation': 'reference_presence_and_consistency_only',
-              'current': None, 'candidate': None, 'net_delta_krw': None, 'reasons': []}
+              'evaluation_anchor': None, 'assumptions': list(ASSUMPTIONS),
+              'current': None, 'candidate': None, 'net_delta_krw': None,
+              'arm_reasons': {}, 'reasons': []}
     try:
         row = _mapping(row, 'row')
         _text(row.get('decision_id'), 'decision_id')
@@ -103,22 +188,34 @@ def compare_policy_outcomes(row: Mapping, *, fees: FeeCalculator | None) -> dict
                 raise ValueError(f'INVALID_FEE_RATE:{key}')
             rates[key] = rate
         fees = FeeCalculator(FeeConfig(**rates))
-        requested = _timestamp(row.get('requested_at'), 'requested_at')
+        raw_policy = _mapping(row.get('policy'), 'policy')
+        anchor_name = raw_policy.get('evaluation_anchor')
+        if anchor_name not in ANCHORS:
+            raise ValueError('COMMON_EVALUATION_POLICY_MISMATCH')
+        if row.get('evaluation_anchor', 'requested_at') != anchor_name:
+            raise ValueError('EVALUATION_ANCHOR_MISMATCH')
+        result['evaluation_anchor'] = anchor_name
+        if anchor_name == 'requested_at':
+            result['assumptions'].append('legacy_requested_at_anchor_is_worker_dispatch_time')
+        elif row.get('live_provenance') != 'in_process_attested':
+            raise ValueError('LIVE_PROVENANCE_NOT_ATTESTED')
+        requested = _timestamp(row.get(anchor_name), anchor_name)
+        if anchor_name == 'input_available_at' and row.get('requested_at') is not None:
+            if _timestamp(row.get('requested_at'), 'requested_at') < requested:
+                raise ValueError('DISPATCH_BEFORE_INPUT')
         evaluation = _timestamp(row.get('evaluation_at'), 'evaluation_at')
         if evaluation <= requested:
             raise ValueError('COMMON_EVALUATION_TIME_REQUIRED')
         snapshot = _mapping(row.get('sizing_snapshot'), 'sizing_snapshot')
         snapshot_ref = _text(snapshot.get('ref'), 'sizing_snapshot.ref')
         if _timestamp(snapshot.get('available_at'), 'sizing_snapshot.available_at') > requested:
-            raise ValueError('SIZING_SNAPSHOT_NOT_AVAILABLE_AT_REQUEST')
-        raw_policy = _mapping(row.get('policy'), 'policy')
+            raise ValueError('SIZING_SNAPSHOT_NOT_AVAILABLE_AT_ANCHOR')
         _text(raw_policy.get('ref'), 'policy.ref')
         _text(raw_policy.get('fee_schedule_ref'), 'policy.fee_schedule_ref')
         if _timestamp(raw_policy.get('fixed_at'), 'policy.fixed_at') > requested:
-            raise ValueError('POLICY_NOT_FIXED_AT_REQUEST')
+            raise ValueError('POLICY_NOT_FIXED_AT_ANCHOR')
         horizon = raw_policy.get('horizon_seconds')
         if (type(horizon) is not int or not 0 < horizon <= 86400
-                or raw_policy.get('evaluation_anchor') != 'requested_at'
                 or evaluation - requested != timedelta(seconds=horizon)):
             raise ValueError('COMMON_EVALUATION_POLICY_MISMATCH')
         keys = ('reject_multiplier', 'unavailable_multiplier', 'max_quote_delay_seconds',
@@ -130,13 +227,28 @@ def compare_policy_outcomes(row: Mapping, *, fees: FeeCalculator | None) -> dict
         arms = {name: _arm(name, row, requested=requested, evaluation=evaluation,
                           snapshot_ref=snapshot_ref, policy=policy, fees=fees)
                 for name in ('current', 'candidate')}
+        arm_reasons = {name: _admission_reasons(row, name, arm, snapshot_ref=snapshot_ref, anchor=requested)
+                       for name, arm in arms.items()}
+        for name, arm in arms.items():
+            if arm['quantity'] > 0:
+                quote_at = _timestamp(row[name]['entry_quote']['received_at'], 'entry_quote.received_at')
+                arm_reasons[name] += _market_reasons(row.get('market_state'), name, quote_at)
+        if any(arm['quantity'] > 0 for arm in arms.values()):
+            exit_at = _timestamp(row['exit_quote']['received_at'], 'exit_quote.received_at')
+            arm_reasons['exit'] = _market_reasons(row.get('market_state'), 'exit', exit_at)
+        arm_reasons = {name: reasons for name, reasons in arm_reasons.items() if reasons}
+        if arm_reasons:
+            result['arm_reasons'] = arm_reasons
+            result['reasons'].extend(f'{name}:{reason}' for name, reasons in arm_reasons.items()
+                                     for reason in reasons)
+            return result
         fx = Decimal('0')
         if any(Decimal(arm['api_cost_usd']) > 0 for arm in arms.values()):
             raw_fx = _mapping(row.get('fx'), 'fx')
             _text(raw_fx.get('evidence_ref'), 'fx.evidence_ref')
             fx = _number(raw_fx.get('krw_per_usd'), 'fx.krw_per_usd')
             if _timestamp(raw_fx.get('available_at'), 'fx.available_at') > requested:
-                raise ValueError('FX_NOT_AVAILABLE_AT_REQUEST')
+                raise ValueError('FX_NOT_AVAILABLE_AT_ANCHOR')
         for arm in arms.values():
             arm['net_proxy_krw'] = str(Decimal(arm['trade_pnl_krw']) - Decimal(arm['api_cost_usd']) * fx)
         result.update(arms, status='conditional_price_proxy',

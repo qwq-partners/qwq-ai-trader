@@ -1,5 +1,13 @@
 # 모니터링 체크포인트
 
+## 실시간 비교 준비(Task1~6) — PR 대기, 운영 미배포, 유료 비교 OFF
+
+- [ ] 10월14일 09:05 이후 [판단 체크리스트](pilot-decision-checklist-2026-10-14.md) 1절 판독 → 2절 배포 조건 → 3절 새 관측. 셋은 각각 사용자 결정.
+- [ ] 배포 뒤 기동 로그에 `[비교작업자]` 줄이 **없어야** 정상(`COMPARISON_WORKER` 미설정). 있으면 환경변수 오설정.
+- [ ] 배포 뒤 첫 `llm_second_check`: `signal_events.metadata.llm_decision.decision_id` 가 월 JSONL 행과 같고, `comparison_handoff` 키는 작업자 미연결이라 없어야 함.
+- [ ] 유료 비교 활성화 전: manifest `enabled` 전환은 Codex 리뷰·사용자 승인 뒤 별도 PR, 월 원장 `policy_mode=normal`·가용액 ≥ 실험 상한 $9.40 + 운영 예비, 미확정 장 상태 코드가 평가에 필요한지 확인(`live_readiness.ready=false` 유지 중).
+- [ ] 비교 실행 뒤 매일: `scripts/report_model_comparison.py --daily <KST 날짜>` 분모·결측·원래/대사 비용 확인, unknown 비용은 기존 `scripts/reconcile_llm_budget.py` 로만 정정(0원 금지).
+
 ## 66차 후속 — 통합 검증과 파일럿 이후 순서
 
 정본: [PDS](../superpowers/plans/2026-10-13-comparison-evidence-remediation.md), [B 신규 관측 계약](../research/concurrent-observation-design-2026-10-13.md), [C 실제 정책 비교](../research/model-comparison-plan-2026-10-13.md).

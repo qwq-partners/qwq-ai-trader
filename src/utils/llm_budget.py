@@ -39,6 +39,28 @@ class BudgetStateError(BudgetBlocked):
     pass
 
 
+_READ_ACTIONS = frozenset({sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ,
+                           sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE})
+
+
+def _read_only(action, *_):
+    # Admission hooks observe the locked snapshot; they cannot write or end it.
+    return sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
+
+
+_LINK_TABLES = frozenset({'comparison_requests', 'comparison_attempts'})
+
+
+def _comparison_link_only(action, arg1, *_):
+    # Link hooks may only read and UPDATE the comparison bookkeeping tables; never the
+    # financial tables, never schema, never the transaction boundary.
+    if action in _READ_ACTIONS:
+        return sqlite3.SQLITE_OK
+    if action == sqlite3.SQLITE_UPDATE and arg1 in _LINK_TABLES:
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
 def _units(value) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise BudgetBlocked('invalid_cost')
@@ -225,12 +247,21 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
             raise BudgetStateError('storage_unavailable') from None
 
     def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int, *,
-                policy_priority='standard', expected_policy_mode=None, task='', role='') -> str:
+                policy_priority='standard', expected_policy_mode=None, task='', role='',
+                admission_check=None, link_reservation=None) -> str:
         """Conservative admission estimate: twice UTF-8 bytes plus 256 overhead.
 
         OpenAI reserves its completion cap; Gemini gets 2x output headroom.
         Month attribution is admission time, not a provider billing promise.
+        admission_check(db, status, committed_units, units, now) runs inside the
+        same BEGIN IMMEDIATE after every existing check and before INSERT. It may
+        only read (SQLite authorizer); BudgetBlocked rejects after COMMIT of the
+        policy observation, with no reservation. Never call providers from it.
         """
+        if admission_check is not None and not callable(admission_check):
+            raise BudgetBlocked('invalid_admission_check')
+        if link_reservation is not None and not callable(link_reservation):
+            raise BudgetBlocked('invalid_link_reservation')
         if (not isinstance(model, str) or not isinstance(prompt, str) or not isinstance(system, str)
                 or isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int)
                 or not 0 < max_output_tokens <= 2 ** 31 - 1):
@@ -279,6 +310,16 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 if committed + units > self.limit_units:
                     db.execute('COMMIT')
                     raise BudgetBlocked('monthly_limit_exceeded')
+                if admission_check is not None:
+                    db.set_authorizer(_read_only)
+                    try:
+                        admission_check(db, status, committed, units, now)
+                    except BudgetBlocked:
+                        db.set_authorizer(None)
+                        db.execute('COMMIT')
+                        raise
+                    finally:
+                        db.set_authorizer(None)
                 fd = os.open(self.lock_dir / (token + '.lock'),
                              os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -290,6 +331,14 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                                (token, POLICY_VERSION, status['policy_mode'], policy_priority, task, role))
                     after, total = self._snapshot(db, now=now)
                     self._observe_policy(db, after, total, now)
+                if link_reservation is not None:
+                    # link_reservation(db, token): the caller's attempt bookkeeping is bound to this token in the
+                    # SAME transaction, so a process killed mid-call still leaves a reconcilable token link.
+                    db.set_authorizer(_comparison_link_only)
+                    try:
+                        link_reservation(db, token)
+                    finally:
+                        db.set_authorizer(None)
                 db.execute('COMMIT')
             self.active_reservations[token] = fd
             admitted = True

@@ -14,9 +14,12 @@ NOW = datetime(2026, 10, 13, 3, tzinfo=timezone.utc)
 
 def setup_guard(tmp_path, *, cap=2, limit=100, clock=lambda: NOW):
     from src.analytics.model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy
-    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", limit, clock=clock)
+    ledger = MonthlyBudgetLedger(tmp_path / "budget.db", limit, clock=clock, policy_enabled=True)
     policy = ComparisonExecutionPolicy(experiment_id="study-1", daily_attempt_cap=cap,
-                                       allowed_models=("gpt-5-mini", "gpt-5.6-sol"), max_output_tokens=400)
+                                       allowed_models=("gpt-5-mini", "gpt-5.6-sol"), max_output_tokens=400,
+                                       experiment_usd_ceiling="1", valid_from="2026-10-13",
+                                       valid_until="2026-11-30", pairs_per_day=10,
+                                       max_common_context_bytes=65536)
     return ledger, policy, ComparisonCallGuard(ledger=ledger, policy=policy)
 
 
@@ -50,7 +53,7 @@ def test_reserves_before_transport_and_counts_retry_fallback_on_restart(tmp_path
     assert first.value == "approve"
     assert ledger.status()["spent_usd"] == 0.0001
     ledger.close()
-    reopened = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW)
+    reopened = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True)
     restarted = ComparisonCallGuard(ledger=reopened, policy=policy)
     asyncio.run(restarted.call(request("gpt-5.6-sol"), dispatch=paid_once))
     with pytest.raises(BudgetBlocked, match="comparison_daily_attempt_cap"):
@@ -63,7 +66,7 @@ def test_reserves_before_transport_and_counts_retry_fallback_on_restart(tmp_path
 def test_concurrent_instances_cannot_overrun_one_daily_slot(tmp_path):
     from src.analytics.model_comparison_execution import ComparisonCallGuard
     ledger, policy, guard = setup_guard(tmp_path, cap=1)
-    other = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW)
+    other = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True)
     guards = (guard, ComparisonCallGuard(ledger=other, policy=policy))
     dispatches = []
 
@@ -134,7 +137,7 @@ def test_crash_orphan_stays_unknown_without_resetting_daily_cap(tmp_path):
 
     with pytest.raises(RuntimeError):
         asyncio.run(guard.call(request(), dispatch=transport))
-    restored = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW)
+    restored = MonthlyBudgetLedger(ledger.path, 100, clock=lambda: NOW, policy_enabled=True)
     with pytest.raises(BudgetBlocked, match="unresolved_usage"):
         asyncio.run(ComparisonCallGuard(ledger=restored, policy=policy).call(request(), dispatch=paid_once))
     assert restored.status()["unresolved_count"] == 1
@@ -212,10 +215,14 @@ def test_zero_cap_blocks_and_zero_measured_cost_is_known(tmp_path):
     ("daily_attempt_cap", float("inf")), ("max_output_tokens", 0), ("max_output_tokens", True),
     ("allowed_models", ["gpt-5-mini"]), ("allowed_models", ()),
     ("allowed_models", ("gpt-5-mini", "gpt-5-mini")), ("experiment_id", ""),
+    ("pairs_per_day", 0), ("pairs_per_day", True), ("pairs_per_day", 1.0), ("pairs_per_day", 2 ** 31),
+    ("max_common_context_bytes", 0), ("max_common_context_bytes", None), ("max_common_context_bytes", "16384"),
 ])
 def test_invalid_policy_is_rejected_before_storage(field, bad):
     from src.analytics.model_comparison_execution import ComparisonExecutionPolicy
-    values = dict(experiment_id="study", daily_attempt_cap=2, allowed_models=("gpt-5-mini",), max_output_tokens=100)
+    values = dict(experiment_id="study", daily_attempt_cap=2, allowed_models=("gpt-5-mini",), max_output_tokens=100,
+                  experiment_usd_ceiling="1", valid_from="2026-10-13", valid_until="2026-10-31",
+                  pairs_per_day=1, max_common_context_bytes=16384)
     values[field] = bad
     with pytest.raises(ValueError):
         ComparisonExecutionPolicy(**values)
@@ -263,8 +270,24 @@ def test_persisted_policy_describes_currency_timezone_and_request_contract(tmp_p
         saved = json.loads(db.execute("SELECT policy FROM comparison_policy").fetchone()[0])
     assert saved["currency"] == "USD" and saved["timezone"] == "Asia/Seoul"
     assert saved["adapter_contract"] == "single-provider-attempt-v1"
-    assert saved["schema_version"] == "model-comparison-execution-v1"
+    assert saved["schema_version"] == "model-comparison-execution-v2"
     assert saved["max_output_tokens"] == 400
+    assert saved["experiment_usd_ceiling"] == "1" and saved["required_policy_mode"] == "normal"
+    assert (saved["valid_from"], saved["valid_until"]) == ("2026-10-13", "2026-11-30")
+    assert (saved["pairs_per_day"], saved["max_common_context_bytes"]) == (10, 65536)
+
+
+def test_pair_limits_have_no_default_and_changes_are_policy_mismatch(tmp_path):
+    from dataclasses import replace
+    from src.analytics.model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy
+    ledger, policy, guard = setup_guard(tmp_path)
+    with pytest.raises(TypeError):
+        ComparisonExecutionPolicy(experiment_id="x", daily_attempt_cap=1, allowed_models=("gpt-5-mini",),
+                                  max_output_tokens=1, experiment_usd_ceiling="1", valid_from="2026-10-13",
+                                  valid_until="2026-10-31")
+    for change in ({"pairs_per_day": 11}, {"max_common_context_bytes": 65535}):
+        with pytest.raises(BudgetBlocked, match="comparison_policy_mismatch"):
+            ComparisonCallGuard(ledger=ledger, policy=replace(policy, **change))
 
 
 def test_clock_crossing_day_during_reservation_does_not_dispatch(tmp_path, monkeypatch):
