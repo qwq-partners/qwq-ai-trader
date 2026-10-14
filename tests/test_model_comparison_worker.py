@@ -97,9 +97,11 @@ class GatedOpenAI(FakeOpenAI):
     """Blocks inside the provider until released — the request may already be at the provider."""
     def __init__(self):
         super().__init__()
+        self.entered = threading.Event()
         self.gate = threading.Event()
 
     async def complete(self, prompt, system="", model=None, **kw):
+        self.entered.set()  # Pair claim and this request's budget reservation precede dispatch.
         while not self.gate.is_set():
             await asyncio.sleep(0.005)
         return await super().complete(prompt, system, model, **kw)
@@ -364,9 +366,9 @@ def test_expired_accepted_offer_does_not_consume_the_daily_pair(tmp_path):
     try:
         assert worker.offer(envelope(worker, "dec-0")) == "accepted"
         assert wait(lambda: worker.health()["started"] == 1)
-        # started 는 러너 claim 전에 오른다 — 시계를 옮기기 전에 dec-0 의 원장 입장이 끝났는지 기다린다.
-        # (안 기다리면 러너가 live_input_too_old 로 보수적으로 거부해 다른 시나리오가 된다)
-        assert wait(lambda: worker.runner.admitted_pair_ids(ledger.today().isoformat()))
+        # started 는 claim 전이다. 공급자 진입 신호로 claim 완료를 기다린 뒤 시계를 옮긴다.
+        # 실행 중 외부 DB 조회는 worker의 쓰기와 경쟁하므로 영속 결과는 stop 뒤에 확인한다.
+        assert op.entered.wait(5)
         assert worker.offer(envelope(worker, "dec-1")) == "accepted"
         clock.at = NOW + timedelta(seconds=6)
         op.gate.set()
@@ -374,7 +376,10 @@ def test_expired_accepted_offer_does_not_consume_the_daily_pair(tmp_path):
         assert worker.offer(envelope(worker, "dec-2", at=clock.at)) == "accepted"   # 만료분은 쌍 수에서 빠졌다
         assert worker.offer(envelope(worker, "dec-3", at=clock.at)) == "rejected_daily_pair_cap"
     finally:
-        worker.stop(5)
+        health = worker.stop(5)
+    assert health["drained"] is True
+    assert worker.runner.admitted_pair_ids(ledger.today().isoformat()) == {
+        worker.runner.pair_id("dec-0"), worker.runner.pair_id("dec-2")}
 
 
 def test_pair_failing_before_claim_frees_the_day_slot_after_ledger_resync(tmp_path):
