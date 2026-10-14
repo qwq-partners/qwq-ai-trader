@@ -50,6 +50,14 @@ def _decode(raw):
 def validate_window_contract(context, observations=None):
     """Offline as well as install-time binding; never reopen or amend a study."""
     s = context.get('capture', {})
+    rest_opt_in = 'rest_market_state_evidence' in s
+    if rest_opt_in and (s.get('version') != LLM_VERSION or s['rest_market_state_evidence'] is not True):
+        raise ValueError('REST 상태 근거는 명시 LLM 창의 true 계약만 허용')
+    if observations is not None:
+        for record in observations['records']:
+            if 'market_state_snapshot' in record or 'rest_market_state_status' in record:
+                if not rest_opt_in or record.get('kind') != 'rest_quote':
+                    raise ValueError('REST 상태 레코드는 명시 관측 계약 필요')
     if observations is not None and any(r.get('kind') == 'market_state' for r in observations['records']):
         channels = s.get('channels', {})
         if type(channels) is not dict or channels.get('market_state_evidence') is not True:
@@ -380,6 +388,8 @@ class CapturePlan:
             expected.update(('max_scans', 'quote_admission'))
         if type(s) is dict and s.get('version') == LLM_VERSION:
             expected.add('record_allocations')
+            if 'rest_market_state_evidence' in s:
+                expected.add('rest_market_state_evidence')
         if (type(s) is not dict or set(s) != expected
                 or s['version'] not in ('runner-first-scan-v1', 'runner-first-scan-v2', 'runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION)):
             raise ValueError('지원하지 않는 capture 계약/필드')
@@ -467,6 +477,7 @@ class _WindowBuffer(EntryObservationBuffer):
                          selection_basis_settings=s.get('selection_basis'),
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
                          frame_diagnostics_settings=s.get('frame_diagnostics'))
+        self.rest_market_state_evidence = s.get('rest_market_state_evidence') is True
         self.llm_admission = s['version'] == LLM_VERSION
         self.llm_quote_submit = None
         self._llm_symbols = {}

@@ -271,10 +271,21 @@ def capture_rest_quote(observer, scan_id, symbol, quote, *, requested_at=None):
         return
     try:
         fields = ("price", "open", "high", "low", "volume", "change_pct")
-        _publish(observer, {"kind": "rest_quote", "candidate_id": f"{scan_id}:{symbol}",
-                            "observed_at": _now(), "requested_at": requested_at,
-                            "source": "KIS_FHKST01010100", "source_as_of": None,
-                            "quote": {k: _scalar(quote.get(k)) for k in fields}})
+        record = {"kind": "rest_quote", "candidate_id": f"{scan_id}:{symbol}",
+                  "observed_at": _now(), "requested_at": requested_at,
+                  "source": "KIS_FHKST01010100", "source_as_of": None,
+                  "quote": {k: _scalar(quote.get(k)) for k in fields}}
+        if getattr(observer, 'rest_market_state_evidence', False) is True:
+            record['rest_market_state_status'] = 'missing_snapshot'
+            snapshot = quote.get('market_state_snapshot')
+            if snapshot is not None:
+                try:
+                    from .kis_rest_market_state import validate_snapshot
+                    record['market_state_snapshot'] = validate_snapshot(snapshot, expected_symbol=symbol)
+                    record['rest_market_state_status'] = 'recorded'
+                except (ValueError, TypeError):
+                    record['rest_market_state_status'] = 'invalid_snapshot'
+        _publish(observer, record)
     except Exception:
         _capture_failed(observer)
 

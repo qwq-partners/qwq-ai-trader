@@ -51,7 +51,7 @@ def main() -> int:
         ledger_status = {"verified": True, "complete": verified["complete"],
                          "incomplete_reasons": list(verified["incomplete_reasons"]),
                          "dropped_records": verified.get("dropped_records")}
-        payloads = [r for r in verified["records"] if isinstance(r, dict) and r.get("kind") in ("ws_quote", "market_state")]
+        payloads = [r for r in verified["records"] if isinstance(r, dict) and r.get("kind") in ("ws_quote", "market_state", "rest_quote")]
     else:
         payloads = load_ledger_payloads(args.ledger, max_bytes=args.max_bytes)
     rows = join_decisions(load_decisions(args.decisions, max_bytes=args.max_bytes), payloads,
