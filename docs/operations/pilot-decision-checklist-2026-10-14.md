@@ -13,7 +13,7 @@
 
 | # | 확인 | 근거 위치 | 판정 |
 |---|---|---|---|
-| 1-1 | 활성화 서비스 상태·종료 코드·요청 영수증 소비 여부 | `systemctl status` 출력(읽기), `/home/ubuntu/.local/state/qwq-deploy/market-state-pilot-20261013/` 영수증·status | 영수증 미소비/시작 마감 경과면 **미수집**(UNKNOWN). 자동 재시도·소모된 once 재발급 금지 |
+| 1-1 | 활성화 서비스 상태·종료 코드·요청 영수증 소비 여부 | `systemctl status` 출력(읽기), `/var/lib/qwq-entry-capture/20261014-market-state-pilot-v1/status.json`, `/home/ubuntu/.local/state/qwq-entry-observation/20261014-market-state-pilot-v1/startup.receipt` | 영수증 미소비/시작 마감 경과면 **미수집**(UNKNOWN). 자동 재시도·소모된 once 재발급 금지 |
 | 1-2 | 봇 건강 | 활성화 영수증·status의 예정된 재기동과 현재 PID·시작시각·NRestarts 대조, `/api/health`(execution_recovery ready, pending 0) | 08:55 활성화는 봇을 한 번 재기동하므로 이전 PID 1114252 유지가 성공 조건은 아니다. 추가 재기동·오류가 있으면 원인 먼저, 배포 보류 |
 | 1-3 | 원장 봉인·누락 | `read_observation_journal(path, max_bytes, expected_study_sha256=9720ea6d…c01d)` → `complete`, `incomplete_reasons`, `dropped_records` | `complete=False` 또는 drop>0 이면 용량/기록 결함으로 분류. 결손 개수 불명(무봉인 prefix)은 UNKNOWN |
 | 1-4 | 채널별 상태 수신 | 원장 `market_state` 레코드의 `tr_id`(H0STCNT0 47필드 / H0STMKO0 11필드) 건수·`market_state_status`(`raw_only`/`invalid_values`/`unsupported_layout`) | **MKO 0건은 UNKNOWN**(정상 증명 아님). `unsupported_layout`/`invalid_values` 비율이 0 이 아니면 필드 레이아웃 재확인 |
@@ -51,7 +51,7 @@
 | 가짜 공급자·임시 원장으로 입력→작업자→쌍→보고 E2E, 예산 경계·복구 시험 | 실제 채널별 상태 수신·세대·유량·누락 |
 | 실험 manifest 상한 계산(토폴로지·예약 추정식) | 실제 응답 지연·실제 토큰(가정 900/400 치환) |
 | 장 상태 코드 의미의 공식 문서 대조 | 실제 코드 분포·VI/정지 발생 |
-| 계좌 기준선: 2024년 이하 권리조회(봇 정지 창), 코드표 대조 | 시작 순자산·외부 입출금 원본(사용자 제공) |
+| 계좌 기준선: 2024년 이하 권리조회(봇 정지 창), 코드표 대조 | 시작 순자산·외부 입출금 공식 원장(KIS 조회 가능 기간·완전성 확인) |
 
 ## 5. 하지 말 것
 
