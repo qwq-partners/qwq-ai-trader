@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [가격 평가기 LLM 관측 연결·검증·다음 실측](research/profitability-kickoff-2026-10-14.md#10월15일--가격-평가기-연결-보완): 원본 레코드와 전체 후보를 보존하며 기존 가격 평가기에 연결한다. 실제 주문 준비/장 상태 검토가 없으면 비교 불가를 유지한다. 오프라인 변경이며 운영 재배포는 필요하지 않다.
+
 > [순수익 개선 일정 및 착수](superpowers/plans/2026-10-14-profitability-priority-schedule.md): 기존10월15일 수집 후09:35 판독, 진입 가격→선정 기여→위험·교체·청산 순서. [실제 준비 근거와 입력 결측](research/profitability-kickoff-2026-10-14.md). 후속 AI 자동 재개 미등록, 운영 재배포 없음.
 
 > [10월14일22:12 main Verify 실패 후속](operations/llm-capture-2026-10-15.md#plandosee--2212-main-verify-실패-후속): 시험의 동시 DB 조회 제거·종료 후 영속 결과 확인, 테스트/문서 변경만. 운영 버전과 내일 예약을 유지하며 병합 후 main 검사까지 확인한다.
