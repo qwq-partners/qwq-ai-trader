@@ -33,7 +33,7 @@
 
 - [x] UTC 전체 verify, 필요한 시간대 회귀, 비밀정보/diff 검사. 새 source/test 변경이 없으면 전체 반복 금지.
 - [x] 독립 critical 최종 리뷰, 근거와 남은 실측/설치 작업을 연구 문서·CHANGELOG·CLAUDE·인덱스에 기록.
-- [ ] 커밋·푸시·PR·해당 head CI 확인 후 통합 판단. 운영 배포/새 예약은 미수행.
+- [x] 커밋·푸시·[PR #191 생성](https://github.com/qwq-partners/qwq-ai-trader/pull/191). 최종 head CI 확인 후 통합 판단은 PR 정본으로 추적한다. 운영 배포/새 예약은 미수행.
 
 ## Review Focus
 

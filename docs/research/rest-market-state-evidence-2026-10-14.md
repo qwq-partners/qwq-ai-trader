@@ -4,7 +4,7 @@
 
 10월14일 파일럿의 장운영 사건 0건은 정상 거래의 증거가 아니다. 그렇다고 같은 관측을 오래 반복하면 초기 상태 문제가 해결되는 것도 아니다. 이번 범위는 **추가 증권 API 호출 없이 이미 받는 현재가 응답의 상태 원문을 보존하고, 판단 뒤 첫 호가에 대해 자료의 가용성과 결측 사유를 측정**하는 것이다.
 
-계획은 [구현 계약](../superpowers/plans/2026-10-14-rest-market-state-evidence.md), 선행 판독은 [파일럿 정본](market-state-pilot-readout-2026-10-14.md)을 따른다. 기준 main은 `597150da590d7d68c530800367d4f9d00061b72f`다. 운영 배포·설치·예약·유료 비교·매수 재개는 이번 구현에 포함하지 않는다.
+계획은 [구현 계약](../superpowers/plans/2026-10-14-rest-market-state-evidence.md), 선행 판독은 [파일럿 정본](market-state-pilot-readout-2026-10-14.md)을 따른다. 기준 main은 `597150da590d7d68c530800367d4f9d00061b72f`다. 구현·문서 커밋은 푸시했고 [PR #191](https://github.com/qwq-partners/qwq-ai-trader/pull/191)을 만들었다. 최종 head의 CI와 병합 여부는 해당 PR이 정본이다. 운영 배포·설치·예약·유료 비교·매수 재개는 이번 구현에 포함하지 않는다.
 
 ## DO — 공식 근거와 구현 흐름
 

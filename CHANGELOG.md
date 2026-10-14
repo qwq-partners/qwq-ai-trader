@@ -5,7 +5,7 @@
 - 추가 증권 API 요청 없이 `get_quote`의 상태 원문·응답종목·논리 호출 시작/반환 시각을 제한된 스냅샷으로 보존한다. 공식 문서 지문·null 거래소 시각/순번을 기록하고 N/00을 정상으로 판정하지 않는다.
 - 명시 `runner-llm-window-v1`의 `rest_market_state_evidence:true`에서만 기존 rest_quote에 저장한다. 과거 연구 형태·기존 가격 반환·WS/경제성 게이트를 보존한다.
 - strict 원장 조인에 별도 원문 가용성·결측 사유를 추가한다. 최신 결측/손상·종목 불일치·시각 역전·동률·노후 자료는 제외하며 항상 UNKNOWN이다.
-- [PLAN→DO→SEE·공식 근거·흐름·검증](docs/research/rest-market-state-evidence-2026-10-14.md): 관련244검사 통과. 시계 오류로 가격 반환이 사라지는 반례2건도 격리했다. 최종1538d29 전체6122 passed(rc0)·KST107·격리0·실제 Claude Opus5 독립 종결 APPROVE(P0/P1 0). 비차단4의견 판정·리뷰 시간초과 진단·최종 PR/CI는 정본에 기록한다. 운영 배포/새 설치/실수집은 별도다.
+- [PLAN→DO→SEE·공식 근거·흐름·검증](docs/research/rest-market-state-evidence-2026-10-14.md): 관련244검사 통과. 시계 오류로 가격 반환이 사라지는 반례2건도 격리했다. 최종1538d29 전체6122 passed(rc0)·KST107·격리0·실제 Claude Opus5 독립 종결 APPROVE(P0/P1 0). 비차단4의견 판정·리뷰 시간초과 진단·최종 [PR #191/CI·병합](https://github.com/qwq-partners/qwq-ai-trader/pull/191)은 PR 정본으로 확인한다. 운영 배포/새 설치/실수집은 별도다.
 
 ## 2026-10-14 — 파일럿 실측 판독·시장 상태 시각 정합화 (운영 미배포)
 
