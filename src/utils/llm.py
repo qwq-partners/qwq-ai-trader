@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Callable
 import aiohttp
 from loguru import logger
 
+from .llm_roles import LLMRole, ROLE_POLICY_VERSION, get_role_profile
 from .llm_pricing import rate_quote
 from .llm_budget import MonthlyBudgetLedger, BudgetBlocked, BudgetStateError
 from contextvars import ContextVar
@@ -236,6 +237,7 @@ class LLMResponse:
     budget_priority: Optional[str] = None
     budget_reservation_token: Optional[str] = None  # 64차: 월 예산 원장 reservations.token 연결 (정산 시 기록)
     attempt_trail: Optional[list] = None  # 64차: 이 응답을 만들기까지의 실제 공급자 시도 목록(재시도·폴백 각 1행)
+    refusal_detected: bool = False  # 공급자가 명시한 거절 여부만; 본문은 저장하지 않는다.
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -266,6 +268,7 @@ _GEMINI_LEVELS = {
     "gemini-3.1-flash-lite": {"minimal", "low", "medium", "high"},
     "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
     "gemini-3.8-flash": {"low", "medium", "high"},
+    "gemini-4-argon": {"low", "medium", "high"},
 }
 
 
@@ -473,7 +476,9 @@ class OpenAIClient(BaseLLMClient):
                 choices = data.get("choices") or []
                 choice = choices[0] if choices else {}
                 metadata["finish_reason"] = choice.get("finish_reason")
-                content = (choice.get("message") or {}).get("content") or ""
+                message = choice.get("message") or {}
+                metadata["refusal_detected"] = bool(message.get("refusal"))
+                content = message.get("content") or ""
                 if not isinstance(content, str):
                     raise ValueError("Provider content must be text")
                 success = resp.status == 200 and bool(choices)
@@ -563,7 +568,7 @@ class GeminiClient(BaseLLMClient):
                                error="Gemini API key not configured", **metadata)
         generation = {"temperature": temperature,
                       "maxOutputTokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
-        if model == "gemini-3.8-flash":
+        if model in {"gemini-3.8-flash", "gemini-4-argon"}:
             generation.pop("temperature")
         if level is not None:
             generation["thinkingConfig"] = {"thinkingLevel": level}
@@ -798,6 +803,66 @@ class LLMManager:
 
         return (not self.daily_usage.cost_missing
                 and self.daily_usage.estimated_cost_usd < self.config.daily_budget_usd)
+
+    async def complete_role(
+        self, prompt: str, role: LLMRole | str, system: str = "",
+    ) -> LLMResponse:
+        """고정 역할을 한 번만 호출한다. 분류·폴백·빈 응답/JSON 재시도는 없다.
+
+        호출자가 모델/출력량/우선순위/시한을 덮어쓸 수 없다. 역할 이름은 공통
+        원장·감사·시도 이력의 task로 남아 기존 task별 절약 라우팅과 구분된다.
+        """
+        role, profile = get_role_profile(role)
+        provider = LLMProvider(profile.provider)
+        controls = profile.controls()
+        if rate_quote(profile.model, 0, 0) is None:
+            raise ValueError("Unpriced LLM role model")
+        _validate_controls(profile.model, provider, controls)
+        if not isinstance(prompt, str) or not isinstance(system, str):
+            raise ValueError("Role prompt and system must be text")
+
+        token = _ATTEMPT_TRAIL.set([])
+        self.stats["total_requests"] += 1
+        try:
+            if self._closing:
+                response = self._monthly_blocked_response(provider, profile.model, "manager_closing")
+            elif not self._check_budget():
+                reason = "daily_unknown_cost" if self.daily_usage.cost_missing else "daily_limit_exceeded"
+                response = self._monthly_blocked_response(provider, profile.model, reason)
+                response.error = "Daily budget exceeded"
+            elif len(prompt.encode("utf-8")) + len(system.encode("utf-8")) > profile.max_input_bytes:
+                response = LLMResponse(
+                    "", profile.model, provider, success=False, requested_model=profile.model,
+                    error="Role input byte limit exceeded", request_sent=False,
+                    usage_known=False, billing_status="not_sent")
+            else:
+                deadline = asyncio.get_running_loop().time() + profile.timeout_seconds
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        response = await self._complete_attempt(
+                            self._get_client(provider), prompt, system, profile.model,
+                            role.value, "primary", _deadline=deadline,
+                            _role_finish_reason="stop" if provider == LLMProvider.OPENAI else "STOP",
+                            budget_priority=profile.budget_priority, **controls)
+                except TimeoutError as exc:
+                    # timeout이 변환한 취소 원인에는 공통 정산 경계의 응답이 남아 있다.
+                    response = getattr(exc.__cause__, "_llm_response", None)
+                    if response is None:
+                        response = LLMResponse(
+                            "", profile.model, provider, success=False, requested_model=profile.model,
+                            error="Role deadline exceeded", request_sent=False,
+                            usage_known=False, billing_status="not_sent")
+                    response.error = "Role deadline exceeded"
+            response.budget_priority = profile.budget_priority
+            self.stats["success_count" if response.success else "error_count"] += 1
+        except BaseException as exc:
+            self._attach_trail_to_exception(exc, _ATTEMPT_TRAIL.get())
+            raise
+        finally:
+            trail = _ATTEMPT_TRAIL.get()
+            _ATTEMPT_TRAIL.reset(token)
+        self._attach_trail(response, trail)
+        return response
 
     async def complete(
         self,
@@ -1195,6 +1260,8 @@ class LLMManager:
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
         token = None
+        deadline = kwargs.pop("_deadline", None)
+        role_finish_reason = kwargs.pop("_role_finish_reason", None)
         priority = kwargs.pop("budget_priority", "standard")
         if _role == "shadow":
             priority = "research"
@@ -1248,6 +1315,17 @@ class LLMManager:
                 self._annotate_budget(response, policy, priority)
                 self._account_attempt(response, _task, _role)
                 return response
+        # 원장의 동기 입장 검사가 시한을 넘겼으면 HTTP 진입 전에 예약을 해제한다.
+        # 이벤트 루프의 timeout callback만으로는 동기 검사 직후 전송을 막을 수 없다.
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            response = LLMResponse(
+                "", _model, provider, success=False, requested_model=_model,
+                error="Role deadline exceeded", request_sent=False,
+                usage_known=False, billing_status="not_sent")
+            self._annotate_budget(response, policy, priority)
+            self._settle_monthly(token, response, _model)
+            self._account_attempt(response, _task, _role)
+            return response
         try:
             response = await _client.complete(_prompt, _system, model=_model, **kwargs)
         except asyncio.CancelledError as exc:
@@ -1278,6 +1356,12 @@ class LLMManager:
             self._account_attempt(unknown, _task, _role)
             exc._llm_response = unknown
             raise
+        # 새 역할만 완결·비거절·비어 있지 않은 본문을 사용한다. 기존 매매 계약은 유지한다.
+        if role_finish_reason is not None and response.success and (
+                response.finish_reason != role_finish_reason or response.refusal_detected
+                or not (response.content or "").strip()):
+            response.success = False
+            response.error = "Role completion incomplete, refused or empty"
         self._annotate_budget(response, policy, priority)
         self._settle_monthly(token, response, _model)
         self._account_attempt(response, _task, _role)
@@ -1303,16 +1387,21 @@ class LLMManager:
 
     def _audit_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Metadata-only audit; no prompts, content, free-text errors, keys or raw payload."""
-        if self.audit_dir is None:
+        is_role = task in {item.value for item in LLMRole}
+        audit_dir = self.audit_dir
+        role_sink = audit_dir is None and is_role and self.config.monthly_budget_usd is not None
+        if role_sink and self.config.budget_state_path:
+            audit_dir = Path(self.config.budget_state_path).expanduser().parent / "role-audit"
+        if audit_dir is None:
             return
         now = datetime.now()
         today = now.strftime("%Y%m%d")
         try:
-            self.audit_dir.mkdir(parents=True, exist_ok=True)
-            if self._audit_log_date != today:
+            audit_dir.mkdir(mode=0o700 if role_sink else 0o777, parents=True, exist_ok=True)
+            if not role_sink and self._audit_log_date != today:
                 cutoff = (now - timedelta(days=self._LLM_LOG_RETENTION_DAYS)).strftime("%Y%m%d")
                 try:
-                    for path in self.audit_dir.glob("llm-audit-*.jsonl"):
+                    for path in audit_dir.glob("llm-audit-*.jsonl"):
                         date_part = path.stem.removeprefix("llm-audit-")
                         if re.fullmatch(r"\d{8}", date_part) and date_part < cutoff:
                             try:
@@ -1353,8 +1442,36 @@ class LLMManager:
                 "estimated_cost_usd": quote.cost_usd if quote and response.usage_known else None,
                 "price_basis": quote.basis if quote else "unpriced",
             }
-            with (self.audit_dir / f"llm-audit-{today}.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+            if is_role:
+                row["role_policy_version"] = ROLE_POLICY_VERSION
+                row["refusal_detected"] = response.refusal_detected
+            line = json.dumps(row, ensure_ascii=False) + "\n"
+            filename = f"llm-audit-{today}.jsonl"
+            if role_sink:
+                # 자동 역할 감사만 전용 비공개 경로에 기록한다. symlink를 따라가지 않는다.
+                directory_fd = os.open(audit_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fchmod(directory_fd, 0o700)
+                    if getattr(self, "_role_audit_log_date", None) != today:
+                        cutoff = (now - timedelta(days=self._LLM_LOG_RETENTION_DAYS)).strftime("%Y%m%d")
+                        try:
+                            for name in os.listdir(directory_fd):
+                                match = re.fullmatch(r"llm-audit-(\d{8})\.jsonl", name)
+                                if match and match[1] < cutoff:
+                                    os.unlink(name, dir_fd=directory_fd)
+                        except OSError:
+                            logger.warning("[LLM] metadata audit retention failed")
+                        self._role_audit_log_date = today
+                    fd = os.open(filename, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory_fd)
+                    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                        os.fchmod(stream.fileno(), 0o600)
+                        stream.write(line)
+                finally:
+                    os.close(directory_fd)
+            else:
+                with (audit_dir / filename).open("a", encoding="utf-8") as stream:
+                    stream.write(line)
         except Exception:
             logger.warning("[LLM] metadata audit write failed")
 

@@ -64,7 +64,7 @@ class _FakeLLM:
         self._content = content
         self.prompts = []
 
-    async def complete(self, prompt, **kwargs):
+    async def complete_role(self, prompt, **kwargs):
         self.prompts.append(prompt)
         return _FakeResp(self._content)
 
@@ -194,7 +194,7 @@ def test_brief_json_schema_is_fixed(gen, monkeypatch, tmp_path):
 
 def test_llm_failure_returns_none(gen, monkeypatch):
     class _Fail(_FakeLLM):
-        async def complete(self, prompt, **kwargs):
+        async def complete_role(self, prompt, **kwargs):
             resp = _FakeResp("")
             resp.success = False
             resp.error = "timeout"

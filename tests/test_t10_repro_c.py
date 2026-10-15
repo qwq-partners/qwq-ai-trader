@@ -51,7 +51,8 @@ class _FakeLLM:
     def __init__(self, content):
         self._content = content
 
-    async def complete(self, **kwargs):
+    async def complete_role(self, prompt, *, role, system=""):
+        assert role == "morning_brief"
         return _FakeLLMResult(self._content)
 
 

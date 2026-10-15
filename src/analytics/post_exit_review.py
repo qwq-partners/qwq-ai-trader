@@ -19,7 +19,8 @@ from collections import defaultdict
 
 from loguru import logger
 
-from ..utils.llm import LLMTask, get_llm_manager
+from ..utils.llm import get_llm_manager
+from ..utils.llm_roles import LLMRole
 
 
 JOURNAL_DIR = Path.home() / ".cache" / "ai_trader" / "journal"
@@ -272,12 +273,10 @@ class PostExitReviewer:
             "출력은 한국어 마크다운으로 600단어 이내."
         )
         try:
-            resp = await self._llm.complete(
+            resp = await self._llm.complete_role(
                 prompt=prompt,
-                budget_priority="research",
-                task=LLMTask.STRATEGY_ANALYSIS,
+                role=LLMRole.POST_EXIT_RESEARCH,
                 system=system,
-                max_tokens=1800,
             )
             if resp and getattr(resp, "success", False):
                 return resp.content or ""
@@ -390,7 +389,7 @@ class PostExitReviewer:
         if report.get("llm_insights"):
             lines.extend([
                 "",
-                "## LLM 분석 (GPT-5.4)",
+                "## LLM 분석",
                 "",
                 report["llm_insights"],
             ])
@@ -459,7 +458,7 @@ class PostExitReviewer:
             insight_short = report["llm_insights"][:1200]
             lines.extend([
                 "",
-                "<b>🤖 GPT-5.4 분석</b>",
+                "<b>🤖 LLM 분석</b>",
                 f"<pre>{_escape_html(insight_short)}</pre>",
             ])
             if len(report["llm_insights"]) > 1200:

@@ -66,7 +66,8 @@ class _FakeLLM:
         self._content = content
         self.prompts = []
 
-    async def complete(self, prompt, **kwargs):
+    async def complete_role(self, prompt, *, role, system=""):
+        assert role == "morning_brief"
         self.prompts.append(prompt)
         return _FakeResp(self._content)
 

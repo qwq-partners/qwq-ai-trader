@@ -445,15 +445,15 @@ class MacroEconomist(ExpertAgent):
         if self.llm_manager is None:
             return ""
         try:
-            from src.utils.llm import LLMTask
+            from src.utils.llm_roles import LLMRole
             prompt = (
                 "다음 거시지표와 컨텍스트를 보고 KR/US 주식에 미치는 영향을 한국어 한 줄로 요약하세요.\n"
                 f"지표: {json.dumps(prices, ensure_ascii=False)}\n"
                 f"매크로 컨텍스트: {macro_context[:300]}"
             )
-            resp = await self.llm_manager.complete(
+            resp = await self.llm_manager.complete_role(
                 prompt,
-                task=LLMTask.REPORT_SUMMARY,  # Rule score is already set; summarize only.
+                role=LLMRole.REPORT_ONE_LINE,  # 규칙 점수는 이미 결정됨; 서술만 요약한다.
                 system="당신은 거시 경제 분석가입니다. 한 줄로 핵심만.",
             )
             if resp.success and resp.content:

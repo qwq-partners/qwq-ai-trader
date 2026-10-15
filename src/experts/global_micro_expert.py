@@ -204,14 +204,14 @@ class GlobalMicroExpert(ExpertAgent):
         if self.llm_manager is None or not industry_text:
             return ""
         try:
-            from src.utils.llm import LLMTask
+            from src.utils.llm_roles import LLMRole
             prompt = (
                 "글로벌 섹터 동향이 KR 종목에 미칠 영향을 한국어 한 줄로 요약.\n"
                 f"산업: {industry_text[:300]}\n"
                 f"섹터수익률: {json.dumps(sector_returns, ensure_ascii=False)}"
             )
-            resp = await self.llm_manager.complete(
-                prompt, task=LLMTask.QUICK_ANALYSIS,
+            resp = await self.llm_manager.complete_role(
+                prompt, role=LLMRole.REPORT_ONE_LINE,
                 system="글로벌 산업 분석가. 한 줄로.",
             )
             if resp.success and resp.content:
