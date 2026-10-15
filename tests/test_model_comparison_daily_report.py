@@ -8,7 +8,7 @@ import pytest
 from src.analytics import model_comparison_daily_report as daily
 from scripts.report_model_comparison import main as report_main
 
-MANIFEST = Path(__file__).resolve().parents[1] / 'config/experiments/R1-bull-reasoning-20261013.json'
+MANIFEST = Path(__file__).resolve().parents[1] / 'config/experiments/R1-bull-reasoning-20261015-pricing.json'
 DAY = '2026-10-15'
 
 
@@ -74,6 +74,21 @@ def test_manifest_budget_matches_topology_and_reserve_formula():
     assert roles['bear']['max_output_tokens'] == roles['bull_current']['max_output_tokens'] == av.MAX_TOKENS
     assert roles['bull_current']['seed'] == av.VERDICT_SEED
     assert manifest['strict_on_disagreement'] is av.STRICT_ON_DISAGREEMENT
+
+
+def test_revised_draft_preserves_historical_input_and_does_not_activate():
+    import hashlib
+    previous = MANIFEST.with_name('R1-bull-reasoning-20261013.json')
+    old = json.loads(previous.read_text())
+    revised = json.loads(MANIFEST.read_text())
+    assert revised['supersedes_draft']['sha256'] == hashlib.sha256(previous.read_bytes()).hexdigest()
+    assert old['enabled'] is revised['enabled'] is False
+    assert old['roles'] == revised['roles']
+    assert old['valid_from'] == revised['valid_from']
+    assert old['valid_until'] == revised['valid_until']
+    assert old['budget']['reservation_usd_ceiling_per_pair'] == '0.4700590'
+    assert revised['budget']['reservation_usd_ceiling_per_pair'] == '0.5374550'
+    assert revised['execution_policy']['experiment_usd_ceiling'] == revised['budget']['experiment_usd_ceiling']
 
 
 def test_zero_samples():
