@@ -107,13 +107,23 @@ def activation_profile(name):
             datetime(2026,10,14,23,55,tzinfo=timezone.utc),
             datetime(2026,10,14,23,57,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261016-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261016-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261016-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261016-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261016-llm-window-v1-entry-capture.conf'),
+            '2026-10-16-engine-llm-window-v1',
+            datetime(2026,10,16,0,10,tzinfo=timezone.utc),
+            datetime(2026,10,16,0,12,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
 
 
 def capture_prepared(cfg, projection):
     if not cfg.engine_only:
         return True
-    if cfg.evaluation_epoch == '2026-10-15-engine-llm-window-v1':
+    if cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1'):
         llm = projection.get('llm')
         if (projection.get('scan_scope') != 'window' or projection.get('capture_closed') is not False
                 or type(llm) is not dict):
@@ -128,6 +138,9 @@ def capture_prepared(cfg, projection):
             required_new_channels=15, buffer_capacity=110000, queue_capacity=110000,
             batch_size=64, max_record_bytes=65536, max_bytes=7434242048, dropped_records=0,
             retained_memory_limit_bytes=512 * 1024 * 1024, memory_exhausted=False)
+        if cfg.evaluation_epoch == '2026-10-16-engine-llm-window-v1':
+            expected.update(start_at='2026-10-16T00:15:00+00:00',
+                admission_end_at='2026-10-16T00:25:00+00:00', end_at='2026-10-16T00:41:00+00:00')
         if any(type(llm.get(k)) is not type(v) or llm[k] != v for k,v in expected.items()):
             return False
         if (type(llm.get('retained_memory_bytes')) is not int
@@ -271,7 +284,7 @@ def load_config(profile='20261002'):
             raise GuardError()
     if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
         raise GuardError()
-    if profile == '20261015-llm-window-v1' and raw['old_head'] != raw['new_head']:
+    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1') and raw['old_head'] != raw['new_head']:
         raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
@@ -414,7 +427,8 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
     try:
         window()
-        if cfg.evaluation_epoch == '2026-10-15-engine-llm-window-v1' and cfg.old_head != cfg.new_head:
+        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1')
+                and cfg.old_head != cfg.new_head):
             raise GuardError()
         phase = 'receipt'
         trusted_dir(cfg.state_dir, trusted_uid)
@@ -587,6 +601,8 @@ def main():
             cfg = load_config('20261014-market-state-pilot-v1')
         elif sys.argv[1:] == ['--profile', '20261015-llm-window-v1']:
             cfg = load_config('20261015-llm-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261016-llm-window-v1']:
+            cfg = load_config('20261016-llm-window-v1')
         else:
             raise GuardError()
         result = activate(cfg)
