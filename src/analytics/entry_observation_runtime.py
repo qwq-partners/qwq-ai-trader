@@ -5,6 +5,7 @@ import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -416,6 +417,19 @@ class CapturePlan:
             m = MarkoutPolicy.from_dict(context['markout_policy'])
             if m.fixed_at > now or (end - admission_end).total_seconds() <= m.horizon_seconds:
                 raise ValueError('사전 고정/보유시간 범위 위반')
+            if s['version'] == LLM_VERSION:
+                local_admission_end = admission_end.astimezone(KST)
+                # This is only the common live_screening entry_time necessary
+                # condition. It does not promise a strategy signal, an LLM call,
+                # or an entry/quote latency outcome.
+                if not (time(9, 15) <= local_start.time()
+                        and local_admission_end.time() <= time(15, 1)):
+                    raise ValueError('LLM 수집 입장 창은 KST 09:15~15:01 범위 전체여야 한다')
+                tail = end - admission_end
+                tail_seconds = (Decimal(tail.days * 86400 + tail.seconds)
+                                + Decimal(tail.microseconds) / Decimal(1_000_000))
+                if tail_seconds <= Decimal(m.horizon_seconds) + m.max_delay_seconds:
+                    raise ValueError('LLM 수집 종료는 markout horizon과 최대 지연 뒤여야 한다')
         p = Path(s['journal_path'])
         if not p.is_absolute() or p == self.study_path:
             raise ValueError('별도 절대 신규 원장 경로 필요')

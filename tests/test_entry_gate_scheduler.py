@@ -149,6 +149,16 @@ def test_success_records_real_created_event_before_emit(monkeypatch):
     assert checks(trace)["score"][0] is True
 
 
+@pytest.mark.parametrize('hour,minute,accepted', [
+    (9, 14, False), (9, 15, True), (15, 0, True), (15, 1, False),
+])
+def test_actual_scheduler_entry_time_gate_has_the_declared_half_open_kst_bounds(
+        monkeypatch, hour, minute, accepted):
+    trace, _, events, _ = run_cycle(monkeypatch, hour=hour, minute=minute)
+    assert checks(trace)['entry_time'][0] is accepted
+    assert bool(events) is accepted
+
+
 @pytest.mark.parametrize("kwargs,stage", [
     ({"cash":0},"cash"),({"stocks":[stock(score=74)]},"score"),
     ({"positions":{"S":NS(sector="x")}},"excluded"),

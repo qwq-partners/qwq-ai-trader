@@ -379,6 +379,8 @@ def test_partial_fill_timestamp_backfill_cannot_prove_recreation():
 
 def test_unknown_ownership_keeps_account_loss_gate_blocked(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    from src.utils import macro_calendar
+    monkeypatch.setattr(macro_calendar, "is_macro_event_day", lambda: ("", False))
     risk = RiskManager(RiskConfig(daily_max_loss_pct=5.0), Decimal("20000000"), market="KR")
     risk.set_cash_verification(True)
     pf = _pf(manual_now="-5000000", manual_start="-1000000")
