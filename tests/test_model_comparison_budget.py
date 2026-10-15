@@ -14,7 +14,7 @@ FALLBACK = [{"model": "gpt-5.6-sol", "input_tokens": 900, "output_tokens": 100},
 def test_call_cost_is_decimal_rounded_up_and_none_for_unknown():
     assert call_cost_usd("gpt-5-mini", 900, 400) == Decimal("0.001025")       # 900×0.25 + 400×2.0 per 1M
     assert call_cost_usd("gpt-5-mini", 5, 0) == Decimal("0.00000125")          # 1e-9 단위, 축소되지 않음
-    assert call_cost_usd("gpt-5.6-sol", 900, 400) == Decimal("0.0116")
+    assert call_cost_usd("gpt-5.6-sol", 900, 400) == Decimal("0.0125")
     assert call_cost_usd("unknown-model", 1, 1) is None
 
 
@@ -22,8 +22,8 @@ def test_decision_cost_reports_expected_and_path_maximum():
     d = decision_cost_usd(CURRENT, fallback=FALLBACK)
     assert Decimal(d["total_usd"]) == Decimal("0.00185")
     assert Decimal(d["total_with_retry_usd"]) == Decimal("0.002035")            # 평균 가정 ×1.1
-    # 최대: Bull 2회 + Bear 2회 + 폴백 체인(gpt-5.6-sol 0.0056 + gemini-3.1-pro 0.003) — 공급자 폴백까지 합산
-    assert Decimal(d["max_usd"]) == Decimal("0.00185") * 2 + Decimal("0.0056") + Decimal("0.003")
+    # 최대: Bull 2회 + Bear 2회 + 폴백 체인(gpt-5.6-sol 캐시 쓰기 상한 0.0065 + gemini-3.1-pro 0.003)
+    assert Decimal(d["max_usd"]) == Decimal("0.00185") * 2 + Decimal("0.0065") + Decimal("0.003")
     assert d["per_role"]["fallback_1"]["model"] == "gemini-3.1-pro-preview"
     bad = decision_cost_usd(CURRENT + [{"role": "x", "model": "nope", "input_tokens": 1, "output_tokens": 1}])
     assert bad["total_usd"] is None and bad["max_usd"] is None and bad["unpriced_roles"] == ["x"]
