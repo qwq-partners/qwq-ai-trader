@@ -1,13 +1,14 @@
 """Offline LLM-boundary observation: no provider, account or socket calls."""
 import asyncio
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
 
 from src.analytics import entry_observation as obs
 from src.analytics.entry_observation_runtime import _WindowBuffer, validate_window_contract
+from src.analytics.entry_price_shadow import KST
 from src.data.feeds.quote_subscription import QuoteSubscriptionCoordinator
 from test_entry_observation_runtime import load
 from test_signal_window_observation import window_plan, stock, event
@@ -21,6 +22,57 @@ def llm_plan(c):
              record_allocations={'ws_quote': 100, 'market_state': 100, 'other': 500},
              max_bytes=1000 * (65536 + 2048) + 2048)
     s['channels'].update(market_state_evidence=True, market_state_max_records=100)
+    # Keep this synthetic LLM runtime fixture out of the historical 09:00 study
+    # while preserving every capture duration.
+    for field in ('start_at', 'admission_end_at', 'end_at'):
+        s[field] = (datetime.fromisoformat(s[field]) + timedelta(minutes=15)).isoformat()
+    c['as_of'] = s['end_at']
+
+
+def _llm_capture_times(c, *, start, admission, end):
+    llm_plan(c)
+    c['capture'].update(start_at=start, admission_end_at=admission, end_at=end)
+    c['capture']['channels']['lease_seconds'] = 2000
+    c['as_of'] = end
+
+
+@pytest.mark.parametrize('start,admission,end,local_start', [
+    ('2026-10-02T09:15:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:06+09:00', '09:15:00'),
+    ('2026-10-02T00:15:00+00:00', '2026-10-02T00:16:00+00:00', '2026-10-02T00:17:06+00:00', '09:15:00'),
+    ('2026-10-02T15:00:00+09:00', '2026-10-02T15:01:00+09:00', '2026-10-02T15:02:06+09:00', '15:00:00'),
+])
+def test_llm_install_accepts_same_kst_entry_window_in_kst_or_utc(
+        tmp_path, start, admission, end, local_start):
+    plan, _ = load(tmp_path, lambda c: _llm_capture_times(
+        c, start=start, admission=admission, end=end))
+    assert plan.start_at.astimezone(KST).time().isoformat() == local_start
+
+
+@pytest.mark.parametrize('start,admission,end,error', [
+    # Any overlap is insufficient: early scans can consume the finite cohort.
+    ('2026-10-02T09:00:00+09:00', '2026-10-02T09:20:00+09:00', '2026-10-02T09:21:06+09:00', 'LLM 수집 입장 창'),
+    # A 09:14 scan could not have passed the common live_screening entry-time gate.
+    ('2026-10-02T09:14:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:06+09:00', 'LLM 수집 입장 창'),
+    # The half-open 15:01 bound permits equality but excludes the next instant.
+    ('2026-10-02T15:00:00+09:00', '2026-10-02T15:01:00.000001+09:00', '2026-10-02T15:03:00+09:00', 'LLM 수집 입장 창'),
+    # Equal tail is insufficient because the markout deadline is half-open too.
+    ('2026-10-02T09:15:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:05+09:00', 'LLM 수집 종료'),
+])
+def test_llm_install_rejects_windows_outside_entry_time_or_without_markout_tail(
+        tmp_path, start, admission, end, error):
+    with pytest.raises(ValueError, match=error):
+        load(tmp_path, lambda c: _llm_capture_times(c, start=start, admission=admission, end=end))
+
+
+def test_historical_llm_readout_keeps_original_0900_window_contract(tmp_path):
+    from test_entry_observation_runtime import fixture_plan
+    _, context = fixture_plan(tmp_path, lambda c: _llm_capture_times(
+        c, start='2026-10-02T09:00:00+09:00', admission='2026-10-02T09:10:00+09:00',
+        end='2026-10-02T09:26:00+09:00'))
+    context['capture']['channels']['lease_seconds'] = 1560
+    # Historical replay never invokes CapturePlan.validate, so its recorded study
+    # remains readable even though a new installation of this window is rejected.
+    validate_window_contract(context)
 
 
 def setup(tmp_path, monkeypatch):

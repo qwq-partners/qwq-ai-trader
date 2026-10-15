@@ -1,7 +1,8 @@
 """Fixed future preparation with real local runtime/journal; no broker/socket API."""
 import asyncio
+from copy import deepcopy
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -21,11 +22,11 @@ NOW = datetime(2026, 10, 14, 23, 55, tzinfo=timezone.utc)
 
 def fixed_llm(c):
     llm_plan(c)
-    c.update(evaluation_epoch=EPOCH, as_of='2026-10-15T00:26:00+00:00')
+    c.update(evaluation_epoch=EPOCH, as_of='2026-10-15T00:41:00+00:00')
     c['markout_policy']['horizon_seconds'] = 900
     s = c['capture']
-    s.update(start_at='2026-10-15T00:00:00+00:00',
-             admission_end_at='2026-10-15T00:10:00+00:00', end_at=c['as_of'],
+    s.update(start_at='2026-10-15T00:15:00+00:00',
+             admission_end_at='2026-10-15T00:25:00+00:00', end_at=c['as_of'],
              max_scans=4, rest_market_state_evidence=True,
              record_allocations=dict(ws_quote=50000, market_state=50000, other=8000),
              buffer_capacity=110000, queue_capacity=110000, batch_size=64,
@@ -49,8 +50,19 @@ async def projection(bot):
     return await KRAPIHandler(SimpleNamespace(bot=bot)).get_entry_observation_readiness(request())
 
 
-def prepared(value):
-    return module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), value)
+def legacy_profile_resource_check(value):
+    # Activation remains pinned to the consumed 09:00 profile.  These runtime
+    # resource tests instead use a future-safe synthetic window, so adapt only
+    # the retired profile's immutable timestamps before exercising its readiness
+    # resource predicate only. Loader coverage separately proves the old artifact
+    # fails, and the activation integration test keeps its actual projection.
+    projection = deepcopy(value)
+    if type(projection.get('llm')) is not dict:
+        return False
+    projection['llm'].update(start_at='2026-10-15T00:00:00+00:00',
+                             admission_end_at='2026-10-15T00:10:00+00:00',
+                             end_at='2026-10-15T00:26:00+00:00')
+    return module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), projection)
 
 
 @pytest.mark.asyncio
@@ -60,7 +72,11 @@ async def test_real_preparation_checks_hook_actual_resources_and_unconnected_cap
         response = await projection(bot)
         assert response.status == 200
         data = json.loads(response.text)
-        assert prepared(data)
+        assert not module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), data)
+        assert legacy_profile_resource_check(data)
+        assert data['llm']['start_at'] == '2026-10-15T00:15:00+00:00'
+        assert data['llm']['admission_end_at'] == '2026-10-15T00:25:00+00:00'
+        assert data['llm']['end_at'] == '2026-10-15T00:41:00+00:00'
         assert data['llm']['operational_demand'] == 16
         assert data['llm']['required_new_channels'] == 15
         assert data['llm']['connected'] is False
@@ -88,9 +104,9 @@ async def test_activation_rejects_missing_unbounded_or_exhausted_memory(tmp_path
         data = json.loads((await projection(bot)).text)
         data['llm'].update(retained_memory_limit_bytes=512 * 1024 * 1024,
                            retained_memory_bytes=0, memory_exhausted=False)
-        assert prepared(data)
+        assert legacy_profile_resource_check(data)
         data['llm'][field] = value
-        assert not prepared(data)
+        assert not legacy_profile_resource_check(data)
     finally:
         await r.close('test_finished')
 
@@ -125,7 +141,7 @@ async def test_prepared_never_promotes_missing_or_mutated_runtime(tmp_path, defe
         elif defect == 'writer': r.journal._fail('synthetic_writer_failed')
         elif defect == 'projection': r.buffer.selection_basis_settings = None
         response = await projection(bot)
-        assert response.status == 503 or not prepared(json.loads(response.text))
+        assert response.status == 503 or not legacy_profile_resource_check(json.loads(response.text))
     finally:
         q._send = None
         await r.close('test_finished')
@@ -139,9 +155,9 @@ async def test_connected_operational_acks_suffice_without_future_candidate_acks(
     q.interval = 0
     try:
         assert await bot.ws_feed.connect()
-        assert not prepared(json.loads((await projection(bot)).text))
+        assert not legacy_profile_resource_check(json.loads((await projection(bot)).text))
         for key in list(q._states): await q.handle_ack(ack(key), q.generation)
-        assert prepared(json.loads((await projection(bot)).text))
+        assert legacy_profile_resource_check(json.loads((await projection(bot)).text))
         assert not q._leases
     finally:
         await bot.ws_feed.disconnect()
@@ -159,12 +175,12 @@ async def test_closing_actual_feed_cannot_reuse_old_owner_acks(tmp_path):
     try:
         assert await feed.connect()
         for key in list(q._states): await q.handle_ack(ack(key), q.generation)
-        assert prepared(json.loads((await projection(bot)).text))
+        assert legacy_profile_resource_check(json.loads((await projection(bot)).text))
         await q._lock.acquire()
         closing = asyncio.create_task(feed._close_managed_socket(feed._ws, q.generation))
         await asyncio.sleep(0)
         assert feed._connected is False and q._send is not None
-        assert not prepared(json.loads((await projection(bot)).text))
+        assert not legacy_profile_resource_check(json.loads((await projection(bot)).text))
     finally:
         if q._lock.locked(): q._lock.release()
         if closing is not None: await closing
@@ -174,15 +190,17 @@ async def test_closing_actual_feed_cannot_reuse_old_owner_acks(tmp_path):
 
 @pytest.mark.parametrize('setup', [PROFILE], indirect=True)
 @pytest.mark.asyncio
-async def test_new_profile_predeployed_once_uses_actual_readiness(setup, tmp_path):
+async def test_retired_profile_rejects_future_safe_actual_readiness(setup, tmp_path):
     s = setup
     object.__setattr__(s.cfg, 'old_head', s.cfg.new_head)
     s.source.write_bytes(b'new\n')
     r, bot, _ = await installed(tmp_path)
     try:
-        s.anchors.update(json.loads((await projection(bot)).text), study_sha256=s.cfg.study_sha256)
+        readiness = json.loads((await projection(bot)).text)
+        s.anchors.update(readiness, study_sha256=s.cfg.study_sha256)
         result = s.run()
-        assert result['status'] == 'complete' and not result['toss_attempted']
+        assert result['status'] == 'failed' and not result['toss_attempted']
+        assert result['restart_attempted'] is True and result['rollback'] == 'not_needed'
         assert sum('restart' in e for e in s.events) == 1
         assert not any('checkout' in e for e in s.events)
         count = len(s.events)
@@ -246,7 +264,7 @@ async def test_fixed_date_first_five_repeat_sixth_and_finite_seal(tmp_path, monk
     q = bot.ws_feed._quote_subscription_owner
     monkeypatch.setattr(obs, '_now', lambda: clock[0].isoformat())
     try:
-        clock[0] = r.plan.start_at.replace(minute=6)  # Delayed first screen.
+        clock[0] = r.plan.start_at + timedelta(minutes=6)  # Delayed first screen.
         symbols = [f'{900001+i}' for i in range(6)]
         scan = obs.capture_scan(r.buffer, [stock(s) for s in symbols], 'regular')
         for i, symbol in enumerate(symbols): enter(r.buffer, scan, f'first-{i}', symbol)
