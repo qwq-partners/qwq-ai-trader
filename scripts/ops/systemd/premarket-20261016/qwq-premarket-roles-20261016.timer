@@ -1,0 +1,12 @@
+[Unit]
+Description=QWQ single dated roles timer
+
+[Timer]
+OnCalendar=2026-10-16 07:35:00 Asia/Seoul
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=qwq-premarket-roles-20261016.service
+
+[Install]
+WantedBy=timers.target

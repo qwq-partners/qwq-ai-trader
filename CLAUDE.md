@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-16 장전 후속:** [판독·아침 점검·계좌/선정/모델/청산 정본](docs/operations/premarket-followthrough-2026-10-16.md). 독립 단발 판독/점검과 결과 전 비교 계약을 준비한다. 설치·검증·실행 여부는 정본의 최종 기록을 따른다. 운영 de6c5bf7·09:10 수집 활성화·매수 중지·월100·유료 비교OFF 유지, 봉인 전 재배포하지 않는다. 아래는 당시 이력이다.
+
 > **2026-10-15 22:33 KST — 배포·내일 관측 설치 완료:** [모델 배분·실호출·운영/예약 정본](docs/research/engine-model-allocation-2026-10-15.md). PR #200 운영 `de6c5bf7`·PID1879257·NRestarts0, 기동162초 뒤 오류0·복구ready·미체결0. 10월16일09:10 준비 타이머 enabled/active,09:15~09:25 입장·09:41 종료. KR 매수 중지·월100·evolved 수정·과거 관측 보존. **관측 봉인 전 운영 HEAD/소스/설정 변경 금지; 후속 문서 커밋은 재배포하지 않는다.** 자동 AI 판독은 미예약이다. 아래는 당시 이력이다.
 
 > **2026-10-15 밤 — 거래 엔진 역할별 모델 배분:** [정본·공식 요금·검증·실측](docs/research/engine-model-allocation-2026-10-15.md). 한 줄 설명/아침 보고는 정식 Gemini 3.1 Flash-Lite/minimal, 주간 매도 후속 복기는 GPT-6.1 Sol/medium으로 분리한다. 진입 판단/기존 진화 모델과 매수 중지는 유지한다. 새 경로는 시간·출력·월 예산 한도 및 모델/지연/토큰 감사 기록을 적용하며 자동 fallback은 없다. 6633검사·독립 리뷰 통과; 배포/예약 최종 상태는 정본을 따른다. 아래는 당시 이력이다.
@@ -618,7 +620,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 
 ## 주간 매도 후속 복기 (Post-Exit Review)
 
-- 매주 토요일 09:00 KST 자동 실행 (`run_post_exit_review_scheduler`)
+- 매주 토요일 09:30~09:44 KST 실행 창 (`run_post_exit_review_scheduler`, 실제 루프 기준; 이전 09:00 문서 정정)
 - 최근 30일 KR 매도 거래 → KIS 현재가 조회 → 매도 후 변동 추적
 - 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
 - LLM: GPT-6.1 Sol / medium (`POST_EXIT_RESEARCH`), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
