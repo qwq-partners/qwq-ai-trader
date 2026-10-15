@@ -1,0 +1,22 @@
+[Unit]
+Description=QWQ single dated readout evidence check (no trading mutation)
+
+[Service]
+User=ubuntu
+Group=ubuntu
+Type=oneshot
+UMask=0077
+WorkingDirectory=/home/ubuntu/.local/state/qwq-premarket-20261016
+ExecStartPre=/usr/bin/sha256sum --quiet --check /home/ubuntu/.local/share/qwq-premarket-20261016/bundle.sha256
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 TZ=Asia/Seoul HOME=/home/ubuntu/.local/state/qwq-premarket-20261016/empty-home /home/ubuntu/projects/qwq-ai-trader/venv/bin/python -I -B /home/ubuntu/.local/share/qwq-premarket-20261016/release/scripts/ops/run_capture_readout.py --manifest /home/ubuntu/.local/share/qwq-premarket-20261016/readout.json
+Restart=no
+TimeoutStartSec=480
+KillMode=control-group
+NoNewPrivileges=yes
+Nice=10
+CPUQuota=50%
+MemoryHigh=512M
+MemoryMax=768M
+LimitCORE=0
+StandardOutput=append:/home/ubuntu/.local/state/qwq-premarket-20261016/readout.log
+StandardError=append:/home/ubuntu/.local/state/qwq-premarket-20261016/readout.log
