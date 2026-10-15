@@ -36,11 +36,17 @@
 
 ## 설치·검증 기록
 
-아래는 최종 검증·설치 시 갱신한다. 현재 실제 관측 결과는 없다.
+2026-10-15 **23:40 KST** 설치 후 확인이다. 예약 설치는 끝났으며 세 점검과 실제 관측 결과는 아직 미래다.
 
 - 구현/관련 검증: 판독45건 + 점검12건 통합57 passed(rc0), 외부/운영 접근 시도0. 판독 관련186·선정 관련68·모델/청산244 추가 검증.
 - 독립 중요 리뷰: Astra/xhigh 요청, 실제 모델/effort metadata 미노출. [최종 리뷰](../reviews/premarket-followthrough-2026-10-16.md)는 소스/설치 APPROVE, 미해결 P0/P1/P2 0이다. 미래 발송 오인·호출 출처 누락·중복 집계·실패 영수증·청산 정책 스키마 지적을 수정하고 재확인했다.
-- 전체 verify: **6690 passed / 2 skipped / 2 xfailed**, rc0, 243.95초. 문법/비밀정보 검사 통과, 외부·운영 접근 시도0. CI/commit/push/예약 설치는 이어서 기록한다. 운영 재배포 대상 아님.
+- 전체 verify: **6690 passed / 2 skipped / 2 xfailed**, rc0, 243.95초. 문법/비밀정보 검사 통과, 외부·운영 접근 시도0. 구현 `92a6dcae` 커밋/푸시 완료. CI·최종 병합 상태는 [PR #202](https://github.com/qwq-partners/qwq-ai-trader/pull/202)가 정본이며 운영 재배포 대상이 아니다.
+- 설치: 위 세 시스템 타이머가 **enabled/active**, 다음 실행은 각각 10월16일07:35/08:50/09:45 KST다. LastTrigger 비어 있음, 세 서비스 inactive/PID0, attempted 영수증 없음으로 미실행을 확인했다. 검토된 6개 unit 파일과 설치본의 SHA-256이 일치한다. 계정 Linger=no는 변경하지 않았다.
+- 고정 설치 소스: `92a6dcae`의 추적된 src/scripts/config만 별도 release로 복사했다. 398파일을 묶은 `bundle.sha256` 자체 지문은 `76dbf2776ff66350ded2eb2744ac6bbada3b5b6991770cefdb18f50c8c7ebcba`이며 검사 rc0다. 판독기 `--check`는 preflight_ok, 실행 영수증 미소비다. 미래 입력은 아직 검사하지 않았다는 상태를 보존했다.
+- 설치 확인 영수증: `~/.local/state/qwq-premarket-20261016/install-receipt.json`(0600), SHA-256 `35865d84c12ca0afd30afb11886198874ccf128ce8ee377b14585e270c7fcccc`. 고정 묶음의 `release.json`은 **설치 전 생성 이력**(`installed:false`)이며 변경하지 않는다. 현재 설치 상태는 별도 설치 영수증과 실제 타이머 상태로 확인한다.
+- 보존 확인: 운영 HEAD `de6c5bf7`, PID1879257/NRestarts0/active, 334개 코드·설정·study 지문 불일치0, 기존09:10 타이머 enabled/active·미실행, 관측 시작 receipt 없음, KR 매수 중지 유지. 로컬 메모리 health는 connected/ready, broker/risk/journal pending0·미귀속0이었다. 미커밋 `evolved_overrides.yml` 수정은 보존했다.
+
+장전 구현·설계·검증·독립 예약 설치는 완료했다. 남은 실제 작업은 07:35/08:50 결과 확인 → 09:45 판독과 실제 호가별 장 상태 검토 → 충족된 표본의 가격/초기 청산 대조다. 계좌 순수익 계산은 시작 순자산·외부 입출금·권리 지급 의미·운영비 증빙 확보 뒤에만 이어간다. 새20일 관측이나 유료 비교를 자동 시작하지 않는다.
 
 ## 다음 판독
 
