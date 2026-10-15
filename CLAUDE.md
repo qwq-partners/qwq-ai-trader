@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-15 밤 — 거래 엔진 역할별 모델 배분:** [정본·공식 요금·검증·실측](docs/research/engine-model-allocation-2026-10-15.md). 한 줄 설명/아침 보고는 정식 Gemini 3.1 Flash-Lite/minimal, 주간 매도 후속 복기는 GPT-6.1 Sol/medium으로 분리한다. 진입 판단/기존 진화 모델과 매수 중지는 유지한다. 새 경로는 시간·출력·월 예산 한도 및 모델/지연/토큰 감사 기록을 적용하며 자동 fallback은 없다. 6633검사·독립 리뷰 통과; 배포/예약 최종 상태는 정본을 따른다. 아래는 당시 이력이다.
+
 > **2026-10-15 저녁 — Claude 자동 판독 확인·다음 관측 준비:** [실행 대조·해석 보완·설치 전 체크리스트](docs/operations/llm-capture-followup-2026-10-16.md). 09:35~09:37 판독/텔레그램 성공·cron 제거, 실제 Opus5·기록 비용USD0.9188905 확인. 09:10 이후 스캔 부재는 입장 종료와 구분하며 판단 파일은 첫 저장 시 생성된다. 기존 cron은 권한/실패/중복/비용 가드 보강 전 재사용하지 않는다. 새10월16일09:15~09:25 입장/09:41 종료의 별도 설치 경로를 준비하며 운영 미배포·미설치·새 AI 판독 미예약이다. 최종 검증/통합 상태는 연결 문서를 따른다. 아래는 당시 이력이다.
 
 > **2026-10-15 09:39 KST — 단발 관측 판독·시간창 결함:** [PLAN→DO→SEE·수정 범위·다음 단발안](docs/research/llm-capture-readout-2026-10-15.md). 봉인된 창의 기록 드롭0(전체 구간·디스크 영속성·판단 기록 완료 미확정), 후보3건 모두09:15 이전 시간 게이트 차단, LLM시작0·후보호가0·비교쌍0. 관측 입장이09:10에 닫혀 실제 경로와 어긋났다. 설치 전 공통 진입 시간·종료 여유 검사를 보완했고, 전체6340검사·독립 최종 리뷰를 통과했다. 과거 원장 재생은 보존한다. 다음 관측은 새 날짜/epoch로 별도 준비해야 하고 현재 미설치다. 운영5444509·KR매수중지·월100·유료비교OFF 보존, 이번 배포/재시작/예약 변경 없음. 아래는 당시 이력이다.
@@ -566,10 +568,19 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 ```
 
 ## LLM 모델 선택
-| 작업 | Primary | Fallback |
+
+역할별 고정 정책은 `src/utils/llm_roles.py`의 `engine-roles-v1`이다. 모델·추론·출력·기한을 함께 고정하며, 기존 슬롯을 바꾸어 모든 호출을 일괄 승격하지 않는다.
+
+| 작업 | Primary | Fallback / 한도 |
 |------|---------|----------|
-| 테마 탐지, 뉴스 요약 | Gemini 3.1 Flash Lite | OpenAI gpt-5-mini |
-| 거래 복기, 전략 진화 | OpenAI gpt-5.6-sol (2026-08-19~ Manus 해지로 회귀) | Gemini 3.1 Pro |
+| 기존 테마 탐지·뉴스 요약 | Gemini 3.1 Flash-Lite Preview | OpenAI gpt-5-mini; 기존 설정 |
+| 거시·한국경제·글로벌미시 한 줄 설명 | Gemini 3.1 Flash-Lite 정식 / minimal | 없음; 출력512·20초 |
+| 아침 보고 | Gemini 3.1 Flash-Lite 정식 / minimal | 없음; 출력1600·45초 |
+| 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
+| 기존 거래 복기·전략 진화 | OpenAI gpt-5.6-sol | Gemini 3.1 Pro Preview; 기존 설정 |
+| 실시간 Bull/Bear·진입·시장 국면 | 기존 설정 유지 | 실제 진입 후 가격/비용 근거로 별도 비교 |
+
+월 USD100의 기존 원장을 공유한다. 80% 절약·95% 필수 호출만·100% 유료 중지 및 KST 월 전환 정책을 유지한다. Argon은 제한 비교 후보이고 Claude는 엔진 API 연결 미구현으로 운영 배정하지 않았다. 새 보고/복기 경로는 실패·빈 응답·거절·길이 중단을 성공으로 채택하지 않는다. 상세 근거는 [모델 배분 정본](docs/research/engine-model-allocation-2026-10-15.md)을 따른다.
 
 ---
 
@@ -608,7 +619,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 매주 토요일 09:00 KST 자동 실행 (`run_post_exit_review_scheduler`)
 - 최근 30일 KR 매도 거래 → KIS 현재가 조회 → 매도 후 변동 추적
 - 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
-- LLM: GPT-5.4 (STRATEGY_ANALYSIS, fallback Gemini Pro), 표본 ≥5건
+- LLM: GPT-6.1 Sol / medium (`POST_EXIT_RESEARCH`), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
 - 출력: JSON + Wiki 페이지(`weekly_post_exit_YYYY-WNN.md`) + 텔레그램
 - Wiki 페이지는 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
 

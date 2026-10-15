@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-15 — 엔진 역할별 LLM·보수적 비용 집계
+
+- 보고 설명/아침 보고를 정식 Gemini 3.1 Flash-Lite/minimal, 주간 매도 후속 복기를 GPT-6.1 Sol/medium으로 분리하고 역할별 입력·출력·시간·예산을 고정했다. 기존 진입/진화 모델과 매수 중지는 유지한다. 새 경로의 불완전·거절 응답을 실패 처리하고 모델/지연/사용량 감사 기록을 남긴다.
+- OpenAI 자동 캐시 쓰기 상한과 Gemini 3.8/Argon 할인 종료 후 요금을 새 비용 추정에 반영했다. 과거 정산과 10월13일 R1 초안은 보존하고 재산출 초안을 별도 disabled 파일로 작성했다.
+- 전체 verify **6633 passed / 2 skipped / 2 xfailed**, rc0·격리 위반0·비밀정보 검사 통과. 독립 Astra/xhigh 요청 리뷰 APPROVE(P0/P1/P2 0); 실제 reviewer metadata 미노출. [공식 근거·실호출·배포/예약 상태](docs/research/engine-model-allocation-2026-10-15.md).
+
 ## 2026-10-15 — 자동 판독 대조·10월16일 단발 관측 준비
 
 - Claude 09:35 자동 판독의 실제 완료·모델/비용·텔레그램·cron 제거를 대조하고, 관측 입장 밖 스캔과 기록기 지연 생성에 대한 해석을 보완했다. 기존 실행기의 재사용 전 P1/P2 보강 항목을 기록한다. [정본·검증·후속 순서](docs/operations/llm-capture-followup-2026-10-16.md).

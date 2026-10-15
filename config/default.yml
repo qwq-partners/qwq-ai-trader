@@ -10,6 +10,9 @@ telegram:
   enabled: true
 
 llm:
+  # 보고/한 줄 설명/후속 복기는 src/utils/llm_roles.py의 고정 역할 프로필을 사용한다.
+  # 아래 heavy/light 슬롯은 기존 진입·팀·시장 분석 등 task 경로에 계속 적용한다.
+  # 월 예산 원장은 두 경로가 공유하며 역할 실패에 자동 유료 승격은 없다.
   primary: gemini_flash_lite
   fallback: openai_gpt5_mini
   daily_budget: 5.0
