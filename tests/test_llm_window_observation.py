@@ -1,7 +1,7 @@
 """Offline LLM-boundary observation: no provider, account or socket calls."""
 import asyncio
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -22,11 +22,6 @@ def llm_plan(c):
              record_allocations={'ws_quote': 100, 'market_state': 100, 'other': 500},
              max_bytes=1000 * (65536 + 2048) + 2048)
     s['channels'].update(market_state_evidence=True, market_state_max_records=100)
-    # Keep this synthetic LLM runtime fixture out of the historical 09:00 study
-    # while preserving every capture duration.
-    for field in ('start_at', 'admission_end_at', 'end_at'):
-        s[field] = (datetime.fromisoformat(s[field]) + timedelta(minutes=15)).isoformat()
-    c['as_of'] = s['end_at']
 
 
 def _llm_capture_times(c, *, start, admission, end):
