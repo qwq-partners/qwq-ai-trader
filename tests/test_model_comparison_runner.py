@@ -53,7 +53,7 @@ def setup(tmp_path, *, pairs_per_day=20, max_common_context_bytes=65536, **kwarg
     ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
         experiment_id='R', daily_attempt_cap=40,
-        allowed_models=('gpt-5-mini', 'gemini-3.1-flash-lite-preview'), max_output_tokens=400,
+        allowed_models=('gpt-5-mini', 'gemini-3.1-flash-lite'), max_output_tokens=400,
         experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
         pairs_per_day=pairs_per_day, max_common_context_bytes=max_common_context_bytes))
     op, ge = FakeOpenAI(**kwargs), FakeGemini()
@@ -63,7 +63,7 @@ def setup(tmp_path, *, pairs_per_day=20, max_common_context_bytes=65536, **kwarg
                       common_context='same immutable facts', input_available_at=NOW.isoformat(),
                       current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803),
                       candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803),
-                      bear=m.RoleControls('gemini-3.1-flash-lite-preview', 400, None, 0.0),
+                      bear=m.RoleControls('gemini-3.1-flash-lite', 400, None, 0.0),
                       neutral_sizing=None, pricing_basis='offline_replay',
                       fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
     return m, ledger, runner, spec, op, ge
@@ -542,7 +542,7 @@ def test_fallback_chain_deadline_stops_remaining_fallbacks_and_keeps_size(tmp_pa
     op.complete = ge.complete = reply
     spec = replace(spec, fallback_prompt='fb', fallback_chain_timeout_seconds=0.06,
                    fallback_chain=(m.RoleControls('gpt-5-mini', 100, timeout_seconds=1.0),
-                                   m.RoleControls('gemini-3.1-flash-lite-preview', 100, timeout_seconds=1.0)))
+                                   m.RoleControls('gemini-3.1-flash-lite', 100, timeout_seconds=1.0)))
     row = asyncio.run(runner.run(spec))
     assert sent == ['gpt-5-mini', 'gpt-5-mini']                     # 두 arm 의 첫 폴백만. 두 번째 폴백 공급자 호출 0
     for arm in ('current', 'candidate'):

@@ -33,7 +33,7 @@ llm:
   # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
   openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, Bull/Bear 토론 (light)
   gemini_model_heavy: "gemini-3.1-pro-preview"
-  gemini_model_light: "gemini-3.1-flash-lite-preview"
+  gemini_model_light: "gemini-3.1-flash-lite"  # Stable; retired preview must not receive new calls.
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl

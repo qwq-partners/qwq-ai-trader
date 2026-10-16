@@ -26,7 +26,7 @@ def _isolated_home(tmp_path, monkeypatch):
 def policy(**changes):
     from src.analytics.model_comparison_execution import ComparisonExecutionPolicy
     values = dict(experiment_id="R1", daily_attempt_cap=50,
-                  allowed_models=("gpt-5-mini", "gemini-3.1-flash-lite-preview"), max_output_tokens=400,
+                  allowed_models=("gpt-5-mini", "gemini-3.1-flash-lite"), max_output_tokens=400,
                   experiment_usd_ceiling="1", valid_from="2026-10-13", valid_until="2026-10-31",
                   pairs_per_day=10, max_common_context_bytes=65536)
     values.update(changes)
@@ -455,7 +455,7 @@ def _runner(path, *, unknown=False, crash=False):
                       common_context="same immutable facts", input_available_at=NOW.isoformat(),
                       current=m.RoleControls("gpt-5-mini", 400, "minimal", 0.3, 20260803),
                       candidate=m.RoleControls("gpt-5-mini", 400, "low", 0.3, 20260803),
-                      bear=m.RoleControls("gemini-3.1-flash-lite-preview", 400, None, 0.0),
+                      bear=m.RoleControls("gemini-3.1-flash-lite", 400, None, 0.0),
                       neutral_sizing=None, pricing_basis="offline_replay",
                       fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
     return m, ledger, guard, runner, spec, openai, gemini

@@ -21,7 +21,7 @@ from src.analytics.model_comparison_worker import ComparisonWorker  # noqa: E402
 from src.utils.llm import GeminiClient, LLMConfig, LLMProvider, LLMResponse, OpenAIClient  # noqa: E402
 from src.utils.llm_budget import MonthlyBudgetLedger  # noqa: E402
 
-MODELS = {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite-preview",
+MODELS = {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
           (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}
 _EMPTY = LLMConfig(openai_api_key="", gemini_api_key="")
 

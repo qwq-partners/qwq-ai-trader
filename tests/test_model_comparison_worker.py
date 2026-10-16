@@ -18,7 +18,7 @@ from src.utils.llm import LLMProvider
 from src.utils.llm_budget import BudgetBlocked, MonthlyBudgetLedger
 from tests.test_model_comparison_runner import NOW, FakeGemini, FakeOpenAI
 
-MODELS = {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite-preview",
+MODELS = {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
           (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}
 FAKE_LLM = SimpleNamespace(_get_model=lambda p, w: MODELS[(p, w)])
 SUFFIX = "\n이 매수 시그널을 승인하시겠습니까? YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
