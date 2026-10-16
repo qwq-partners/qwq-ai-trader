@@ -416,6 +416,12 @@ class KISMarketData:
                     if not symbol or not name:
                         continue
 
+                    try:
+                        from src.analytics.selection_modifiers import mark_candidate_supply
+                        mark_candidate_supply(investor, market, item.get("mksc_shrn_iscd"), item.get("ntby_qty"))
+                    except Exception:
+                        pass  # observation failures never alter provider results
+
                     net_qty = int(item.get("ntby_qty", 0) or 0)
 
                     acml_vol = int(item.get("acml_vol", 0) or 0)
