@@ -21,6 +21,7 @@ from uuid import uuid4
 from .entry_observation import EntryObservationBuffer
 from .entry_price_shadow import _timestamp as parse_timestamp
 from .selection_basis import BASIS_FIELDS, TERM_FIELDS, MAX_TERMS
+from .selection_modifiers import EXTRA_FIELDS, STAGE_FIELDS, SUPPLY_FIELDS, SHADOW_FIELDS, ORDER as MODIFIER_ORDER
 from .selection_source_status import SCAN_FIELDS, RUN_FIELDS, ORDER
 from .entry_gate_trace import TRACE_FIELDS, STEP_FIELDS, STAGES, SCAN_FIELDS as GATE_SCAN_FIELDS
 
@@ -42,7 +43,8 @@ FIELDS = {
     "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic signal_id order_id allocation_signal_id",
     "market_state": "schema_version observed_at received_at connection_id generation symbol tr_id local_frame_index record_index message_count raw_field_count market_state_schema market_state_source_sha256 market_state_status source_sequence state_verdict business_date exchange_time new_mkop_cls_code trht_yn hour_cls_code market_cls_code mkop_cls_code antc_mkop_cls_code mrkt_trtm_cls_code divi_app_cls_code iscd_stat_cls_code vi_cls_code ovtm_vi_cls_code exch_cls_code",
 }
-FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS))
+FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS | EXTRA_FIELDS))
+FIELDS['scan'] += ' selection_modifiers_expected selection_modifier_max_stages'
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))
 FIELDS['entry_gate_trace'] = ' '.join(sorted(TRACE_FIELDS))
 NESTED = {
@@ -56,6 +58,11 @@ NESTED = {
         "core_cash_reserved cash_capacity_before strategy_allocation_pct strategy_held_notional "
         "strategy_pending_reserved strategy_cap_notional strategy_remaining_notional reference_price").split()),
 }
+NESTED['modifier_stages'] = STAGE_FIELDS
+NESTED['supply_evidence'] = frozenset(('foreign', 'institution'))
+NESTED['foreign'] = SUPPLY_FIELDS
+NESTED['institution'] = SUPPLY_FIELDS
+NESTED['same_input_shadow'] = SHADOW_FIELDS
 NESTED['source_terms'] = TERM_FIELDS
 NESTED['selection_source_runs'] = RUN_FIELDS
 NESTED['steps'] = STEP_FIELDS
@@ -107,6 +114,11 @@ def _record_shape(record, maximum):
         if record.get("kind") != "quote_subscription" or record.get("status") != "connection_gap":
             raise ValueError("frame 진단은 connection_gap 전용")
         validate_diagnostic(record["frame_diagnostic"], reason=record.get("reason"))
+    if record.get("kind") == "selection_basis" and record.get("basis_status") == "observed":
+        common = {"kind", "sequence", "candidate_id", "symbol", "observed_at", "basis_status"}
+        expected = BASIS_FIELDS | (EXTRA_FIELDS if record.get("version") == "kr-selection-basis-v2" else frozenset())
+        if set(record) != common | expected:
+            raise ValueError("selection basis version field mismatch")
     budget = maximum
 
     def scalar(value):
@@ -136,17 +148,22 @@ def _record_shape(record, maximum):
             if nested and key in NESTED:
                 if key == "capital_snapshot" and value is None:
                     scalar(None)
-                elif key in ("candidates", "source_terms", "selection_source_runs", "steps"):
-                    limit = {'source_terms': MAX_TERMS, 'selection_source_runs': len(ORDER), 'steps':len(STAGES)}.get(key, maximum // 4)
+                elif key in ("candidates", "source_terms", "selection_source_runs", "steps", "modifier_stages"):
+                    limit = {'source_terms': MAX_TERMS, 'selection_source_runs': len(ORDER), 'steps':len(STAGES), 'modifier_stages':len(MODIFIER_ORDER)}.get(key, maximum // 4)
                     if not isinstance(value, list) or len(value) > limit:
                         raise ValueError("후보 배열 한도/형식 위반")
                     for item in value:
                         mapping(item, NESTED[key])
                 else:
-                    mapping(value, NESTED[key])
+                    mapping(value, NESTED[key], nested=(key == "supply_evidence"))
             else:
                 scalar(value)
     mapping(record, set(FIELDS[record["kind"]].split()) | {"kind", "sequence"}, nested=True)
+    if record.get('kind') == 'selection_basis' and record.get('version') == 'kr-selection-basis-v2':
+        from .selection_basis import validate_basis
+        basis = {k:v for k,v in record.items() if k in BASIS_FIELDS | EXTRA_FIELDS}
+        validate_basis(basis, score=record['final_score'], rank=record['returned_rank'], observed_at=record['observed_at'])
+
 
 
 class ObservationJournal:

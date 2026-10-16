@@ -134,7 +134,12 @@ def validate_window_contract(context, observations=None):
                     or any(r.get(k) != v for k, v in scan_fields(gate).items())
                     or r.get('selection_basis_expected') is not True
                     or r.get('selection_basis_max_candidates') != selection['max_candidates']
-                    or r.get('selection_basis_max_terms') != selection['max_source_terms']):
+                    or r.get('selection_basis_max_terms') != selection['max_source_terms']
+                    or (selection['version'] == 'selection-basis-v3' and
+                        (r.get('selection_modifiers_expected') is not True
+                         or r.get('selection_modifier_max_stages') != selection['max_modifier_stages']))
+                    or (selection['version'] != 'selection-basis-v3' and
+                        {'selection_modifiers_expected', 'selection_modifier_max_stages'} & set(r))):
                 raise ValueError('window population/time binding mismatch')
         if s.get('version') == READY_VERSION:
             _validate_ready_records(observations['records'], start, admission, end)
@@ -447,7 +452,7 @@ class CapturePlan:
             # 스캔과 후보별 근거의 즉시 발생량을 최소 예산으로 예약한다.
             # 호가/주문 등 전체 구간 유량은 기존 capacity_evidence_ref로 별도 확인한다.
             burst = 1 + selection['max_candidates']
-            record_minimum = 65536 if selection['version'] == 'selection-basis-v2' else 32768
+            record_minimum = 65536 if selection['version'] in ('selection-basis-v2', 'selection-basis-v3') else 32768
             if s['version'] in ('runner-first-scan-v3', 'runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
                 from .entry_gate_trace import validate_settings as validate_gate_settings
                 gate = validate_gate_settings(s['entry_gate_trace'])
@@ -757,6 +762,9 @@ class ObservationRuntime:
             start_at=b.start_at.isoformat(), admission_end_at=b.admission_end.isoformat(),
             end_at=b.end_at.isoformat(), max_scans=b.max_scans,
             selection_max_candidates=b.selection_basis_settings['max_candidates'],
+            **(dict(selection_basis_version='selection-basis-v3',
+                    selection_max_modifier_stages=b.selection_basis_settings['max_modifier_stages'])
+               if b.selection_basis_settings['version'] == 'selection-basis-v3' else {}),
             gate_max_candidates=b.entry_gate_trace_settings['max_candidates'],
             max_candidates=owner.max_candidates, lease_seconds=owner.lease_seconds,
             registration_cap=owner.cap, external_reserved=owner.reserved,

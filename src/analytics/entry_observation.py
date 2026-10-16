@@ -105,7 +105,12 @@ class EntryObservationBuffer:
     @property
     def selection_sources_capture_enabled(self):
         return (self.selection_capture_enabled
-                and self.selection_basis_settings['version'] == 'selection-basis-v2')
+                and self.selection_basis_settings['version'] in ('selection-basis-v2', 'selection-basis-v3'))
+
+    @property
+    def selection_modifiers_capture_enabled(self):
+        return (self.selection_capture_enabled
+                and self.selection_basis_settings["version"] == "selection-basis-v3")
 
     def begin_scan(self):
         """복사 전에 첫 시도를 예약한다. 빈 결과/복사 실패 뒤 재선정하지 않는다."""
@@ -333,7 +338,9 @@ def capture_scan(observer, stocks, session: str) -> str | None:
         if selection is not None:
             record.update(selection_basis_expected=True, selection_basis_max_candidates=selection['max_candidates'],
                           selection_basis_max_terms=selection['max_source_terms'])
-            if selection['version'] == 'selection-basis-v2':
+            if selection['version'] == 'selection-basis-v3':
+                record.update(selection_modifiers_expected=True, selection_modifier_max_stages=selection['max_modifier_stages'])
+            if selection['version'] in ('selection-basis-v2', 'selection-basis-v3'):
                 record.update(selection_sources_expected=True, selection_sources_status='unavailable')
                 try:
                     from .selection_source_status import validate_snapshot, snapshot_fields
@@ -363,6 +370,9 @@ def _capture_selection_basis(observer, scan_id, stocks, settings, scan_at):
             record = {'kind': 'selection_basis', 'candidate_id': f'{scan_id}:{stock.symbol}',
                       'symbol': stock.symbol, 'observed_at': _now(), 'basis_status': 'unavailable'}
             basis = getattr(stock, 'selection_basis', None)
+            if basis is not None and settings['version'] == 'selection-basis-v3' and basis.get('version') != 'kr-selection-basis-v2' and not basis.get('cache_fallback'):
+                observer.mark_incomplete('selection_modifiers_unavailable')
+                basis = None
             if basis is not None:
                 record.update(validate_basis(basis, score=stock.score, rank=rank,
                     observed_at=scan_at, max_terms=settings['max_source_terms']))
