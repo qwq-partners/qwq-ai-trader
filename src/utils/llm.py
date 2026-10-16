@@ -108,8 +108,12 @@ class LLMConfig:
     monthly_budget_usd: Optional[float] = None  # Explicit activation only.
     budget_state_path: Optional[str] = None
     budget_policy_enabled: bool = False
+    missing_cost_policy: str = "block"
 
     def __post_init__(self):
+        if (not isinstance(self.missing_cost_policy, str)
+                or self.missing_cost_policy not in {"block", "log_and_continue"}):
+            raise ValueError("llm.missing_cost_policy must be block or log_and_continue")
         if not isinstance(self.budget_policy_enabled, bool):
             raise ValueError("llm.budget_policy_enabled must be boolean")
         if self.budget_policy_enabled and self.monthly_budget_usd is None:
@@ -158,6 +162,7 @@ class LLMConfig:
             monthly_budget_usd=llm_cfg.get("monthly_budget"),
             budget_state_path=llm_cfg.get("budget_state_path"),
             budget_policy_enabled=llm_cfg.get("budget_policy_enabled", False),
+            missing_cost_policy=llm_cfg.get("missing_cost_policy", "block"),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
@@ -254,6 +259,8 @@ class LLMResponse:
     refusal_detected: bool = False  # 공급자가 명시한 거절 여부만; 본문은 저장하지 않는다.
     transport_error_kind: Optional[str] = None
     uncertain_cost_ceiling_usd: Optional[float] = None  # Durable hold, never actual spend.
+    missing_cost_policy: str = "block"
+    cost_accounting_skipped: bool = False
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -751,6 +758,7 @@ class LLMManager:
                 self.monthly_budget = MonthlyBudgetLedger(
                     self.config.budget_state_path, self.config.monthly_budget_usd,
                     policy_enabled=self.config.budget_policy_enabled,
+                    missing_cost_policy=self.config.missing_cost_policy,
                     economy_summary_models=(self.config.openai_model_light, self.config.gemini_model_light),
                 )
             except BudgetBlocked as exc:
@@ -814,12 +822,23 @@ class LLMManager:
         else:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
 
+    def _daily_unknown_blocks(self) -> bool:
+        return (self.config.missing_cost_policy == "block"
+                and self.daily_usage.unbounded_cost_missing)
+
+    @staticmethod
+    def _trail_has_unknown_cost(trail: Optional[list]) -> bool:
+        return any(item.get("uncertain_cost_ceiling_usd") is not None
+                   or (item.get("request_sent") and item.get("usage_known") is False
+                       and item.get("billing_status") != "rejected_before_generation")
+                   for item in (trail or []))
+
     def _check_budget(self) -> bool:
         """Process-local post-usage gate, not a strict global spending cap.
 
         Concurrent/in-flight calls, unknown timeout charges and process restarts
-        prevent strict enforcement. Unbounded unknown cost blocks paid attempts;
-        durably certified timeout ceilings remain occupied alongside known cost.
+        prevent strict enforcement. The explicit missing-cost policy controls
+        unknown amounts; certified ceilings remain occupied alongside known cost.
         """
         # 날짜가 바뀌면 리셋
         today = datetime.now().date()
@@ -827,7 +846,7 @@ class LLMManager:
             self.daily_usage = LLMUsage()
             self._usage_reset_date = today
 
-        return (not self.daily_usage.unbounded_cost_missing
+        return (not self._daily_unknown_blocks()
                 and (self.daily_usage.estimated_cost_usd + self.daily_usage.uncertain_cost_ceiling_usd)
                 < self.config.daily_budget_usd)
 
@@ -854,7 +873,7 @@ class LLMManager:
             if self._closing:
                 response = self._monthly_blocked_response(provider, profile.model, "manager_closing")
             elif not self._check_budget():
-                reason = "daily_unknown_cost" if self.daily_usage.unbounded_cost_missing else "daily_limit_exceeded"
+                reason = "daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded"
                 response = self._monthly_blocked_response(provider, profile.model, reason)
                 response.error = "Daily budget exceeded"
             elif len(prompt.encode("utf-8")) + len(system.encode("utf-8")) > profile.max_input_bytes:
@@ -941,7 +960,7 @@ class LLMManager:
                 content="", model="", provider=LLMProvider.OPENAI,
                 success=False, error="Daily budget exceeded",
                 request_sent=False, usage_known=False, billing_status="not_sent",
-                budget_block_reason="daily_unknown_cost" if self.daily_usage.unbounded_cost_missing else "daily_limit_exceeded",
+                budget_block_reason="daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded",
             )
 
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
@@ -975,9 +994,16 @@ class LLMManager:
             self.stats["error_count"] += 1
             return response
 
+        if response.http_status in {401, 403}:
+            # A billing-policy relaxation does not authorize bypassing a known
+            # authentication/permission refusal, including body-read timeouts.
+            self.stats["error_count"] += 1
+            return response
+
         if response.success:
             self.stats["success_count"] += 1
-            self._maybe_fire_shadow(prompt, system, task, kwargs, response)
+            if not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
+                self._maybe_fire_shadow(prompt, system, task, kwargs, response)
             return response
 
         if response.budget_block_reason:
@@ -985,15 +1011,15 @@ class LLMManager:
             self.stats["fallback_skipped_monthly_budget"] = self.stats.get("fallback_skipped_monthly_budget", 0) + 1
             return response
 
-        # JSON repair already consumed a preceding provider attempt. A bounded
-        # timeout there ends this logical call instead of adding a third send.
-        if attempt_role == "json_retry" and response.uncertain_cost_ceiling_usd is not None:
+        # Missing cost during repair ends this logical call instead of creating
+        # another provider send. The next independent call may still proceed.
+        if attempt_role == "json_retry" and self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
             self.stats["error_count"] += 1
             return response
 
         if not self._check_budget():
             self.stats["error_count"] += 1
-            reason = ("fallback_skipped_unknown_cost" if self.daily_usage.unbounded_cost_missing
+            reason = ("fallback_skipped_unknown_cost" if self._daily_unknown_blocks()
                       else "fallback_skipped_budget")
             self.stats[reason] = self.stats.get(reason, 0) + 1
             return response
@@ -1012,8 +1038,7 @@ class LLMManager:
 
         if response.success:
             self.stats["success_count"] += 1
-            if not any(item.get("uncertain_cost_ceiling_usd") is not None
-                       for item in (_ATTEMPT_TRAIL.get() or [])):
+            if not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
                 self._maybe_fire_shadow(prompt, system, task, kwargs, response)
         else:
             self.stats["error_count"] += 1
@@ -1148,7 +1173,7 @@ class LLMManager:
                 content="", model="", provider=provider,
                 success=False, error="Daily budget exceeded",
                 request_sent=False, usage_known=False, billing_status="not_sent",
-                budget_block_reason="daily_unknown_cost" if self.daily_usage.unbounded_cost_missing else "daily_limit_exceeded",
+                budget_block_reason="daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded",
             )
 
         client = self._get_client(provider)
@@ -1160,6 +1185,7 @@ class LLMManager:
         attempts = 0
         while (retry_on_empty > attempts
                and response.success
+               and not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get())
                and not (response.content or "").strip()
                and self._check_budget()):
             attempts += 1
@@ -1226,6 +1252,8 @@ class LLMManager:
                 "estimated_cost_usd": cost,
                 "transport_error_kind": response.transport_error_kind,
                 "uncertain_cost_ceiling_usd": response.uncertain_cost_ceiling_usd,
+                "missing_cost_policy": response.missing_cost_policy,
+                "cost_accounting_skipped": response.cost_accounting_skipped,
                 "budget_reservation_token": response.budget_reservation_token,
                 "budget_block_reason": response.budget_block_reason,
                 "latency_ms": response.latency_ms, "error": response.error,
@@ -1432,6 +1460,14 @@ class LLMManager:
 
     def _account_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Record known usage even for empty/error responses before another attempt."""
+        response.missing_cost_policy = self.config.missing_cost_policy
+        response.cost_accounting_skipped = bool(
+            self.config.missing_cost_policy == "log_and_continue"
+            and response.request_sent and not response.usage_known
+            and response.billing_status != "rejected_before_generation"
+            and response.uncertain_cost_ceiling_usd is None)
+        if response.cost_accounting_skipped:
+            logger.warning("[LLM] 비용 미확인 시도: 금액 합산 제외, 미확인 기록 보존 (log_and_continue)")
         self._append_trail(response, task, role)
         if response.billing_status == "rejected_before_generation":
             self.daily_usage.inferred_nonbillable_rejections += 1
@@ -1484,6 +1520,8 @@ class LLMManager:
                 "billing_status": response.billing_status,
                 "transport_error_kind": response.transport_error_kind,
                 "uncertain_cost_ceiling_usd": response.uncertain_cost_ceiling_usd,
+                "missing_cost_policy": response.missing_cost_policy,
+                "cost_accounting_skipped": response.cost_accounting_skipped,
                 "budget_block_reason": response.budget_block_reason,
                 "budget_policy_mode": response.budget_policy_mode,
                 "budget_policy_version": response.budget_policy_version,
@@ -1711,9 +1749,7 @@ class LLMManager:
                 raw=response.content or "", parsed=None, success=False,
             )
             # 1회 재시도 — JSON 형식만 요청하는 접미 추가
-            if _retry == 0 and not any(
-                    item.get("uncertain_cost_ceiling_usd") is not None
-                    for item in (response.attempt_trail or [])):
+            if _retry == 0 and not self._trail_has_unknown_cost(response.attempt_trail):
                 retry_prompt = (
                     prompt + "\n\n**중요: 위 지시에 따라 반드시 순수 JSON만 출력하세요. "
                     "코드블록(```), 설명 텍스트, 마크다운 없이 JSON 객체만 응답하세요.**"
@@ -1779,12 +1815,17 @@ class LLMManager:
             "input_tokens": self.daily_usage.input_tokens,
             "output_tokens": self.daily_usage.output_tokens,
             "estimated_cost_usd": round(self.daily_usage.estimated_cost_usd, 4),
-            "budget_remaining_usd": (None if self.daily_usage.unbounded_cost_missing else
+            "budget_remaining_usd": (None if self._daily_unknown_blocks() else
                                      round(max(0, self.config.daily_budget_usd
                                                - self.daily_usage.estimated_cost_usd
                                                - self.daily_usage.uncertain_cost_ceiling_usd), 4)),
             "uncertain_cost_ceiling_usd": self.daily_usage.uncertain_cost_ceiling_usd,
             "bounded_unknown_requests": self.daily_usage.bounded_unknown_requests,
+            "missing_cost_policy": self.config.missing_cost_policy,
+            "skipped_unknown_requests": (
+                self.daily_usage.unknown_usage_requests - self.daily_usage.bounded_unknown_requests
+                if self.config.missing_cost_policy == "log_and_continue" else 0),
+            "cost_accounting_complete": not self.daily_usage.cost_missing,
             "cost_missing": self.daily_usage.cost_missing,
             "unpriced_requests": self.daily_usage.unpriced_requests,
             "unknown_usage_requests": self.daily_usage.unknown_usage_requests,

@@ -402,13 +402,17 @@ async def test_elapsed_uses_monotonic_clock_not_wall_clock(monkeypatch, provider
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', [400, 401, 403, 404, 413, 422, 429])
-async def test_structured_pre_generation_rejection_allows_fallback_without_invented_usage(status, tmp_path):
+async def test_structured_pre_generation_rejection_preserves_usage_and_auth_boundary(status, tmp_path):
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'), audit_dir=tmp_path)
     manager.openai._session = Session(Reply({'error': {'message': 'rejected', 'type': 'request_error'}}, status=status))
     manager.gemini._session = Session(gemini_reply())
     result = await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)
-    assert result.success
-    assert manager.daily_usage.input_tokens == 100
+    if status in {401, 403}:
+        assert not result.success and not manager.gemini._session.payloads
+        assert manager.daily_usage.input_tokens == 0
+    else:
+        assert result.success
+        assert manager.daily_usage.input_tokens == 100
     assert manager.daily_usage.inferred_nonbillable_rejections == 1
     assert not manager.daily_usage.cost_missing
     rows = [json.loads(line) for file in tmp_path.glob('*.jsonl') for line in file.read_text().splitlines()]
