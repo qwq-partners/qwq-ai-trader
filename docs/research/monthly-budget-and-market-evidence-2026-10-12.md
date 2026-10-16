@@ -80,7 +80,7 @@ flowchart TD
 
 ## 미확인 비용과 초기화 장애 복구 절차
 
-자동으로 미확인 비용을0으로 바꾸거나 원장/표식을 삭제하지 않는다. `scripts/reconcile_llm_budget.py`는 기본 읽기 전용 미리보기이며 API/재시작을 수행하지 않는다.
+자동으로 미확인 비용을0으로 바꾸거나 원장/표식을 삭제하지 않는다. `scripts/reconcile_llm_budget.py`의 기본 미리보기는 비용 행을 변경하지 않으며 API/재시작을 수행하지 않는다. 다만 생성자가 보조 lock 파일/디렉터리를 만들거나 열고 SQLite 쓰기 연결을 열므로 엄격한 파일시스템 읽기 전용 도구는 아니다(10월17일 합성 재현). 운영 상태의 순수 조회에는 SQLite `mode=ro` 같은 별도 읽기 경로를 사용한다. 일관된 임시 복사본으로 미리보기를 시험할 수 있지만 복사된 lock으로 원본 호출의 실행 여부를 판단하지 않는다. [10월17일 실제 보류 진단](../operations/selection-capture-2026-10-19.md)을 함께 확인한다.
 
 1. 관련 공급자의 지연 집계가 끝난 사용 내역을 확보하고, 모델·시각·현재 원장의 예약 token을 대조한다. 요청별 귀속을 확정할 수 없으면 보류한다. 금액0은 명시적인 미과금 근거가 있을 때만 사용한다. 근거 파일은 Git 밖에 보존한다.
 2. review JSON은 `version=llm-budget-reconciliation-v1`, 원래 `activated_at`, 비밀정보 없는 `reviewer_ref`, 근거 파일의 `evidence_sha256`, `adjustments=[{token,actual_cost_usd}]`, `clear_bound_breach`를 정확히 포함한다. 해시는 근거 파일과의 결합이지 사실 확인의 대체가 아니다.
