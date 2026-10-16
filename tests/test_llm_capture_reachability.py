@@ -28,6 +28,10 @@ from test_risk_sizing import home, _em
 from test_entry_llm_context import RecordingLLM
 from src.core.adversarial_validator import AdversarialValidator
 from src.analytics import llm_decision_record as decisions
+from test_selection_source_basis import screener, stock
+from src.signals.screener.kr_screener import StockScreener
+from src.analytics.selection_modifiers import mark_candidate_supply
+from src.analytics.selection_source_status import mark_source
 
 
 @pytest.fixture(autouse=True)
@@ -41,18 +45,21 @@ def decision_recorder(tmp_path, monkeypatch):
 SYMBOL = '900001'
 
 
-def study(context):
+def study(context, *, selection_v3=False):
     llm_plan(context)
     context['as_of'] = '2026-10-16T09:56:00+09:00'
     context['markout_policy'].update(horizon_seconds=900, policy_ref='synthetic-15min-v1')
     context['capture'].update(start_at='2026-10-16T09:30:00+09:00',
         admission_end_at='2026-10-16T09:40:00+09:00', end_at=context['as_of'])
     context['capture']['channels']['lease_seconds'] = 1560
+    if selection_v3:
+        context['capture']['selection_basis'].update(version='selection-basis-v3', max_modifier_stages=24)
 
 
 async def connected_case(tmp_path, monkeypatch, *, raw_score=93, regime='neutral',
-                         scan_time='09:30:00', process_time=None, unknown=False, manager_available=True, sector_bonus=False):
-    plan, context = load(tmp_path, study)
+                         scan_time='09:30:00', process_time=None, unknown=False, manager_available=True, sector_bonus=False,
+                         selection_v3=False, foreign_raw='1'):
+    plan, context = load(tmp_path, lambda c: study(c, selection_v3=selection_v3))
     clock = [dt.datetime.fromisoformat('2026-10-16T' + scan_time + '+09:00')]
     real_datetime = dt.datetime
 
@@ -136,6 +143,33 @@ async def connected_case(tmp_path, monkeypatch, *, raw_score=93, regime='neutral
         change_pct=2, reasons=['MA20+3%', 'RSI:50', '기관 순매수'], atr_pct=4,
         volume_ratio=3, per=10, pbr=1)
     async def screen_all(**kwargs): return [candidate]
+    source_screener = NS(screen_all=screen_all)
+    capture_flags = []
+    if selection_v3:
+        # Reuse synthetic external-data helpers, leaving native source merging,
+        # stage instrumentation, SPDI, occurrence bonus and normalization intact.
+        # Weighted inputs 100*.5 + 52.5*.4 + SPDI12 + two-source bonus10 = raw93.
+        source_screener = screener(monkeypatch, {'screen_volume_surge': [
+            stock(SYMBOL, score=100, change_pct=2, atr_pct=4, per=10, pbr=1)]})
+        source_screener._apply_spdi_filter = StockScreener._apply_spdi_filter.__get__(source_screener)
+        async def foreign(*args, **kwargs):
+            mark_source('payload', count=1)
+            mark_candidate_supply('1', '0001', SYMBOL, foreign_raw)
+            return [stock(SYMBOL, score=52.5, has_foreign_buying=True)]
+        async def institutional(*args, **kwargs):
+            mark_source('payload', count=1)
+            mark_candidate_supply('2', '0001', SYMBOL, '0')
+            return []
+        source_screener.screen_foreign_buying = foreign
+        source_screener.screen_institutional_buying = institutional
+        for module in ('src.signals.screener.kr_screener', 'src.analytics.selection_basis',
+                       'src.analytics.selection_modifiers', 'src.analytics.selection_source_status'):
+            monkeypatch.setattr(module + '.datetime', Frozen)
+        actual_screen_all = source_screener.screen_all  # retains production decorator
+        async def traced_screen_all(**kwargs):
+            capture_flags.append({key: value for key, value in kwargs.items() if key.startswith('capture_')})
+            return await actual_screen_all(**kwargs)
+        source_screener.screen_all = traced_screen_all
     # Synthetic supply input is consumed by the actual scheduler metadata builder.
     cache = tmp_path / '.cache' / 'ai_trader'
     cache.mkdir(parents=True, exist_ok=True)
@@ -143,7 +177,7 @@ async def connected_case(tmp_path, monkeypatch, *, raw_score=93, regime='neutral
     if sector_bonus:
         (cache / 'supply_daily_20261016.json').write_text(json.dumps({SYMBOL: {'foreign': 1}}))
     bot = NS(running=True, market='kr', engine=engine, broker=broker,
-        screener=NS(screen_all=screen_all), theme_detector=None, _stock_validator=None,
+        screener=source_screener, theme_detector=None, _stock_validator=None,
         kis_market_data=NS(get_night_futures_quote=night),
         strategy_manager=NS(enabled_strategies=['gap_and_go']),
         config=NS(get=lambda *args: {}), risk_manager=rm,
@@ -179,7 +213,7 @@ async def connected_case(tmp_path, monkeypatch, *, raw_score=93, regime='neutral
     assert halt.read_text() == 'synthetic BUY halt'
     assert kis_kr.kill_switch.check('buy', 'KR')[0] is False
     return NS(plan=plan, context=context, buffer=buffer, journal=journal, subscriptions=subscriptions,
-        clock=clock, signal=signal, order=order_event, blocked=blocked, engine=engine, llm=llm)
+        clock=clock, signal=signal, order=order_event, blocked=blocked, engine=engine, llm=llm, capture_flags=capture_flags)
 
 
 @pytest.mark.asyncio
@@ -344,6 +378,49 @@ async def test_missing_manager_is_started_evidence_not_model_approval(home, tmp_
         assert case.signal.metadata['llm_decision']['stage'] == 'unavailable'
         assert any(r['kind'] == 'llm_check_started' for r in case.buffer.export()['records'])
         assert case.order is not None and len(case.blocked) == 1
+    finally:
+        await case.journal.close()
+        await case.subscriptions.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('foreign_raw,foreign_state', [('1', 'positive'), (None, 'unobserved')])
+async def test_v3_scheduler_real_screener_evidence_survives_connected_journal(
+        home, tmp_path, monkeypatch, foreign_raw, foreign_state):
+    from src.analytics.selection_basis import build_selection_report
+    case = await connected_case(tmp_path, monkeypatch, selection_v3=True, foreign_raw=foreign_raw)
+    try:
+        assert case.capture_flags == [{'capture_selection': True,
+            'capture_selection_sources': True, 'capture_selection_modifiers': True}]
+        assert case.signal.score == 85  # real aggregation93, actual CV early-session -8
+        assert case.signal.metadata['llm_decision']['stage'] == 'adversarial'
+        assert case.order is not None and len(case.blocked) == 1
+        rows = case.buffer.export()['records']
+        basis = next(r for r in rows if r['kind'] == 'selection_basis')
+        assert basis['basis_status'] == 'observed'
+        assert basis['version'] == 'kr-selection-basis-v2'
+        assert basis['final_score'] == 93
+        assert len(basis['modifier_stages']) == 24
+        assert basis['supply_evidence']['foreign']['state'] == foreign_state
+        assert basis['supply_evidence']['institution']['state'] == 'observed_nonpositive'
+        assert next(r for r in rows if r['kind'] == 'order_ready')['signal_id'] == case.signal.id
+        case.clock[0] = case.plan.end_at
+        sealed = await case.journal.close()
+        assert sealed['sealed'] and sealed['fsync_confirmed']
+        loaded = read_observation_journal(case.plan.settings['journal_path'],
+            max_bytes=case.plan.settings['max_bytes'], expected_study_sha256=case.plan.study_sha256)
+        report = build_selection_report(loaded)
+        assert report['capture_complete']
+        assert report['counts']['missing_records'] == report['counts']['unavailable'] == 0
+        assert report['source_scans'][0]['status'] == 'observed'
+        runs = {r['source_id']: r for r in report['source_scans'][0]['snapshot']['runs']}
+        assert runs['kis_foreign_buying']['payload_count'] == 1
+        assert runs['kis_foreign_buying']['returned_count'] == 1
+        assert runs['kis_institutional_buying']['payload_count'] == 1
+        assert runs['kis_institutional_buying']['returned_count'] == 0
+        assert report['modifier_evidence']['complete_traces'] == 1
+        assert report['modifier_evidence']['candidates'] == report['modifier_evidence']['arithmetic_reconciled'] == 1
+        assert next(r for r in loaded['records'] if r['kind'] == 'selection_basis') == basis
     finally:
         await case.journal.close()
         await case.subscriptions.stop()
