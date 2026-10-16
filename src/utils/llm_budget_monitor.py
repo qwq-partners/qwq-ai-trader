@@ -63,6 +63,20 @@ def _money(value: Any) -> str:
     return "미확인" if number is None else f"${number:.4f}"
 
 
+def _skipped_unknown_cost_line(payload: Mapping[str, Any], *, previous_month: bool = False) -> Optional[str]:
+    """Describe opt-in omitted unknown costs without inventing a dollar amount."""
+    if "skipped_unknown_count" not in payload:
+        return None
+    count = payload.get("skipped_unknown_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return "비용 미확인 건수: 미확인"
+    if count == 0:
+        return None
+    prefix = "이전 월 " if previous_month else ""
+    ending = "계속 진행했습니다." if previous_month else "계속 진행합니다."
+    return f"{prefix}비용 미확인 {count}건은 합계에서 제외하고 {ending}"
+
+
 def _cost_terms(payload: Mapping[str, Any]) -> list[str]:
     terms = [
         f"정산 추정 {_money(payload.get('spent_usd'))}",
@@ -137,12 +151,18 @@ def format_budget_policy_notice(
                 f"(월 경계 시점 잠정값): "
                 f"{' + '.join(_cost_terms(previous))}"
             )
+            skipped_line = _skipped_unknown_cost_line(previous, previous_month=True)
+            if skipped_line is not None:
+                lines.append(skipped_line)
             unresolved = previous.get("unresolved_count")
             if isinstance(unresolved, int) and not isinstance(unresolved, bool) and unresolved >= 0:
                 lines.append(f"미확인 전체 건수: {unresolved}건")
         lines.append(f"새 월 {month}: {_cost_line(payload).removeprefix('비용: ')}")
     else:
         lines.append(_cost_line(payload))
+    skipped_line = _skipped_unknown_cost_line(payload)
+    if skipped_line is not None:
+        lines.append(skipped_line)
     lines.append("비용 기준: 공개 단가·토큰 사용량 추정이며 공급자 청구서 확정액이 아닙니다.")
 
     lines.extend([
