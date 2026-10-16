@@ -87,6 +87,25 @@ async def test_timeout_while_reading_permission_error_does_not_authorize_fallbac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('reported_usage', [False, True])
+async def test_provider_safety_refusal_survives_http_cleanup_timeout(tmp_path, reported_usage):
+    class CleanupTimeoutReply(Reply):
+        async def __aexit__(self, *args):
+            raise TimeoutError()
+    manager = manager_for(tmp_path)
+    data = {'promptFeedback': {'blockReason': 'SAFETY'}}
+    if reported_usage:
+        data['usageMetadata'] = {'promptTokenCount': 10, 'candidatesTokenCount': 0,
+                                 'thoughtsTokenCount': 0}
+    manager.gemini._session = Session(CleanupTimeoutReply(data))
+    manager.openai._session = Session(openai_reply())
+    result = await manager.complete('news', task=LLMTask.THEME_DETECTION, max_tokens=100)
+    assert not result.success and result.refusal_detected
+    assert result.uncertain_cost_ceiling_usd is None
+    assert not manager.openai._session.payloads
+
+
+@pytest.mark.asyncio
 async def test_timeout_hold_counts_toward_daily_gate(tmp_path):
     manager = manager_for(tmp_path, daily_budget_usd=0.2)
     manager.gemini._session = Session(TimeoutReply({}))

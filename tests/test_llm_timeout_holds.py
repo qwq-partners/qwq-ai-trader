@@ -90,6 +90,19 @@ def test_hold_carries_across_restart_and_month_and_status_is_readonly(tmp_path):
     assert before == reopened.path.read_bytes()
 
 
+def test_certified_inflight_request_keeps_room_for_timeout_across_month_boundary(tmp_path):
+    now = [datetime(2026, 10, 31, 14, 59, tzinfo=timezone.utc)]
+    ledger = ledger_at(tmp_path, limit=0.5, clock=lambda: now[0])
+    original = certified(ledger)
+    now[0] = datetime(2026, 10, 31, 15, 0, tzinfo=timezone.utc)
+    # The first request can still become an all-month uncertain hold. Reusing
+    # that room at midnight would admit two 0.262912 liabilities into USD0.5.
+    with pytest.raises(BudgetBlocked, match='monthly_limit_exceeded'):
+        certified(ledger)
+    ledger.settle(original, outcome='timeout')
+    assert ledger.status()['committed_usd'] == CEILING
+
+
 def test_full_ceiling_must_fit_even_when_prompt_tiny(tmp_path):
     ledger = ledger_at(tmp_path, limit=0.26)
     with pytest.raises(BudgetBlocked, match='monthly_limit_exceeded'):

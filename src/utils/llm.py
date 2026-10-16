@@ -606,6 +606,10 @@ class GeminiClient(BaseLLMClient):
                     raise ValueError("Provider response must be an object")
                 metadata.update(_provider_errors(data))
                 usage = data.get("usageMetadata") or {}
+                feedback = data.get("promptFeedback") or {}
+                metadata["refusal_detected"] = (
+                    isinstance(feedback, dict)
+                    and feedback.get("blockReason") not in (None, "", "BLOCK_REASON_UNSPECIFIED"))
                 if not isinstance(usage, dict):
                     usage = {}
                 input_count = _token_count(usage.get("promptTokenCount"))
@@ -616,10 +620,13 @@ class GeminiClient(BaseLLMClient):
                 candidates = data.get("candidates") or []
                 candidate = candidates[0] if candidates else {}
                 metadata["finish_reason"] = candidate.get("finishReason")
+                metadata["refusal_detected"] = metadata["refusal_detected"] or (
+                    metadata["finish_reason"] in {
+                        "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"})
                 parts = (candidate.get("content") or {}).get("parts") or []
                 content = "".join(part.get("text", "") for part in parts if not part.get("thought"))
                 metadata["billing_status"] = _billing_status(data, resp.status, metadata["usage_known"])
-                success = resp.status == 200 and bool(candidates)
+                success = resp.status == 200 and bool(candidates) and not metadata["refusal_detected"]
                 return LLMResponse(
                     content, model, LLMProvider.GEMINI,
                     input_tokens=_token_count(usage.get("promptTokenCount")),
@@ -959,6 +966,14 @@ class LLMManager:
         response = await self._complete_attempt(
             primary_client, prompt, system, primary_model, task.value, attempt_role, **kwargs
         )
+
+        if response.refusal_detected:
+            # A provider refusal remains a refusal even if transport cleanup
+            # subsequently times out. Never turn it into cross-provider retry.
+            response.success = False
+            response.error = "Provider refused request"
+            self.stats["error_count"] += 1
+            return response
 
         if response.success:
             self.stats["success_count"] += 1

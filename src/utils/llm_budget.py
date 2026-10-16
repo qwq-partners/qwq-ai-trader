@@ -232,13 +232,20 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         reserved = 0
         # Only outstanding reservations need OS lock checks; settled history is
         # aggregated using month/state indexes, not loaded on every health read.
-        for row in db.execute("SELECT token,month,reserved_units FROM reservations WHERE state='reserved'").fetchall():
+        for row in db.execute("SELECT * FROM reservations WHERE state='reserved'").fetchall():
+            bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (row['token'],)).fetchone()
+            if bound is not None:
+                validate_certificate(bound, row)
+                if bound['held'] != 0:
+                    raise BudgetStateError('storage_corrupt')
             if self._orphaned(row['token']):
                 unresolved += 1
                 unbounded += 1
                 if persist_orphans:
                     db.execute("UPDATE reservations SET state='unknown' WHERE token=?", (row['token'],))
-            elif row['month'] == month:
+            elif row['month'] == month or bound is not None:
+                # A certified in-flight request can become an all-month hold
+                # after midnight. Preserve its room before admitting new calls.
                 reserved += row['reserved_units']
         reason = ('reservation_bound_breach' if settings['bound_breach'] else
                   'unresolved_usage' if unbounded else
@@ -308,11 +315,9 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 # Capture admission once: pricing, budget and row month cannot
                 # straddle midnight and charge a different month than checked.
                 now = self._now()
-                # 2026-10-12: combined limits are documented at
-                # https://ai.google.dev/gemini-api/docs/thinking#token-limits-and-max_output_tokens
-                # but that current guide targets Interactions, not the deployed
-                # 3.1 generateContent path. Reserve 2x as an explicit uncertainty
-                # margin; do not change the payload or claim an invoice guarantee.
+                # Preserve the legacy estimate for uncertified requests. The
+                # narrow certified branch uses the reviewed Generate Content
+                # combined output/thinking limit and full model input limit.
                 output_reserve = max_output_tokens * (2 if model.startswith('gemini-') else 1)
                 if certified:
                     input_estimate, output_reserve = GEMINI_INPUT_LIMIT, max_output_tokens
