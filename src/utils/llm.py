@@ -1407,7 +1407,12 @@ class LLMManager:
             self._account_attempt(unknown, _task, _role)
             exc._llm_response = unknown
             raise
-        # 새 역할만 완결·비거절·비어 있지 않은 본문을 사용한다. 기존 매매 계약은 유지한다.
+        # Provider refusal is an unsuccessful result on every route, including
+        # fallback; record that fact before the attempt trail and audit persist.
+        if response.refusal_detected:
+            response.success = False
+            response.error = "Provider refused request"
+        # Fixed roles additionally require complete, non-empty output.
         if role_finish_reason is not None and response.success and (
                 response.finish_reason != role_finish_reason or response.refusal_detected
                 or not (response.content or "").strip()):

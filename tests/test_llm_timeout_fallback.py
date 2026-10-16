@@ -106,6 +106,21 @@ async def test_provider_safety_refusal_survives_http_cleanup_timeout(tmp_path, r
 
 
 @pytest.mark.asyncio
+async def test_fallback_refusal_is_not_reported_or_audited_as_success(tmp_path):
+    manager = manager_for(tmp_path)
+    refusal = openai_reply('')
+    refusal.data['choices'][0]['message']['refusal'] = 'Provider safety refusal'
+    manager.gemini._session = Session(TimeoutReply({}))
+    manager.openai._session = Session(refusal)
+    result = await manager.complete('news', task=LLMTask.THEME_DETECTION, max_tokens=100)
+    assert not result.success and result.refusal_detected
+    assert result.attempt_trail[-1]['success'] is False
+    rows = [json.loads(line) for p in (tmp_path / 'audit').glob('*.jsonl')
+            for line in p.read_text().splitlines()]
+    assert rows[-1]['outcome'] == 'error'
+
+
+@pytest.mark.asyncio
 async def test_timeout_hold_counts_toward_daily_gate(tmp_path):
     manager = manager_for(tmp_path, daily_budget_usd=0.2)
     manager.gemini._session = Session(TimeoutReply({}))
