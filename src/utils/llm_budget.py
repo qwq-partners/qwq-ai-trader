@@ -2,7 +2,8 @@
 
 Money uses integer nano-USD. SQLite serializes admission/settlement; a held flock
 identifies each live reservation. A lost process releases that lock, NOT its
-possible charge. Unbounded orphaned/unknown usage blocks all months until repair.
+possible charge. Unbounded orphaned/unknown usage blocks all months by default;
+explicit log_and_continue skips its missing cost without settling the evidence.
 Certified timeout ceilings remain committed across months until reconciliation.
 Reservations are conservative estimates, not provider invoice guarantees.
 """
@@ -75,7 +76,13 @@ def _units(value) -> int:
 
 class MonthlyBudgetLedger(BudgetPolicyMixin):
     def __init__(self, path, monthly_limit_usd: float, *, clock: Optional[Callable] = None,
-                 policy_enabled: bool = False, economy_summary_models: tuple[str, ...] = ()):
+                 policy_enabled: bool = False, economy_summary_models: tuple[str, ...] = (),
+                 missing_cost_policy: str = 'block'):
+        if (not isinstance(missing_cost_policy, str)
+                or missing_cost_policy not in {'block', 'log_and_continue'}):
+            raise BudgetStateError('invalid_missing_cost_policy')
+        self.missing_cost_policy = missing_cost_policy
+        self._observed_skipped_unknowns: set[str] = set()
         if not isinstance(policy_enabled, bool):
             raise BudgetStateError('invalid_budget_policy')
         self.policy_enabled = policy_enabled
@@ -212,7 +219,10 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         month = (now or self._now()).strftime('%Y-%m')
         validate_schema(db)
         unresolved = unbounded = bounded = uncertain = 0
+        skipped_unknowns = set()
         for row in db.execute("SELECT * FROM reservations WHERE state='unknown'").fetchall():
+            if row['actual_units'] is not None:
+                raise BudgetStateError('storage_corrupt')
             unresolved += 1
             bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (row['token'],)).fetchone()
             if bound is not None:
@@ -224,6 +234,7 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 uncertain += ceiling
             else:
                 unbounded += 1
+                skipped_unknowns.add(row['token'])
         row = db.execute("""SELECT COALESCE(SUM(actual_units),0), COUNT(*) FROM reservations
                           WHERE month=? AND state='settled'""", (month,)).fetchone()
         spent, settled_count = row[0], row[1]
@@ -233,6 +244,8 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         # Only outstanding reservations need OS lock checks; settled history is
         # aggregated using month/state indexes, not loaded on every health read.
         for row in db.execute("SELECT * FROM reservations WHERE state='reserved'").fetchall():
+            if row['actual_units'] is not None:
+                raise BudgetStateError('storage_corrupt')
             bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (row['token'],)).fetchone()
             if bound is not None:
                 validate_certificate(bound, row)
@@ -241,6 +254,7 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
             if self._orphaned(row['token']):
                 unresolved += 1
                 unbounded += 1
+                skipped_unknowns.add(row['token'])
                 if persist_orphans:
                     db.execute("UPDATE reservations SET state='unknown' WHERE token=?", (row['token'],))
             elif row['month'] == month or bound is not None:
@@ -248,8 +262,16 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 # after midnight. Preserve its room before admitting new calls.
                 reserved += row['reserved_units']
         reason = ('reservation_bound_breach' if settings['bound_breach'] else
-                  'unresolved_usage' if unbounded else
+                  'unresolved_usage' if unbounded and self.missing_cost_policy == 'block' else
                   'monthly_limit_exceeded' if spent + reserved + uncertain >= self.limit_units else None)
+        if self.missing_cost_policy == 'log_and_continue':
+            # 상태 조회마다 반복하지 않고 새 미확정 사용량을 관측할 때만 기록한다.
+            # 원장 행과 실제비용 null은 보존하고 식별자/요청 내용은 로그에 넣지 않는다.
+            if skipped_unknowns - self._observed_skipped_unknowns:
+                logging.getLogger(__name__).warning(
+                    '[LLM 예산] missing_cost_policy=log_and_continue: '
+                    '금액 없는 사용량 %d건 합산 제외; 실제비용 미확정 기록 보존', unbounded)
+            self._observed_skipped_unknowns = skipped_unknowns
         return {
             'month': month, 'timezone': 'Asia/Seoul', 'monthly_limit_usd': self.limit_units / _SCALE,
             'activated_at': settings['activated_at'], 'baseline_month': settings['baseline_month'],
@@ -257,6 +279,9 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
             'available_usd': None if reason in {'reservation_bound_breach', 'unresolved_usage'}
                              else max(0, (self.limit_units - spent - reserved - uncertain) / _SCALE),
             'unresolved_count': unresolved, 'settled_count': settled_count,
+            'missing_cost_policy': self.missing_cost_policy,
+            'skipped_unknown_count': unbounded if self.missing_cost_policy == 'log_and_continue' else 0,
+            'cost_accounting_complete': unresolved == 0,
             'unbounded_unresolved_count': unbounded, 'bounded_unresolved_count': bounded,
             'uncertain_cost_ceiling_usd': uncertain / _SCALE,
             'committed_usd': (spent + reserved + uncertain) / _SCALE,
