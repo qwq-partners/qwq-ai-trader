@@ -32,8 +32,8 @@ def _llm_capture_times(c, *, start, admission, end):
 
 
 @pytest.mark.parametrize('start,admission,end,local_start', [
-    ('2026-10-02T09:15:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:06+09:00', '09:15:00'),
-    ('2026-10-02T00:15:00+00:00', '2026-10-02T00:16:00+00:00', '2026-10-02T00:17:06+00:00', '09:15:00'),
+    ('2026-10-02T09:30:00+09:00', '2026-10-02T09:31:00+09:00', '2026-10-02T09:32:06+09:00', '09:30:00'),
+    ('2026-10-02T00:30:00+00:00', '2026-10-02T00:31:00+00:00', '2026-10-02T00:32:06+00:00', '09:30:00'),
     ('2026-10-02T15:00:00+09:00', '2026-10-02T15:01:00+09:00', '2026-10-02T15:02:06+09:00', '15:00:00'),
 ])
 def test_llm_install_accepts_same_kst_entry_window_in_kst_or_utc(
@@ -48,10 +48,15 @@ def test_llm_install_accepts_same_kst_entry_window_in_kst_or_utc(
     ('2026-10-02T09:00:00+09:00', '2026-10-02T09:20:00+09:00', '2026-10-02T09:21:06+09:00', 'LLM 수집 입장 창'),
     # A 09:14 scan could not have passed the common live_screening entry-time gate.
     ('2026-10-02T09:14:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:06+09:00', 'LLM 수집 입장 창'),
+    # 비코어 KR BUY는 공통 entry_time 통과 뒤에도 교차검증에서 09:30 전 차단된다.
+    ('2026-10-02T09:15:00+09:00', '2026-10-02T09:25:00+09:00', '2026-10-02T09:41:00+09:00', 'LLM 수집 입장 창'),
+    ('2026-10-02T09:29:59.999999+09:00', '2026-10-02T09:31:00+09:00', '2026-10-02T09:32:06+09:00', 'LLM 수집 입장 창'),
+    ('2026-10-02T00:29:59.999999+00:00', '2026-10-02T00:31:00+00:00', '2026-10-02T00:32:06+00:00', 'LLM 수집 입장 창'),
     # The half-open 15:01 bound permits equality but excludes the next instant.
     ('2026-10-02T15:00:00+09:00', '2026-10-02T15:01:00.000001+09:00', '2026-10-02T15:03:00+09:00', 'LLM 수집 입장 창'),
     # Equal tail is insufficient because the markout deadline is half-open too.
-    ('2026-10-02T09:15:00+09:00', '2026-10-02T09:16:00+09:00', '2026-10-02T09:17:05+09:00', 'LLM 수집 종료'),
+    ('2026-10-02T09:30:00+09:00', '2026-10-02T09:31:00+09:00', '2026-10-02T09:32:05+09:00', 'LLM 수집 종료'),
+    ('2026-10-02T15:00:00+09:00', '2026-10-02T15:01:00+09:00', '2026-10-02T15:02:05+09:00', 'LLM 수집 종료'),
 ])
 def test_llm_install_rejects_windows_outside_entry_time_or_without_markout_tail(
         tmp_path, start, admission, end, error):
@@ -68,6 +73,82 @@ def test_historical_llm_readout_keeps_original_0900_window_contract(tmp_path):
     # Historical replay never invokes CapturePlan.validate, so its recorded study
     # remains readable even though a new installation of this window is rejected.
     validate_window_contract(context)
+
+
+@pytest.mark.asyncio
+async def test_historical_0915_sealed_journal_remains_readable_without_install(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from pathlib import Path
+    from src.analytics.capture_readiness import build_capture_readiness
+    import src.analytics.entry_observation_journal as journal_module
+    from src.analytics.entry_observation_journal import ObservationJournal, read_observation_journal
+    from src.analytics.entry_observation_runtime import CapturePlan
+    from test_entry_observation_runtime import fixture_plan
+
+    manifest, context = fixture_plan(tmp_path, lambda c: _llm_capture_times(
+        c, start='2026-10-02T09:15:00+09:00', admission='2026-10-02T09:25:00+09:00',
+        end='2026-10-02T09:41:00+09:00'))
+    study = Path(json.loads(manifest.read_text())['study_path'])
+    raw = study.read_bytes()
+    # 과거 합성 원장은 설치 검사를 호출하지 않고 기록된 계약으로 재생한다.
+    plan = CapturePlan(study, hashlib.sha256(raw).hexdigest(), raw)
+    clock = [plan.start_at]
+    monkeypatch.setattr(obs, '_now', lambda: clock[0].isoformat())
+    monkeypatch.setattr(journal_module, '_timestamp', lambda: clock[0].isoformat())
+    buffer = _WindowBuffer(plan, lambda: clock[0])
+    writer = await ObservationJournal.open(buffer, plan.settings['journal_path'],
+        study_ref=plan.settings['study_ref'], study_sha256=plan.study_sha256,
+        queue_capacity=1000, batch_size=10, max_bytes=plan.settings['max_bytes'],
+        max_record_bytes=plan.settings['max_record_bytes'])
+    try:
+        scan = obs.capture_scan(buffer, [stock()], 'regular')
+        obs.capture_signal(buffer, scan, event('historical-blocked'))
+    finally:
+        clock[0] = plan.end_at
+        sealed = await writer.close()
+    assert sealed['sealed']
+    journal = Path(plan.settings['journal_path'])
+    before = raw, journal.read_bytes()
+    observations = read_observation_journal(journal, max_bytes=plan.settings['max_bytes'],
+        expected_study_sha256=plan.study_sha256)
+    validate_window_contract(context, observations)
+    report = build_capture_readiness(study, journal)
+    assert report['status'] == 'no_llm_checks'
+    assert report['llm_started_count'] == 0
+    assert report['economics']['profitability_pass'] is False
+    assert (study.read_bytes(), journal.read_bytes()) == before
+
+
+@pytest.mark.parametrize('local_time,expected_pass,expected_score', [
+    ('09:15:00', False, 0),
+    ('09:29:59.999999', False, 0),
+    ('09:30:00', True, 62),
+])
+def test_real_cross_validator_blocks_noncore_kr_buy_until_0930(
+        home, monkeypatch, local_time, expected_pass, expected_score):
+    import datetime as datetime_module
+    import src.core.cross_validator as cv_module
+
+    fixed = datetime_module.datetime.fromisoformat('2026-10-02T' + local_time)
+
+    class Frozen(datetime_module.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.replace(tzinfo=tz)
+
+    monkeypatch.setattr(datetime_module, 'datetime', Frozen)
+    monkeypatch.setattr(cv_module, 'datetime', Frozen)
+    validator = cv_module.CrossStrategyValidator(market='KR')
+    # 패널 로더만 격리하며 시간 차단·점수 계산은 실제 검증기를 실행한다.
+    monkeypatch.setattr(validator, '_load_panel_outlook', lambda: None)
+    passed, score, reason = validator.validate(
+        symbol='900001', side='buy', strategy='sepa_trend', score=70,
+        metadata={'atr_pct': 3.0, 'per': 10.0, 'pbr': 1.0, 'foreign_net_buy': 1.0},
+        market_regime='bull')
+    assert passed is expected_pass
+    assert score == expected_score
+    assert ('장초반 30분 진입 차단' in reason) is (not expected_pass)
 
 
 def setup(tmp_path, monkeypatch):
