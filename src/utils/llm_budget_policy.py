@@ -85,8 +85,10 @@ class BudgetPolicyMixin:
             if reset:
                 previous_date = now.replace(day=1) - timedelta(days=1)
                 prior = self._snapshot(db, now=previous_date)[0]
-                payload['previous_month'] = {key: prior[key] for key in (
-                    'month', 'spent_usd', 'reserved_usd', 'unresolved_count')}
+                payload['previous_month'] = {key: prior.get(key) for key in (
+                    'month', 'spent_usd', 'reserved_usd', 'unresolved_count',
+                    'uncertain_cost_ceiling_usd', 'bounded_unresolved_count',
+                    'unbounded_unresolved_count')}
             event_id = uuid.uuid4().hex
             sequence = db.execute('INSERT INTO policy_notices(event_id,payload,created_at) VALUES (?,?,?)',
                                   (event_id, json.dumps(payload, ensure_ascii=False), now.timestamp())).lastrowid
