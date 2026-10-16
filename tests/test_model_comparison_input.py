@@ -91,7 +91,7 @@ def test_completed_monthly_record_cannot_become_live_pair(tmp_path):
                     common_context=loaded["inputs"]["common_context"], input_available_at=loaded["inputs"]["collected_at"],
                     current=RoleControls("gpt-5-mini", 400, "minimal", 0.3, 20260803),
                     candidate=RoleControls("gpt-5-mini", 400, "low", 0.3, 20260803),
-                    bear=RoleControls("gemini-3.1-flash-lite-preview", 400, None, 0.0),
+                    bear=RoleControls("gemini-3.1-flash-lite", 400, None, 0.0),
                     neutral_sizing=None, pricing_basis="paired_live_shadow", fixed_at=T0.isoformat(),
                     strict_on_disagreement=False, fallback_chain_timeout_seconds=10.0)
     with pytest.raises(ValueError, match="live"):
@@ -121,7 +121,7 @@ class _LLM:
         self.delay, self.prompts = delay, []
 
     def _get_model(self, provider, weight):
-        return {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite-preview",
+        return {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
                 (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}[(provider, weight)]
 
     async def complete_with(self, prompt, *, provider, **kwargs):

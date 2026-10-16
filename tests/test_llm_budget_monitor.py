@@ -85,6 +85,45 @@ def test_formatter_reports_cost_reservations_thresholds_and_trading_boundary():
     assert "기존 매매 규칙·매수 중지 설정과 보호 청산은 유지됩니다" in text
 
 
+def test_formatter_includes_uncertain_timeout_hold_in_managed_total():
+    """Catch a formatter that shows a timeout hold but omits it from the total."""
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+
+    text = format_budget_policy_notice(_payload(
+        spent_usd=79.0,
+        reserved_usd=0.5,
+        uncertain_cost_ceiling_usd=1.0,
+    ))
+
+    assert (
+        "정산 추정 $79.0000 + 예약 추정 $0.5000 + 미확인 비용 보류 $1.0000 "
+        "= 관리 합계 $80.5000 / 월 한도 $100.0000 (80.5%)"
+    ) in text
+
+
+def test_formatter_keeps_legacy_cost_line_when_timeout_hold_is_absent():
+    """Catch adding a fictional timeout hold to historical notice payloads."""
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+
+    text = format_budget_policy_notice(_payload(spent_usd=79.0, reserved_usd=0.5))
+
+    assert (
+        "정산 추정 $79.0000 + 예약 추정 $0.5000 = 관리 합계 $79.5000 "
+        "/ 월 한도 $100.0000 (79.5%)"
+    ) in text
+    assert "미확인 비용 보류" not in text
+
+
+def test_formatter_reports_invalid_timeout_hold_as_unknown():
+    """Catch coercing an explicitly malformed timeout hold to a zero cost."""
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+
+    text = format_budget_policy_notice(_payload(uncertain_cost_ceiling_usd="not-a-number"))
+
+    assert "미확인 비용 보류 미확인" in text
+    assert "관리 합계 미확인" in text
+
+
 @pytest.mark.parametrize(
     ("mode", "expected"),
     [
@@ -127,6 +166,33 @@ def test_month_reset_reports_previous_month_and_does_not_clear_unresolved_usage(
     assert "미확인 전체 건수: 2건" in text
     assert "새 월 2026-11" in text
     assert "미확인 비용과 원장 이상은 월 전환으로 초기화되지 않습니다" in text
+
+
+def test_month_reset_reports_previous_month_timeout_hold():
+    """Catch dropping an unresolved timeout hold from the prior-month summary."""
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+
+    text = format_budget_policy_notice(_payload(
+        kind="month_reset",
+        month="2026-11",
+        event_at="2026-11-01T00:00:01+09:00",
+        spent_usd=0.0,
+        reserved_usd=0.0,
+        policy_mode="normal",
+        policy_reason="kst_month_reset",
+        previous_month={
+            "month": "2026-10",
+            "spent_usd": 94.0,
+            "reserved_usd": 0.5,
+            "uncertain_cost_ceiling_usd": 1.0,
+            "unresolved_count": 2,
+        },
+    ))
+
+    assert (
+        "이전 월 2026-10 (월 경계 시점 잠정값): "
+        "정산 추정 $94.0000 + 예약 추정 $0.5000 + 미확인 비용 보류 $1.0000"
+    ) in text
 
 
 def test_blocked_month_reset_does_not_claim_normal_policy_restored():

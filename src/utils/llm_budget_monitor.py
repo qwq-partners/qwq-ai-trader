@@ -63,26 +63,45 @@ def _money(value: Any) -> str:
     return "미확인" if number is None else f"${number:.4f}"
 
 
+def _cost_terms(payload: Mapping[str, Any]) -> list[str]:
+    terms = [
+        f"정산 추정 {_money(payload.get('spent_usd'))}",
+        f"예약 추정 {_money(payload.get('reserved_usd'))}",
+    ]
+    if "uncertain_cost_ceiling_usd" in payload:
+        hold = _number(payload.get("uncertain_cost_ceiling_usd"))
+        if hold is None or hold > 0:
+            terms.append(
+                f"미확인 비용 보류 {_money(payload.get('uncertain_cost_ceiling_usd'))}"
+            )
+    return terms
+
+
 def _cost_line(payload: Mapping[str, Any]) -> str:
     spent = _number(payload.get("spent_usd"))
     reserved = _number(payload.get("reserved_usd"))
     limit = _number(payload.get("monthly_limit_usd"))
-    if spent is None or reserved is None or limit is None:
+    hold_present = "uncertain_cost_ceiling_usd" in payload
+    hold = _number(payload.get("uncertain_cost_ceiling_usd")) if hold_present else 0.0
+    terms = " + ".join(_cost_terms(payload))
+    if spent is None or reserved is None or limit is None or hold is None:
+        if hold_present:
+            return (
+                f"비용: {terms} = 관리 합계 미확인 / "
+                f"월 한도 {_money(payload.get('monthly_limit_usd'))}"
+            )
         return (
             f"비용: 정산 추정 {_money(payload.get('spent_usd'))} + "
             f"예약 추정 {_money(payload.get('reserved_usd'))} / "
             f"월 한도 {_money(payload.get('monthly_limit_usd'))}"
         )
-    total = spent + reserved
+    total = spent + reserved + hold
     ratio = (
         100.0 if limit == 0 and total > 0
         else 0.0 if limit == 0
         else total / limit * 100
     )
-    return (
-        f"비용: 정산 추정 ${spent:.4f} + 예약 추정 ${reserved:.4f} = "
-        f"관리 합계 ${total:.4f} / 월 한도 ${limit:.4f} ({ratio:.1f}%)"
-    )
+    return f"비용: {terms} = 관리 합계 ${total:.4f} / 월 한도 ${limit:.4f} ({ratio:.1f}%)"
 
 
 def format_budget_policy_notice(
@@ -116,8 +135,7 @@ def format_budget_policy_notice(
             lines.append(
                 f"이전 월 {_safe_text(previous.get('month'))} "
                 f"(월 경계 시점 잠정값): "
-                f"정산 추정 {_money(previous.get('spent_usd'))} + "
-                f"예약 추정 {_money(previous.get('reserved_usd'))}"
+                f"{' + '.join(_cost_terms(previous))}"
             )
             unresolved = previous.get("unresolved_count")
             if isinstance(unresolved, int) and not isinstance(unresolved, bool) and unresolved >= 0:

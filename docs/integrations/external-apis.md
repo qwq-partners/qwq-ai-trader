@@ -1,5 +1,7 @@
 # 외부 API 연동
 
+> **2026-10-17 — Gemini timeout fallback:** [호출 상한 계약·별도 비용 보류·정식 모델 전환](../research/gemini-timeout-fallback-2026-10-17.md). 일반task의 대체 경로를 유지하면서, 인증된 미래 시간 초과만 비용 보류 후 다음 공급자를 호출한다. 고정 역할/비교 공급자는 자동 교체하지 않는다. 운영 미배포.
+
 > **2026-10-14 — 기존 REST 현재가 상태 보존:** [공식 필드 근거·지문·시간 한계·명시 opt-in](../research/rest-market-state-evidence-2026-10-14.md). KRX `FHKST01010100`의 기존 응답만 사용하며 추가 호출은 없다. N의 정상 의미/거래소 as-of는 미확인이라 항상 UNKNOWN. 논리 호출 구간은 리미터·재시도를 포함한다. 운영 미배포.
 
 > **72·73차 KIS 상태:** [원천 규격과 한계](../research/kis-market-state-capture-2026-10-13.md), [한 종목 파일럿과 실효 채널 가드](../research/market-state-pilot-2026-10-13.md). 단일 연결의 정적 묶음을 사용하며 운영 PRICE 전달/REST 커버리지와 상태 기록을 분리한다. 장운영 사건 부재나 정규장 코드만으로 정상 연속매매를 확정하지 않는다.
