@@ -117,13 +117,23 @@ def activation_profile(name):
             datetime(2026,10,16,0,10,tzinfo=timezone.utc),
             datetime(2026,10,16,0,12,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261019-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261019-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261019-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v1-entry-capture.conf'),
+            '2026-10-19-engine-llm-window-v1',
+            datetime(2026,10,19,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,19,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
 
 
 def capture_prepared(cfg, projection):
     if not cfg.engine_only:
         return True
-    if cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1'):
+    if cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1'):
         llm = projection.get('llm')
         if (projection.get('scan_scope') != 'window' or projection.get('capture_closed') is not False
                 or type(llm) is not dict):
@@ -141,6 +151,12 @@ def capture_prepared(cfg, projection):
         if cfg.evaluation_epoch == '2026-10-16-engine-llm-window-v1':
             expected.update(start_at='2026-10-16T00:15:00+00:00',
                 admission_end_at='2026-10-16T00:25:00+00:00', end_at='2026-10-16T00:41:00+00:00')
+        lease_seconds = 1560
+        if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v1':
+            expected.update(start_at='2026-10-19T00:30:00+00:00',
+                admission_end_at='2026-10-19T00:40:00+00:00', end_at='2026-10-19T01:00:00+00:00',
+                selection_basis_version='selection-basis-v3', selection_max_modifier_stages=24)
+            lease_seconds = 1800
         if any(type(llm.get(k)) is not type(v) or llm[k] != v for k,v in expected.items()):
             return False
         if (type(llm.get('retained_memory_bytes')) is not int
@@ -151,7 +167,7 @@ def capture_prepared(cfg, projection):
                 or allocations != dict(ws_quote=50000, market_state=50000, other=8000, scan_metadata=804)
                 or any(type(v) is not int for v in allocations.values())
                 or llm.get('incomplete_reasons') != []
-                or type(llm.get('lease_seconds')) not in (int,float) or llm['lease_seconds'] != 1560):
+                or type(llm.get('lease_seconds')) not in (int,float) or llm['lease_seconds'] != lease_seconds):
             return False
         if any(type(llm.get(k)) is not int or llm[k] < 0 for k in ('operational_demand','generation')):
             return False
@@ -284,7 +300,7 @@ def load_config(profile='20261002'):
             raise GuardError()
     if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
         raise GuardError()
-    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1') and raw['old_head'] != raw['new_head']:
+    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1', '20261019-llm-window-v1') and raw['old_head'] != raw['new_head']:
         raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
@@ -427,7 +443,7 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
     try:
         window()
-        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1')
+        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1')
                 and cfg.old_head != cfg.new_head):
             raise GuardError()
         phase = 'receipt'
@@ -603,6 +619,8 @@ def main():
             cfg = load_config('20261015-llm-window-v1')
         elif sys.argv[1:] == ['--profile', '20261016-llm-window-v1']:
             cfg = load_config('20261016-llm-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261019-llm-window-v1']:
+            cfg = load_config('20261019-llm-window-v1')
         else:
             raise GuardError()
         result = activate(cfg)
