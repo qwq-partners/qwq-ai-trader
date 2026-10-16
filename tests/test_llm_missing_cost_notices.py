@@ -1,4 +1,13 @@
 """Notification coverage for opt-in continuation after unknown LLM costs."""
+import pytest
+
+
+@pytest.mark.parametrize("mode", ["paused", "blocked"])
+def test_unknown_cost_note_does_not_claim_stopped_paid_calls_continue(mode):
+    from src.utils.llm_budget_monitor import format_budget_policy_notice
+    text = format_budget_policy_notice(_payload(policy_mode=mode))
+    assert "비용 미확인 2건은 금액 합계에서 제외합니다." in text
+    assert "계속 진행" not in text
 
 
 def _payload(**overrides):
@@ -26,7 +35,7 @@ def test_notice_reports_opted_in_unknown_costs_excluded_from_current_total():
 
     text = format_budget_policy_notice(_payload())
 
-    assert "비용 미확인 2건은 합계에서 제외하고 계속 진행합니다." in text
+    assert "비용 미확인 2건은 금액 합계에서 제외합니다." in text
     assert "비용 미확인 2건이 $0" not in text
     assert "공급자 청구서 확정액이 아닙니다" in text
 
@@ -41,7 +50,7 @@ def test_notice_reports_invalid_unknown_cost_count_as_unknown_and_escapes_text()
     ), event_id="evt-<unsafe>")
 
     assert "비용 미확인 건수: 미확인" in text
-    assert "비용 미확인 0건은 합계에서 제외하고 계속 진행합니다." not in text
+    assert "비용 미확인 0건은 금액 합계에서 제외합니다." not in text
     assert "<script>" not in text
     assert "<img" not in text
     assert "evt-&lt;unsafe&gt;" in text
@@ -70,7 +79,7 @@ def test_month_reset_reports_previous_month_unknown_costs_excluded_from_total():
         },
     ))
 
-    assert "이전 월 비용 미확인 3건은 합계에서 제외하고 계속 진행했습니다." in text
+    assert "이전 월 비용 미확인 3건은 금액 합계에서 제외했습니다." in text
     assert "새 월 비용 미확인" not in text
 
 

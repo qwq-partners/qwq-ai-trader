@@ -9,7 +9,7 @@ from src.analytics import llm_decision_record as rec
 from src.analytics.llm_decision_record import DecisionRecorder, attempt_record, decision_record, set_decision_recorder
 from src.core.adversarial_validator import BEAR_SUFFIX, BULL_SUFFIX, AdversarialValidator
 from src.core.cross_validator import CrossStrategyValidator
-from src.utils.llm import LLMProvider, LLMResponse
+from src.utils.llm import LLMConfig, LLMProvider, LLMResponse
 
 
 @pytest.fixture
@@ -236,6 +236,7 @@ def test_llm_manager_trail_collects_every_real_attempt(monkeypatch):
     """P1: complete_with 한 호출 안의 재시도(빈 응답 → 재시도)가 trail 2행으로 남고 응답에 붙는다."""
     from src.utils.llm import LLMManager, LLMUsage
     mgr = object.__new__(LLMManager)
+    mgr.config = LLMConfig()
     mgr.daily_usage = LLMUsage()
     monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
 
@@ -293,6 +294,7 @@ def test_trail_survives_cancellation_and_exception(monkeypatch):
     """P1: 빈 응답(비용 발생) 뒤 재시도가 취소/예외로 끝나도 이미 보낸 호출의 예약 토큰은 예외에 남는다."""
     from src.utils.llm import LLMManager, LLMUsage
     mgr = object.__new__(LLMManager)
+    mgr.config = LLMConfig()
     mgr.daily_usage = LLMUsage()
     monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
 
@@ -356,6 +358,7 @@ def test_fallback_generic_exception_is_recorded_with_prior_attempts(monkeypatch,
 def test_empty_string_requested_model_is_preserved_in_trail(monkeypatch):
     from src.utils.llm import LLMManager, LLMUsage, _ATTEMPT_TRAIL
     mgr = object.__new__(LLMManager)
+    mgr.config = LLMConfig()
     mgr.daily_usage = LLMUsage()
     monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
     token = _ATTEMPT_TRAIL.set([])
@@ -373,6 +376,7 @@ def test_fallback_timeout_through_wait_for_keeps_trail_and_token(monkeypatch, re
     import src.core.cross_validator as cv
     from src.utils.llm import LLMManager, LLMUsage
     mgr = object.__new__(LLMManager)
+    mgr.config = LLMConfig()
     mgr.daily_usage = LLMUsage()
     monkeypatch.setattr(mgr, "_audit_attempt", lambda *a, **k: None, raising=False)
 
@@ -422,7 +426,7 @@ def test_unknown_usage_tokens_are_none_not_zero():
                          role_system_sha256=None, role_suffix="x")
     assert row["input_tokens"] is None and row["output_tokens"] is None and row["usage_known"] is False
     from src.utils.llm import LLMManager, LLMUsage, _ATTEMPT_TRAIL
-    mgr = object.__new__(LLMManager); mgr.daily_usage = LLMUsage(); mgr._audit_attempt = lambda *a, **k: None
+    mgr = object.__new__(LLMManager); mgr.config = LLMConfig(); mgr.daily_usage = LLMUsage(); mgr._audit_attempt = lambda *a, **k: None
     token = _ATTEMPT_TRAIL.set([])
     try:
         mgr._account_attempt(_resp("", success=False, usage_known=False, input_tokens=0, output_tokens=0), "t", "r")

@@ -73,8 +73,8 @@ def _skipped_unknown_cost_line(payload: Mapping[str, Any], *, previous_month: bo
     if count == 0:
         return None
     prefix = "이전 월 " if previous_month else ""
-    ending = "계속 진행했습니다." if previous_month else "계속 진행합니다."
-    return f"{prefix}비용 미확인 {count}건은 합계에서 제외하고 {ending}"
+    ending = "제외했습니다." if previous_month else "제외합니다."
+    return f"{prefix}비용 미확인 {count}건은 금액 합계에서 {ending}"
 
 
 def _cost_terms(payload: Mapping[str, Any]) -> list[str]:
