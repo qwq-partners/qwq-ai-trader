@@ -419,12 +419,12 @@ class CapturePlan:
                 raise ValueError('사전 고정/보유시간 범위 위반')
             if s['version'] == LLM_VERSION:
                 local_admission_end = admission_end.astimezone(KST)
-                # This is only the common live_screening entry_time necessary
-                # condition. It does not promise a strategy signal, an LLM call,
-                # or an entry/quote latency outcome.
-                if not (time(9, 15) <= local_start.time()
+                # 신규 설치만 검사: live_screening 공통 시간과 LLM 이전의
+                # 비코어 KR BUY 교차검증(09:30 전 차단)을 모두 만족해야 한다.
+                # 신호·점수 통과·LLM 호출·호가 지연 결과를 보장하지는 않는다.
+                if not (time(9, 30) <= local_start.time()
                         and local_admission_end.time() <= time(15, 1)):
-                    raise ValueError('LLM 수집 입장 창은 KST 09:15~15:01 범위 전체여야 한다')
+                    raise ValueError('LLM 수집 입장 창은 KST 09:30~15:01 범위 전체여야 한다')
                 tail = end - admission_end
                 tail_seconds = (Decimal(tail.days * 86400 + tail.seconds)
                                 + Decimal(tail.microseconds) / Decimal(1_000_000))

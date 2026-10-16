@@ -1,5 +1,6 @@
 """Fixed future preparation with real local runtime/journal; no broker/socket API."""
 import asyncio
+from copy import deepcopy
 import json
 from hashlib import sha256
 from pathlib import Path
@@ -30,6 +31,14 @@ async def installed(tmp_path, *, head='a'*40):
         (('study', 'study.json'), ('engine_manifest', 'manifest.json'), ('once', 'once.json'))}}
     manifest, files = payloads(installer, head)
     installer.validate_payload(manifest, files)
+    # 자원 시험의 새 설치만 미래 안전 창으로 이동한다. 고정 installer/profile은 보존한다.
+    study = installer.document(files['study'])
+    study['as_of'] = '2026-10-16T00:56:00+00:00'
+    study['capture'].update(start_at='2026-10-16T00:30:00+00:00',
+        admission_end_at='2026-10-16T00:40:00+00:00', end_at=study['as_of'])
+    files['study'] = installer.raw(study)
+    files['engine_manifest'] = installer.raw(dict(study_path=str(installer.NEW['study']),
+        study_sha256=sha256(files['study']).hexdigest()))
     for key in ('study', 'engine_manifest', 'once'):
         installer.NEW[key].write_bytes(files[key])
         installer.NEW[key].chmod(0o600)
@@ -48,8 +57,14 @@ async def projection(bot):
     return await KRAPIHandler(SimpleNamespace(bot=bot)).get_entry_observation_readiness(request())
 
 
-def prepared(value):
-    return module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), value)
+def legacy_profile_resource_check(value):
+    # 자원 술어만 과거 profile에 투영한다. 실제 활성화 시험은 원본 projection을 전달한다.
+    projection = deepcopy(value)
+    if type(projection.get('llm')) is not dict:
+        return False
+    projection['llm'].update(start_at='2026-10-16T00:15:00+00:00',
+        admission_end_at='2026-10-16T00:25:00+00:00', end_at='2026-10-16T00:41:00+00:00')
+    return module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), projection)
 
 
 @pytest.mark.asyncio
@@ -59,10 +74,11 @@ async def test_real_preparation_checks_hook_actual_resources_and_unconnected_cap
         response = await projection(bot)
         assert response.status == 200
         data = json.loads(response.text)
-        assert prepared(data)
-        assert data['llm']['start_at'] == '2026-10-16T00:15:00+00:00'
-        assert data['llm']['admission_end_at'] == '2026-10-16T00:25:00+00:00'
-        assert data['llm']['end_at'] == '2026-10-16T00:41:00+00:00'
+        assert legacy_profile_resource_check(data)
+        assert not module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), data)
+        assert data['llm']['start_at'] == '2026-10-16T00:30:00+00:00'
+        assert data['llm']['admission_end_at'] == '2026-10-16T00:40:00+00:00'
+        assert data['llm']['end_at'] == '2026-10-16T00:56:00+00:00'
         assert data['llm']['operational_demand'] == 16
         assert data['llm']['required_new_channels'] == 15
         assert data['llm']['connected'] is False
@@ -90,9 +106,9 @@ async def test_activation_rejects_missing_unbounded_or_exhausted_memory(tmp_path
         data = json.loads((await projection(bot)).text)
         data['llm'].update(retained_memory_limit_bytes=512 * 1024 * 1024,
                            retained_memory_bytes=0, memory_exhausted=False)
-        assert prepared(data)
+        assert legacy_profile_resource_check(data)
         data['llm'][field] = value
-        assert not prepared(data)
+        assert not legacy_profile_resource_check(data)
     finally:
         await r.close('test_finished')
 
@@ -127,7 +143,7 @@ async def test_prepared_never_promotes_missing_or_mutated_runtime(tmp_path, defe
         elif defect == 'writer': r.journal._fail('synthetic_writer_failed')
         elif defect == 'projection': r.buffer.selection_basis_settings = None
         response = await projection(bot)
-        assert response.status == 503 or not prepared(json.loads(response.text))
+        assert response.status == 503 or not legacy_profile_resource_check(json.loads(response.text))
     finally:
         q._send = None
         await r.close('test_finished')
@@ -141,9 +157,9 @@ async def test_connected_operational_acks_suffice_without_future_candidate_acks(
     q.interval = 0
     try:
         assert await bot.ws_feed.connect()
-        assert not prepared(json.loads((await projection(bot)).text))
+        assert not legacy_profile_resource_check(json.loads((await projection(bot)).text))
         for key in list(q._states): await q.handle_ack(ack(key), q.generation)
-        assert prepared(json.loads((await projection(bot)).text))
+        assert legacy_profile_resource_check(json.loads((await projection(bot)).text))
         assert not q._leases
     finally:
         await bot.ws_feed.disconnect()
@@ -161,12 +177,12 @@ async def test_closing_actual_feed_cannot_reuse_old_owner_acks(tmp_path):
     try:
         assert await feed.connect()
         for key in list(q._states): await q.handle_ack(ack(key), q.generation)
-        assert prepared(json.loads((await projection(bot)).text))
+        assert legacy_profile_resource_check(json.loads((await projection(bot)).text))
         await q._lock.acquire()
         closing = asyncio.create_task(feed._close_managed_socket(feed._ws, q.generation))
         await asyncio.sleep(0)
         assert feed._connected is False and q._send is not None
-        assert not prepared(json.loads((await projection(bot)).text))
+        assert not legacy_profile_resource_check(json.loads((await projection(bot)).text))
     finally:
         if q._lock.locked(): q._lock.release()
         if closing is not None: await closing
@@ -177,13 +193,13 @@ async def test_closing_actual_feed_cannot_reuse_old_owner_acks(tmp_path):
 @pytest.mark.parametrize('setup', [PROFILE], indirect=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize('defect', [None, 'old_start', 'old_admission', 'old_end', 'epoch', 'study', 'llm'])
-async def test_installer_once_runtime_projection_activates_once_without_checkout(setup, tmp_path, defect):
+async def test_retired_profile_rejects_future_safe_runtime_projection_without_checkout(setup, tmp_path, defect):
     s = setup
     object.__setattr__(s.cfg, 'old_head', s.cfg.new_head)
     s.source.write_bytes(b'new\n')
     r, bot, _ = await installed(tmp_path, head=s.cfg.new_head)
-    # Bind activation to the exact installer artifacts consumed by the runtime;
-    # never rewrite a projection's hash or dates just to fit the activation.
+    # 합성 새 설치의 실제 지문을 연결하되 날짜 투영을 변조하지 않는다.
+    # 고정 과거 profile은 새로운 안전 창을 활성화할 수 없어야 한다.
     once = tmp_path / 'once.json'
     object.__setattr__(s.cfg, 'once_path', once)
     object.__setattr__(s.cfg, 'study_sha256', r.plan.study_sha256)
@@ -204,7 +220,7 @@ async def test_installer_once_runtime_projection_activates_once_without_checkout
         elif defect == 'llm': readiness.pop('llm')
         s.anchors.update(readiness)
         result = s.run()
-        assert result['status'] == ('failed' if defect else 'complete') and not result['toss_attempted']
+        assert result['status'] == 'failed' and not result['toss_attempted']
         assert result['restart_attempted'] is True and result['rollback'] == 'not_needed'
         assert sum('restart' in e for e in s.events) == 1
         assert not any('checkout' in e for e in s.events)

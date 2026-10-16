@@ -22,11 +22,11 @@ NOW = datetime(2026, 10, 14, 23, 55, tzinfo=timezone.utc)
 
 def fixed_llm(c):
     llm_plan(c)
-    c.update(evaluation_epoch=EPOCH, as_of='2026-10-15T00:41:00+00:00')
+    c.update(evaluation_epoch=EPOCH, as_of='2026-10-15T00:56:00+00:00')
     c['markout_policy']['horizon_seconds'] = 900
     s = c['capture']
-    s.update(start_at='2026-10-15T00:15:00+00:00',
-             admission_end_at='2026-10-15T00:25:00+00:00', end_at=c['as_of'],
+    s.update(start_at='2026-10-15T00:30:00+00:00',
+             admission_end_at='2026-10-15T00:40:00+00:00', end_at=c['as_of'],
              max_scans=4, rest_market_state_evidence=True,
              record_allocations=dict(ws_quote=50000, market_state=50000, other=8000),
              buffer_capacity=110000, queue_capacity=110000, batch_size=64,
@@ -74,9 +74,9 @@ async def test_real_preparation_checks_hook_actual_resources_and_unconnected_cap
         data = json.loads(response.text)
         assert not module().capture_prepared(SimpleNamespace(engine_only=True, evaluation_epoch=EPOCH), data)
         assert legacy_profile_resource_check(data)
-        assert data['llm']['start_at'] == '2026-10-15T00:15:00+00:00'
-        assert data['llm']['admission_end_at'] == '2026-10-15T00:25:00+00:00'
-        assert data['llm']['end_at'] == '2026-10-15T00:41:00+00:00'
+        assert data['llm']['start_at'] == '2026-10-15T00:30:00+00:00'
+        assert data['llm']['admission_end_at'] == '2026-10-15T00:40:00+00:00'
+        assert data['llm']['end_at'] == '2026-10-15T00:56:00+00:00'
         assert data['llm']['operational_demand'] == 16
         assert data['llm']['required_new_channels'] == 15
         assert data['llm']['connected'] is False

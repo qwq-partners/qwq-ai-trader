@@ -489,7 +489,7 @@ def study_context(m, head='a'*40):
             max_snapshot_age_seconds='1',risk_per_trade_pct='0.7',max_position_pct='18'),capture=capture)
 
 
-def test_final_synthetic_artifact_loads_real_0915_llm_plan(m,tmp_path,monkeypatch):
+def test_final_synthetic_artifact_loader_rejects_incompatible_0915_llm_window(m,tmp_path,monkeypatch):
     from datetime import datetime, timezone
     from src.analytics.entry_observation_runtime import CapturePlan
     monkeypatch.setattr(m,'ENGINE_STATE',tmp_path/'engine-state')
@@ -498,9 +498,8 @@ def test_final_synthetic_artifact_loads_real_0915_llm_plan(m,tmp_path,monkeypatc
     m.validate_payload(doc,files)
     m.NEW['study'].write_bytes(files['study'])
     m.NEW['engine_manifest'].write_bytes(files['engine_manifest'])
-    plan=CapturePlan.load(m.NEW['engine_manifest'],now=datetime(2026,10,16,0,10,tzinfo=timezone.utc))
-    assert plan.start_at.isoformat()=='2026-10-16T00:15:00+00:00'
-    assert plan.end_at.isoformat()=='2026-10-16T00:41:00+00:00'
+    with pytest.raises(ValueError, match='LLM 수집 입장 창'):
+        CapturePlan.load(m.NEW['engine_manifest'],now=datetime(2026,10,16,0,10,tzinfo=timezone.utc))
     assert not (m.ENGINE_STATE/'engine.jsonl').exists()
 
 
