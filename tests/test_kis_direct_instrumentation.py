@@ -1,4 +1,4 @@
-"""Direct KIS provider calls report bounded telemetry at their HTTP boundary."""
+"""실제 공급자 조회의 요청 경계에서 직접 KIS 집계와 기존 동작을 대조한다."""
 import asyncio
 from types import SimpleNamespace
 
@@ -148,7 +148,7 @@ def test_each_direct_kis_get_counts_non_200_without_reading_its_body(
 
 
 def test_decoded_api_error_invalid_json_timeout_and_cancellation_keep_existing_provider_flow(monkeypatch):
-    provider, _ = _market([_Response(body={"rt_cd": "1", "rt_cd": "EGW00215"})])
+    provider, _ = _market([_Response(body={"rt_cd": "EGW00215"})])
     assert asyncio.run(provider.fetch_sector_indices()) == []
     api = _row("sector_indices")
     assert (api["api_error"], api["egw00215"]) == (1, 1)

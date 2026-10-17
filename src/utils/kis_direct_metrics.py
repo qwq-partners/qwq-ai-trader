@@ -55,7 +55,7 @@ _recorder = DirectKISMetrics()
 
 
 def _increment(key: tuple[str, str, str], field: str) -> None:
-    """Observation failures must never affect a direct provider call."""
+    """계측 실패는 공급자 호출의 반환이나 예외를 바꾸지 않는다."""
     try:
         _recorder.increment(key, field)
     except Exception:
@@ -115,7 +115,7 @@ class _Observation:
         return True
 
     async def json(self, response: Any) -> Any:
-        """Read the existing body once and classify only that decoded envelope."""
+        """기존 본문을 한 번만 읽고 응답 봉투의 결과만 분류한다."""
         try:
             data = await response.json()
         except asyncio.CancelledError:
@@ -141,8 +141,9 @@ class _Observation:
         else:
             self._finish("api_error", data)
 
+
 def observe_get(component: str, operation: str, tr_id: str) -> _Observation:
-    """Observe exactly one direct GET attempt after its existing limiter call."""
+    """기존 리미터를 통과한 직접 GET 시도 한 건을 관측한다."""
     return _Observation(component, operation, tr_id)
 
 

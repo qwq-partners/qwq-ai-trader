@@ -1,4 +1,4 @@
-"""Bounded telemetry for direct KIS GET requests."""
+"""직접 KIS GET 관측의 고정 차원과 실패 격리를 검증한다."""
 import asyncio
 import importlib
 
@@ -51,6 +51,21 @@ def test_success_snapshot_is_fixed_and_independent(metrics):
     assert (row["attempts"], row["success"]) == (1, 1)
     row["success"] = 999
     assert _row(metrics.snapshot(), "sector_indices")["success"] == 1
+
+
+def test_untrusted_labels_collapse_without_retaining_identity(metrics):
+    for index in range(100):
+        with metrics.observe_get(
+            f"private-account-{index}", f"005930-{index}", f"private-token-{index}"
+        ) as observed:
+            observed.observe_response(_Response(status=503))
+    snapshot = metrics.snapshot()
+    assert len(snapshot["http"]) == 1
+    row = snapshot["http"][0]
+    assert (row["component"], row["operation"], row["tr_id"]) == ("other",) * 3
+    assert (row["attempts"], row["http_error"]) == (100, 100)
+    assert "private" not in str(snapshot)
+    assert "005930" not in str(snapshot)
 
 
 @pytest.mark.parametrize(
