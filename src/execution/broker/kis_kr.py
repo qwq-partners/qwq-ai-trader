@@ -514,7 +514,11 @@ class KISBroker(BaseBroker):
                                 try:
                                     _body = await resp.json()
                                     err_data = _body if isinstance(_body, dict) else {}
-                                    observed("http_error", str(err_data.get("msg_cd", "")) == "EGW00215")
+                                    observed(
+                                        "http_error",
+                                        egw00215=str(err_data.get("msg_cd", "")) == "EGW00215",
+                                        egw00201=str(err_data.get("msg_cd", "")) == "EGW00201",
+                                    )
                                     if self._is_token_error(err_data) and attempt < 2:
                                         logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
                                         await self._recover_token()
@@ -548,7 +552,8 @@ class KISBroker(BaseBroker):
                         if isinstance(data, dict):
                             observed("http_error" if resp.status >= 400 else
                                      "success" if str(data.get("rt_cd", "")) == "0" else "api_error",
-                                     str(data.get("msg_cd", "")) == "EGW00215")
+                                     egw00215=str(data.get("msg_cd", "")) == "EGW00215",
+                                     egw00201=str(data.get("msg_cd", "")) == "EGW00201")
                         if self._is_token_error(data) and attempt < 2:
                             logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
                             await self._recover_token()
@@ -2213,7 +2218,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"잔고 조회 오류: {e}")
             return {}
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("quote")
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """현재가 조회"""
         if not self.is_connected:
@@ -2268,7 +2273,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"현재가 조회 오류: {e}")
             return {}
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("overtime_quote")
     async def get_overtime_quote(self, symbol: str) -> Dict[str, Any]:
         """넥스트장(시간외단일가) 현재가 조회 — FHPST02300000
 
@@ -2386,7 +2391,7 @@ class KISBroker(BaseBroker):
     # 과거 일봉 데이터 조회
     # ============================================================
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("daily_prices")
     async def get_daily_prices(self, symbol: str, days: int = 60) -> List[Dict[str, Any]]:
         """
         과거 일봉 OHLCV 데이터 조회
@@ -2414,7 +2419,7 @@ class KISBroker(BaseBroker):
             all_rows: List[Dict[str, Any]] = []
             max_pages = 5  # 안전 상한 (100행×5=500거래일)
 
-            for _ in range(max_pages):
+            for page in range(1, max_pages + 1):
                 params = {
                     "fid_cond_mrkt_div_code": "J",
                     "fid_input_iscd": symbol.zfill(6),
@@ -2424,7 +2429,8 @@ class KISBroker(BaseBroker):
                     "fid_org_adj_prc": "1",  # 수정주가 반영
                 }
 
-                data = await self._api_get(url, tr_id, params)
+                with kis_request_metrics.request_page(page):
+                    data = await self._api_get(url, tr_id, params)
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":

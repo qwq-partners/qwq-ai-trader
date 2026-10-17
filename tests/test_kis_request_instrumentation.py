@@ -151,11 +151,11 @@ def test_health_reads_recent_limiter_without_mutation_and_distinguishes_unknown(
     assert collector.get_system_health()["broker"]["rate_limit_calls_last_sec"] is None
 
 
-def test_other_logical_operation_counts_quote_without_retaining_symbol(broker):
+def test_quote_operation_counts_without_retaining_symbol(broker):
     install(broker, [response({"rt_cd": "0", "output": {"stck_prpr": "100"}})])
     asyncio.run(broker.get_quote("005930"))
-    assert row("logical", "other")["calls"] == 1
-    assert row("http", "other")["attempts"] == 1
+    assert row("logical", "quote")["calls"] == 1
+    assert row("http", "quote")["attempts"] == 1
     assert "005930" not in str(metrics.snapshot())
 
 
