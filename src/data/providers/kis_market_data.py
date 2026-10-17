@@ -21,6 +21,7 @@ from loguru import logger
 
 from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
+from src.utils import kis_direct_metrics  # 직접 KIS GET의 고정 차원 관측
 from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-15)
 from src.analytics.selection_source_status import mark_source
 
@@ -141,14 +142,17 @@ class KISMarketData:
 
                 await kis_rate_limit.acquire()
                 calls += 1
-                async with session.get(url, headers=headers, params=params) as resp:
+                async with kis_direct_metrics.observe_get(
+                    "market_data", "holidays", "CTCA0903R"
+                ) as observed, session.get(url, headers=headers, params=params) as resp:
+                    observed.observe_response(resp)
                     if resp.status != 200:
                         # 뒤 조회 실패는 앞에서 모은 휴장일을 유지한다 (캐시하지 않음)
                         (logger.error if calls == 1 else logger.warning)(
                             f"휴장일 조회 실패: HTTP {resp.status} (BASS_DT={params['BASS_DT']}, 수집 {len(holidays)}일 유지)")
                         return holidays
 
-                    data = await resp.json()
+                    data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     logger.warning(
@@ -222,12 +226,15 @@ class KISMarketData:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "sector_indices", "FHPUP02140000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     logger.error(f"업종지수 조회 실패: HTTP {resp.status}")
                     return result
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     logger.warning(f"업종지수 API 오류: {data.get('msg1')}")
@@ -300,13 +307,16 @@ class KISMarketData:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "fluctuation_rank", "FHPST01700000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"등락률 순위 조회 실패: HTTP {resp.status}")
                     return result
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     _mark_selection_source("error", reason="api")
@@ -391,13 +401,16 @@ class KISMarketData:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "foreign_institution", "FHPTJ04400000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"{investor_name} 매매동향 조회 실패: HTTP {resp.status}")
                     return result
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     _mark_selection_source("error", reason="api")
@@ -488,11 +501,14 @@ class KISMarketData:
                 "FID_RANK_SORT_CLS_CODE_2": "0",
             }
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "frgnmem_trade_estimate", "FHKST644100C0"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS] 외국계가집계 HTTP {resp.status}")
                     return result
-                data = await resp.json()
+                data = await observed.json(resp)
                 rt_cd = data.get("rt_cd")
                 if rt_cd != "0":
                     msg1 = data.get("msg1", "")
@@ -566,10 +582,13 @@ class KISMarketData:
                 "FID_INPUT_ISCD": symbol,
             }
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "stock_investor_daily", "FHKST01010900"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     return result
-                data = await resp.json()
+                data = await observed.json(resp)
                 if data.get("rt_cd") != "0":
                     return result
                 for item in data.get("output", []):
@@ -674,11 +693,14 @@ class KISMarketData:
             url = f"{self._token_manager.base_url}/uapi/domestic-stock/v1/quotations/investor-trend-estimate"
             params = {"MKSC_SHRN_ISCD": symbol}
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "investor_trend_estimate", "HHPTJ04160200"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS] 추정가집계({symbol}) HTTP {resp.status}")
                     return None
-                data = await resp.json()
+                data = await observed.json(resp)
                 rt_cd = data.get("rt_cd")
                 if rt_cd != "0":
                     msg1 = data.get("msg1", "")
@@ -780,11 +802,14 @@ class KISMarketData:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "stock_valuation", "FHKST01010100"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     return None
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     return None
@@ -970,14 +995,17 @@ class KISMarketData:
                     "FID_INPUT_ISCD": symbol,
                 }
                 await kis_rate_limit.acquire()
-                async with session.get(url, headers=headers, params=params) as resp:
+                async with kis_direct_metrics.observe_get(
+                    "market_data", "night_futures_quote", "FHMIF10000000"
+                ) as observed, session.get(url, headers=headers, params=params) as resp:
+                    observed.observe_response(resp)
                     if resp.status != 200:
                         logger.warning(
                             f"[KIS] 야간선물 시세 조회 실패: HTTP {resp.status} "
                             f"(div={mrkt_div})"
                         )
                         continue
-                    data = await resp.json()
+                    data = await observed.json(resp)
                     if data.get("rt_cd", "") != "0":
                         logger.warning(
                             f"[KIS] 야간선물 시세 오류: rt_cd={data.get('rt_cd')} "
@@ -1109,11 +1137,14 @@ class KISMarketData:
                 "FID_INPUT_ISCD": index_code,
             }
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "market_data", "index_price", "FHPUP02100000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS 지수] {label} HTTP {resp.status}")
                     return None
-                data = await resp.json()
+                data = await observed.json(resp)
                 if data.get("rt_cd") != "0":
                     logger.debug(f"[KIS 지수] {label} API 오류: {data.get('msg1')}")
                     return None
