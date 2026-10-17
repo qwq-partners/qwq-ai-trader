@@ -20,6 +20,16 @@ def m():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def installation_clock(m, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 17, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(m, 'datetime', Clock)
+    monkeypatch.setattr(m.core, 'datetime', Clock)
+
+
 def test_v2_paths_and_payload_do_not_reuse_v1(m):
     c = m.core
     old = v1.m.__wrapped__()

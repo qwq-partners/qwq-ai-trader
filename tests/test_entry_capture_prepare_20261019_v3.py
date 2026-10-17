@@ -1,5 +1,6 @@
 """Third Monday epoch; every filesystem and service fixture is synthetic."""
 import importlib.util
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,16 @@ def m():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@pytest.fixture(autouse=True)
+def installation_clock(m, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 17, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(m.transaction, 'datetime', Clock)
+    monkeypatch.setattr(m.core, 'datetime', Clock)
 
 
 def test_v3_fixed_identities_and_both_preserved_inventories(m):
@@ -321,3 +332,19 @@ def test_v3_cli_help_identifies_correct_installation(m, capsys):
         m.main(['--help'])
     assert exit_info.value.code == 0
     assert 'Fixed October 19 v3 capture' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('instant', ['2026-10-19T00:20:00+00:00',
+                                    '2026-10-19T00:25:00+00:00',
+                                    '2027-01-01T00:00:00+00:00'])
+@pytest.mark.parametrize('apply', [False, True])
+def test_v3_deadline_rejects_before_host_or_file_reads(m, monkeypatch, instant, apply):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(instant).astimezone(tz)
+    monkeypatch.setattr(m.transaction, 'datetime', Clock)
+    monkeypatch.setattr(m.core, 'load_manifest', lambda _: pytest.fail('manifest read after deadline'))
+    monkeypatch.setattr(m.core, 'Host', lambda: pytest.fail('host created after deadline'))
+    with pytest.raises(m.core.GuardError, match='installation_deadline_passed'):
+        m.prepare('a'*64, apply=apply)
