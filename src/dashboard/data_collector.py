@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ..utils import loop_heartbeat as _hb
-from ..utils import kis_request_metrics
+from ..utils import kis_request_metrics, kis_direct_metrics
 
 # pykrx: lazy import (동기 블로킹 방지)
 # 실제 사용하는 함수 내부에서 import
@@ -1571,6 +1571,7 @@ class DashboardDataCollector:
             }
             if is_kr_broker:
                 broker_stats["kis_requests"] = kis_request_metrics.snapshot()
+                broker_stats["kis_direct_requests"] = kis_direct_metrics.snapshot()
 
         # 엔진 리스크 매니저
         risk_stats = {}
