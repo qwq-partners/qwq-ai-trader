@@ -8,9 +8,39 @@
 
 **DO:** 고정 해시의 v3→v2→v1 설치 코드에서 검증된 트랜잭션을 재사용한다. 기존 세 예약의 입력·설치·백업156파일을 보존하며 이전 타이머의 중지/비활성 및 미소비를 설치 각 경계와 활성화의 영수증 소비 전·재시작 전에 검사한다. 새 실제 SHA/PID/명령·소스/설정 지문은 배포와150초 이상 기동 점검 뒤 고정한다. 독립 중요 검토 후 staging/check/apply를 실행하고 새/과거 입력·백업·예약을 대조한다. 설치 실패 후 과거 타이머를 자동 재가동하지 않는다.
 
+**DO — 운영 배포:** [PR #216](https://github.com/qwq-partners/qwq-ai-trader/pull/216)을 병합한 고정 `a0bc9c942e88ae9c1d41742cf92cecb2d84d23b3`를10월18일00:57:15 KST 재기동했다. 기존 배포 잠금 안에서 v3를 중지한 뒤 `local_deploy.sh`를 실행해 rc0·롤백 없음으로 완료했다. 운영 전체7290 passed/2 skipped/2 xfailed·격리0·문법/비밀검사 통과다. PR CI39046254028와 main CI39046602746도7290건 통과했다.
+
+**SEE — 기동:** 155초 뒤 PID2208722·NRestarts0·복구ready·미체결0·정체0·ERROR/Traceback0·KIS 거절/토큰 오류0을 확인했다. 보호606경로의 설정/과거 관측/기존 v3 판독 원본 지문과 기존 비용 행은 보존됐고 KR 매수 중지·월100·unknown1/normal·log_and_continue가 유지됐다. 새 `kis_direct_requests`가 실제 health에 노출됐으며 기동 조회5건(휴장4·업종1)은 성공으로 집계됐다. 이는 장중 호출 절감률이나 수익성 실측이 아니다.
+
 **판독:** 기존 v3 소스/manifest를 보존하고 새 v4 study·원장·동일 월 판단 경로와 배포 소스로 별도 입력을 고정한다.10:05~10:20 시작 허용 창과 기존 네 CLI를 유지하며 사전검사만 수행한다. 미래 봉인·내용·판단 기록 완료는 확인 전까지 미확정이다.
 
-**SEE — 소스:** 관련778 passed/2 skipped, 전체7290 passed/2 skipped/2 xfailed·격리 위반0·문법/비밀검사 통과. 독립 중요 리뷰 미해결 P0/P1/P2 0이며 별도333검사도 통과했다. Astra/xhigh 요청, 실제 모델/실효 effort metadata 미노출이다. PR/main CI·배포·실제 입력 승인과 설치 영수증은 실행 후 추가한다. 이 소스 검증은 실수집·순수익·매수 재개 증거가 아니다.
+**SEE — 소스:** 관련778 passed/2 skipped, 전체7290 passed/2 skipped/2 xfailed·격리 위반0·문법/비밀검사 통과. 독립 중요 리뷰 미해결 P0/P1/P2 0이며 별도333검사도 통과했다. Astra/xhigh 요청, 실제 모델/실효 effort metadata 미노출이다. PR/main CI·배포·실제 입력 승인과 설치 영수증도 위·아래 실행 기록으로 확인했다. 이 소스 검증은 실수집·순수익·매수 재개 증거가 아니다.
+
+**SEE — 실제 설치·판독 준비:** 독립 중요 입력 리뷰(P0/P1/P2 0) 뒤 staging/check/apply rc0. 새8파일·과거156파일/백업·정확한 source/config/PID 지문이 일치한다. 기존v1/v2/v3는 disabled/inactive·미소비이고 새v4는 enabled/active·서비스inactive·미소비/미수집이다. 설치 중 봇 추가 재시작은 없었다. systemd 정적 검사에는 기존 별도 `claude-session.service`의 KillMode 경고만 있었으며 그 서비스는 변경하지 않았다.
+
+| 고정 항목 | 값 |
+| --- | --- |
+| 운영 SHA / PID | `a0bc9c942e88ae9c1d41742cf92cecb2d84d23b3` / `2208722` |
+| v4 설치 manifest SHA256 | `397450db7d56699b1c13d4122e1eb053ad4f4cbb5a98d1db80a6732d1fdcb63b` |
+| v4 study SHA256 | `f934355d89224610d6ce66e0649248cb28f7401a9900cda913e22d54cbb4354d` |
+| 판독 manifest SHA256 | `d77d1ca7f29b2cede164bd21fcb2076ac938fbc9de3de34230b2218fbd5653a2` |
+| 판독 소스 fingerprint | `9369e7f9b932ed115a012f6d405139962afc38e9e07a72633858b2c00f875c03` |
+| 판독 소스/입력 | `~/.local/share/qwq-capture-readout/20261019-v4/` (소스398파일) |
+| 수집 원장 | `~/.local/state/qwq-entry-observation/20261019-llm-window-v4/engine.jsonl` |
+| 판독 결과 예정 경로 | `~/.local/state/qwq-capture-readout/20261019-v4/` |
+
+판독 `--check`는 `preflight_ok`, `future_inputs_checked=false`다. 기존 v3 판독 입력과 소스는 보존했고 새 output/attempt는 생성하지 않았다. 자동 판독 예약·유료 AI 호출은 추가하지 않았다. **10월19일 실제 봉인 확인 후10:05~10:20 KST 안에서** 아래 명령으로 수동 시작한다. 미래 시각을 주입하거나 소비한 attempt를 지우지 않는다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python -I -B \
+  /home/ubuntu/.local/share/qwq-capture-readout/20261019-v4/source-a0bc9c94/scripts/ops/run_capture_readout.py \
+  --manifest /home/ubuntu/.local/share/qwq-capture-readout/20261019-v4/manifest.json
+```
+
+**남은 순서:** ① 월요일 활성화의 새 PID/영수증·복구ready·실효 구독 확인 ②10:00 이후 봉인/누락과 판단 기록 상태 확인 ③ 위 창에서 판독해 실제 후보 선정·LLM 응답 뒤 호가·장 상태·900초 bid의 결측을 나눠 기록 ④ 충족한 자료만 가격/청산/비용 비교로 넘긴다. 관측 성공만으로 순수익·매수 재개·새20일·유료 모델 비교를 승인하지 않는다.
+
+배포·기동 근거는 `~/.local/state/qwq-kis-metrics-deploy-20261018/`, 입력·설치 영수증은 `~/.local/state/qwq-oct19-v4-deployment-20261018/`, 판독 준비 영수증은 새 판독 입력 디렉터리에 보존한다. 이후 문서 커밋은 운영 HEAD를 움직이지 않는다.
+
 
 > **10월17일 판독 준비:** [월요일 판독 입력과 실행 순서](#10월17일-후속--판독-입력-고정). 기존 네 분석 도구의 소스 사본과 v3 입력 manifest를 준비해 사전검사를 통과했다. 판독 자체는 미실행·미예약이며 운영 `8003acbd`와 수집 예약을 변경하지 않았다.
 
@@ -58,6 +88,8 @@
 **남은 순서:** 월요일 활성화 전 지문/예산 재확인 →09:25~09:27 활성화·복구·구독 확인 →10:00 이후 봉인/누락·선정 단계·실제 LLM 응답 뒤 호가/장 상태/900초 bid 판독. 직접 HTTP 오류 분류/개별 송수신 시각 계측은 별도 후속이며, 실제 자료가 모이면 같은 진입 청산·모델/API 비용 후 성과를 비교한다. 새20일·유료R1·매수 재개·계좌 총수익/TWR을 자동 승인하지 않는다.
 
 ## 10월17일 후속 — 판독 입력 고정
+
+> 이 절의 v3 입력/명령은 보존 이력이다. 현재 실행 대상은 위10월18일 v4 정본이다.
 
 **PLAN:** 실제 수집 뒤 두 질문, “어떤 종목이 선택됐는가”와 “판단을 기다린 뒤 어떤 가격에 진입할 수 있었는가”에 답할 판독 경로를 미리 점검한다. 기존 단발 판독기의 네 CLI와 선정·진입 평가기를 재사용한다. 새 전략·운영 코드·예약 변경은 포함하지 않는다.
 
