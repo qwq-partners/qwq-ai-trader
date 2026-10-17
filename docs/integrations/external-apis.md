@@ -23,6 +23,22 @@
 > 미연결·`rt_cd` 실패·예외·행 정규화 실패는 미완. 기본 호출(`status=None`)은 요청·반환이 이전과 같다(`check_fills` 무변경).
 > 소비자는 초과수익 원장의 20:30 거래일 기록 대사다(설계 A §5-1).
 
+## 2026-10-17 — 대시보드 KIS 조회 절약·출처 계측 (운영 미배포)
+
+**PLAN:** 휴장 중에도 반복되던 전광판 요청을 줄이고, 추가 API 요청 없이 브로커 호출의 출처·시세 종류·거절 코드를 구분한다. 거래 가격/주문/리미터 정책과 월요일 관측의 고정 운영 입력은 유지한다.
+
+**DO:** SSE 구독자가 없으면 표시 데이터 수집을 쉬고, 접속자가 있으면 기존 갱신 주기를 재개한다. 대시보드 서버별 `DashboardMarketCache`를 SSE와 HTTP에 공유하여 같은 종목의 동시 요청을 합친다. KIS 지수2개·고정 종목3개의 표시용 응답만 보관하며, 거래용 `broker.get_quote()`는 캐시를 우회한다.
+
+- 한국 거래일/세션은 명시 KST와 공통 휴장일 판정으로 계산한다. 장중10초, 휴장/야간300초이며, 거래일08:00~20:00의 동시호가·중간 CLOSED 구간은10초를 유지한다. 날짜/세션 변경 시 다시 조회한다.
+- 미국 지수 조회는 한국 휴장 캐시와 분리한다. 무접속일 때만 SSE 전체 조회가 쉬며, 사용자 HTTP 요청은 계속 처리한다.
+- 실패/빈 응답도 같은 주기 동안 재호출을 억제한다. 이전 성공값이 있으면 `stale=true`와 원래 `fetched_at`을 유지하고 전광판에 “갱신 지연”을 표시한다. 없으면 결측/기존 Yahoo 폴백을 따른다. `fetched_at`은 대시보드가 공급자 메서드의 값을 받은 시각으로, 거래소 시각이나 새로운 HTTP 수신 인증이 아니다(공급자 자체 캐시가 있을 수 있다).
+- `kis_request_metrics`에 `dashboard_sse_indices`/`dashboard_http_indices`, `quote`/`overtime_quote`/`daily_prices`와 시세 TR3종을 고정 allowlist로 추가한다. 일봉 페이지와 EGW00201 응답도 별도 집계한다. 기록 실패는 거래 반환/재시도 제어에 영향을 주지 않는다.
+- 계측 범위는 계속 `kr_broker_get`이다. 직접 `KISMarketData`/스크리너의 HTTP 요청, 다른 프로세스, 공급자 실제 버킷은 포함되지 않는다. 이번 변경은 개별 송신/응답 시각 원장이나 direct non-200 코드 분류를 추가하지 않는다.
+
+**SEE:** 최종 전체 verify **7043 passed / 2 skipped / 2 xfailed**(253.27초, rc0), 관련61검사·최종 실제 서버 연결7검사/UTC7검사·JS 문법/지연·정상·기존 응답 표시3경우 통과. 최종 운영 상태/외부 네트워크 접근 시도0·문법/비밀정보 검사 통과. 독립 Sol/high 요청 리뷰 P0/P1/P2 0으로 승인했다(실제 모델/실효 effort metadata 미노출). 브로커 구현은 Terra/high 요청 작업자와 분리했고, 루트가 차이·시험 근거를 확인해 통합했다. 실제 KIS 감소량·거절 해소·순수익 개선은 운영 실측 전이며, 계산상 무접속 전광판 요청0·지속 접속 휴장 중 KIS 표시용 요청 최대5개/300초(재시도 별도)는 조건부 예측이다. HTTP가 사용하는 Yahoo 지수와 폴백, 거래/다른 호출의 총량은 이 예측에 포함하지 않는다.
+
+**후속 순서:** 개발 검증/병합 → 기존10월19일 고정 관측 완료 → 별도 배포와 동일 구간 요청/거절 실측. 직접 HTTP의 코드 분류·요청별 시각 귀속은 별도 후속이다. 이번 작업은 운영 배포/재시작·예약/설정 변경·증권사 API/거래 엔진 유료 LLM 수동 호출을 수행하지 않았다. 운영 체크아웃846c3215와 기존 evolved 설정의 미커밋 상태를 보존했다. 커밋/푸시 뒤 PR 및 병합 CI 상태는 GitHub 정본을 따른다.
+
 ## 브로커 — KIS (한국투자증권)
 
 **2026-10-01 작업 브랜치 — WS 호가 관측 입력 정정(미배포):** `kis_websocket`의 H0STASP0/H0NXASP0 최우선 잔량을 0-based 23/33으로 수정했다. 기존 4/14는 2호가 가격이다. [KIS 공식 KRX 필드](https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/domestic_stock/asking_price_krx/asking_price_krx.py), [공식 NXT 필드](https://raw.githubusercontent.com/koreainvestment/open-trading-api/main/examples_llm/domestic_stock/asking_price_nxt/asking_price_nxt.py)를 10-01 확인했다. TR·BSOP_HOUR 원문·HOUR_CLS_CODE·프레임 건수와 aware 수신시각을 metadata로 보존한다. HHMMSS의 거래일은 추정하지 않으며 source_as_of=null이다. 복수 레코드 분할·세션/VI 확정은 미구현, 기존 Event.timestamp/체결가/REST 매도호가 경로는 변경하지 않았다. run_trader에 기본 None 관측기용 콜백만 추가했으며 추가 구독·조회·운영 수집은 없다. 과거 손실과의 인과관계를 입증한 수정이 아니다.

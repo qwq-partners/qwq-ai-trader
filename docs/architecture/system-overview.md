@@ -505,3 +505,7 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 ### 25차 첫 후보 투영/시작 수명
 
 `entry-anchor-projection-v2`는 전체 반환≤100개와 선택 규칙을 보존하고 앞3개 판단만 전달한다. 승인 plan의 선택 규칙과 report의 전체 분모를 함께 검사한다. Runner의 `--entry-observation-once`는 비공개 영수증을 배타 생성·동기화한 뒤 기존 CapturePlan을 읽는다. 이미 소비했거나 지정 구간 밖이면 일반 기동한다. 관측 성공을 뜻하는 영수증은 아니며 원래 주문 경로는 그대로다. [설치안](../operations/entry-capture-installation-2026-10-02.md)과 [규약25차](../research/current-engine-selection-entry-protocol-2026-09-30.md) 참조.
+
+### 2026-10-17 대시보드 표시용 시세 흐름 (운영 미배포)
+
+`SSE 접속 확인 → 전광판 조회`와 `HTTP 지수 요청`은 서버별 표시용 KR 캐시를 공유한다. 캐시는 날짜/세션/주기 확인 → 같은 키의 동시 조회 합치기 → KIS 기존 메서드 호출 → 원래 조회 시각과 실패 상태 보존 순서다. 미국 지수의 주기는 별도이며, 거래 엔진의 시세·선정·주문은 이 캐시에 연결하지 않는다. 브로커 GET 계측은 고정 출처·작업·TR·페이지·거절 코드만 추가하며 제어 로직에 쓰지 않는다. [주기·결측·검증 범위](../integrations/external-apis.md#2026-10-17--대시보드-kis-조회-절약출처-계측-운영-미배포)를 따른다.

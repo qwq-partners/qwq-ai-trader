@@ -89,7 +89,7 @@ class DashboardServer:
 
         # KR REST API 라우트 (/api/*)
         if self.data_collector:
-            setup_kr_api_routes(app, self.data_collector)
+            setup_kr_api_routes(app, self.data_collector, market_cache=self.sse_manager.market_cache)
 
         # US REST API 라우트 (/api/us/*)
         if self.us_engine:
