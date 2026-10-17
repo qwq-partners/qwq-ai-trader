@@ -1,5 +1,7 @@
 # 10월19일 선정·LLM 단발 관측 — 배포와 설치
 
+> **10월17일 판독 준비:** [월요일 판독 입력과 실행 순서](#10월17일-후속--판독-입력-고정). 기존 네 분석 도구의 소스 사본과 v3 입력 manifest를 준비해 사전검사를 통과했다. 판독 자체는 미실행·미예약이며 운영 `8003acbd`와 수집 예약을 변경하지 않았다.
+
 > **2026-10-17 15:51 KST 이후 배포·v3 설치 확인:** [운영·계측·예약 근거](#10월17일-대시보드-배포와-v3-교체). PR #212 고정 `8003acbd`·PID2140438·NRestarts0·복구ready·미체결0. 운영 전체7105검사 통과, KR 매수 중지·월100·unknown1/normal·기존 원장과 설정 보존. 월요일10월19일09:25 v3 예약 enabled/active, 이전 v1/v2는 정지/미소비 보존. 실수집·순수익은 아직 미확정이다. 아래 운영·예약 상태는 각 시점의 이력이며, 후속 문서만 재배포하지 않는다.
 
 > **10월17일 오후 점검:** 아래 [주간 복기 실행 확인](#10월17일-오후--주간-복기-실행-확인)은 배포 전 점검 이력이다. 복기·모델 사용량 확인 완료, 월요일 v2 예약과 운영 고정 지문은 유지한다. 아래 미실행·예정 표시는 당시 이력이다.
@@ -42,6 +44,50 @@
 비공개 원본/정규화 영수증은 `~/.local/state/qwq-dashboard-deploy-20261017/`와 `~/.local/state/qwq-oct19-v3-deployment-20261017/`에 보존한다. 독립 리뷰는 Astra/xhigh 요청이며 실제 모델/실효 effort metadata는 미노출이다. 후속 문서 커밋은 이 운영 SHA에 다시 배포하지 않는다.
 
 **남은 순서:** 월요일 활성화 전 지문/예산 재확인 →09:25~09:27 활성화·복구·구독 확인 →10:00 이후 봉인/누락·선정 단계·실제 LLM 응답 뒤 호가/장 상태/900초 bid 판독. 직접 HTTP 오류 분류/개별 송수신 시각 계측은 별도 후속이며, 실제 자료가 모이면 같은 진입 청산·모델/API 비용 후 성과를 비교한다. 새20일·유료R1·매수 재개·계좌 총수익/TWR을 자동 승인하지 않는다.
+
+## 10월17일 후속 — 판독 입력 고정
+
+**PLAN:** 실제 수집 뒤 두 질문, “어떤 종목이 선택됐는가”와 “판단을 기다린 뒤 어떤 가격에 진입할 수 있었는가”에 답할 판독 경로를 미리 점검한다. 기존 단발 판독기의 네 CLI와 선정·진입 평가기를 재사용한다. 새 전략·운영 코드·예약 변경은 포함하지 않는다.
+
+**DO:** 검증된 main `e3318d93199063b3792629d83c4314466812992f`의 `src/`·`scripts/` 396파일만 비공개 소스 사본으로 고정했다. 실행 소스는 운영 `8003acbd`와 같고 두 커밋의 차이는 문서뿐이다. 실제 v3 study 지문을 대조하고 다음 입력 manifest의 `--check`를 실행해 `preflight_ok`를 확인했다. 원장·판단의 미래 내용/완결성 검증은 `future_inputs_checked=false`, 출력 디렉터리와 attempt는 미생성이다. 외부 API·유료 LLM 호출과 예약 등록은 하지 않았다.
+
+| 항목 | 준비한 값 |
+|---|---|
+| 소스/manifest 위치 | `~/.local/share/qwq-capture-readout/20261019-v3/` |
+| 소스 사본 | 위 경로의 `source-e3318d93/` |
+| 판독 manifest | 위 경로의 `manifest.json` |
+| 실행 소스 fingerprint | `f6fbaa2df9bb7f4a964bb3b37c2b9cb9c148f535779f7d38fd7e8810ee016cfb` |
+| 판독 manifest SHA256 | `6411450f619dff4576bb317c162064c1cc122565434d4df675bf9136e36597a5` |
+| 연결 study SHA256 | `30beffd8ecaae04199f5f0be6dc283c3fe01ab88e7c6879a23495512744783fd` |
+| 수집 원장 | `~/.local/state/qwq-entry-observation/20261019-llm-window-v3/engine.jsonl` |
+| 월 판단 원본 | `~/.cache/ai_trader/llm_decisions/decisions-2026-10.jsonl` |
+| 판독 결과 예정 경로 | `~/.local/state/qwq-capture-readout/20261019-v3/` |
+| 판독 시작 허용 창 | 10월19일10:05~10:20 KST; 자동 실행 시각이 아님 |
+
+사전검사와 준비 영수증은 소스/manifest 디렉터리의 `preflight.json`, `preparation-receipt.json`에 보존한다. 파일0600·디렉터리0700으로 준비했으며 실제 운영 입력·소스·원장 원본은 수정하지 않았다.
+
+**실행 순서:** 월요일09:25~09:27 활성화와10:00 이후 종료·봉인·입력 지문을 먼저 확인한다. 위 허용 창 안에서 다음 명령으로 판독을 시작한다. 시각 밖에서는 실행을 거부하며 attempt를 소비하지 않는다. 실패한 attempt를 삭제하거나 시계를 과거로 덮어써 재실행하지 않는다. 허용 창을 놓치거나 입력이 바뀌면 새 판독 계획과 출력 경로를 검토한다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python -I -B \
+  /home/ubuntu/.local/share/qwq-capture-readout/20261019-v3/source-e3318d93/scripts/ops/run_capture_readout.py \
+  --manifest /home/ubuntu/.local/share/qwq-capture-readout/20261019-v3/manifest.json
+```
+
+| 질문/점검 | 결과에서 볼 항목 |
+|---|---|
+| 자료를 믿고 읽을 수 있는가 | `summary.json`의 실제 하위 종료코드·입력 지문, `readiness.json`의 무결성/봉인/누락 |
+| 어떤 반환 후보가 선택됐고 진입 단계에서 왜 통과·차단됐는가 | `evaluation-unreviewed.json`의 `selection_basis`, 24단계 보정·수급 결측·SPDI 한 단계 비교; `gate-trace.json`의 후속 단계별 분모. 스크리너가 반환하기 전 제외한 종목은 이 관측 밖임 |
+| LLM 응답 뒤 호가가 있었는가 | `readiness.json`의 정확한 signal/decision 결합, 첫 호가 지연·ask·수량·같은 연결/세대의 장 상태; 미결합 판단은 결측으로 보존 |
+| 모델이 실제 호출됐고 얼마를 썼는가 | 보존된 판단 snapshot에서 위 결합 ID의 전송·응답 결과·모델·지연·사용량·비용/예산 사유를 확인. 입장 기록을 유료 전송 성공으로 해석하지 않음 |
+| 장 상태를 판단할 근거가 있는가 | `readiness.json.quote_join`의 같은 연결/세대 WebSocket 장 상태와 연결된 REST snapshot/status. `frame-diagnostics.json`은 오류 프레임·연결 공백 분류만 보며 정상장 증거로 쓰지 않음 |
+| 가격/청산 비교를 시작할 수 있는가 | `evaluation-unreviewed.json`의 `order_ready` 이후 첫 KRX 호가와 그 호가부터 +900초 bid 검토 과제. 세션 근거를 검토한 뒤 기존 가격 평가기와 동일 진입 청산 비교를 실행 |
+
+응답 지연 분석의 첫 호가는 `decision_available_at` 뒤이고, 가격 평가의 첫 호가는 `order_ready` 뒤다. 두 기준을 같은 시각으로 치환하지 않으며 호가를 실제 체결로 해석하지 않는다. `diagnostics_complete`는 판독과 원장 무결성 확인이며 수익성 판정이 아니다. 판단 기록 완료는 `unverified`, 계좌 수익은 null을 유지한다. 후보0·LLM0·호가 결측·비교 불가를 수익0으로 바꾸지 않는다. SPDI 국소 비교 역시 전체 순위·최종 선정·손익 효과가 아니다. 수집 자동 예약과 이번 수동 판독 준비, 향후 실제 판독을 구분한다.
+
+**SEE:** 입력 사전검사와 소스 사본396파일·manifest·권한 대조를 통과했다. `tests/test_capture_readout_nonempty.py`는 기존 스케줄러/엔진 fixture와 실제 네 CLI를 연결해, 후보가 있는 v3/24단계 자료·판단 기록·호가·장 상태 유무를 두 경우로 검증한다. +899초의 유리한 호가를 건너뛰고 +900초 bid를 선택하며, 장 상태가 없으면 `market_state_unknown`·평가 불가, 세션 검토가 없으면 비교쌍 없음으로 남긴다. 원본 study/원장/판단 바이트와 판단 완료 미확정·계좌 수익null·수익/운영 적격성false를 확인했다.
+
+신규2검사, 기존 단발 판독45검사, 연결/가격 평가17검사를 통과했다. 독립 Sol/high 요청 리뷰에서 신규2검사를 재실행(13.12초·격리0)해 P0/P1/P2 0으로 승인했다. 실제 모델/실효 effort metadata는 미노출이다. 통합 소스의 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`는 **7107 passed / 2 skipped / 2 xfailed**,271.31초·rc0·운영 상태/외부 네트워크 접근0·문법/비밀정보 검사 통과다. 이는 합성 연결 검증이며 실제 시장 자료·체결·순수익을 입증하지 않는다. 근거는 `~/.local/state/qwq-oct19-readout-preparation-20261017/`에 보존한다. PR/병합 CI는 해당 실행 기록을 확인하며 운영 재배포는 필요하지 않다.
 
 ## 10월17일 오후 — 주간 복기 실행 확인
 
