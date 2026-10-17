@@ -262,8 +262,12 @@ function _buildTickerHTML(indices) {
             ? Math.round(idx.price).toLocaleString() + '원'
             : idx.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
         const pctStr = (up ? '+' : '') + idx.change_pct.toFixed(2) + '%';
+        const staleLabel = idx.stale === true
+            ? '<span class="nav-ts" title="최근 조회 실패로 이전 가격을 표시합니다">갱신 지연</span>'
+            : '';
         return `<span class="${tiCls}">${idx.label}</span>` +
                `<span class="${tvCls}" style="color:${color}">${arrow} ${price} ${pctStr}</span>` +
+               staleLabel +
                `<span class="nav-ts">·</span>`;
     }).join('');
     return items + items;
