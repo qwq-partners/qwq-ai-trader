@@ -20,6 +20,16 @@ def m():
     return mod
 
 
+@pytest.fixture(autouse=True)
+def installation_clock(m, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 17, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(m, 'datetime', Clock)
+    monkeypatch.setattr(m.core, 'datetime', Clock)
+
+
 def test_v2_paths_and_payload_do_not_reuse_v1(m):
     c = m.core
     old = v1.m.__wrapped__()
@@ -102,7 +112,7 @@ def test_v2_profile_and_strict_readiness():
     assert a.capture_prepared(cfg,projection())
     value=projection();value['llm']['selection_max_modifier_stages']=23
     assert not a.capture_prepared(cfg,value)
-    with pytest.raises(a.GuardError):a.activation_profile('20261019-llm-window-v3')
+    with pytest.raises(a.GuardError):a.activation_profile('20261019-llm-window-v4')
 
 
 def test_private_core_is_hash_pinned_and_does_not_mutate_v1(m,monkeypatch):
@@ -339,7 +349,7 @@ def test_v2_activation_config_pins_only_reviewed_predeployed_contract(m,monkeypa
 
 @pytest.mark.parametrize('argv,accepted',[(['--profile','20261019-llm-window-v2'],True),
     (['--profile','20261019-llm-window-v2','--date','2026-10-20'],False),
-    (['--profile','20261019-llm-window-v3'],False)])
+    (['--profile','20261019-llm-window-v4'],False)])
 def test_v2_activation_cli_narrow(monkeypatch,capsys,argv,accepted):
     a=activation_module();selected=[]
     monkeypatch.setattr(a.sys,'argv',[a.__file__,*argv])
