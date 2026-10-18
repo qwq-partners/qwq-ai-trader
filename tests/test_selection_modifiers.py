@@ -33,15 +33,15 @@ def test_ordered_news_merge_and_modifier_accounting_preserves_scores(monkeypatch
     validate_basis(basis,score=out[0].score,rank=1,observed_at=datetime.now(timezone.utc).isoformat())
 
 
-def test_native_spdi_shadow_suppresses_only_unknown_absence_penalty(monkeypatch):
+def test_corrected_unknown_absence_does_not_claim_historical_shadow_comparison(monkeypatch):
     from src.signals.screener.kr_screener import StockScreener
     s=screener(monkeypatch,{'screen_volume_surge':[stock(score=30,change_pct=5)]})
     s._apply_spdi_filter=StockScreener._apply_spdi_filter.__get__(s)
     out=run(s,capture_selection=True,capture_selection_modifiers=True)
-    assert out[0].score==0
+    assert out[0].score==15
     shadow=out[0].selection_basis['same_input_shadow']
-    assert shadow['status']=='comparable'
-    assert (shadow['actual_before'],shadow['actual_after'],shadow['shadow_after'],shadow['shadow_delta_vs_actual'])==(15,0,15,15)
+    assert shadow['status']=='inputs_incomplete'
+    assert shadow['actual_after'] is shadow['shadow_after'] is None
     assert shadow['final_score_delta'] is shadow['gate_delta'] is shadow['economic_effect'] is None
 
 
@@ -188,7 +188,7 @@ def test_observer_internal_failures_leave_business_result_unchanged(monkeypatch,
     def fail(*a):raise RuntimeError('synthetic observer failure')
     monkeypatch.setattr(ModifierCapture,method,fail)
     out=run(s,capture_selection=True,capture_selection_modifiers=True)
-    assert out[0].score==15 and len(calls)==1
+    assert out[0].score==50 and len(calls)==1
     assert out[0].selection_basis['version']=='kr-selection-basis-v1'
 
 
@@ -230,7 +230,7 @@ async def test_context_scope_resets_after_business_exception_and_cancellation(mo
 
 
 @pytest.mark.parametrize('foreign,inst,change,base,want_actual,want_shadow',[
-    (False,False,5,100,30,50),(False,False,5,10,0,5),
+    (False,False,5,100,None,None),(False,False,5,10,None,None),
     (True,False,2,100,62,62),(True,True,2,100,80,80),
     (True,False,8,10,0,0),(False,False,2,100,50,50)])
 def test_spdi_shadow_uses_actual_stage_floor_and_legacy_flags(monkeypatch,foreign,inst,change,base,want_actual,want_shadow):
@@ -243,7 +243,7 @@ def test_spdi_shadow_uses_actual_stage_floor_and_legacy_flags(monkeypatch,foreig
     validate_basis(b,score=result[0].score,rank=1,observed_at=datetime.now(timezone.utc).isoformat())
 
 
-def test_two_observed_nonpositive_sources_keep_spdi_penalty(monkeypatch):
+def test_observer_only_rows_cannot_become_scoring_inputs(monkeypatch):
     from src.analytics.selection_modifiers import mark_candidate_supply
     from src.signals.screener.kr_screener import StockScreener
     s=screener(monkeypatch,{'screen_volume_surge':[stock(change_pct=5)]})
@@ -253,8 +253,9 @@ def test_two_observed_nonpositive_sources_keep_spdi_penalty(monkeypatch):
     s.screen_foreign_buying,s.screen_institutional_buying=foreign,inst
     out=run(s,capture_selection=True,capture_selection_modifiers=True)
     shadow=out[0].selection_basis['same_input_shadow']
-    assert shadow['actual_after']==shadow['shadow_after']==30
-    assert shadow['shadow_delta_vs_actual']==0
+    assert out[0].score == 50
+    assert shadow['status'] == 'inputs_incomplete'
+    assert shadow['actual_after'] is shadow['shadow_after'] is None
 
 
 def test_conflicting_markets_and_wrong_source_binding_stay_unknown(monkeypatch):

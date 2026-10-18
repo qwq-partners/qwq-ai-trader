@@ -11,21 +11,25 @@ pykrx market-wide 수급 데이터를 5 영업일 분 축적해 종목별 정규
   규모 보너스             → 최대 +15pt (5일 누적 주수 기준)
   가속 보너스             → +15pt (최근 2일 > 이전 3일)
 
-캐시: ~/.cache/ai_trader/supply_daily_YYYYMMDD.json (일별 저장)
+캐시: ~/.cache/ai_trader/supply_daily_v2_YYYYMMDD.json (날짜 검증 일별 저장)
 갱신: 15:40 장 마감 후 / 또는 08:15 아침 스캔 전 (전일 데이터)
 """
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+import math
+import numbers
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from loguru import logger
+from src.utils.atomic_io import atomic_write_json
 
 
 CACHE_DIR = Path.home() / ".cache" / "ai_trader"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOOKBACK_DAYS = 5       # 5 영업일
 
 
@@ -33,7 +37,7 @@ def _get_trading_dates(n: int) -> List[str]:
     """최근 n 영업일 날짜 목록 반환 (오늘 제외, 최신→오래된 순, 공휴일 제외)"""
     from src.core.engine import is_kr_market_holiday
     dates = []
-    d = datetime.now().date() - timedelta(days=1)
+    d = datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)
     while len(dates) < n:
         if d.weekday() < 5 and not is_kr_market_holiday(d):
             dates.append(d.strftime("%Y%m%d"))
@@ -55,6 +59,7 @@ class SupplyScoreProvider:
     def __init__(self):
         # {date_str: {symbol: {"foreign": int, "inst": int}}}
         self._daily: Dict[str, Dict[str, Dict[str, int]]] = {}
+        self._expected_dates: List[str] = []
         self._loaded_dates: List[str] = []   # 로드된 날짜 목록 (최신→오래된 순)
         self._score_cache: Dict[str, float] = {}    # 계산 결과 캐시
         self._meta_cache: Dict[str, dict] = {}
@@ -63,24 +68,89 @@ class SupplyScoreProvider:
     # ── 캐시 IO ───────────────────────────────────────────────────────────────
 
     def _cache_path(self, date_str: str) -> Path:
-        return CACHE_DIR / f"supply_daily_{date_str}.json"
+        if type(date_str) is not str or re.fullmatch(r"[0-9]{8}", date_str) is None:
+            raise ValueError("invalid supply date")
+        datetime.strptime(date_str, "%Y%m%d")
+        return CACHE_DIR / f"supply_daily_v2_{date_str}.json"
 
-    def _save_day(self, date_str: str, data: Dict[str, Dict[str, int]]):
+    @staticmethod
+    def _valid_day(data):
+        from src.analytics.selection_supply_policy import validated_quantity
+        if type(data) is not dict or len(data) > 10000:
+            return {}
+        result = {}
+        for symbol, row in data.items():
+            if (type(symbol) is not str or re.fullmatch(r"[0-9]{6}", symbol) is None
+                    or symbol == "000000" or type(row) is not dict):
+                continue
+            values = {side: validated_quantity(row.get(side)) for side in ("foreign", "inst")}
+            if any(value is not None for value in values.values()):
+                result[symbol] = values
+        return result
+
+    def _save_day(self, date_str: str, data, *, source: str):
+        # Separate names preserve old files without trusting possibly relabeled
+        # snapshots written by earlier versions as verified daily history.
+        if source not in ("FHKST01010900", "pykrx_exact_date"):
+            raise ValueError("unverified history source")
         try:
-            self._cache_path(date_str).write_text(
-                json.dumps(data, ensure_ascii=False)
-            )
+            path = self._cache_path(date_str)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(path, {"version": "supply-daily-v2", "source_date": date_str,
+                                     "source": source, "data": self._valid_day(data)})
         except Exception as e:
-            logger.debug(f"[수급5일] 캐시 저장 실패 {date_str}: {e}")
+            logger.debug(f"[수급5일] 캐시 저장 실패 {date_str}: {type(e).__name__}")
 
     def _load_day(self, date_str: str) -> Optional[Dict[str, Dict[str, int]]]:
         path = self._cache_path(date_str)
         if path.exists():
             try:
-                return json.loads(path.read_text())
+                raw = json.loads(path.read_text())
+                if (type(raw) is dict and raw.get("version") == "supply-daily-v2"
+                        and raw.get("source_date") == date_str
+                        and raw.get("source") in ("FHKST01010900", "pykrx_exact_date")):
+                    return self._valid_day(raw.get("data")) or None
             except Exception:
                 pass
         return None
+
+    @staticmethod
+    def _kis_day(rows, date_str):
+        from src.analytics.selection_supply_policy import validated_quantity
+        if type(rows) is not dict or len(rows) > 10000:
+            return {}
+        day = datetime.strptime(date_str, "%Y%m%d").date().isoformat()
+        result = {}
+        for symbol, row in rows.items():
+            if type(row) is not dict or type(row.get("_supply_evidence")) is not dict:
+                continue
+            values = {}
+            for side, evidence_side, numeric in (("foreign", "foreign", "foreign_net_buy"),
+                                                  ("inst", "institution", "inst_net_buy")):
+                proof = row["_supply_evidence"].get(evidence_side)
+                value = None
+                try:
+                    stamp = datetime.fromisoformat(proof["captured_at"])
+                    if (proof.get("source") == "FHKST01010900" and proof.get("status") == "observed"
+                            and proof.get("source_date") == day and stamp.tzinfo is not None
+                            and stamp <= datetime.now(timezone.utc)
+                            and day <= stamp.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+                            and type(proof.get("value")) is int
+                            and proof["value"] == validated_quantity(row.get(numeric))):
+                        value = validated_quantity(proof["value"])
+                except (TypeError, KeyError, ValueError, AttributeError):
+                    pass
+                values[side] = value
+            result[symbol] = values
+        return SupplyScoreProvider._valid_day(result)
+
+    def _finish_window(self, dates):
+        self._expected_dates = list(dates)
+        self._daily = {day: rows for day, rows in self._daily.items() if day in dates}
+        self._loaded_dates = [day for day in dates if self._daily.get(day)]
+        self._score_cache.clear()
+        self._meta_cache.clear()
+        self._ready = bool(self._loaded_dates)
 
     @property
     def is_ready(self) -> bool:
@@ -93,10 +163,10 @@ class SupplyScoreProvider:
     ) -> bool:
         """
         KIS API(FHKST01010900)로 5일치 수급 데이터 로드.
-        pykrx/KRX 완전 대체 경로.
+        KIS 미수록 날짜는 기존 pykrx 날짜 조회로만 폴백한다.
 
         최적화:
-        - 캐시 파일이 있는 날짜는 즉시 로드하고 KIS 호출 생략
+        - 검증된 v2 캐시 날짜는 즉시 로드하고 KIS 호출 생략
         - 캐시 미스 날짜들은 asyncio.gather로 병렬 조회
           (concurrency=5로 KIS rate limit 준수, 총 동시 요청 ≤ 25)
 
@@ -133,15 +203,10 @@ class SupplyScoreProvider:
                         symbols, date_str, concurrency=5
                     )
                     if kis_result:
-                        day_data = {
-                            sym: {
-                                "foreign": v.get("foreign_net_buy", 0),
-                                "inst":    v.get("inst_net_buy", 0),
-                            }
-                            for sym, v in kis_result.items()
-                        }
-                        self._daily[date_str] = day_data
-                        self._save_day(date_str, day_data)
+                        day_data = self._kis_day(kis_result, date_str)
+                        if day_data:
+                            self._daily[date_str] = day_data
+                            self._save_day(date_str, day_data, source="FHKST01010900")
                         logger.info(
                             f"[수급5일] KIS 로드 완료: {date_str} {len(day_data)}종목"
                         )
@@ -152,32 +217,29 @@ class SupplyScoreProvider:
 
             await asyncio.gather(*[_fetch_date(d) for d in missing_dates])
 
-        self._loaded_dates = [d for d in dates if d in self._daily]
-        if self._loaded_dates:
-            self._score_cache.clear()
-            self._meta_cache.clear()
-            self._ready = True
+        self._finish_window(dates)
 
-        # KIS로 못 채운 날짜가 있으면 supply_demand 캐시 폴백 (ensure_loaded 위임)
+        # KIS로 못 채운 날짜는 검증된 일별 캐시/pykrx 조회 (ensure_loaded 위임)
         still_missing = [d for d in dates if d not in self._daily]
         if still_missing:
             logger.info(
-                f"[수급5일] KIS 미수록 날짜 → 캐시 폴백: {still_missing}"
+                f"[수급5일] KIS 미수록 날짜 → 일별 자료 조회: {still_missing}"
             )
-            await self.ensure_loaded()
+            await self.ensure_loaded(_window_dates=dates)
 
         return self._ready
 
-    async def ensure_loaded(self, force_refresh_today: bool = False) -> bool:
+    async def ensure_loaded(self, force_refresh_today: bool = False, *, _window_dates=None) -> bool:
         """
         5일치 데이터 확보 (캐시 우선, 없으면 pykrx 호출).
 
         Args:
-            force_refresh_today: True이면 오늘 날짜 데이터 강제 재조회
+            force_refresh_today: True이면 가장 최근 완료 거래일 데이터 강제 재조회
         Returns:
             True if data is ready
         """
-        dates = _get_trading_dates(LOOKBACK_DAYS)
+        # Preserve the KIS request window even if midnight passes during I/O.
+        dates = list(_window_dates) if _window_dates is not None else _get_trading_dates(LOOKBACK_DAYS)
         # force_refresh_today: 가장 최신 날짜(오늘의 전일)를 재조회
         if force_refresh_today and dates:
             self._daily.pop(dates[0], None)  # 메모리에서 제거 → 재조회 유도
@@ -206,31 +268,20 @@ class SupplyScoreProvider:
             except Exception as e:
                 logger.warning(f"[수급5일] pykrx {date_str} 조회 실패: {e}")
 
-            # pykrx 실패(0종목) → supply_demand 스냅샷 캐시로 폴백
-            if not day_data:
-                day_data = self._load_supply_demand_fallback(date_str)
-                if day_data:
-                    logger.info(
-                        f"[수급5일] supply_demand 캐시 폴백: {date_str} {len(day_data)}종목"
-                    )
+            # Intraday snapshots cannot establish exact-date daily observations.
+            # A missing date remains missing, rather than copying an older day.
+            day_data = self._valid_day(day_data)
 
             if day_data:
                 self._daily[date_str] = day_data
-                self._save_day(date_str, day_data)
+                self._save_day(date_str, day_data, source="pykrx_exact_date")
                 logger.info(f"[수급5일] 로드 완료: {date_str} {len(day_data)}종목")
             else:
                 logger.warning(f"[수급5일] {date_str} 데이터 없음 (pykrx+캐시 모두 실패)")
 
-        self._loaded_dates = [d for d in dates if d in self._daily]
-
-        if self._loaded_dates:
-            self._score_cache.clear()
-            self._meta_cache.clear()
-            self._ready = True
-            logger.info(
-                f"[수급5일] 준비 완료: {len(self._loaded_dates)}일치 "
-                f"({self._loaded_dates[-1]}~{self._loaded_dates[0]})"
-            )
+        self._finish_window(dates)
+        if self._ready:
+            logger.info(f"[수급5일] 날짜 확인 자료: {len(self._loaded_dates)}/{len(dates)}일")
         return self._ready
 
     @staticmethod
@@ -240,6 +291,7 @@ class SupplyScoreProvider:
         동기 함수 — asyncio.to_thread()로 호출할 것.
         """
         import pykrx.stock as pykrx_stock
+        from src.analytics.selection_supply_policy import validated_quantity
 
         result: Dict[str, Dict[str, int]] = {}
         configs = [
@@ -259,51 +311,24 @@ class SupplyScoreProvider:
                 for ticker, row in df.iterrows():
                     sym = str(ticker).zfill(6)
                     if sym not in result:
-                        result[sym] = {"foreign": 0, "inst": 0}
-                    result[sym][field] += int(row.get("순매수거래량", 0) or 0)
+                        result[sym] = {}
+                    raw = row.get("순매수거래량")
+                    if isinstance(raw, numbers.Integral) and not isinstance(raw, bool):
+                        raw = int(raw)
+                    elif isinstance(raw, numbers.Real) and not isinstance(raw, bool):
+                        # pandas promotes an integer column containing NaN to
+                        # float64. Recover only exact finite integral values at
+                        # this dataframe boundary; never truncate fractions.
+                        raw = int(raw) if math.isfinite(raw) and float(raw).is_integer() else None
+                    value = validated_quantity(raw)
+                    if field in result[sym] and result[sym][field] != value:
+                        result[sym][field] = None
+                    elif field not in result[sym]:
+                        result[sym][field] = value
             except Exception as e:
                 logger.debug(f"[수급5일] pykrx {market}/{investor} {date_str}: {e}")
 
         return result
-
-    @staticmethod
-    def _load_supply_demand_fallback(date_str: str) -> Dict[str, Dict[str, int]]:
-        """
-        pykrx 실패 시 `supply_demand_YYYYMMDD.json` 스냅샷 캐시 폴백.
-
-        supply_demand 캐시 스키마: {sym: {"foreign_net_buy": N, "inst_net_buy": N}}
-        supply_daily  캐시 스키마: {sym: {"foreign": N, "inst": N}}
-        → 필드명 변환 후 반환.
-
-        date_str 날짜 우선 탐색, 없으면 최대 7일 이내 최신 파일 탐색 (연휴 5일 + 여유).
-        swing_screener._load_prev_day_supply_from_cache와 탐색 범위를 7일로 통일.
-        """
-        from datetime import datetime, timedelta
-        try:
-            dt = datetime.strptime(date_str, "%Y%m%d")
-        except Exception:
-            dt = datetime.now() - timedelta(days=1)
-
-        for delta in range(0, 8):  # 0=해당 날짜, 1~7=직전 최대 7일
-            target = (dt - timedelta(days=delta)).strftime("%Y%m%d")
-            path = CACHE_DIR / f"supply_demand_{target}.json"
-            if path.exists():
-                try:
-                    raw = json.loads(path.read_text())
-                    if not raw:
-                        continue
-                    # 스키마 변환: foreign_net_buy → foreign, inst_net_buy → inst
-                    converted: Dict[str, Dict[str, int]] = {
-                        sym: {
-                            "foreign": vals.get("foreign_net_buy", 0),
-                            "inst":    vals.get("inst_net_buy", 0),
-                        }
-                        for sym, vals in raw.items()
-                    }
-                    return converted
-                except Exception:
-                    pass
-        return {}
 
     # ── 점수 계산 ─────────────────────────────────────────────────────────────
 
@@ -317,19 +342,19 @@ class SupplyScoreProvider:
         if not self._loaded_dates:
             return 0.0, {}
 
-        # 날짜 순서: 최신→오래된 (loaded_dates[0]이 최신)
+        # 요청 거래일 순서: 최신→오래된. 자료가 없는 날짜도 제거하지 않는다.
         foreign_series = []
         inst_series = []
-        for date_str in self._loaded_dates:
+        for date_str in self._expected_dates:
             day = self._daily.get(date_str, {}).get(symbol, {})
-            foreign_series.append(day.get("foreign", 0))
-            inst_series.append(day.get("inst", 0))
+            foreign_series.append(day.get("foreign"))
+            inst_series.append(day.get("inst"))
 
         # 연속 순매수 일수 (최신부터 역산)
         def streak(series: List[int]) -> int:
             count = 0
             for v in series:
-                if v > 0:
+                if v is not None and v > 0:
                     count += 1
                 else:
                     break
@@ -339,12 +364,15 @@ class SupplyScoreProvider:
         inst_streak = streak(inst_series)
 
         # 5일 누적
-        foreign_5d = sum(foreign_series)
-        inst_5d = sum(inst_series)
+        def complete_sum(series):
+            return sum(series) if len(series) == LOOKBACK_DAYS and all(v is not None for v in series) else None
+
+        foreign_5d = complete_sum(foreign_series)
+        inst_5d = complete_sum(inst_series)
 
         # 가속 여부: 최근 2일 합 > 이전 3일 합
         is_accelerating = False
-        if len(foreign_series) >= 4:
+        if foreign_5d is not None:
             recent_2 = foreign_series[0] + foreign_series[1]
             prev_3 = sum(foreign_series[2:min(5, len(foreign_series))])
             if recent_2 > 0 and prev_3 > 0:
@@ -376,8 +404,8 @@ class SupplyScoreProvider:
             score += 8
 
         # 규모 보너스: 5일 누적 (최대 15pt)
-        total_5d = foreign_5d + inst_5d
-        if total_5d > 0:
+        total_5d = foreign_5d + inst_5d if foreign_5d is not None and inst_5d is not None else None
+        if total_5d is not None and total_5d > 0:
             score += min(15.0, total_5d / 50_000)  # 5만 주당 1pt
 
         # 가속 보너스 (15pt)
@@ -395,6 +423,9 @@ class SupplyScoreProvider:
             "is_accelerating": is_accelerating,
             "score":          score,
             "days_loaded":    len(self._loaded_dates),
+            "days_expected": len(self._expected_dates),
+            "days_observed": {"foreign": sum(v is not None for v in foreign_series),
+                              "inst": sum(v is not None for v in inst_series)},
         }
         return score, meta
 

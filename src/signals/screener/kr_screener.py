@@ -36,6 +36,10 @@ from src.data.providers.kis_market_data import KISMarketData, get_kis_market_dat
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
 from src.analytics.selection_basis import SelectionBasisBuilder
+from src.analytics.selection_supply_policy import (
+    POLICY_ID as SUPPLY_POLICY_ID,
+    supply_scan, evidence_rows, record_evidence, decision_snapshot,
+)
 from src.analytics.selection_modifiers import capture_scope, observe as _capture_modifier, source_scope
 from src.analytics.selection_source_status import SourceCapture, mark_source
 
@@ -412,10 +416,16 @@ class StockScreener:
         FHPTJ04400000 API로 기관 순매수 상위 조회 (코스피 + 코스닥)
         """
         cache_key = "institutional_buying"
+        evidence_cache = getattr(self, "_supply_evidence_cache", None)
+        if evidence_cache is None:
+            self._supply_evidence_cache = evidence_cache = {}
+        record_evidence("2", {})
         if self._is_cache_valid(cache_key):
+            record_evidence("2", evidence_cache.get(cache_key, {}))
             _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
+        evidence_cache.pop(cache_key, None)
         stocks = []
         kmd = self._kis_market_data or get_kis_market_data()
 
@@ -423,6 +433,8 @@ class StockScreener:
             raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="2")
             raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="2")
             raw = raw_kospi + raw_kosdaq
+            supply_rows = evidence_rows(raw)
+            record_evidence("2", supply_rows)
             # KOSPI/KOSDAQ 동일 종목 중복 제거 (KOSPI 우선)
             seen_inst = set()
             deduped_inst = []
@@ -474,10 +486,12 @@ class StockScreener:
 
             stocks.sort(key=lambda x: x.score, reverse=True)
             self._update_cache(cache_key, stocks)
+            evidence_cache[cache_key] = supply_rows
             logger.info(f"[Screener] 기관 순매수 {len(stocks)}개 발굴")
             return stocks[:limit]
 
         except Exception as e:
+            record_evidence("2", {})
             _mark_selection_source("error", reason="exception")
             logger.error(f"기관 순매수 스크리닝 오류: {e}")
             return stocks
@@ -663,10 +677,16 @@ class StockScreener:
         FHPTJ04400000 API로 외국인 순매수 상위 조회
         """
         cache_key = "foreign_buying"
+        evidence_cache = getattr(self, "_supply_evidence_cache", None)
+        if evidence_cache is None:
+            self._supply_evidence_cache = evidence_cache = {}
+        record_evidence("1", {})
         if self._is_cache_valid(cache_key):
+            record_evidence("1", evidence_cache.get(cache_key, {}))
             _mark_selection_source("cache", age_seconds=_selection_cache_age(self._cache_time, cache_key))
             return self._cache[cache_key][:limit]
 
+        evidence_cache.pop(cache_key, None)
         stocks = []
         kmd = self._kis_market_data or get_kis_market_data()
 
@@ -675,6 +695,8 @@ class StockScreener:
             raw_kospi = await kmd.fetch_foreign_institution(market="0001", investor="1")
             raw_kosdaq = await kmd.fetch_foreign_institution(market="0002", investor="1")
             raw = raw_kospi + raw_kosdaq
+            supply_rows = evidence_rows(raw)
+            record_evidence("1", supply_rows)
             # KOSPI/KOSDAQ 동일 종목 중복 제거 (KOSPI 우선)
             seen_fgn = set()
             deduped_fgn = []
@@ -728,10 +750,12 @@ class StockScreener:
 
             stocks.sort(key=lambda x: x.score, reverse=True)
             self._update_cache(cache_key, stocks)
+            evidence_cache[cache_key] = supply_rows
             logger.info(f"[Screener] 외국인 순매수 {len(stocks)}개 발굴")
             return stocks[:limit]
 
         except Exception as e:
+            record_evidence("1", {})
             _mark_selection_source("error", reason="exception")
             logger.error(f"외국인 순매수 스크리닝 오류: {e}")
             return stocks
@@ -1395,33 +1419,46 @@ class StockScreener:
         try:
             spdi_applied = 0
             for symbol, stock in all_stocks.items():
-                change = stock.change_pct
-                has_supply = stock.has_foreign_buying or stock.has_inst_buying
-                has_dual = stock.has_foreign_buying and stock.has_inst_buying
+                try:
+                    change = stock.change_pct
+                    has_supply = stock.has_foreign_buying or stock.has_inst_buying
+                    has_dual = stock.has_foreign_buying and stock.has_inst_buying
+                    decision = decision_snapshot(stock)
+                    absence_observed = decision["absence_observed"]
+                    _observe_modifier("policy_begin", "spdi", stock, decision)
 
-                if has_supply and 0 < change <= 3.0:
-                    # 유형 A: 수급 있는데 가격 조용 → 최고 기회
-                    bonus = 20 if has_dual else 12
-                    stock.score += bonus
-                    stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
-                    spdi_applied += 1
-                elif not has_supply and change >= 5.0:
-                    # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
-                    stock.score = max(stock.score - 20, 0)
-                    stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
-                    spdi_applied += 1
-                elif has_supply and change >= 8.0:
-                    # 유형 B: 수급+급등 동시 → 후행 타이밍
-                    stock.score = max(stock.score - 8, 0)
-                    stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
-                    spdi_applied += 1
+                    if has_supply and 0 < change <= 3.0:
+                        # 유형 A: 수급 있는데 가격 조용 → 최고 기회
+                        bonus = 20 if has_dual else 12
+                        stock.score += bonus
+                        stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
+                        spdi_applied += 1
+                    elif absence_observed and change >= 5.0:
+                        # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
+                        stock.score = max(stock.score - 20, 0)
+                        stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
+                        spdi_applied += 1
+                    elif has_supply and change >= 8.0:
+                        # 유형 B: 수급+급등 동시 → 후행 타이밍
+                        stock.score = max(stock.score - 8, 0)
+                        stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
+                        spdi_applied += 1
 
-                _observe_modifier("spdi", stock)
+                    # Historical v3 shadow knows only fresh observer rows, not this
+                    # policy's cached proof. Keep actual stage deltas, but do not
+                    # claim its legacy shadow is comparable to an evidence decision.
+                    if not absence_observed:
+                        _observe_modifier("spdi", stock)
+                    _observe_modifier("policy_end", "spdi", stock)
+                except Exception as e:
+                    logger.warning(
+                        f"[Screener] SPDI 종목 처리 오류 (다음 종목 계속): {type(e).__name__}"
+                    )
 
             if spdi_applied:
                 logger.info(f"[Screener] SPDI 필터 {spdi_applied}개 적용")
         except Exception as e:
-            logger.warning(f"[Screener] SPDI 필터 오류 (무시): {e}")
+            logger.warning(f"[Screener] SPDI 필터 오류 (무시): {type(e).__name__}")
 
     async def _apply_inst_sell_blacklist(self, all_stocks: Dict[str, "ScreenedStock"]):
         """
@@ -1888,6 +1925,7 @@ class StockScreener:
     # 통합 스크리닝
     # ============================================================
 
+    @supply_scan
     @capture_scope
     async def screen_all(
         self,
@@ -1904,6 +1942,7 @@ class StockScreener:
         capture_selection: bool = False,
         capture_selection_sources: bool = False,
         capture_selection_modifiers: bool = False,
+        capture_selection_supply_policy: bool = False,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -1920,7 +1959,7 @@ class StockScreener:
             overnight_volatility: US 오버나이트 주요지수 최대 변동률 (절대값 %)
         """
         all_stocks: Dict[str, ScreenedStock] = {}
-        # 소스 카운트 추적 (정규화용)
+        # 원시 출현 횟수: 동일 입력 파생 소스도 포함하므로 독립 확인 수가 아니다.
         source_counts: Dict[str, int] = {}
         basis = None
         if capture_selection is True:
@@ -1967,8 +2006,8 @@ class StockScreener:
             """
             종목 병합 헬퍼 (소스 카운트 기반 정규화)
 
-            여러 스크리닝에서 나타난 종목은 신뢰도가 높으므로
-            소스 수를 추적하여 최종 점수 정규화 시 반영합니다.
+            원시 병합 출현 수를 추적한다. 파생 소스의 중복도 포함하며
+            서로 독립된 근거라는 뜻은 아니다 (기존 보너스 계약 보존).
             """
             if basis is not None:
                 observe_basis("record", stock, weight, source_id, input_rank)
@@ -2287,11 +2326,14 @@ class StockScreener:
         try:
             retail_only_count = 0
             for symbol, stock in all_stocks.items():
-                if stock.change_pct >= 3.0 and not stock.has_foreign_buying and not stock.has_inst_buying:
+                decision = decision_snapshot(stock)
+                _observe_modifier("policy_begin", "retail_only", stock, decision)
+                if 3.0 <= stock.change_pct < 5.0 and decision["absence_observed"]:
                     # 상승 중인데 기관/외국인 수급 없음 → 개인 단독 매수 의심
                     stock.score = max(stock.score - 15, 0)
                     stock.reasons.append(f"개인단독매수 의심 (기관/외국인 미참여, {stock.change_pct:+.1f}%)")
                     retail_only_count += 1
+                _observe_modifier("policy_end", "retail_only", stock)
             if retail_only_count:
                 logger.info(f"[Screener] 개인단독매수 감점 {retail_only_count}개 적용")
         except Exception as e:
@@ -2308,21 +2350,29 @@ class StockScreener:
             regime_applied = 0
             if overnight_sentiment == "bearish":
                 for symbol, stock in all_stocks.items():
-                    if not stock.has_foreign_buying and not stock.has_inst_buying:
+                    decision = decision_snapshot(stock)
+                    _observe_modifier("policy_begin", "overnight_regime", stock, decision)
+                    if decision["absence_observed"]:
                         # 약세장에서 수급 없는 종목 → 강한 감점
                         stock.score = max(stock.score - 20, 0)
                         stock.reasons.append("US 야간 약세 + 수급부재 감점")
                         regime_applied += 1
-                    elif stock.has_foreign_buying or stock.has_inst_buying:
-                        # 약세장이지만 수급 있는 종목 → 소폭 감점만
+                    else:
+                        # 수급 결측도 약세장 자체의 기본 위험 감점은 유지한다.
                         stock.score = max(stock.score - 5, 0)
-                        stock.reasons.append("US 야간 약세 (수급 방어)")
+                        reason = "수급 방어" if decision["buying_observed"] else "수급 미확인"
+                        stock.reasons.append(f"US 야간 약세 ({reason})")
+                        regime_applied += 1
+                    _observe_modifier("policy_end", "overnight_regime", stock)
             elif overnight_sentiment == "bullish":
                 for symbol, stock in all_stocks.items():
+                    decision = decision_snapshot(stock)
+                    _observe_modifier("policy_begin", "overnight_regime", stock, decision)
                     if stock.has_foreign_buying or stock.has_inst_buying:
                         stock.score += 10
                         stock.reasons.append("US 야간 강세 + 수급 가점")
                         regime_applied += 1
+                    _observe_modifier("policy_end", "overnight_regime", stock)
             if regime_applied:
                 logger.info(
                     f"[Screener] US 오버나이트 레짐({overnight_sentiment}) "
@@ -2393,7 +2443,7 @@ class StockScreener:
         if result:
             if basis is not None:
                 observe_basis("before_bonus", result, source_counts)
-            # 1. 소스 수 기반 신뢰도 보너스 적용 (최대 +20점)
+            # 1. 기존 원시 출현 보너스 (최대 +20점); 독립 소스 확인 보너스가 아님
             for stock in result:
                 source_cnt = source_counts.get(stock.symbol, 1)
                 if source_cnt >= 3:
@@ -2438,7 +2488,8 @@ class StockScreener:
             stock.reasons = list(dict.fromkeys(stock.reasons))
 
         source = "KIS+Naver" if kis_success and use_naver else ("Naver" if use_naver else "KIS")
-        logger.info(f"[Screener] 통합 스크리닝 완료: {len(result)}개 종목 (소스: {source})")
+        logger.info(f"[Screener] 통합 스크리닝 완료: {len(result)}개 종목 "
+                    f"(소스: {source}, 수급정책: {SUPPLY_POLICY_ID})")
 
         if basis is not None:
             observe_basis("finish", result)
@@ -2455,7 +2506,7 @@ class StockScreener:
                 for stock in fallback:
                     if capture_selection is True and stock.selection_basis is not None:
                         stock.selection_basis["cache_fallback"] = True
-                        if capture_selection_modifiers is not True and stock.selection_basis.get("version") == "kr-selection-basis-v2":
+                        if capture_selection_modifiers is not True and stock.selection_basis.get("version") in ("kr-selection-basis-v2", "kr-selection-basis-v3"):
                             from src.analytics.selection_basis import BASIS_FIELDS
                             stock.selection_basis = {k:v for k,v in stock.selection_basis.items() if k in BASIS_FIELDS}
                             stock.selection_basis["version"] = "kr-selection-basis-v1"

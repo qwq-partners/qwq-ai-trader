@@ -42,7 +42,8 @@ def capture_scope(func):
         capture = None
         if kwargs.get('capture_selection_modifiers') is True and kwargs.get('capture_selection') is True:
             try:
-                capture = ModifierCapture()
+                capture = (PolicyModifierCapture() if kwargs.get('capture_selection_supply_policy') is True
+                           else ModifierCapture())
             except Exception:
                 pass
         token = _ACTIVE.set(capture)
@@ -83,6 +84,12 @@ class ModifierCapture:
         self.failed = False
         self.rows, self.stages, self.merges, self.native = {}, [], {}, {}
         self.open = None
+
+    def policy_begin(self, stage, stock, decision):
+        pass  # v3 interpretation is frozen
+
+    def policy_end(self, stage, stock):
+        pass
 
     def raw(self, investor, market, symbol, raw, source):
         if source != {'1':'kis_foreign_buying', '2':'kis_institutional_buying'}.get(investor):
@@ -244,3 +251,138 @@ def validate_extension(basis):
             raise ValueError('shadow native SPDI reconciliation')
     else:
         raise ValueError('shadow status')
+
+
+# Explicit settings v4 / payload v3. Historical EXTRA_FIELDS and its validator
+# remain unchanged; these fields describe the actual new-policy decision input.
+POLICY_FIELDS = frozenset(('supply_policy_id', 'supply_policy_started_at', 'supply_policy_decisions', 'supply_policy_shadow'))
+POLICY_STAGES = ('spdi', 'retail_only', 'overnight_regime')
+POLICY_ROW_FIELDS = frozenset(('state', 'value', 'proof_age_seconds', 'origin', 'source_as_of'))
+DECISION_FIELDS = frozenset(('captured_at', 'legacy_foreign', 'legacy_institution', 'foreign',
+    'institution', 'absence_observed', 'buying_observed', 'change_pct', 'before', 'after', 'native_evaluated'))
+POLICY_SHADOW_FIELDS = frozenset(('status', 'actual_after', 'legacy_after', 'delta_vs_legacy',
+    'final_score_delta', 'gate_delta', 'economic_effect'))
+
+
+def _policy_spdi(before, change, foreign, inst, absence):
+    if not (foreign or inst) and change >= 5 and not absence:
+        return before
+    return _spdi(before, change, foreign, inst)
+
+
+def _policy_shadow(decision, stage):
+    shadow = dict(status='inputs_incomplete', actual_after=None, legacy_after=None,
+                  delta_vs_legacy=None, final_score_delta=None, gate_delta=None, economic_effect=None)
+    if decision is None or decision['native_evaluated'] is not True:
+        return shadow
+    before, change = decision['before'], decision['change_pct']
+    foreign, inst = decision['legacy_foreign'], decision['legacy_institution']
+    actual = _policy_spdi(before, change, foreign, inst, decision['absence_observed'])
+    if before != stage['before'] or actual != decision['after'] or actual != stage['after']:
+        return shadow
+    legacy = _spdi(before, change, foreign, inst)
+    shadow.update(status='comparable', actual_after=actual, legacy_after=legacy, delta_vs_legacy=actual-legacy)
+    return shadow
+
+
+class PolicyModifierCapture(ModifierCapture):
+    def __init__(self):
+        super().__init__()
+        self.policy_started_at = datetime.now(timezone.utc).isoformat()
+        self.policy = {stage: {} for stage in POLICY_STAGES}
+
+    def policy_begin(self, stage, stock, decision):
+        from .selection_basis import number
+        if stage not in self.policy or self.open is None or self.open[0] != stage:
+            raise ValueError('policy decision stage mismatch')
+        rows = self.policy[stage]
+        if stock.symbol in rows or len(rows) >= 500:
+            raise ValueError('policy decision duplicate/cap')
+        rows[stock.symbol] = dict(deepcopy(decision), change_pct=number(stock.change_pct),
+                                 before=number(stock.score), after=None, native_evaluated=False)
+
+    def policy_end(self, stage, stock):
+        from .selection_basis import number
+        if self.open is None or self.open[0] != stage:
+            raise ValueError('policy completion stage mismatch')
+        decision = self.policy[stage][stock.symbol]
+        if decision['native_evaluated']:
+            raise ValueError('duplicate policy completion')
+        decision.update(after=number(stock.score), native_evaluated=True)
+
+    def finish(self, stock):
+        from .selection_supply_policy import POLICY_ID
+        extension = super().finish(stock)
+        decisions = {stage: deepcopy(self.policy[stage].get(stock.symbol)) for stage in POLICY_STAGES}
+        extension.update(supply_policy_id=POLICY_ID, supply_policy_started_at=self.policy_started_at, supply_policy_decisions=decisions,
+            supply_policy_shadow=_policy_shadow(decisions['spdi'], extension['modifier_stages'][ORDER.index('spdi')]))
+        return extension
+
+
+def validate_policy_extension(basis):
+    from .selection_basis import number, _equal, _time
+    from .selection_supply_policy import POLICY_ID, MAX_AGE_SECONDS
+    if basis['supply_policy_id'] != POLICY_ID:
+        raise ValueError('unsupported supply decision policy')
+    decisions = basis['supply_policy_decisions']
+    if type(decisions) is not dict or set(decisions) != set(POLICY_STAGES):
+        raise ValueError('policy decision stages')
+    started = _time(basis['supply_policy_started_at'])
+    if started > _time(basis['produced_at']):
+        raise ValueError('policy scan start after production')
+    last_at = started
+    for stage in POLICY_STAGES:
+        decision = decisions[stage]
+        if decision is None:
+            continue
+        if type(decision) is not dict or set(decision) != DECISION_FIELDS:
+            raise ValueError('policy decision schema')
+        at = _time(decision['captured_at'])
+        if at > _time(basis['produced_at']) or (last_at is not None and at < last_at):
+            raise ValueError('policy decision time order')
+        last_at = at
+        for flag in ('legacy_foreign', 'legacy_institution', 'absence_observed', 'buying_observed', 'native_evaluated'):
+            if type(decision[flag]) is not bool:
+                raise ValueError('policy decision flag')
+        for side in ('foreign', 'institution'):
+            row = decision[side]
+            if type(row) is not dict or set(row) != POLICY_ROW_FIELDS or row['source_as_of'] is not None:
+                raise ValueError('policy supply row schema/asof')
+            age, value = row['proof_age_seconds'], row['value']
+            if row['origin'] == 'unavailable':
+                if age is not None or value is not None or row['state'] != 'unobserved':
+                    raise ValueError('unavailable policy proof claims')
+            elif row['origin'] == 'policy_memory_proof':
+                if not 0 <= number(age) <= 10**12:
+                    raise ValueError('policy proof age')
+                if age > MAX_AGE_SECONDS:
+                    if value is not None or row['state'] != 'unobserved':
+                        raise ValueError('expired policy proof used')
+                elif (type(value) is not int or number(value) != value
+                      or row['state'] != ('positive' if value > 0 else 'observed_nonpositive')):
+                    raise ValueError('policy proof value/state')
+            else:
+                raise ValueError('unverified policy proof origin')
+        flags = decision['legacy_foreign'] or decision['legacy_institution']
+        absence = not flags and all(decision[s]['state'] == 'observed_nonpositive' for s in ('foreign','institution'))
+        buying = bool(flags or any(decision[s]['state'] == 'positive' for s in ('foreign','institution')))
+        if decision['absence_observed'] != absence or decision['buying_observed'] != buying:
+            raise ValueError('policy decision evidence mismatch')
+        number(decision['change_pct']); number(decision['before'])
+        observed = basis['modifier_stages'][ORDER.index(stage)]
+        if not _equal(decision['before'], observed['before']):
+            raise ValueError('policy decision before mismatch')
+        if decision['native_evaluated']:
+            if not _equal(decision['after'], observed['after']):
+                raise ValueError('policy native after mismatch')
+        elif decision['after'] is not None:
+            raise ValueError('aborted policy decision claims completion')
+    shadow = basis['supply_policy_shadow']
+    if type(shadow) is not dict or set(shadow) != POLICY_SHADOW_FIELDS:
+        raise ValueError('policy shadow schema')
+    if shadow['status'] == 'comparable':
+        for key in ('actual_after', 'legacy_after', 'delta_vs_legacy'):
+            number(shadow[key])
+    expected = _policy_shadow(decisions['spdi'], basis['modifier_stages'][ORDER.index('spdi')])
+    if shadow != expected:
+        raise ValueError('policy shadow native arithmetic/unsupported claim')

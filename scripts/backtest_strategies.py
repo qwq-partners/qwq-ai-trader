@@ -169,6 +169,9 @@ class BacktestConfig:
     min_holding_days: int = 0         # 이 보유일 전엔 손절(채널 이탈 포함) 외 청산 금지
     # ladder 실엔진 미러 (기본 off — 게이트 기본 동작 보존). A/B 러너가 켠다.
     enable_composite_exit: bool = False   # 1차 익절 후 MA5-0.5% / 전일저가 이탈 → 전량 청산
+    composite_trail_min_stage: str = "first"
+    composite_ma5_buffer_pct: float = 0.5
+    composite_prev_low_enabled: bool = True
     post_exit_stale_days: int = 0         # 1차 익절 후 N일 보유 & 0<수익<post_exit_stale_pnl_pct → 청산 (0=off)
     post_exit_stale_pnl_pct: float = 3.0
     # 신규 진입 초기 손절 정책 (2026-09 T5). 기본값은 기존 동작(게이트 호환) — A/B 러너·T6 가 live_policy 를 명시.
@@ -194,13 +197,25 @@ class BacktestConfig:
             raise ValueError(f"entry_stop_mode 는 {ENTRY_STOP_MODES} 중 하나: {self.entry_stop_mode!r}")
         if self.slot_policy not in SLOT_POLICIES:
             raise ValueError(f"slot_policy 는 {SLOT_POLICIES} 중 하나: {self.slot_policy!r}")
+        # Same validation as the live policy, without initializing its state/cache.
+        from src.strategies.exit_manager import ExitConfig
+        composite = ExitConfig(
+            composite_trail_min_stage=self.composite_trail_min_stage,
+            composite_ma5_buffer_pct=self.composite_ma5_buffer_pct,
+            composite_prev_low_enabled=self.composite_prev_low_enabled,
+            enable_atr_linked_trailing=self.enable_atr_linked_trailing,
+            atr_link_multiplier=self.atr_link_multiplier,
+            atr_link_cap_pct=self.atr_link_cap_pct)
+        self.composite_ma5_buffer_pct = composite.composite_ma5_buffer_pct
+        self.atr_link_multiplier = composite.atr_link_multiplier
+        self.atr_link_cap_pct = composite.atr_link_cap_pct
 
 
 ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
 SLOT_POLICIES = ("fixed", "live_weighted")
 
 # 백테스트 계산기 버전 — 결과 manifest 재현 키. 체결·사이징·청산 계산이 바뀌면 올린다.
-CALC_VERSION = "2026-09-14.t7"
+CALC_VERSION = "2026-10-18.composite-config"
 
 # offline 캐시 재사용 허용 오차(일). 워밍업 시작이 이만큼 늦은 캐시까지는 같은 구간으로 본다
 # — 워밍업은 400일이고 MA200 확보에는 ≈290일이면 충분하다 (UniverseManager._find_covering_cache).
@@ -1298,16 +1313,18 @@ class BTExitManager:
         if is_core:
             return actions
 
-        # ── 4b. 복합 청산 (실엔진 _check_composite_trailing 미러, 1차 익절 이후) ──
+        # ── 4b. 복합 청산 (동일 설정, 일봉 근사; 체결 순서 parity는 아님) ──
         if (self.config.enable_composite_exit
-                and pos.exit_stage != ExitStage.NONE
+                and pos.exit_stage.value >= ExitStage[self.config.composite_trail_min_stage.upper()].value
                 and pos.remaining_quantity > 0):
             ma5 = row.get('ma5')
             prev_low = row.get('prev_low')
             reason = None
-            if ma5 is not None and not pd.isna(ma5) and close < float(ma5) * 0.995:
-                reason = f"복합청산 MA5({float(ma5):,.0f})-0.5% 이탈"
-            elif (prev_low is not None and not pd.isna(prev_low)
+            buffer = 0.3 if pos.strategy == StrategyType.RSI2 else self.config.composite_ma5_buffer_pct
+            if ma5 is not None and not pd.isna(ma5) and float(ma5) > 0 and close < float(ma5) * (1 - buffer / 100):
+                reason = f"복합청산 MA5({float(ma5):,.0f})-{buffer}% 이탈"
+            elif (self.config.composite_prev_low_enabled
+                  and prev_low is not None and not pd.isna(prev_low) and float(prev_low) > 0 and low > 0
                   and low < float(prev_low) and close < float(prev_low)):
                 reason = f"복합청산 전일저가({float(prev_low):,.0f}) 이탈"
             if reason:
@@ -2267,6 +2284,11 @@ def build_backtest_config_from_effective(
         "entry_stop_mode": "live_policy",
         "slot_policy": "live_weighted",
         "calculator_version": CALC_VERSION,
+        "exit_evaluation": "daily_ohlc_approximation",
+        "live_exit_parity": False,
+        "exit_parity_gaps": ["net_stop_vs_price_stop", "intraday_high_touch_fill_order",
+                             "first_second_trailing_reset", "breakeven_and_holding_order",
+                             "third_to_trailing_promotion", "unset_exit_defaults"],
     }
 
     sepa = _section(strats, "sepa_trend")
@@ -2318,8 +2340,14 @@ def build_backtest_config_from_effective(
         atr_multiplier=float(em.get("atr_multiplier", 2.0)),
         min_stop_pct=float(em.get("min_stop_pct", 4.0)),
         max_stop_pct=float(em.get("max_stop_pct", 8.0)),
+        enable_atr_linked_trailing=em.get("enable_atr_linked_trailing", True),
+        atr_link_multiplier=em.get("atr_link_multiplier", 1.2),
+        atr_link_cap_pct=em.get("atr_link_cap_pct", 6.0),
         # 복합 청산·익절후 저효율·정체 (실엔진 값)
         enable_composite_exit=bool(em.get("enable_composite_trailing", True)),
+        composite_trail_min_stage=em.get("composite_trail_min_stage", "first"),
+        composite_ma5_buffer_pct=em.get("composite_ma5_buffer_pct", 0.5),
+        composite_prev_low_enabled=em.get("composite_prev_low_enabled", True),
         post_exit_stale_days=int(em.get("post_exit_stale_days", 5)),
         post_exit_stale_pnl_pct=float(em.get("post_exit_stale_pnl_pct", 3.0)),
         stale_exit_days=int(em.get("stale_exit_days", 5)),

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from src.indicators.technical import TechnicalIndicators
-from src.utils.session import KST
+from src.utils.session import KST, is_kr_market_holiday
 from src.utils.kospi_benchmark import (
     FALLBACK_SOURCES as KOSPI_SOURCES,
     benchmark_date_status,
@@ -49,6 +49,7 @@ class SwingScreener:
         self._stock_master = stock_master
         self._indicators = TechnicalIndicators()
         self._kospi_closes: List[float] = []  # 벤치마크 KOSPI 종가 (MRS용)
+        self._kospi_dates: List[date] = []  # MRS 날짜 조인; 위치 기반 대체 금지
         # 벤치마크 로드 시각·마지막 봉 날짜 — 소비자(LLM 레짐 분류기)가 "이 종가열이
         # 언제 자료인지"와 "당일 봉이 이미 포함됐는지"를 판별한다 (2026-09-14 리뷰)
         self._kospi_loaded_at: Optional[datetime] = None
@@ -321,7 +322,11 @@ class SwingScreener:
         FDR(FinanceDataReader)로 1년치 일봉 조회 (KIS API 60일 제한 우회).
         Semaphore(10) + wait_for(10초) 로 병렬 조회.
         """
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        scan_date = datetime.now(KST).date()
+        last_complete_session = scan_date - timedelta(days=1)
+        while is_kr_market_holiday(last_complete_session):
+            last_complete_session -= timedelta(days=1)
+        start_date = (scan_date - timedelta(days=365)).strftime("%Y-%m-%d")
         sem = asyncio.Semaphore(10)
 
         async def fetch_one(stock: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -381,12 +386,26 @@ class SwingScreener:
                 indicators = self._indicators.calculate_all(symbol, daily_data)
                 if not indicators:
                     return None
+                # MRS는 별도 벤치마크의 날짜/신선도에 의존한다. 공용 지표 캐시에
+                # 덧쓰거나 이전 스캔 MRS를 그대로 반환하지 않는다.
+                indicators = dict(indicators)
+                indicators.pop("mrs", None)
+                indicators.pop("mrs_slope", None)
 
                 # MRS 계산 (벤치마크 데이터 있을 경우)
-                if self.get_benchmark_status()["status"] == "fresh":
-                    stock_closes = [float(d["close"]) for d in daily_data]
-                    mrs_result = self._indicators.calculate_mrs(
-                        stock_closes, self._kospi_closes, period=20
+                benchmark_dates = getattr(self, "_kospi_dates", [])
+                if (self.get_benchmark_status()["status"] == "fresh"
+                        and len(benchmark_dates) == len(self._kospi_closes)
+                        and last_complete_session in benchmark_dates):
+                    try:
+                        stock_bars = [(datetime.strptime(d["date"], "%Y%m%d").date(), d["close"])
+                                      for d in daily_data]
+                    except (TypeError, ValueError):
+                        stock_bars = []  # 날짜 미확인은 MRS만 제외한다.
+                    mrs_result = self._indicators.calculate_mrs_dated(
+                        stock_bars,
+                        list(zip(benchmark_dates, self._kospi_closes)),
+                        before=scan_date, period=20,
                     )
                     if mrs_result:
                         indicators["mrs"] = mrs_result["mrs"]
@@ -641,115 +660,67 @@ class SwingScreener:
         | 재무 | 20% | PER/PBR/ROE |
         | 섹터 | 10% | 섹터 모멘텀 |
         """
-        # ── 수급 데이터 일괄 조회 (LCI용) ──
-        # 1차: KIS 실시간 API (장중/마감 후)
-        # 2차: pykrx 전일 수급 (프리장 등 KIS 데이터 없는 경우 자동 폴백)
-        supply_demand: Dict[str, Dict[str, int]] = {}  # symbol -> {foreign_net_buy, inst_net_buy}
-        # ── 0차: 외국계 추정 가집계 (장중 10시 이후만, TR: FHKST644100C0) ──
-        # 외국계 브로커 기반 추정치 — 결제 전 데이터라 장중에만 유효.
-        # 1차(fetch_foreign_institution)와 병합해 커버리지 최대화.
-        _now_hour = datetime.now().hour
-        if self._kis_market_data and _now_hour >= 10:
-            try:
-                _est_results = await asyncio.gather(
-                    self._kis_market_data.fetch_frgnmem_trade_estimate(market="1001", sort_cls="0"),  # 코스피 외국계 매수
-                    self._kis_market_data.fetch_frgnmem_trade_estimate(market="2001", sort_cls="0"),  # 코스닥 외국계 매수
-                    return_exceptions=True,
-                )
-                for _est_res in _est_results:
-                    if isinstance(_est_res, list):
-                        for _item in _est_res:
-                            _sym = _item.get("symbol", "")
-                            if _sym:
-                                if _sym not in supply_demand:
-                                    supply_demand[_sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
-                                supply_demand[_sym]["foreign_net_buy"] += _item.get("net_buy_qty", 0)
-                if supply_demand:
-                    logger.info(f"[스윙스크리너] 0차 외국계가집계: {len(supply_demand)}종목")
-            except Exception as _e:
-                logger.debug(f"[스윙스크리너] 0차 외국계가집계 실패: {_e}")
+        from src.analytics.swing_supply import (
+            utc_now, previous_session, ranking_evidence, valid_evidence, supply_age,
+        )
+        now = utc_now()
+        evidence = {}
+        coverage = {"broker_estimate_rows": 0, "ranking_rows": 0,
+                    "broker_estimates_scored": False}
+        # Keep the existing request/fallback boundary. Broker-member estimates
+        # overlap broader foreign totals and are diagnostic only.
+        if self._kis_market_data and datetime.now().hour >= 10:
+            estimates = await asyncio.gather(
+                self._kis_market_data.fetch_frgnmem_trade_estimate(market="1001", sort_cls="0"),
+                self._kis_market_data.fetch_frgnmem_trade_estimate(market="2001", sort_cls="0"),
+                return_exceptions=True,
+            )
+            coverage["broker_estimate_rows"] = sum(len(rows) for rows in estimates if isinstance(rows, list))
         if self._kis_market_data:
-            try:
-                fi_results = await asyncio.gather(
-                    self._kis_market_data.fetch_foreign_institution(market="0001", investor="1"),
-                    self._kis_market_data.fetch_foreign_institution(market="0002", investor="1"),
-                    self._kis_market_data.fetch_foreign_institution(market="0001", investor="2"),
-                    self._kis_market_data.fetch_foreign_institution(market="0002", investor="2"),
-                    return_exceptions=True,
-                )
-                # 외국인 (index 0,1)
-                for res in fi_results[:2]:
-                    if isinstance(res, list):
-                        for item in res:
-                            sym = item.get("symbol", "")
-                            if sym not in supply_demand:
-                                supply_demand[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
-                            supply_demand[sym]["foreign_net_buy"] += item.get("net_buy_qty", 0)
-                # 기관 (index 2,3)
-                for res in fi_results[2:]:
-                    if isinstance(res, list):
-                        for item in res:
-                            sym = item.get("symbol", "")
-                            if sym not in supply_demand:
-                                supply_demand[sym] = {"foreign_net_buy": 0, "inst_net_buy": 0}
-                            supply_demand[sym]["inst_net_buy"] += item.get("net_buy_qty", 0)
-                logger.info(f"[스윙스크리너] 수급 데이터 조회: {len(supply_demand)}종목")
-            except Exception as e:
-                logger.warning(f"[스윙스크리너] 수급 데이터 조회 실패: {e}")
+            results = await asyncio.gather(*[
+                self._kis_market_data.fetch_foreign_institution(market=market, investor=investor)
+                for investor in ("1", "2") for market in ("0001", "0002")
+            ], return_exceptions=True)
+            now = utc_now()  # responses may have been captured after request start
+            coverage["ranking_rows"] = sum(len(rows) for rows in results if isinstance(rows, list))
+            foreign = ranking_evidence(zip(("0001", "0002"), results[:2]), now)
+            institution = ranking_evidence(zip(("0001", "0002"), results[2:]), now)
+            evidence = {symbol: {"foreign": foreign.get(symbol), "institution": institution.get(symbol)}
+                        for symbol in foreign.keys() | institution.keys()}
 
-        # KIS 성공 시 캐시 저장 (다음날 08:20 아침 스캔 폴백용)
-        supply_data_age = 0   # 0=당일, 1=전일(T-1), 2=캐시(T-2+)
-        if supply_demand:
-            self._save_supply_demand_cache(supply_demand)
-
-        # ── 2~4차 폴백: 1차 성공 시 prev_date_str/candidate_symbols 계산 자체를 건너뜀 ──
-        if not supply_demand:
-            # prev_date_str: 직전 영업일 (주말 스킵)
-            _prev = datetime.now().date() - timedelta(days=1)
-            while _prev.weekday() >= 5:
-                _prev -= timedelta(days=1)
-            prev_date_str = _prev.strftime("%Y%m%d")
-            candidate_symbols = [c.symbol for c in candidates]
-
-            # ── 2차: KIS 종목별 전일 투자자 API (FHKST01010900) ──
-            # pykrx(KRX 인증 차단)를 완전 대체. 장전 08:20에도 T-1 확정 데이터 정상 반환.
+        # Partial live holes remain unknown; never add symbol queries to fill them.
+        if not coverage["ranking_rows"] and not coverage["broker_estimate_rows"]:
+            target_day = previous_session(now.astimezone(KST).date())
+            target = target_day.strftime("%Y%m%d")
             if self._kis_market_data:
                 try:
-                    kis_investor = await self._kis_market_data.fetch_batch_investor_daily(
-                        candidate_symbols, prev_date_str, concurrency=10
-                    )
-                    if kis_investor:
-                        supply_demand = kis_investor
-                        supply_data_age = 1
-                        logger.info(
-                            f"[스윙스크리너] 수급 T-1: KIS 종목별 API "
-                            f"({len(supply_demand)}/{len(candidate_symbols)}종목, {prev_date_str})"
-                        )
-                except Exception as e:
-                    logger.warning(f"[스윙스크리너] KIS 종목별 투자자 조회 실패: {e}")
-
-            # ── 3차: supply_demand 캐시 폴백 ──
-            if not supply_demand:
-                supply_demand = self._load_prev_day_supply_from_cache(prev_date_str)
-                if supply_demand:
-                    supply_data_age = 1
-                    logger.info(
-                        f"[스윙스크리너] 수급 T-1 캐시 폴백: {len(supply_demand)}종목"
-                    )
-
-            # ── 4차: T-2+ 캐시 최종 폴백 ──
-            if not supply_demand:
-                cached, cache_age = self._load_supply_demand_cache_with_age()
-                if cached:
-                    supply_demand = cached
-                    supply_data_age = min(cache_age, 2)
-
-        # ── 후보별 수급 데이터 주입 ──
+                    daily = await self._kis_market_data.fetch_batch_investor_daily(
+                        [c.symbol for c in candidates], target, concurrency=10)
+                    now = utc_now()
+                    for symbol, row in daily.items():
+                        proofs = row.get("_supply_evidence") or {}
+                        evidence[symbol] = {}
+                        for side in ("foreign", "institution"):
+                            proof = valid_evidence(proofs.get(side), now)
+                            evidence[symbol][side] = (
+                                proof if proof is not None and proof["source_date"] == target_day.isoformat()
+                                else None
+                            )
+                except Exception as exc:
+                    logger.warning(f"[스윙스크리너] 일별 수급 조회 실패: {type(exc).__name__}")
+            if not evidence:
+                evidence = self._load_swing_supply_cache(now)
+        if evidence:
+            self._save_swing_supply_cache(evidence, now)
         for candidate in candidates:
-            sd = supply_demand.get(candidate.symbol, {})
-            candidate.indicators["foreign_net_buy"] = sd.get("foreign_net_buy", 0)
-            candidate.indicators["inst_net_buy"] = sd.get("inst_net_buy", 0)
-            candidate.indicators["supply_data_age"] = supply_data_age  # 신선도 추적
+            proofs = evidence.get(candidate.symbol, {})
+            ind = candidate.indicators
+            ind["supply_evidence"] = {side: valid_evidence(proofs.get(side), now)
+                                      for side in ("foreign", "institution")}
+            ind["foreign_net_buy"] = (ind["supply_evidence"]["foreign"] or {}).get("value")
+            ind["inst_net_buy"] = (ind["supply_evidence"]["institution"] or {}).get("value")
+            ind["supply_data_age"] = supply_age(ind, now)
+            ind["supply_coverage"] = dict(coverage)
 
         # 밸류에이션 일괄 조회 (배치 API 활용)
         if self._kis_market_data:
@@ -940,6 +911,7 @@ class SwingScreener:
         KIS get_daily_prices('0001')는 주식 일봉 API이므로 지수 대체재가 아니다.
         """
         self._kospi_closes = []
+        self._kospi_dates = []
         self._kospi_loaded_at = None
         self._kospi_last_bar_date = None
         self._kospi_source = None
@@ -963,6 +935,7 @@ class SwingScreener:
                     logger.warning(f"[스윙스크리너] KOSPI 대용 {source} 제외: 최근 30봉 일수익률 이상치 {bad}")
                 if status["status"] == "fresh":
                     self._kospi_closes = closes
+                    self._kospi_dates = dates
                     self._kospi_loaded_at = status["loaded_at"]
                     self._kospi_last_bar_date = status["last_bar_date"]
                     self._kospi_source = source
@@ -984,6 +957,48 @@ class SwingScreener:
                 f"status={status['status']}, 마지막 봉={status['last_bar_date']}, "
                 f"reason={status['reason']}"
             )
+
+    def _save_swing_supply_cache(self, evidence, now):
+        """Separate schema: scheduler legacy snapshots cannot overwrite proof."""
+        from pathlib import Path
+        from src.analytics.swing_supply import CACHE_VERSION, MAX_ROWS
+        from src.utils.atomic_io import atomic_write_json
+        if len(evidence) > MAX_ROWS:
+            return
+        path = Path.home() / ".cache" / "ai_trader" / f"swing_supply_v1_{now.astimezone(KST):%Y%m%d}.json"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(path, {"version": CACHE_VERSION, "saved_at": now.isoformat(), "rows": evidence})
+        except Exception as exc:
+            logger.warning(f"[스윙스크리너] 수급 증거 캐시 저장 실패: {type(exc).__name__}")
+
+    def _load_swing_supply_cache(self, now):
+        import json
+        from pathlib import Path
+        from src.analytics.swing_supply import CACHE_VERSION, MAX_ROWS, valid_evidence
+        cache_dir = Path.home() / ".cache" / "ai_trader"
+        for delta in range(8):
+            day = now.astimezone(KST).date() - timedelta(days=delta)
+            path = cache_dir / f"swing_supply_v1_{day:%Y%m%d}.json"
+            try:
+                if not path.exists() or path.stat().st_size > 1_000_000:
+                    continue
+                data = json.loads(path.read_text())
+                rows = data.get("rows")
+                if data.get("version") != CACHE_VERSION or not isinstance(rows, dict) or len(rows) > MAX_ROWS:
+                    continue
+                result = {}
+                for symbol, proofs in rows.items():
+                    if not isinstance(proofs, dict):
+                        continue
+                    clean = {side: valid_evidence(proofs.get(side), now) for side in ("foreign", "institution")}
+                    if any(p is not None for p in clean.values()):
+                        result[symbol] = clean
+                if result:
+                    return result
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+        return {}
 
     def _save_supply_demand_cache(self, data: Dict[str, Dict[str, int]]) -> None:
         """수급 데이터를 날짜별 캐시 파일로 저장 (KIS API 성공 시)."""
@@ -1149,64 +1164,8 @@ class SwingScreener:
         return {}
 
     def _compute_lci_zscore(self, candidates: List[SwingCandidate]):
-        """
-        전체 후보의 외국인/기관 순매수 → z-score → LCI 계산
-
-        LCI = 0.5 * z(foreign) + 0.5 * z(inst)
-        """
-        if not candidates:
-            return
-
-        all_foreign = [c.indicators.get("foreign_net_buy") if c.indicators.get("foreign_net_buy") is not None else 0 for c in candidates]
-        all_inst = [c.indicators.get("inst_net_buy") if c.indicators.get("inst_net_buy") is not None else 0 for c in candidates]
-
-        def zscore_list(values: List[float]) -> List[float]:
-            n = len(values)
-            if n < 2:
-                return [0.0] * n
-            mean = sum(values) / n
-            variance = sum((v - mean) ** 2 for v in values) / n
-            std = variance ** 0.5
-            if std < 1e-10:
-                return [0.0] * n
-            return [(v - mean) / std for v in values]
-
-        z_foreign = zscore_list(all_foreign)
-        z_inst = zscore_list(all_inst)
-
-        # ── P0-2: 시장 전체 수급 상태 절대값 게이트 ──
-        # LCI는 후보 집합 내 상대 z-score만 측정. 시장 전체가 수급 악화 중이어도
-        # "상대적으로 덜 나쁜" 종목이 높은 LCI를 받는 구조.
-        # 게이트: 후보 집합의 60% 이상이 외국인 순매도 → 시장 수급 압박 → LCI 50% 할인
-        n_neg_foreign = sum(1 for v in all_foreign if v < 0)
-        market_sell_pressure = (n_neg_foreign / len(all_foreign)) > 0.60 if all_foreign else False
-        lci_market_mult = 0.5 if market_sell_pressure else 1.0
-        if market_sell_pressure:
-            logger.warning(
-                f"[스윙스크리너] 시장 수급 압박 감지: 외국인 순매도 종목 "
-                f"{n_neg_foreign}/{len(all_foreign)}개 → LCI 50% 할인 적용"
-            )
-
-        # 수급 데이터 전무(std≈0) 시 z-score 전부 0 → LCI=None으로 설정하여 폴백 경로 활성화
-        all_zero = all(z == 0.0 for z in z_foreign) and all(z == 0.0 for z in z_inst)
-        for i, c in enumerate(candidates):
-            if all_zero:
-                c.indicators["lci"] = None
-                c.indicators["market_sell_pressure"] = market_sell_pressure
-            else:
-                lci = 0.5 * z_foreign[i] + 0.5 * z_inst[i]
-
-                # 수급 가속도: 외국인+기관 동시 순매수 시 LCI 부스트
-                if all_foreign[i] > 0 and all_inst[i] > 0:
-                    raw_accel = 0.3 + (z_foreign[i] + z_inst[i]) * 0.1
-                    accel = max(0, min(raw_accel, 0.5))  # 0~0.5 클램프
-                    lci += accel
-                    c.indicators["supply_accel"] = round(accel, 3)
-
-                # 시장 수급 압박 할인 적용
-                lci *= lci_market_mult
-                c.indicators["lci"] = round(lci, 3)
-                c.indicators["market_sell_pressure"] = market_sell_pressure
+        from src.analytics.swing_supply import apply_lci
+        apply_lci(candidates)
 
     async def _apply_strategic_overlay(
         self, candidates: List[SwingCandidate]

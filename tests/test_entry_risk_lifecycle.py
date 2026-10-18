@@ -326,10 +326,47 @@ def test_initial_risk_persisted_and_restored(home):
     # 부분 매도·레짐 변경·재등록에도 분모 불변 (덮어쓰기 금지)
     em2.set_initial_risk(SYM, Decimal("1"), Decimal("9.9"))
     assert em2.get_state(SYM).initial_risk_amount == Decimal("69500")
-    em2.apply_regime_params("bear")
+    assert em2.apply_regime_params("trending_bear") == 1
+    assert em2.get_state(SYM).stop_loss_pct == 3.5
+    assert em2.get_state(SYM).trailing_stop_pct == 2.0
     _register(em2, qty=125)
     assert em2.get_state(SYM).initial_risk_amount == Decimal("69500")
     assert em2.get_state(SYM).actual_stop_pct == Decimal("5.0")
+
+
+@pytest.mark.parametrize("with_history,expected_stop,expected_source", [
+    (False, Decimal("3.5"), "strategy"),
+    (True, Decimal("6.0"), "dynamic"),
+])
+def test_real_bear_regime_updates_stop_without_rewriting_initial_risk(
+        home, monkeypatch, with_history, expected_stop, expected_source):
+    monkeypatch.setattr(ExitManager, "_count_business_days", lambda self, start, end: 0)
+    em = ExitManager(ExitConfig(include_fees=False))
+    # ATR=3% from actual history creates a dynamic 6% stop; a hint alone does not.
+    history = {"high": [Decimal("10150")] * 20,
+               "low": [Decimal("9850")] * 20,
+               "close": [PRICE] * 20} if with_history else None
+    em.register_position(
+        Position(symbol=SYM, quantity=100, avg_price=PRICE, current_price=PRICE),
+        stop_loss_pct=5.0, price_history=history, atr_pct_hint=3.0,
+    )
+    st = em.get_state(SYM)
+    initial_stop = Decimal("6.0") if with_history else Decimal("5.0")
+    initial_risk = Decimal("60000") if with_history else Decimal("50000")
+    em.set_initial_risk(SYM, initial_risk, initial_stop)
+    assert em.apply_regime_params("trending_bear") == 1
+    assert st.stop_loss_pct == 3.5
+    assert st.trailing_stop_pct == 2.0
+    decision = em.resolve_stop(dynamic_stop_pct=st.dynamic_stop_pct,
+                               fixed_stop_pct=st.stop_loss_pct, is_core=False)
+    assert (decision.stop_pct, decision.source) == (expected_stop, expected_source)
+    result = em.update_price(SYM, Decimal("9600"))
+    if with_history:
+        assert result is None  # Dynamic 6% remains authoritative over the 3.5% regime stop.
+    else:
+        assert result[:2] == ("sell_all", 100)
+        assert "SL=3.50%" in result[2]
+    assert (st.initial_risk_amount, st.actual_stop_pct) == (initial_risk, initial_stop)
 
 
 def test_states_without_initial_risk_stay_none(home):
