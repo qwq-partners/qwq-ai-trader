@@ -1,0 +1,118 @@
+# 동일 진입·장중 가격의 첫 청산 판단 비교
+
+## PLAN — 순수익 개선에 필요한 원인 분리
+
+진입이 같아도 장중 고점·하락 순서에 따라 청산 판단이 달라진다. 일봉 근사와 별도로 실제
+`ExitManager`를 재생해 초기 손절·본전 보호·첫 부분매도 중 **어느 판단이 먼저 달라지는지**
+확인한다. 이 도구의 합성 결과만으로 새 청산 정책을 채택하거나 순수익 개선을 선언하지 않는다.
+
+[입력/격리 명세](../superpowers/specs/2026-10-18-first-exit-replay.md) ·
+[실행 계획](../superpowers/plans/2026-10-18-first-exit-replay.md).
+기준 소스는 main `4a24fbf1`이다. 기존 운영 ba29b903과 10월19일 v5 예약은 유지한다.
+
+## DO — 범위와 실행 방법
+
+```mermaid
+flowchart LR
+    A[같은 신규 진입과 시간순 PRICE] --> B[입력·시각·설정 검증]
+    B --> C[독립 상태의 실제 ExitManager A]
+    B --> D[독립 상태의 실제 ExitManager B]
+    C --> E[첫 신호에서 중단]
+    D --> E
+    E --> F[시각·가격·수량·사유·지문 비교]
+```
+
+`src/analytics/first_exit_replay.py`가 실제 생성자·진입 등록·가격 평가를 사용한다. 독립 시계와
+임시 상태 경로, 명시 수수료 계산기를 제공하며 HOME이나 원래 모듈의 전역 객체를 바꾸지 않는다.
+정책마다 첫 신호에서 멈추므로 부분매도 신호 후 체결 단계는 진행하지 않는다.
+소수점 계산 환경도 독립적으로 고정해 호출자의 반올림 설정에 따라 결과가 달라지지 않게 한다.
+
+CLI는 외부 API·운영 설정·계좌 원장을 자동으로 읽지 않는다. 입력 JSON과 새 출력 파일을
+명시해야 하며, 기존 출력 덮어쓰기·중복 키·비정규 파일·2MB 초과 자료를 거부한다.
+
+```bash
+python scripts/report_first_exit.py --input /private/first-exit-input.json --output /private/first-exit-report.json
+```
+
+아래는 **합성 예시**다. 수수료를 0으로 둔 것은 두 손절 조건의 차이만 확인하기 위한 것이며
+실제 거래 비용 가정이 아니다. 실자료 평가에서는 검증한 수수료와 당시 설정을 별도로 넣는다.
+
+```json
+{
+  "schema_version": "first_exit_replay_v1",
+  "entry": {
+    "symbol": "000001", "quantity": 100, "price": "10000",
+    "at": "2026-10-19T09:30:00+09:00", "source_ref": "synthetic:entry"
+  },
+  "events": [
+    {"sequence": 1, "at": "2026-10-19T09:31:00+09:00", "kind": "PRICE", "price": "9500", "source_ref": "synthetic:price:1"},
+    {"sequence": 2, "at": "2026-10-19T09:32:00+09:00", "kind": "PRICE", "price": "9100", "source_ref": "synthetic:price:2"}
+  ],
+  "policies": [
+    {"name": "fixed_4", "config": {"stop_loss_pct": 4, "enable_dynamic_stop": false}},
+    {"name": "fixed_8", "config": {"stop_loss_pct": 8, "enable_dynamic_stop": false}}
+  ],
+  "fees": {"buy_commission_rate": "0", "sell_commission_rate": "0", "sell_tax_rate": "0"}
+}
+```
+
+정책은 두 개이고 종목·진입·가격 경로는 공통이다. `config` 생략값은 코드 기본값이다.
+결과의 `resolved_config`와 `effective_initial_state`를 확인해야 하며 운영 설정 자동 복제는 아니다.
+등록 인자 `registration`은 손절·트레일링·익절 기준/비율, ATR 힌트, 코어 여부 등 지원 필드만
+받는다. 가격 이력·보유 중 상태 복원은 지원하지 않는다. `expected_policy_sha256`를 지정하면
+소스 지문 불일치를 거부한다. source_ref/지문은 자료의 진실성이나 완전성을 인증하지 않는다.
+
+등록 지원 필드는 `stop_loss_pct`, `trailing_stop_pct`, `first/second/third_exit_pct`,
+`first/second/third_exit_ratio`, `stale_high_days`, `is_core`, `max_holding_days`,
+`trailing_activate_pct`, `atr_pct_hint`, `strategy_name`이다(슬래시 표기는 각각 별도 키).
+가격 문자열 범위는1e-12~1e15, 수량은1~1e9, 정책 숫자는 유한한 JSON 숫자이며 최대1e6,
+일수는0~1e5 정수다. 비율은0~1, 손절/트레일링 폭과 상한은 양수100 미만이다.
+초기 단계 `none`의 활성 복합 트레일링은 MA5/전일 저가 자료가 없으므로 거부하며,
+`eod_close=true`도 스케줄러 동작이라 거부한다. 그 외 범위는 모듈의 입력 검증을 따른다.
+
+## 해석 경계
+
+- `first_decision`은 공급된 가격 경로에서 발생한 신호다. 주문·체결·최종 청산 가격이 아니다.
+- `not_observed_in_supplied_path`는 그 경로에서 신호를 못 봤다는 뜻이다. 두 정책 모두 이 상태면
+  `comparison.first_decision_changed=null`이며 정책 동등성으로 판정하지 않는다.
+- 판단 차이는 첫 이벤트·행동·수량으로 비교한다. 같은 이벤트에 같은 수량을 매도하면서
+  사유 문자열만 다른 경우에는 판단 변경으로 세지 않는다.
+- `fill_status=not_simulated`, `net_pnl=null`, `live_exit_parity=false`를 유지한다.
+- FIRST 체결 이후 복합 트레일링, 다일 보유/휴장, 레짐·급락 변화, 주문 거절·취소·부분체결,
+  운영 재기동 상태까지 재현하는 도구가 아니다. BOOK의 bid를 현재가 PRICE로 바꾸어 넣으면 안 된다.
+- `atr_pct_hint`는 실제 등록 코드의 ATR 연동 트레일링 입력이다. 가격 이력 없이 초기 ATR 동적
+  손절까지 계산한 것으로 해석하지 않는다. 결과의 `dynamic_stop_pct` 결측을 확인한다.
+- 10월19일 v5는 후보·진입 호가/900초 비교를 위한 관측이다. 그것만으로 전체 장중 청산 경로와
+  각 대안의 실제 체결을 확보했다고 해석하지 않는다.
+
+## SEE — 검증과 통합
+
+- 새 모듈/CLI 통합 시험 **73 passed**, 운영 상태·외부 네트워크 접근 시도0.
+- 청산 특성화·운영 계약과 새 모듈의 관련 시험 **164 passed / 기존2 xfailed**, 격리0.
+  두 시험 집합은 겹치므로 더하지 않는다. 누락 구현과 소수점 환경 의존 실패를 확인한 뒤 수정했다.
+- 문서 합성 입력을 실제 CLI로 실행(rc0): 두 정책의 첫 신호 sequence1/2, 각각 sell_all,
+  비교 changed=true, net_pnl=null, 출력0600. 실제 시장 자료 결과가 아니다.
+- 병렬로 서로 다른 날짜/수수료를 재생해 시계·상태 분리를 확인했다. 원본 전역/환경/수수료
+  객체 불변, 임시 폴더 정리, 전체 입력 선검증, 첫 신호 뒤 잘못된 입력도 거부를 확인했다.
+- 구현자는 요청 Astra/high, 제한된 의존 경로 감사자는 Sol/high이며 실제 모델/실효 effort는
+  메타데이터 미노출이다. 경로 감사는 소스 검토만이며 시험 실행 성공 근거로 세지 않는다.
+- 작업 중 원격 main에 별도 문서 PR #220이 병합됐다. 코드 차이는 없으며 RAG 제안 기록과
+  사용자의 미적용 결정을 보존해 통합한다. 이 도구는 해당 RAG 제안의 구현이 아니다.
+- 읽기 전용 운영 점검 rc0: PID2369151·NRestarts0, v5 신규8파일/이전332파일·소스/설정
+  지문 일치, 타이머 enabled/active·10월19일09:25, 시도 미소비·수집 미시작 확인.
+
+전체 verify는 **8029 passed / 2 skipped / 기존2 xfailed**, 기존 경고8건,
+390.40초·rc0다. 문법/비밀정보 검사 통과, 운영 상태·외부 네트워크 접근 시도0.
+독립 중요 최종 리뷰는 진행 중이며 결과 확인 뒤 통합한다.
+
+## 다음 순서
+
+1. 10월19일 v5의 실제 봉인·누락·선정 병목·판단/호가 쌍을 확인한다. 자동 수집은09:25,
+   종료10:00, 준비된 수동 판독 시작 창은10:05~10:20 KST다. 자동 판독 예약은 없다.
+2. 첫 청산 비교에는 당시 진입, 실제 PRICE 시각/순서, 당시 설정·사전 ATR 근거를 확보한다.
+   이 도구로 고정 손절·ATR 연동 트레일링/본전 보호의 첫 판단 차이를 평가한다.
+3. 첫 판단 이후 비교가 필요하면 대안별 주문·체결 상태를 포함하는 별도 계약을 정한다.
+   실제 청산 비용·대기 중 가격·보유 노출을 갖추기 전 순수익이나 최적 정책으로 승격하지 않는다.
+
+오프라인 도구와 문서만 추가하므로 운영 재배포가 필요하지 않다. 이미 설치된 v5의 소스와
+설정 지문을 바꾸지 않고 실제 관측을 진행한다.
