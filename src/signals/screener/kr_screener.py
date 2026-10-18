@@ -1422,6 +1422,7 @@ class StockScreener:
                 change = stock.change_pct
                 has_supply = stock.has_foreign_buying or stock.has_inst_buying
                 has_dual = stock.has_foreign_buying and stock.has_inst_buying
+                absence_observed = observed_no_buying(stock)
 
                 if has_supply and 0 < change <= 3.0:
                     # 유형 A: 수급 있는데 가격 조용 → 최고 기회
@@ -1429,7 +1430,7 @@ class StockScreener:
                     stock.score += bonus
                     stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
                     spdi_applied += 1
-                elif observed_no_buying(stock) and change >= 5.0:
+                elif absence_observed and change >= 5.0:
                     # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
                     stock.score = max(stock.score - 20, 0)
                     stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
@@ -1440,7 +1441,11 @@ class StockScreener:
                     stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
                     spdi_applied += 1
 
-                _observe_modifier("spdi", stock)
+                # Historical v3 shadow knows only fresh observer rows, not this
+                # policy's cached proof. Keep actual stage deltas, but do not
+                # claim its legacy shadow is comparable to an evidence decision.
+                if not absence_observed:
+                    _observe_modifier("spdi", stock)
 
             if spdi_applied:
                 logger.info(f"[Screener] SPDI 필터 {spdi_applied}개 적용")

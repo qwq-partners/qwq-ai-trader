@@ -148,3 +148,15 @@ def test_observer_failure_cannot_disable_real_nonpositive_penalty(monkeypatch, m
     assert result[0].score == 30
     assert len(calls) == 4
     assert result[0].selection_basis['version'] == 'kr-selection-basis-v1'
+
+
+def test_cached_decision_proof_does_not_claim_legacy_unknown_shadow_comparison(monkeypatch):
+    s, _, calls = native_screener(monkeypatch, '0')
+    assert run(s)[0].score == 30
+    result = run(s, capture_selection=True, capture_selection_modifiers=True)
+    basis = result[0].selection_basis
+    assert result[0].score == 30
+    assert next(stage for stage in basis['modifier_stages'] if stage['stage_id'] == 'spdi')['delta'] == -20
+    assert basis['same_input_shadow']['status'] == 'inputs_incomplete'
+    assert basis['same_input_shadow']['shadow_delta_vs_actual'] is None
+    assert len(calls) == 4
