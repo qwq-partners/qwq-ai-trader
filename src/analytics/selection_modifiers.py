@@ -315,7 +315,7 @@ class PolicyModifierCapture(ModifierCapture):
         extension = super().finish(stock)
         decisions = {stage: deepcopy(self.policy[stage].get(stock.symbol)) for stage in POLICY_STAGES}
         extension.update(supply_policy_id=POLICY_ID, supply_policy_started_at=self.policy_started_at, supply_policy_decisions=decisions,
-            supply_policy_shadow=_policy_shadow(decisions['spdi'], extension['modifier_stages'][10]))
+            supply_policy_shadow=_policy_shadow(decisions['spdi'], extension['modifier_stages'][ORDER.index('spdi')]))
         return extension
 
 
@@ -383,6 +383,6 @@ def validate_policy_extension(basis):
     if shadow['status'] == 'comparable':
         for key in ('actual_after', 'legacy_after', 'delta_vs_legacy'):
             number(shadow[key])
-    expected = _policy_shadow(decisions['spdi'], basis['modifier_stages'][10])
+    expected = _policy_shadow(decisions['spdi'], basis['modifier_stages'][ORDER.index('spdi')])
     if shadow != expected:
         raise ValueError('policy shadow native arithmetic/unsupported claim')
