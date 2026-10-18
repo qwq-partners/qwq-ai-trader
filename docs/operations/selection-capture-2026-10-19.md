@@ -1,6 +1,74 @@
 # 10월19일 선정·LLM 단발 관측 — 배포와 설치
 
-> **10월18일 갱신:** [직접 KIS 계측 배포와 v4 교체](#10월18일-직접-kis-계측-배포와-v4-교체)를 정본으로 삼는다. 아래 v3 유지·미배포 결정은 이전 시점의 기록이다.
+> **현재 정본:** [주문 귀속 배포와 v5 교체](#10월18일-주문-귀속-배포와-v5-교체).
+
+## 10월18일 주문 귀속 배포와 v5 교체
+
+**PLAN:** 좋은 종목과 진입 시점의 판단을 비용 후 결과에 연결하기 위해 청산 설정·수급 입력 오류 수정과 판단→주문 의도→증분 체결 귀속을 적용한다. 새 형식 기록 뒤에도 복구할 수 있도록 호환 reader를 실제 직전 운영 버전으로 먼저 둔다. 기존 v4 입력은 보존하고 최종 SHA/PID에 묶인 v5를 같은 관측 창에 설치한다.
+
+**DO — 두 단계 배포:** PR [#221](https://github.com/qwq-partners/qwq-ai-trader/pull/221) `710af55387ab1ba70378b311c8cdad5a60c4ed2c`를 먼저 배포해 reader 운영7314검사·PID2361326·150초 기동을 확인했다. 이어 [#218](https://github.com/qwq-partners/qwq-ai-trader/pull/218), [#219](https://github.com/qwq-partners/qwq-ai-trader/pull/219), [#222](https://github.com/qwq-partners/qwq-ai-trader/pull/222)의 최종 `ba29b9034b47a3033f0b3133bfe97a560ff9da00`를 배포 rc0·롤백 없이 적용했다. 최종 자동 복구 대상은 `710af553`다. 이전 v4 타이머는 배포 잠금 안에서 중지했으며 옛 예약을 다시 켜지 않는다.
+
+**SEE — 운영:** 2026-10-18 13:05:47 KST 확인에서 PID2369151·NRestarts0·기동150초·복구ready·미체결/정체0·KR 매수 중지다. 운영 전체7956 passed/2 skipped/2 xfailed·격리0·문법/비밀검사 통과, 기동 ERROR/Traceback0·KIS 거절/토큰 오류0이다. 기본/진화 설정·환경·과거 관측/판독 등 보호1187경로 지문과 각 배포 직전 비용 행을 보존했다. 월USD100·기준선0·unknown1/actual=null·reserved0·normal·log_and_continue 유지다. 운영 기동의 자동 호출은 발생했으므로 유료 호출0으로 주장하지 않는다. 수동 거래·추가 모델 비교는 실행하지 않았다.
+
+**SEE — CI·리뷰:** reader PR/main과 최종 PR/main Verify가 통과했다. 최종 main 실행은 [39094955456](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/39094955456),7956검사다. 중간 #219 main 실행39094918409는 뒤이은 #222 실행으로 취소됐으며 실패로 보지 않는다. 최종 소스686파일은 로컬7956검사 대상과 일치했다. 중요 소스/도우미 리뷰에 이어 실제 v5 입력도 `claude-opus-5` 응답 모델·요청xhigh(실효 effort 미노출)·도구0/MCP0로 독립 승인했다. 실제 입력 리뷰 비용은 USD1.5309735이며 개발 검토 비용이다.
+
+**DO/SEE — 설치:** 실제 새8파일/6근거 지문, 최종 SHA/PID/소스/설정, 자원과 과거332파일을 대조한 뒤 고정 설치기의 staging/check/apply 및 사후 검사 rc0. v1~v4는 disabled/inactive·미소비 자료 보존, v5는 enabled/active·서비스inactive·미소비/미수집이다. 설치 중 봇 추가 재시작0이며 PID는2369151로 유지됐다. `selection-basis-v4` study와 `kr-selection-basis-v3` 기록을 사용한다. 과거 채널 준비 상태는 역사 근거이고 활성화 때 실제 연결·구독 여유를 다시 확인한다. 설치 뒤13:17:37 KST 재확인에서도 PID2369151·기동860초·NRestarts0·복구ready·미체결0과 보호 지문/기존 비용행 보존이 확인됐다. 정적 검사에는 기존 별도 `claude-session.service`의 KillMode 경고가 있었으며 해당 서비스는 변경하지 않았다.
+
+| 고정 항목 | 값 |
+| --- | --- |
+| 운영 SHA / PID | `ba29b9034b47a3033f0b3133bfe97a560ff9da00` / `2369151` |
+| 호환 복구 SHA | `710af55387ab1ba70378b311c8cdad5a60c4ed2c` |
+| v5 설치 manifest SHA256 | `1e41223d0d323f7d5349706a814806a83d74ac76cc13b39316bbfc647df17cb6` |
+| v5 study SHA256 | `be9215c8eb4345a682c8912543a3e52c51944af584ea5ef0b15dd012dd2a30f4` |
+| 판독 manifest SHA256 | `1f032ec9ce9f5a4329d78f3c93d1457430e3b1db5660b4120350b4d16327a993` |
+| 판독 소스 fingerprint | `dc1490f2c283e487f790bb326d48ba27f810c0135cae217573693d4b45349995` |
+| 판독 소스/입력 | `~/.local/share/qwq-capture-readout/20261019-v5/` (소스403파일) |
+| 수집 원장 | `~/.local/state/qwq-entry-observation/20261019-llm-window-v5/engine.jsonl` |
+| 판독 결과 예정 경로 | `~/.local/state/qwq-capture-readout/20261019-v5/` |
+
+**판독 준비:** 배포 소스와 새 v5 study/manifest를 별도로 고정하고 `--check`에서 `preflight_ok`, `future_inputs_checked=false`를 확인했다. output/attempt는 미생성, 실제 판독 미실행, 자동 timer/cron 등록 없음이다. 기존 v1~v4 입력·원본·판독 소스는 보존했다. **10월19일10:00 이후 실제 봉인을 확인하고10:05~10:20 KST 안에서** 아래 명령으로 수동 시작한다. 미래 시각을 주입하거나 소비한 attempt를 삭제하지 않는다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python -I -B \
+  /home/ubuntu/.local/share/qwq-capture-readout/20261019-v5/source-ba29b903/scripts/ops/run_capture_readout.py \
+  --manifest /home/ubuntu/.local/share/qwq-capture-readout/20261019-v5/manifest.json
+```
+
+**남은 순서:** ①09:25~09:27 활성화 영수증·새 PID·복구/구독 확인 ②09:30~09:40 최초5개 실제 LLM 판단·최대4스캔,10:00 종료/봉인 확인 ③10:05~10:20 수동 판독으로 선정 단계·판단 기록 완료 상태·응답 뒤 호가·장 상태·900초 bid의 결측을 구분 ④ 충족한 자료만 동일 진입 청산·지연/거래/API 비용 비교로 넘긴다. 일봉과 실시간 청산의 완전 동등성, 계좌 순수익/TWR, 새20일 관측, 매수 재개는 미확정이다.
+
+배포/기동 근거는 `~/.local/state/qwq-attribution-deploy-20261018/`, 설치 영수증은 `~/.local/state/qwq-oct19-v5-deployment-20261018/`, 판독 준비는 위 v5 디렉터리에 보존한다. 이후 문서 커밋은 운영 HEAD를 움직이지 않는다.
+
+### 실제 입력 리뷰의 추가 확인과 활성화 실패 대응
+
+첫 실제 입력 리뷰는 설치를 승인하면서 활성화 전 두 P1 확인을 요구했다. 소스 대조와
+추가62검사(단발 시작/v5 연결56, runner once6·격리0)로 다음을 확인한 뒤 독립 종결 검토를 받았다.
+
+- `unknown_count=1`을 주문의 불명 상태로 잘못 읽은 초기 우려는 철회됐다. 이는 LLM 비용
+  원장의 기존 미확인 건이며 제품 결함이 아니다. 배포 전후 해당 행의
+  ID/지문을 비공개 영수증에 보존했다. 주문 복구ready·journal_pending0·미귀속종목 없음·미체결0과 별개다.
+- 유효한 once가 만료됐거나 이미 소비됐으면 `None`을 반환해 관측만 생략한다. 봇 기동을 막지
+  않으므로 관측 종료 직후 drop-in을 자동 삭제할 필요는 없다. 잘못된/훼손된 요청은 별도로 거부한다.
+- 기존 공통 검증기가 선정 원천16·후보100·단계24·용량/채널 상한을 검사하고 builder도
+  `validate_payload`를 호출한다. 해당 상한 검사가 없다는 P2 우려는 소스 대조로 해소했다.
+- 근거 JSON은 비공개 경로의 실제 바이트와 study 참조 지문으로 보존한다. root 설치 디렉터리에
+  복사했다고 주장하지 않는다. 루트 영수증 읽기 방식 통일 등 추가 강화 의견은 배포 차단 사항이 아니다.
+
+종결 검토의 실제 모델은 `claude-opus-5`, 요청xhigh/실효 effort 미노출·도구0/MCP0,
+비용 USD0.3053185다. 실제 입력 검토 두 회는 USD1.8362920이며 엔진 호출 비용과 구분한다.
+
+**활성화가 failed/restart_attempted=true면:** 시도 영수증·once·drop-in을 보존하고 재시작을
+반복하거나 이전 타이머를 재가동하지 않는다. 실제 PID/HEAD·서비스·복구/미체결·비공개 로그와
+관측 준비/봉인을 먼저 대조한다. 봇이 정상이고 관측만 실패했다면 자료를 얻기 위해 재시작하지 않는다.
+가동 장애면 원장/미체결 진단 후 고정 최종 SHA 또는 호환 reader를 사용하는 기존 복구 절차를 따른다.
+매수 중지와 소비한 영수증은 유지한다. drop-in이 존재하는 동안 once 요청 파일을 삭제·교체하거나
+권한을 바꾸지 않는다. 해당 서비스는 KR/non-dry-run을 유지하며 US 또는 dry-run 전환 전에는
+drop-in을 먼저 정리해야 한다. 종료 후 drop-in 정리는 별도 작업으로 남기며, 실행 때에는
+실제 활성화 상태·봉인·미체결0 및 root 소유 일반파일/링크수/내용 지문·장치/아이노드를 확인한 뒤
+해당 파일만 제거하고 설정을 다시 읽는다. 자동 정리나 추가 봇 재시작은 예약하지 않았다.
+
+---
+
+> 아래 v4 이하 절은 교체 전 보존 이력이다. **옛 수동 판독 명령은 실행하지 않는다. 현재 대상은 위 v5뿐이다.**
 
 ## 10월18일 직접 KIS 계측 배포와 v4 교체
 
