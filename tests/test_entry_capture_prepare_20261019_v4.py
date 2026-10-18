@@ -96,7 +96,7 @@ def test_v4_activation_profile_has_strict_readiness():
                        ('market_state_evidence', False), ('selection_basis_version', 'selection-basis-v2')]:
         invalid = projection(); invalid['llm'][key] = value
         assert not a.capture_prepared(cfg, invalid)
-    with pytest.raises(a.GuardError): a.activation_profile('20261019-llm-window-v5')
+    with pytest.raises(a.GuardError): a.activation_profile('20261019-llm-window-v6')
 
 
 @pytest.mark.asyncio
@@ -173,7 +173,7 @@ def test_v4_activation_config_fixed_contract(m, monkeypatch, defect):
 
 @pytest.mark.parametrize('argv,accepted', [(['--profile', '20261019-llm-window-v4'], True),
     (['--profile', '20261019-llm-window-v4', '--date', '2026-10-20'], False),
-    (['--profile', '20261019-llm-window-v5'], False)])
+    (['--profile', '20261019-llm-window-v6'], False)])
 def test_v4_cli_is_fixed(monkeypatch, capsys, argv, accepted):
     a = activation_module(); selected = []
     monkeypatch.setattr(a.sys, 'argv', [a.__file__, *argv])
