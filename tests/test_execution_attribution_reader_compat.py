@@ -128,7 +128,7 @@ async def test_forward_unknown_acknowledge_preserves_attribution_and_legacy_appe
 
 
 @pytest.mark.asyncio
-async def test_baseline_history_intent_still_persists_exactly_eight_fields(forward_golden):
+async def test_forward_history_intent_persists_attribution_after_compatible_baseline(forward_golden):
     path, fixture = forward_golden
     ack = ExecutionLedger(path, fixture['scope'])
     await ack.open('operator-ack')
@@ -146,9 +146,14 @@ async def test_baseline_history_intent_still_persists_exactly_eight_fields(forwa
     assert await history.close() is True
     report = read_execution_ledger(path, fixture['scope'])
     facts = report['orders'][history.keys[order.id]]['facts']
-    assert set(facts) == set(FACTS)
-    assert 'attribution' not in facts
-    assert facts == {**FACTS, 'local_id': order.id}
+    # The separately deployed reader baseline was verified with exactly eight
+    # fields. This forward release deliberately starts writing the ninth field.
+    missing = ('candidate_id', 'plan_id', 'signal_id', 'llm_decision_id')
+    assert set(facts) == set(FACTS) | {'attribution'}
+    assert facts == {**FACTS, 'local_id': order.id, 'attribution': {
+        'version': 'order-attribution-v1', **{name: None for name in missing},
+        'missing_reasons': {name: 'not_available' for name in missing},
+    }}
     persisted_intent = next(
         json.loads(payload) for _, _, operation, payload in _rows(path)['events']
         if operation == 'intent' and json.loads(payload)['key'] == history.keys[order.id]
