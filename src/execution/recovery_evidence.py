@@ -8,6 +8,8 @@ import json
 import re
 from zoneinfo import ZoneInfo
 
+from ..core.order_attribution import validate_attribution
+
 
 KINDS = {"broker": "broker_all_orders", "journal": "journal_events",
          "baseline": "baseline_snapshots"}
@@ -99,6 +101,15 @@ def _broker(row):
             "lineage": row["orgn_odno"] not in {"", "0", "0000000000"}}
 
 
+def _journal_execution_id(value):
+    if value is None:
+        return None
+    _text(value)
+    if "\x00" in value:
+        raise ValueError("invalid journal execution ID")
+    return value
+
+
 def _journal(row):
     day = _day(row["event_date"]).isoformat()
     event_id, trade_id, symbol = (_text(row[key]) for key in ("event_id", "trade_id", "symbol"))
@@ -110,8 +121,10 @@ def _journal(row):
     odno = row["kis_order_no"]
     if odno is not None:
         _text(odno)
+    execution_id = _journal_execution_id(row.get("execution_id"))
     return {"key": (day, odno), "symbol": symbol, "side": row["side"],
-            "quantity": qty, "price": price, "event_id": event_id, "trade_id": trade_id}
+            "quantity": qty, "price": price, "event_id": event_id, "trade_id": trade_id,
+            "execution_id": execution_id}
 
 
 def _baseline(row):
@@ -129,6 +142,61 @@ def _baseline(row):
     amount = None if cash["amount"] is None else _number(cash["amount"])
     return {"key": row["owner"], "captured_at": _time(row["captured_at"]),
             "positions": positions, "cash": amount, "cash_basis": cash["basis"]}
+
+
+def _attribution_chain(key, order, scope, day, journal_missing_ids, journal_ids,
+                       journal_events, ledger_ids, issue):
+    """검증된 원장 사실을 보존하고 제출 행의 명시 identity만 연결한다."""
+    facts = order["facts"]
+    attributed = "attribution" in facts
+    # 검증되지 않은 봉투는 보고서 전체를 거부한다. 과거 형식의 결측으로 덮지 않는다.
+    attribution = validate_attribution(facts["attribution"]) if attributed else {
+        "version": "order-attribution-v1",
+        **{name: None for name in ("candidate_id", "plan_id", "signal_id", "llm_decision_id")},
+        "missing_reasons": {name: "legacy_not_recorded" for name in
+                            ("candidate_id", "plan_id", "signal_id", "llm_decision_id")}}
+    chain = {"order_key": key, "local_order_id": facts["local_id"],
+             "broker_order_no": order["odno"] or None, "account_scope": scope,
+             "order_date": day, "symbol": facts["symbol"], "side": facts["side"],
+             "status": order["status"], "attribution": attribution,
+             "requested_quantity": facts["quantity"], "observed_quantity": order["observed_quantity"],
+             "terminal_quantity": order["terminal_quantity"],
+             "unfilled_quantity_at_terminal": (facts["quantity"] - order["terminal_quantity"]
+                 if order["terminal_quantity"] is not None else None), "executions": []}
+    identity = (day, order["odno"])
+    for item in order["executions"]:
+        execution_id = item["execution_id"]
+        quantity = item["to_quantity"] - item["from_quantity"]
+        price = round(Decimal(item["price"]), 2)
+        candidates = journal_ids.get(execution_id, [])
+        status, matched = "missing", None
+        if len(ledger_ids[execution_id]) > 1 or len(candidates) > 1:
+            status = "conflict"
+        elif candidates:
+            row = candidates[0]
+            if (row["eligible"] and row["account_scope"] == scope
+                    and row["key"] == identity and row["symbol"] == facts["symbol"]
+                    and row["side"] == facts["side"] and row["quantity"] == quantity
+                    and row["price"] == price and journal_events[row["event_id"]] == 1):
+                status, matched = "matched_supplied_row", row
+            else:
+                status = "conflict"
+        elif identity in journal_missing_ids:
+            status = "missing_execution_id"
+        # 과거 합계 대사는 유지하되 새 귀속 또는 명시 ID의 연결 실패는 숨기지 않는다.
+        if status != "matched_supplied_row" and (attributed or candidates):
+            issue("journal_execution_identity_conflict" if status == "conflict"
+                  else "journal_execution_identity_missing", "journal",
+                  "mismatch" if status == "conflict" else "incomplete",
+                  order_key=key, execution_id=execution_id)
+        chain["executions"].append({
+            "execution_id": execution_id, "delta_quantity": quantity, "price": item["price"],
+            "journal_price": str(price), "portfolio_applied": item["portfolio_applied"],
+            "handoff_returned": item["handoff_returned"], "journal_identity_status": status,
+            "journal_event_id": matched["event_id"] if matched else None,
+            "journal_trade_id": matched["trade_id"] if matched else None,
+            "journal_durability": "unverified"})
+    return chain
 
 
 def reconcile_execution_evidence(ledger, broker, journal, baseline):
@@ -161,6 +229,11 @@ def _reconcile(ledger, broker, journal, baseline):
         _envelope(source, name)
     window = (broker["window_start"], broker["window_end"])
     issues, inputs, parsed = [], {}, {}
+    journal_ids, journal_events, ledger_ids = defaultdict(list), Counter(), defaultdict(list)
+    journal_missing_ids = set()
+    for key, order in ledger["orders"].items():
+        for item in order["executions"]:
+            ledger_ids[item["execution_id"]].append(key)
 
     def issue(code, source, severity="incomplete", **details):
         issues.append({"code": code, "source": source, "severity": severity, **details})
@@ -192,6 +265,20 @@ def _reconcile(ledger, broker, journal, baseline):
                         or row["captured_at"].astimezone(KST).date() < _day(source["window_end"])):
                     raise ValueError("invalid snapshot chronology")
             except (KeyError, ValueError, TypeError, ArithmeticError):
+                # 무효 행도 같은 실행/DB 행 ID를 주장하면 유효 행의 단독 연결 증거가 될 수 없다.
+                if name == "journal" and isinstance(raw, dict):
+                    try:
+                        event_id = _text(raw.get("event_id"))
+                    except ValueError:
+                        pass
+                    else:
+                        journal_events[event_id] += 1
+                    try:
+                        execution_id = _journal_execution_id(raw.get("execution_id"))
+                    except ValueError:
+                        execution_id = None
+                    if execution_id is not None:
+                        journal_ids[execution_id].append({"eligible": False})
                 stats["invalid_rows"] += 1
                 issue("invalid_row", name, row_index=index)
                 continue
@@ -201,16 +288,29 @@ def _reconcile(ledger, broker, journal, baseline):
                 stats["duplicate_rows"] += 1
                 issue("duplicate_identity", name, "mismatch", row_index=index)
             seen.add(identity)
-            if name == "journal" and row["key"][1] is None:
-                issue("journal_identity_missing", name, row_index=index)
+            if name == "journal":
+                row.update(account_scope=source["account_scope"], eligible=same_scope and same_window)
+                journal_events[row["event_id"]] += 1
+                if row["execution_id"] is not None:
+                    journal_ids[row["execution_id"]].append(row)
+                elif same_scope and same_window:
+                    journal_missing_ids.add(row["key"])
+                if row["key"][1] is None:
+                    issue("journal_identity_missing", name, row_index=index)
             if same_scope and same_window:
                 groups[row["key"]].append(row)
         parsed[name] = groups
 
+    for execution_id, rows in journal_ids.items():
+        if len(rows) > 1:
+            issue("duplicate_execution_id", "journal", "mismatch", execution_id=execution_id)
+        if execution_id not in ledger_ids:
+            issue("journal_execution_id_unmatched", "journal", "mismatch", execution_id=execution_id)
+
     unclean = [key for key, value in ledger["sessions"].items() if not value["clean"] or value["prior_unclean"]]
     if unclean:
         issue("unclean_session_window_unknown", "ledger")
-    results, covered, ignored = [], set(), 0
+    results, chains, covered, ignored = [], [], set(), 0
     for key, order in ledger["orders"].items():
         facts = order["facts"]
         day = _day(facts["order_date"], compact=True).isoformat()
@@ -222,6 +322,8 @@ def _reconcile(ledger, broker, journal, baseline):
             if not resolved:
                 issue("unresolved_outside_window", "ledger", order_key=key)
             continue
+        chains.append(_attribution_chain(key, order, scope, day, journal_missing_ids,
+                                         journal_ids, journal_events, ledger_ids, issue))
         if order["status"] in {"not_sent", "rejected"}:
             continue
         if not order["odno"]:
@@ -316,6 +418,7 @@ def _reconcile(ledger, broker, journal, baseline):
             "window_start": window[0], "window_end": window[1], "comparison_status": status,
             "inputs": {"ledger": {name: ledger[name] for name in ("event_count", "state_digest", "source_sha256")}, **inputs},
             "orders": results, "orders_outside_window": ignored, "unclean_sessions": unclean,
+            "attribution_chains": chains, "intent_count": len(chains), "journal_durability": "unverified",
             "session_risk_window": "unverified", "baseline": base, "issues": issues,
             "next_actions": [
                 {"priority": "P0", "source": source, "resolve_codes": sorted({item["code"] for item in issues if item["source"] == source})}

@@ -154,6 +154,9 @@ LLM 사실 입력, 거래 기억의 저장/압축, 실제 거래 저널의 JSON 
 
 ### 다음 계측 작업의 PLAN→DO→SEE
 
+후속 구현·검증 상태는 [주문 귀속 연결](order-attribution-2026-10-18.md)을 따른다.
+아래 표는 이 문서 작성 당시의 계획이며, 운영 적용 완료를 뜻하지 않는다.
+
 코드 점검상 부족한 부분은 `order_ready` 이후 지속되는 상위 판단 식별자다.
 `Order`에는 candidate/signal/LLM decision 식별자가 없고, `ExecutionHistory.intent`의 고정 사실 필드도
 이를 보존하지 않는다. 기존 후보·LLM 판단·호가 결합·접수/체결 원장을 다시 만들 필요는 없다.

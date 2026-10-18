@@ -26,6 +26,7 @@ import sys
 from loguru import logger
 
 from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital, capture_llm_check_started
+from ..analytics.order_attribution_capture import capture_order_attribution
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
@@ -2281,6 +2282,8 @@ class RiskManager:
             )
 
         order.partial_exit = _sell_partial_intent or _sell_partial_action
+        # 이후 await/메타 변경과 분리해 원문 식별자를 한 번 고정한다. 주문 조건에는 쓰지 않는다.
+        order.attribution = capture_order_attribution(getattr(self, '_entry_observation_owner', None), event)
 
         # 리스크 체크 (SELL은 포지션 축소이므로 체크 스킵)
         if order.side == OrderSide.BUY:
