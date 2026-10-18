@@ -32,29 +32,29 @@
 
 Files: `src/core/order_attribution.py`, `src/execution/execution_ledger.py`, `tests/test_execution_attribution_reader_compat.py`.
 
-- [ ] PR #219의 검증된 validator와 선택적 facts 검증만 복사한다. Order/engine/ExecutionHistory writer는 변경하지 않는다.
-- [ ] 기존 행·혼합 행·호환 reader의 구형 추가 의도·최종 reader의 재개를 임시 SQLite로 검증한다.
-- [ ] 관련/전체 검사·독립 중요 리뷰·PR/main CI를 통과한다.
+- [x] PR #219의 검증된 validator와 선택적 facts 검증만 복사한다. Order/engine/ExecutionHistory writer는 변경하지 않는다.
+- [x] 기존 행·혼합 행·호환 reader의 구형 추가 의도·최종 reader의 재개를 임시 SQLite로 검증한다.
+- [x] 관련/전체 검사·독립 중요 리뷰·PR/main CI를 통과한다.
 
 ## Task 2 — v5 관측 설치 계약
 
 Files: `scripts/ops/entry_capture_prepare_20261019_v5.py`, `scripts/ops/entry_capture_activate.py`, `tests/test_entry_capture_prepare_20261019_v5.py`.
 
-- [ ] v4 소스 해시를 고정한 별도 wrapper를 만들고 v1~v4의332개 원본/백업과 미소비 상태를 보호한다.
-- [ ] 명시적 v5 profile/epoch/경로와4개 이전 예약의 중지 가드를 연결한다. 과거 source pin은 수정하지 않는다.
-- [ ] 합성 경계 시험 후 PR #218/#219를 통합한 최종 소스로 selection-basis-v4/kr-selection-basis-v3 계약을 재검증한다.
-- [ ] 전체 검사·독립 중요 리뷰·PR/main CI를 통과한다.
+- [x] v4 소스 해시를 고정한 별도 wrapper를 만들고 v1~v4의332개 원본/백업과 미소비 상태를 보호한다.
+- [x] 명시적 v5 profile/epoch/경로와4개 이전 예약의 중지 가드를 연결한다. 과거 source pin은 수정하지 않는다.
+- [x] 합성 경계 시험 후 PR #218/#219를 통합한 최종 소스로 selection-basis-v4/kr-selection-basis-v3 계약을 재검증한다.
+- [x] 전체 검사·독립 중요 리뷰·PR/main CI를 통과한다.
 
 ## Task 3 — 승인된 운영 적용
 
-- [ ] 실제 서비스/미체결/복구/구독/예산·환경/설정/킬스위치/과거 관측 지문을 비공개 영수증에 고정한다.
-- [ ] 배포 잠금 안에서 v4 중지 → 호환 읽기 버전 고정 SHA 배포 → 기동150초 이후 확인한다.
-- [ ] 다시 가드 확인 → 최종 기능 고정 SHA 배포 → 기동150초 이후 원장/보호 파일/예산/로그 확인한다.
-- [ ] 새 v5 실제 입력을 검토·고정하고 staging/check/apply → 타이머/파일/미소비 상태를 대조한다.
-- [ ] 판독 소스와 manifest를 별도 v5 디렉터리에 준비해 --check를 수행한다. 미래 자료 내용은 미확정이다.
-- [ ] 실제 결과와 남은 작업을 문서 갱신·커밋·푸시한다. 문서 후속은 재배포하지 않는다.
+- [x] 실제 서비스/미체결/복구/구독/예산·환경/설정/킬스위치/과거 관측 지문을 비공개 영수증에 고정한다.
+- [x] 배포 잠금 안에서 v4 중지 → 호환 읽기 버전 고정 SHA 배포 → 기동150초 이후 확인한다.
+- [x] 다시 가드 확인 → 최종 기능 고정 SHA 배포 → 기동150초 이후 원장/보호 파일/예산/로그 확인한다.
+- [x] 새 v5 실제 입력을 검토·고정하고 staging/check/apply → 타이머/파일/미소비 상태를 대조한다.
+- [x] 판독 소스와 manifest를 별도 v5 디렉터리에 준비해 --check를 수행한다. 미래 자료 내용은 미확정이다.
+- [x] 실제 결과와 남은 작업을 문서에 갱신한다. 커밋·푸시 완료 근거는 후속 문서 PR/커밋을 따른다. 문서 후속은 재배포하지 않는다.
 
-## 초기 SEE
+## 초기 SEE — 적용 전 이력
 
 10월18일 장외 조회: 운영 `a0bc9c94`, PID2208722, NRestarts0, service active,
 복구ready·미체결0·정체0. v4 타이머는10월19일09:25 enabled/active 상태다.
@@ -77,6 +77,6 @@ PR #218/#219는 검증 완료·미병합이다. 이 계획 작성 시점에 운�
 ## 개발 SEE 갱신
 
 [통합 검토·검증 근거](../../reviews/attribution-rollout-2026-10-18.md). reader 최종7314,
-최종 기능 통합7956검사 통과. 독립 중요 재리뷰 승인 완료; 실제 운영 적용은 아래
-실행 영수증을 확보한 뒤 확정한다. 고정 fixture의 History 지문은 forward 생성기
+최종 기능 통합7956검사 통과. 독립 중요 재리뷰 승인 후 reader710af553→최종ba29b903
+배포와 v5 설치·판독 입력 준비를 완료했다. [실행 영수증](../../operations/selection-capture-2026-10-19.md#10월18일-주문-귀속-배포와-v5-교체)을 따른다. 고정 fixture의 History 지문은 forward 생성기
 출처이며 reader 기준의 현재 writer와 같다는 뜻이 아니다.
