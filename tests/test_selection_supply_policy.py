@@ -221,3 +221,34 @@ def test_many_invalid_rows_emit_one_capped_warning_and_schema_marker(monkeypatch
     assert 'bad-private-value' not in messages[0]
     asyncio.run(provider.fetch_foreign_institution(market='0001', investor='1'))
     assert len(messages) == 1 and len(calls) == 1
+
+
+@pytest.mark.parametrize('positive,change,expected,reason', [
+    (False, 5, 30, 'SPDI↓ 수급부재급등(가격+5.0%)'),
+    (True, 2, 62, 'SPDI↑ 수급선행(가격+2.0%)'),
+    (True, 8, 42, 'SPDI중립 수급후행(가격+8.0%)'),
+])
+def test_malformed_earlier_candidate_does_not_skip_later_spdi_adjustment(
+        monkeypatch, positive, change, expected, reason):
+    import asyncio
+    from src.analytics.selection_supply_policy import record_evidence, supply_proof, supply_scan
+    from src.signals.screener import kr_screener
+    malformed = stock('000001', score=50, change_pct='malformed-private-value')
+    valid = stock('000002', score=50, change_pct=change, has_foreign_buying=positive)
+    candidates = {s.symbol: s for s in (malformed, valid)}
+    warnings = []
+    monkeypatch.setattr(kr_screener.logger, 'warning', warnings.append)
+    scanner = object.__new__(StockScreener)
+
+    @supply_scan
+    async def evaluate():
+        for investor in ('1', '2'):
+            record_evidence(investor, {symbol: supply_proof('0') for symbol in candidates})
+        await scanner._apply_spdi_filter(candidates)
+
+    asyncio.run(evaluate())
+    assert valid.score == expected
+    assert valid.reasons == ['원천', reason]  # exactly one adjustment
+    assert malformed.score == 50
+    assert len(warnings) == 1
+    assert 'malformed-private-value' not in warnings[0]

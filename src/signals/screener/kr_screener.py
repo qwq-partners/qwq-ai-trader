@@ -1419,38 +1419,43 @@ class StockScreener:
         try:
             spdi_applied = 0
             for symbol, stock in all_stocks.items():
-                change = stock.change_pct
-                has_supply = stock.has_foreign_buying or stock.has_inst_buying
-                has_dual = stock.has_foreign_buying and stock.has_inst_buying
-                absence_observed = observed_no_buying(stock)
+                try:
+                    change = stock.change_pct
+                    has_supply = stock.has_foreign_buying or stock.has_inst_buying
+                    has_dual = stock.has_foreign_buying and stock.has_inst_buying
+                    absence_observed = observed_no_buying(stock)
 
-                if has_supply and 0 < change <= 3.0:
-                    # 유형 A: 수급 있는데 가격 조용 → 최고 기회
-                    bonus = 20 if has_dual else 12
-                    stock.score += bonus
-                    stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
-                    spdi_applied += 1
-                elif absence_observed and change >= 5.0:
-                    # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
-                    stock.score = max(stock.score - 20, 0)
-                    stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
-                    spdi_applied += 1
-                elif has_supply and change >= 8.0:
-                    # 유형 B: 수급+급등 동시 → 후행 타이밍
-                    stock.score = max(stock.score - 8, 0)
-                    stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
-                    spdi_applied += 1
+                    if has_supply and 0 < change <= 3.0:
+                        # 유형 A: 수급 있는데 가격 조용 → 최고 기회
+                        bonus = 20 if has_dual else 12
+                        stock.score += bonus
+                        stock.reasons.append(f"SPDI↑ 수급선행(가격{change:+.1f}%)")
+                        spdi_applied += 1
+                    elif absence_observed and change >= 5.0:
+                        # 유형 C: 수급 없는 급등 → 개인 단발 → 강한 감점
+                        stock.score = max(stock.score - 20, 0)
+                        stock.reasons.append(f"SPDI↓ 수급부재급등(가격{change:+.1f}%)")
+                        spdi_applied += 1
+                    elif has_supply and change >= 8.0:
+                        # 유형 B: 수급+급등 동시 → 후행 타이밍
+                        stock.score = max(stock.score - 8, 0)
+                        stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
+                        spdi_applied += 1
 
-                # Historical v3 shadow knows only fresh observer rows, not this
-                # policy's cached proof. Keep actual stage deltas, but do not
-                # claim its legacy shadow is comparable to an evidence decision.
-                if not absence_observed:
-                    _observe_modifier("spdi", stock)
+                    # Historical v3 shadow knows only fresh observer rows, not this
+                    # policy's cached proof. Keep actual stage deltas, but do not
+                    # claim its legacy shadow is comparable to an evidence decision.
+                    if not absence_observed:
+                        _observe_modifier("spdi", stock)
+                except Exception as e:
+                    logger.warning(
+                        f"[Screener] SPDI 종목 처리 오류 (다음 종목 계속): {type(e).__name__}"
+                    )
 
             if spdi_applied:
                 logger.info(f"[Screener] SPDI 필터 {spdi_applied}개 적용")
         except Exception as e:
-            logger.warning(f"[Screener] SPDI 필터 오류 (무시): {e}")
+            logger.warning(f"[Screener] SPDI 필터 오류 (무시): {type(e).__name__}")
 
     async def _apply_inst_sell_blacklist(self, all_stocks: Dict[str, "ScreenedStock"]):
         """
