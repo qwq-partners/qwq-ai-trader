@@ -95,3 +95,37 @@ def observed_no_buying(stock):
 def observed_buying(stock):
     return (stock.has_foreign_buying or stock.has_inst_buying
             or any(state(side, stock.symbol) == 'positive' for side in ('1', '2')))
+
+
+def decision_snapshot(stock):
+    """One immutable-by-ownership view used by scoring and copied by observers.
+
+    Age is ingestion age, never a provider as-of time. Both sides use the same
+    monotonic instant; an observer never refreshes or reevaluates this snapshot.
+    """
+    from datetime import datetime, timezone
+    now = time.monotonic()
+    active = _ACTIVE.get() or {}
+    snapshot = {'captured_at': datetime.now(timezone.utc).isoformat(),
+                'legacy_foreign': stock.has_foreign_buying,
+                'legacy_institution': stock.has_inst_buying}
+    for investor, name in (('1', 'foreign'), ('2', 'institution')):
+        proof = active.get(investor, {}).get(stock.symbol)
+        value = age = None
+        origin = 'unavailable'
+        if type(proof) is dict:
+            raw, at = proof.get('value'), proof.get('observed_monotonic')
+            if (type(raw) is int and abs(raw) <= 10**12 and type(at) in (int, float)
+                    and math.isfinite(at) and 0 <= now-at <= 10**12):
+                age, origin = now-at, 'policy_memory_proof'
+                if age <= MAX_AGE_SECONDS:
+                    value = raw
+        snapshot[name] = dict(state='unobserved' if value is None else
+                              'positive' if value > 0 else 'observed_nonpositive',
+                              value=value, proof_age_seconds=age, origin=origin, source_as_of=None)
+    flags = snapshot['legacy_foreign'] or snapshot['legacy_institution']
+    snapshot['absence_observed'] = not flags and all(
+        snapshot[side]['state'] == 'observed_nonpositive' for side in ('foreign', 'institution'))
+    snapshot['buying_observed'] = bool(flags or any(
+        snapshot[side]['state'] == 'positive' for side in ('foreign', 'institution')))
+    return snapshot

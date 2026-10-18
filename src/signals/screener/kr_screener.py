@@ -38,7 +38,7 @@ from src.indicators.technical import TechnicalIndicators
 from src.analytics.selection_basis import SelectionBasisBuilder
 from src.analytics.selection_supply_policy import (
     POLICY_ID as SUPPLY_POLICY_ID,
-    supply_scan, evidence_rows, record_evidence, observed_no_buying, observed_buying,
+    supply_scan, evidence_rows, record_evidence, decision_snapshot,
 )
 from src.analytics.selection_modifiers import capture_scope, observe as _capture_modifier, source_scope
 from src.analytics.selection_source_status import SourceCapture, mark_source
@@ -1423,7 +1423,9 @@ class StockScreener:
                     change = stock.change_pct
                     has_supply = stock.has_foreign_buying or stock.has_inst_buying
                     has_dual = stock.has_foreign_buying and stock.has_inst_buying
-                    absence_observed = observed_no_buying(stock)
+                    decision = decision_snapshot(stock)
+                    absence_observed = decision["absence_observed"]
+                    _observe_modifier("policy_begin", "spdi", stock, decision)
 
                     if has_supply and 0 < change <= 3.0:
                         # 유형 A: 수급 있는데 가격 조용 → 최고 기회
@@ -1447,6 +1449,7 @@ class StockScreener:
                     # claim its legacy shadow is comparable to an evidence decision.
                     if not absence_observed:
                         _observe_modifier("spdi", stock)
+                    _observe_modifier("policy_end", "spdi", stock)
                 except Exception as e:
                     logger.warning(
                         f"[Screener] SPDI 종목 처리 오류 (다음 종목 계속): {type(e).__name__}"
@@ -1939,6 +1942,7 @@ class StockScreener:
         capture_selection: bool = False,
         capture_selection_sources: bool = False,
         capture_selection_modifiers: bool = False,
+        capture_selection_supply_policy: bool = False,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -2322,11 +2326,14 @@ class StockScreener:
         try:
             retail_only_count = 0
             for symbol, stock in all_stocks.items():
-                if 3.0 <= stock.change_pct < 5.0 and observed_no_buying(stock):
+                decision = decision_snapshot(stock)
+                _observe_modifier("policy_begin", "retail_only", stock, decision)
+                if 3.0 <= stock.change_pct < 5.0 and decision["absence_observed"]:
                     # 상승 중인데 기관/외국인 수급 없음 → 개인 단독 매수 의심
                     stock.score = max(stock.score - 15, 0)
                     stock.reasons.append(f"개인단독매수 의심 (기관/외국인 미참여, {stock.change_pct:+.1f}%)")
                     retail_only_count += 1
+                _observe_modifier("policy_end", "retail_only", stock)
             if retail_only_count:
                 logger.info(f"[Screener] 개인단독매수 감점 {retail_only_count}개 적용")
         except Exception as e:
@@ -2343,7 +2350,9 @@ class StockScreener:
             regime_applied = 0
             if overnight_sentiment == "bearish":
                 for symbol, stock in all_stocks.items():
-                    if observed_no_buying(stock):
+                    decision = decision_snapshot(stock)
+                    _observe_modifier("policy_begin", "overnight_regime", stock, decision)
+                    if decision["absence_observed"]:
                         # 약세장에서 수급 없는 종목 → 강한 감점
                         stock.score = max(stock.score - 20, 0)
                         stock.reasons.append("US 야간 약세 + 수급부재 감점")
@@ -2351,15 +2360,19 @@ class StockScreener:
                     else:
                         # 수급 결측도 약세장 자체의 기본 위험 감점은 유지한다.
                         stock.score = max(stock.score - 5, 0)
-                        reason = "수급 방어" if observed_buying(stock) else "수급 미확인"
+                        reason = "수급 방어" if decision["buying_observed"] else "수급 미확인"
                         stock.reasons.append(f"US 야간 약세 ({reason})")
                         regime_applied += 1
+                    _observe_modifier("policy_end", "overnight_regime", stock)
             elif overnight_sentiment == "bullish":
                 for symbol, stock in all_stocks.items():
+                    decision = decision_snapshot(stock)
+                    _observe_modifier("policy_begin", "overnight_regime", stock, decision)
                     if stock.has_foreign_buying or stock.has_inst_buying:
                         stock.score += 10
                         stock.reasons.append("US 야간 강세 + 수급 가점")
                         regime_applied += 1
+                    _observe_modifier("policy_end", "overnight_regime", stock)
             if regime_applied:
                 logger.info(
                     f"[Screener] US 오버나이트 레짐({overnight_sentiment}) "
@@ -2493,7 +2506,7 @@ class StockScreener:
                 for stock in fallback:
                     if capture_selection is True and stock.selection_basis is not None:
                         stock.selection_basis["cache_fallback"] = True
-                        if capture_selection_modifiers is not True and stock.selection_basis.get("version") == "kr-selection-basis-v2":
+                        if capture_selection_modifiers is not True and stock.selection_basis.get("version") in ("kr-selection-basis-v2", "kr-selection-basis-v3"):
                             from src.analytics.selection_basis import BASIS_FIELDS
                             stock.selection_basis = {k:v for k,v in stock.selection_basis.items() if k in BASIS_FIELDS}
                             stock.selection_basis["version"] = "kr-selection-basis-v1"
