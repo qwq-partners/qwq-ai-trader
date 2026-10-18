@@ -1,0 +1,94 @@
+"""Decision evidence for supply absence, independent of optional observation hooks.
+
+Only a present, valid FHPTJ04400000 quantity establishes a state. Ranking misses
+and legacy normalized cache entries remain unknown. Proof has one absolute TTL,
+so passing through the provider and screener caches cannot renew its freshness.
+"""
+from contextvars import ContextVar
+from functools import wraps
+import math
+import re
+import time
+
+POLICY_ID = 'kr-supply-absence-observed-v1'
+MAX_AGE_SECONDS = 600
+MAX_ROWS = 512
+_ACTIVE = ContextVar('selection_supply_policy', default=None)
+
+
+def validated_quantity(raw):
+    if type(raw) is int:
+        value = raw
+    elif type(raw) is str and len(raw) <= 14 and re.fullmatch(r'[+-]?[0-9]+', raw):
+        value = int(raw)
+    else:
+        return None
+    return value if abs(value) <= 10**12 else None
+
+
+def supply_proof(raw):
+    value = validated_quantity(raw)
+    return {'value': value, 'observed_monotonic': time.monotonic()} if value is not None else None
+
+
+def _fresh_value(proof):
+    if type(proof) is not dict:
+        return None
+    value, at = proof.get('value'), proof.get('observed_monotonic')
+    if type(value) is not int or abs(value) > 10**12 or type(at) not in (int, float) or not math.isfinite(at):
+        return None
+    return value if 0 <= time.monotonic() - at <= MAX_AGE_SECONDS else None
+
+
+def supply_scan(func):
+    @wraps(func)
+    async def wrapped(*args, **kwargs):
+        token = _ACTIVE.set({})
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            _ACTIVE.reset(token)
+    return wrapped
+
+
+def evidence_rows(rows):
+    """Bounded snapshot before price/liquidity/rank filtering, with conflicts unknown."""
+    result = {}
+    for row in rows:
+        symbol = row.get('symbol')
+        if not isinstance(symbol, str) or re.fullmatch(r'[0-9]{6}', symbol) is None or symbol == '000000':
+            continue
+        if symbol not in result and len(result) >= MAX_ROWS:
+            return {}  # a truncated snapshot cannot resolve later conflicts
+        proof = row.get('_supply_proof')
+        value = _fresh_value(proof)
+        if symbol in result and _fresh_value(result[symbol]) != value:
+            result[symbol] = None
+        elif symbol not in result:
+            result[symbol] = dict(proof) if value is not None else None
+    return result
+
+
+def record_evidence(investor, rows):
+    active = _ACTIVE.get()
+    if active is not None:
+        active[investor] = rows
+
+
+def state(investor, symbol):
+    active = _ACTIVE.get()
+    proof = active.get(investor, {}).get(symbol) if active is not None else None
+    value = _fresh_value(proof)
+    return 'unobserved' if value is None else 'positive' if value > 0 else 'observed_nonpositive'
+
+
+def observed_no_buying(stock):
+    # Existing positive flags remain valid positive signals; never infer absence
+    # merely from their being false.
+    return (not stock.has_foreign_buying and not stock.has_inst_buying
+            and all(state(side, stock.symbol) == 'observed_nonpositive' for side in ('1', '2')))
+
+
+def observed_buying(stock):
+    return (stock.has_foreign_buying or stock.has_inst_buying
+            or any(state(side, stock.symbol) == 'positive' for side in ('1', '2')))

@@ -435,7 +435,9 @@ class KISMarketData:
                     except Exception:
                         pass  # observation failures never alter provider results
 
-                    net_qty = int(item.get("ntby_qty", 0) or 0)
+                    from src.analytics.selection_supply_policy import supply_proof
+                    proof = supply_proof(item.get("ntby_qty"))
+                    net_qty = proof["value"] if proof is not None else 0
 
                     acml_vol = int(item.get("acml_vol", 0) or 0)
                     prdy_vol = int(item.get("prdy_vol", 0) or 0)
@@ -446,6 +448,7 @@ class KISMarketData:
                         "symbol": symbol,
                         "name": name,
                         "net_buy_qty": net_qty,
+                        "_supply_proof": proof,
                         "net_buy_amt": int(item.get("ntby_tr_pbmn", 0) or 0),
                         "price": float(item.get("stck_prpr", 0) or 0),
                         "change_pct": float(item.get("prdy_ctrt", 0) or 0),
