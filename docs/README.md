@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [10월18일 귀속 배포·v5 통합 검토](reviews/attribution-rollout-2026-10-18.md): reader7314·최종7956검사와 중요 리뷰 승인, 실제 배포/예약은 별도 영수증으로 구분한다.
+
 > [10월18일 귀속 기능 배포 계획](superpowers/plans/2026-10-18-attribution-rollout.md): 호환 읽기 복구 기준을 먼저 확보한 뒤 기능 배포와 v5 관측 입력 교체를 진행한다. 실제 적용 상태는 실행 근거를 따른다.
 
 > [10월18일 주문 귀속·체결 ID 대사](reviews/order-attribution-2026-10-18.md): 판단 ID의 의도 원장 보존과 정확한 체결 연결. 운영 미배포, 구버전 reader 롤백 호환 조건과 입력 출처 한계를 구분한다.
