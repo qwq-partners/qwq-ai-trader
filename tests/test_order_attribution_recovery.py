@@ -9,6 +9,22 @@ import pytest
 from src.execution.recovery_evidence import reconcile_execution_evidence
 
 
+@pytest.mark.parametrize('defect', [dict(date_basis='UTC'), dict(quantity=True),
+                                   dict(price='NaN'), dict(event_date='2026-10-03')])
+@pytest.mark.parametrize('invalid_first', [True, False])
+def test_invalid_row_reusing_event_id_blocks_exact_link(defect, invalid_first):
+    args = evidence()
+    journal = args[2]
+    invalid = {**journal['rows'][0], 'execution_id': None, **defect}
+    journal['rows'].insert(0 if invalid_first else len(journal['rows']), invalid)
+    report = reconcile_execution_evidence(*args)
+    first, second = report['attribution_chains'][0]['executions']
+    assert report['comparison_status'] == 'mismatch'
+    assert first['journal_identity_status'] == 'conflict'
+    assert first['journal_event_id'] is None and first['journal_trade_id'] is None
+    assert second['journal_identity_status'] == 'matched_supplied_row'
+
+
 def stamp(ledger):
     state = {key: ledger[key] for key in ("sessions", "orders")}
     ledger["state_digest"] = sha256(json.dumps(

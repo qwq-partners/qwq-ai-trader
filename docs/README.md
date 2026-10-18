@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [10월18일 주문 귀속·체결 ID 대사](reviews/order-attribution-2026-10-18.md): 판단 ID의 의도 원장 보존과 정확한 체결 연결. 운영 미배포, 구버전 reader 롤백 호환 조건과 입력 출처 한계를 구분한다.
+
 > [10월18일 수급 근거 후속](reviews/supply-evidence-correctness-2026-10-18.md): Swing 결측/중복 수급·일별 날짜·새 정책 관측 형식. 운영 미배포이며 검증·리뷰·후속 계측 순서를 구분한다.
 
 > [10월18일 청산·선정 입력 정비](reviews/exit-selection-correctness-2026-10-18.md): 설정 전달·활성 ATR 상한·수급 결측/중복 감점·MRS 날짜 조인. 운영 미배포, 로컬 전체7452검사·독립 중요 리뷰 승인 완료. 남은 일봉 parity·관측 스키마·실험 순서를 구분한다.

@@ -1,13 +1,14 @@
 """Offline consistency checks. No account access, repairs, replay or release API."""
 
 from collections import Counter, defaultdict
-from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal, localcontext
 from hashlib import sha256
 import json
 import re
 from zoneinfo import ZoneInfo
+
+from ..core.order_attribution import validate_attribution
 
 
 KINDS = {"broker": "broker_all_orders", "journal": "journal_events",
@@ -148,7 +149,8 @@ def _attribution_chain(key, order, scope, day, journal_missing_ids, journal_ids,
     """검증된 원장 사실을 보존하고 제출 행의 명시 identity만 연결한다."""
     facts = order["facts"]
     attributed = "attribution" in facts
-    attribution = deepcopy(facts["attribution"]) if attributed else {
+    # 검증되지 않은 봉투는 보고서 전체를 거부한다. 과거 형식의 결측으로 덮지 않는다.
+    attribution = validate_attribution(facts["attribution"]) if attributed else {
         "version": "order-attribution-v1",
         **{name: None for name in ("candidate_id", "plan_id", "signal_id", "llm_decision_id")},
         "missing_reasons": {name: "legacy_not_recorded" for name in
@@ -263,8 +265,14 @@ def _reconcile(ledger, broker, journal, baseline):
                         or row["captured_at"].astimezone(KST).date() < _day(source["window_end"])):
                     raise ValueError("invalid snapshot chronology")
             except (KeyError, ValueError, TypeError, ArithmeticError):
-                # 무효 행도 같은 실행 ID를 주장하면 유효 행의 단독 연결 증거가 될 수 없다.
+                # 무효 행도 같은 실행/DB 행 ID를 주장하면 유효 행의 단독 연결 증거가 될 수 없다.
                 if name == "journal" and isinstance(raw, dict):
+                    try:
+                        event_id = _text(raw.get("event_id"))
+                    except ValueError:
+                        pass
+                    else:
+                        journal_events[event_id] += 1
                     try:
                         execution_id = _journal_execution_id(raw.get("execution_id"))
                     except ValueError:
@@ -296,6 +304,8 @@ def _reconcile(ledger, broker, journal, baseline):
     for execution_id, rows in journal_ids.items():
         if len(rows) > 1:
             issue("duplicate_execution_id", "journal", "mismatch", execution_id=execution_id)
+        if execution_id not in ledger_ids:
+            issue("journal_execution_id_unmatched", "journal", "mismatch", execution_id=execution_id)
 
     unclean = [key for key, value in ledger["sessions"].items() if not value["clean"] or value["prior_unclean"]]
     if unclean:
