@@ -116,6 +116,15 @@ def test_invalid_composite_stage_is_rejected(stage):
         ExitConfig(composite_trail_min_stage=stage)
 
 
+@pytest.mark.parametrize("minimum", list(ExitStage))
+def test_every_valid_composite_stage_reaches_runtime_lookup(minimum):
+    config = ExitConfig(composite_trail_min_stage=minimum.value)
+    manager, state = registered(config)
+    state.current_stage = ExitStage.FIRST
+    result = manager._check_composite_trailing(state, state.symbol, Decimal("10900"), {"ma5": 11000})
+    assert bool(result) is (minimum in (ExitStage.NONE, ExitStage.FIRST))
+
+
 @pytest.mark.parametrize("buffer", [-0.1, 100, float("nan"), float("inf"), None, True, "bad"])
 def test_invalid_composite_buffer_is_rejected(buffer):
     with pytest.raises(ValueError, match="composite_ma5_buffer_pct"):
@@ -130,3 +139,46 @@ def test_enabled_atr_policy_rejects_invalid_cap(cap):
 
 def test_disabled_atr_policy_does_not_require_unused_cap():
     ExitConfig(enable_atr_linked_trailing=False, atr_link_cap_pct=0)
+
+
+@pytest.mark.parametrize("multiplier", [0, -1, float("nan"), float("inf"), None, True, "bad"])
+def test_enabled_atr_policy_rejects_invalid_multiplier(multiplier):
+    with pytest.raises(ValueError, match="atr_link_multiplier"):
+        ExitConfig(atr_link_multiplier=multiplier)
+
+
+def test_startup_forwards_atr_cap_and_disabled_switch():
+    from scripts.run_trader import build_kr_exit_config
+    config = build_kr_exit_config({"atr_link_cap_pct": 4.0, "atr_link_multiplier": 1.1})
+    manager, state = registered(config, atr=8)
+    assert state.effective_trailing_stop_pct == 4.0
+    assert manager.config.atr_link_multiplier == 1.1
+    config = build_kr_exit_config({"enable_atr_linked_trailing": False, "atr_link_cap_pct": 0})
+    assert config.enable_atr_linked_trailing is False
+
+
+@pytest.mark.parametrize("market", ["kr", "both"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_invalid_exit_config_aborts_before_market_initialization(monkeypatch, market, legacy):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from scripts.run_trader import UnifiedTradingBot
+    from src.utils import token_manager
+    calls = []
+    def token():
+        calls.append("token")
+        return SimpleNamespace(env="test")
+    monkeypatch.setattr(token_manager, "get_token_manager", token)
+    bot = UnifiedTradingBot.__new__(UnifiedTradingBot)
+    bot.market, bot.dry_run = market, True
+    bot.config = {"kr": {"exit_manager": {"composite_trail_min_stage": "FIRST"}},
+                  "dashboard": {"enabled": False}}
+    if legacy:
+        bot.config["exit_manager"] = bot.config["kr"].pop("exit_manager")
+    bot._initialize_kr = AsyncMock(return_value=True)
+    bot._initialize_us = AsyncMock(return_value=True)
+    assert asyncio.run(bot.initialize()) is False
+    assert calls == []
+    bot._initialize_kr.assert_not_awaited()
+    bot._initialize_us.assert_not_awaited()

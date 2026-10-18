@@ -228,13 +228,15 @@ class ExitConfig:
         self.composite_ma5_buffer_pct = buffer
 
         if self.enable_atr_linked_trailing:
-            try:
-                cap = float(self.atr_link_cap_pct)
-            except (TypeError, ValueError, OverflowError) as exc:
-                raise ValueError("atr_link_cap_pct must be finite and positive") from exc
-            if isinstance(self.atr_link_cap_pct, bool) or not math.isfinite(cap) or cap <= 0:
-                raise ValueError("atr_link_cap_pct must be finite and positive")
-            self.atr_link_cap_pct = cap
+            for field_name in ("atr_link_cap_pct", "atr_link_multiplier"):
+                raw = getattr(self, field_name)
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(f"{field_name} must be finite and positive") from exc
+                if isinstance(raw, bool) or not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"{field_name} must be finite and positive")
+                setattr(self, field_name, value)
 
 
 @dataclass

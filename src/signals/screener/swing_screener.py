@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from src.indicators.technical import TechnicalIndicators
-from src.utils.session import KST
+from src.utils.session import KST, is_kr_market_holiday
 from src.utils.kospi_benchmark import (
     FALLBACK_SOURCES as KOSPI_SOURCES,
     benchmark_date_status,
@@ -49,6 +49,7 @@ class SwingScreener:
         self._stock_master = stock_master
         self._indicators = TechnicalIndicators()
         self._kospi_closes: List[float] = []  # 벤치마크 KOSPI 종가 (MRS용)
+        self._kospi_dates: List[date] = []  # MRS 날짜 조인; 위치 기반 대체 금지
         # 벤치마크 로드 시각·마지막 봉 날짜 — 소비자(LLM 레짐 분류기)가 "이 종가열이
         # 언제 자료인지"와 "당일 봉이 이미 포함됐는지"를 판별한다 (2026-09-14 리뷰)
         self._kospi_loaded_at: Optional[datetime] = None
@@ -321,7 +322,11 @@ class SwingScreener:
         FDR(FinanceDataReader)로 1년치 일봉 조회 (KIS API 60일 제한 우회).
         Semaphore(10) + wait_for(10초) 로 병렬 조회.
         """
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+        scan_date = datetime.now(KST).date()
+        last_complete_session = scan_date - timedelta(days=1)
+        while is_kr_market_holiday(last_complete_session):
+            last_complete_session -= timedelta(days=1)
+        start_date = (scan_date - timedelta(days=365)).strftime("%Y-%m-%d")
         sem = asyncio.Semaphore(10)
 
         async def fetch_one(stock: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -381,12 +386,26 @@ class SwingScreener:
                 indicators = self._indicators.calculate_all(symbol, daily_data)
                 if not indicators:
                     return None
+                # MRS는 별도 벤치마크의 날짜/신선도에 의존한다. 공용 지표 캐시에
+                # 덧쓰거나 이전 스캔 MRS를 그대로 반환하지 않는다.
+                indicators = dict(indicators)
+                indicators.pop("mrs", None)
+                indicators.pop("mrs_slope", None)
 
                 # MRS 계산 (벤치마크 데이터 있을 경우)
-                if self.get_benchmark_status()["status"] == "fresh":
-                    stock_closes = [float(d["close"]) for d in daily_data]
-                    mrs_result = self._indicators.calculate_mrs(
-                        stock_closes, self._kospi_closes, period=20
+                benchmark_dates = getattr(self, "_kospi_dates", [])
+                if (self.get_benchmark_status()["status"] == "fresh"
+                        and len(benchmark_dates) == len(self._kospi_closes)
+                        and last_complete_session in benchmark_dates):
+                    try:
+                        stock_bars = [(datetime.strptime(d["date"], "%Y%m%d").date(), d["close"])
+                                      for d in daily_data]
+                    except (TypeError, ValueError):
+                        stock_bars = []  # 날짜 미확인은 MRS만 제외한다.
+                    mrs_result = self._indicators.calculate_mrs_dated(
+                        stock_bars,
+                        list(zip(benchmark_dates, self._kospi_closes)),
+                        before=scan_date, period=20,
                     )
                     if mrs_result:
                         indicators["mrs"] = mrs_result["mrs"]
@@ -940,6 +959,7 @@ class SwingScreener:
         KIS get_daily_prices('0001')는 주식 일봉 API이므로 지수 대체재가 아니다.
         """
         self._kospi_closes = []
+        self._kospi_dates = []
         self._kospi_loaded_at = None
         self._kospi_last_bar_date = None
         self._kospi_source = None
@@ -963,6 +983,7 @@ class SwingScreener:
                     logger.warning(f"[스윙스크리너] KOSPI 대용 {source} 제외: 최근 30봉 일수익률 이상치 {bad}")
                 if status["status"] == "fresh":
                     self._kospi_closes = closes
+                    self._kospi_dates = dates
                     self._kospi_loaded_at = status["loaded_at"]
                     self._kospi_last_bar_date = status["last_bar_date"]
                     self._kospi_source = source

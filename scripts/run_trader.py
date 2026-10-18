@@ -116,6 +116,8 @@ def build_kr_exit_config(exit_cfg: Dict[str, Any]):
     """Build the KR runtime policy without initializing brokers or services."""
     from src.strategies.exit_manager import ExitConfig
 
+    if not isinstance(exit_cfg, dict):
+        raise ValueError("kr.exit_manager must be a mapping")
     return ExitConfig(
         enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
         first_exit_pct=exit_cfg.get("first_exit_pct", 5.0),
@@ -130,6 +132,9 @@ def build_kr_exit_config(exit_cfg: Dict[str, Any]):
         min_stop_pct=exit_cfg.get("min_stop_pct", 4.0),
         max_stop_pct=exit_cfg.get("max_stop_pct", 7.0),
         atr_multiplier=exit_cfg.get("atr_multiplier", 2.0),
+        enable_atr_linked_trailing=exit_cfg.get("enable_atr_linked_trailing", True),
+        atr_link_multiplier=exit_cfg.get("atr_link_multiplier", 1.2),
+        atr_link_cap_pct=exit_cfg.get("atr_link_cap_pct", 6.0),
         include_fees=exit_cfg.get("include_fees", True),
         enable_composite_trailing=exit_cfg.get("enable_composite_trailing", True),
         composite_trail_min_stage=exit_cfg.get("composite_trail_min_stage", "first"),
@@ -250,6 +255,18 @@ class UnifiedTradingBot:
             logger.info("=== QWQ AI Trader 통합 봇 초기화 ===")
             logger.info(f"Dry Run: {self.dry_run}")
             logger.info(f"Market: {self.market}")
+
+            # Reject invalid KR exit policy before tokens/brokers or either market
+            # can initialize. In both mode, _initialize_kr failure alone may allow US.
+            if self.market in ("kr", "both"):
+                try:
+                    kr_cfg = self.config.get("kr") or {}
+                    if not isinstance(kr_cfg, dict):
+                        raise ValueError("kr must be a mapping")
+                    build_kr_exit_config(kr_cfg.get("exit_manager", self.config.get("exit_manager") or {}))
+                except (TypeError, ValueError) as exc:
+                    logger.error(f"KR 청산 설정 검증 실패: {exc}")
+                    return False
 
             # 공유 토큰 매니저 생성 (KR + US 공통)
             from src.utils.token_manager import KISTokenManager, get_token_manager
