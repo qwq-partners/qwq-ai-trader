@@ -112,6 +112,32 @@ def release_singleton_lock():
 # 통합 트레이딩 봇
 # ============================================================
 
+def build_kr_exit_config(exit_cfg: Dict[str, Any]):
+    """Build the KR runtime policy without initializing brokers or services."""
+    from src.strategies.exit_manager import ExitConfig
+
+    return ExitConfig(
+        enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
+        first_exit_pct=exit_cfg.get("first_exit_pct", 5.0),
+        first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.30),
+        second_exit_pct=exit_cfg.get("second_exit_pct", 10.0),
+        second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.50),
+        third_exit_pct=exit_cfg.get("third_exit_pct", 12.0),
+        third_exit_ratio=exit_cfg.get("third_exit_ratio", 0.50),
+        stop_loss_pct=exit_cfg.get("stop_loss_pct", 5.0),
+        trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 3.0),
+        trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 5.0),
+        min_stop_pct=exit_cfg.get("min_stop_pct", 4.0),
+        max_stop_pct=exit_cfg.get("max_stop_pct", 7.0),
+        atr_multiplier=exit_cfg.get("atr_multiplier", 2.0),
+        include_fees=exit_cfg.get("include_fees", True),
+        enable_composite_trailing=exit_cfg.get("enable_composite_trailing", True),
+        composite_trail_min_stage=exit_cfg.get("composite_trail_min_stage", "first"),
+        composite_ma5_buffer_pct=exit_cfg.get("composite_ma5_buffer_pct", 0.5),
+        composite_prev_low_enabled=exit_cfg.get("composite_prev_low_enabled", True),
+    )
+
+
 class UnifiedTradingBot:
     """KR + US 통합 트레이딩 봇
 
@@ -619,24 +645,9 @@ class UnifiedTradingBot:
                 self.expert_orchestrator = None
 
             # 9. ExitManager 초기화
-            from src.strategies.exit_manager import ExitManager, ExitConfig
+            from src.strategies.exit_manager import ExitManager
             exit_cfg = kr_cfg.get("exit_manager", self.config.get("exit_manager") or {})
-            self.exit_manager = ExitManager(ExitConfig(
-                enable_partial_exit=exit_cfg.get("enable_partial_exit", True),
-                first_exit_pct=exit_cfg.get("first_exit_pct", 5.0),
-                first_exit_ratio=exit_cfg.get("first_exit_ratio", 0.30),
-                second_exit_pct=exit_cfg.get("second_exit_pct", 10.0),
-                second_exit_ratio=exit_cfg.get("second_exit_ratio", 0.50),
-                third_exit_pct=exit_cfg.get("third_exit_pct", 12.0),
-                third_exit_ratio=exit_cfg.get("third_exit_ratio", 0.50),
-                stop_loss_pct=exit_cfg.get("stop_loss_pct", 5.0),
-                trailing_stop_pct=exit_cfg.get("trailing_stop_pct", 3.0),
-                trailing_activate_pct=exit_cfg.get("trailing_activate_pct", 5.0),
-                min_stop_pct=exit_cfg.get("min_stop_pct", 4.0),
-                max_stop_pct=exit_cfg.get("max_stop_pct", 7.0),
-                atr_multiplier=exit_cfg.get("atr_multiplier", 2.0),
-                include_fees=exit_cfg.get("include_fees", True),
-            ))
+            self.exit_manager = ExitManager(build_kr_exit_config(exit_cfg))
             logger.info("[KR] 분할 익절 관리자 초기화 완료")
 
             # 절대 자동매도 금지 종목 복원 (config kr.no_auto_exit_symbols)

@@ -213,6 +213,29 @@ class ExitConfig:
     # End-of-day close (US day trade 전용 — ExitManager 내부 미사용, us_scheduler가 직접 처리)
     eod_close: bool = False
 
+    def __post_init__(self):
+        # Reject policy typos at construction rather than silently using FIRST.
+        if not isinstance(self.composite_trail_min_stage, str) or self.composite_trail_min_stage not in {
+            stage.value for stage in ExitStage
+        }:
+            raise ValueError("composite_trail_min_stage must be a valid exit stage")
+        try:
+            buffer = float(self.composite_ma5_buffer_pct)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("composite_ma5_buffer_pct must be finite and in [0, 100)") from exc
+        if isinstance(self.composite_ma5_buffer_pct, bool) or not math.isfinite(buffer) or not 0 <= buffer < 100:
+            raise ValueError("composite_ma5_buffer_pct must be finite and in [0, 100)")
+        self.composite_ma5_buffer_pct = buffer
+
+        if self.enable_atr_linked_trailing:
+            try:
+                cap = float(self.atr_link_cap_pct)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("atr_link_cap_pct must be finite and positive") from exc
+            if isinstance(self.atr_link_cap_pct, bool) or not math.isfinite(cap) or cap <= 0:
+                raise ValueError("atr_link_cap_pct must be finite and positive")
+            self.atr_link_cap_pct = cap
+
 
 @dataclass
 class PositionExitState:
@@ -1142,6 +1165,11 @@ class ExitManager:
             else:
                 ts_pct_used = max(atr_trail, float(base_trail))
                 _trail_src = "ATR트레일링"
+            # The post-BE ATR multiplier must respect the same configured cap
+            # as registration. Core holdings and the disabled policy retain
+            # their existing trailing behavior; stage reset/sell rules follow.
+            if self.config.enable_atr_linked_trailing and not state.is_core:
+                ts_pct_used = min(ts_pct_used, self.config.atr_link_cap_pct)
             # 장중 급락 활성 시 크래시 TS를 상한으로 캡 (2026-08-05 P2)
             # — max(atr_trail, ...)가 crash 조임을 무시하던 구멍 봉합.
             #   SL 캡(판정 시점 적용)과 동일 방식이라 해제 시 자동 원복.
@@ -1233,9 +1261,7 @@ class ExitManager:
             return None
 
         # 최소 적용 단계 체크
-        min_stage = self._COMPOSITE_STAGE_MAP.get(
-            self.config.composite_trail_min_stage, ExitStage.FIRST
-        )
+        min_stage = self._COMPOSITE_STAGE_MAP[self.config.composite_trail_min_stage]
         cur_idx = self.STAGE_ORDER.index(state.current_stage) if state.current_stage in self.STAGE_ORDER else 0
         min_idx = self.STAGE_ORDER.index(min_stage) if min_stage in self.STAGE_ORDER else 1
         if cur_idx < min_idx:
