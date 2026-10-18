@@ -13,7 +13,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from functools import wraps
 from pathlib import Path
@@ -32,6 +32,14 @@ from ...core.types import (
 from ...risk import kill_switch, order_unknown
 from ...utils import audit_log
 from ...utils.session import is_kr_market_holiday
+
+
+def _quote_observation_time() -> Optional[str]:
+    """부가 관측 시계 실패가 기존 현재가 요청/반환을 막지 않게 한다."""
+    try:
+        return datetime.now(timezone.utc).isoformat()
+    except Exception:
+        return None
 
 
 # KIS 구 TR → 신 TR 전환 스위치 (2026-09-21)
@@ -506,7 +514,11 @@ class KISBroker(BaseBroker):
                                 try:
                                     _body = await resp.json()
                                     err_data = _body if isinstance(_body, dict) else {}
-                                    observed("http_error", str(err_data.get("msg_cd", "")) == "EGW00215")
+                                    observed(
+                                        "http_error",
+                                        egw00215=str(err_data.get("msg_cd", "")) == "EGW00215",
+                                        egw00201=str(err_data.get("msg_cd", "")) == "EGW00201",
+                                    )
                                     if self._is_token_error(err_data) and attempt < 2:
                                         logger.warning(f"[토큰] HTTP500 내 토큰 오류({err_data.get('msg_cd')}), 강제 갱신")
                                         await self._recover_token()
@@ -540,7 +552,8 @@ class KISBroker(BaseBroker):
                         if isinstance(data, dict):
                             observed("http_error" if resp.status >= 400 else
                                      "success" if str(data.get("rt_cd", "")) == "0" else "api_error",
-                                     str(data.get("msg_cd", "")) == "EGW00215")
+                                     egw00215=str(data.get("msg_cd", "")) == "EGW00215",
+                                     egw00201=str(data.get("msg_cd", "")) == "EGW00201")
                         if self._is_token_error(data) and attempt < 2:
                             logger.warning(f"[토큰] 토큰 오류 감지 ({data.get('msg_cd')}), 강제 갱신")
                             await self._recover_token()
@@ -2051,6 +2064,24 @@ class KISBroker(BaseBroker):
             logger.error(f"외부 해외계좌 조회 오류 ({cano}): {e} → 캐시 폴백")
             return self._load_overseas_cache(cano)
 
+    async def get_period_rights(self, start_yyyymmdd: str, end_yyyymmdd: str, *, inqr_dvsn: str = "03",
+                                fk100: str = "", nk100: str = "", tr_cont: str = "") -> Dict[str, Any]:
+        """기간별계좌권리현황조회 CTRGA011R — 읽기 전용 1페이지 (66차).
+
+        공식 샘플(open-trading-api examples_llm/domestic_stock/period_rights)의 파라미터를 그대로 쓴다.
+        페이지 순회·완료 판정은 호출부(`src.analytics.kis_period_rights`)가 응답 헤더 `_tr_cont` 와
+        `ctx_area_fk100/nk100` 으로 한다. 주문·설정 변경 없음.
+        """
+        # 리미터는 _api_get 이 재시도마다 획득한다 — 여기서 먼저 잡으면 busy 상태가 풀리지 않아 10초 stale 대기(리뷰 P2)
+        url = f"{self.config.base_url}/uapi/domestic-stock/v1/trading/period-rights"
+        params = {
+            "INQR_DVSN": inqr_dvsn, "CANO": self.config.account_no, "ACNT_PRDT_CD": self.config.account_product_cd,
+            "INQR_STRT_DT": start_yyyymmdd, "INQR_END_DT": end_yyyymmdd,
+            "CUST_RNCNO25": "", "HMID": "", "RGHT_TYPE_CD": "", "PDNO": "", "PRDT_TYPE_CD": "",
+            "CTX_AREA_NK100": nk100, "CTX_AREA_FK100": fk100,
+        }
+        return await self._api_get(url, "CTRGA011R", params, tr_cont=tr_cont)
+
     @kis_request_metrics.observe_operation("account_summary")
     async def get_account_balance(self) -> Dict[str, Any]:
         """
@@ -2187,7 +2218,7 @@ class KISBroker(BaseBroker):
             logger.exception(f"잔고 조회 오류: {e}")
             return {}
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("quote")
     async def get_quote(self, symbol: str) -> Dict[str, Any]:
         """현재가 조회"""
         if not self.is_connected:
@@ -2203,14 +2234,17 @@ class KISBroker(BaseBroker):
                 "fid_input_iscd": symbol.zfill(6),
             }
 
+            # 논리 호출 구간: 내부 리미터·토큰 갱신·재시도를 포함한다.
+            request_started_at = _quote_observation_time()
             data = await self._api_get(url, tr_id, params)
+            response_available_at = _quote_observation_time()
 
             rt_cd = data.get("rt_cd", "")
             if str(rt_cd) != "0":
                 return {}
 
             output = data.get("output", {})
-            return {
+            quote = {
                 "symbol": symbol,
                 "name": str(output.get("hts_kor_isnm", "") or "").strip(),
                 "price": float(output.get("stck_prpr", "0") or "0"),
@@ -2226,12 +2260,20 @@ class KISBroker(BaseBroker):
                 "ovtm_vol": int(output.get("ovtm_untp_vol", "0") or "0"),
                 "ovtm_change_pct": float(output.get("ovtm_untp_prdy_ctrt", "0") or "0"),
             }
+            # 부가 관측 오류는 기존 현재가 반환/매매 흐름으로 전파하지 않는다.
+            try:
+                from ...analytics.kis_rest_market_state import build_snapshot
+                quote["market_state_snapshot"] = build_snapshot(params["fid_input_iscd"], output,
+                    request_started_at=request_started_at, response_available_at=response_available_at)
+            except Exception:
+                logger.warning("[가격관측] REST 상태 메타데이터 생성 실패")
+            return quote
 
         except Exception as e:
             logger.exception(f"현재가 조회 오류: {e}")
             return {}
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("overtime_quote")
     async def get_overtime_quote(self, symbol: str) -> Dict[str, Any]:
         """넥스트장(시간외단일가) 현재가 조회 — FHPST02300000
 
@@ -2349,7 +2391,7 @@ class KISBroker(BaseBroker):
     # 과거 일봉 데이터 조회
     # ============================================================
 
-    @kis_request_metrics.observe_operation("other")
+    @kis_request_metrics.observe_operation("daily_prices")
     async def get_daily_prices(self, symbol: str, days: int = 60) -> List[Dict[str, Any]]:
         """
         과거 일봉 OHLCV 데이터 조회
@@ -2377,7 +2419,7 @@ class KISBroker(BaseBroker):
             all_rows: List[Dict[str, Any]] = []
             max_pages = 5  # 안전 상한 (100행×5=500거래일)
 
-            for _ in range(max_pages):
+            for page in range(1, max_pages + 1):
                 params = {
                     "fid_cond_mrkt_div_code": "J",
                     "fid_input_iscd": symbol.zfill(6),
@@ -2387,7 +2429,8 @@ class KISBroker(BaseBroker):
                     "fid_org_adj_prc": "1",  # 수정주가 반영
                 }
 
-                data = await self._api_get(url, tr_id, params)
+                with kis_request_metrics.request_page(page):
+                    data = await self._api_get(url, tr_id, params)
 
                 rt_cd = data.get("rt_cd", "")
                 if str(rt_cd) != "0":

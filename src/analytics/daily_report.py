@@ -1501,7 +1501,8 @@ class DailyReportGenerator:
             또는 실패 시 None
         """
         try:
-            from ..utils.llm import get_llm_manager, LLMTask
+            from ..utils.llm import get_llm_manager
+            from ..utils.llm_roles import LLMRole
         except Exception as e:
             logger.warning(f"[모닝브리프] LLM 모듈 로드 실패: {e}")
             return None
@@ -1626,14 +1627,13 @@ class DailyReportGenerator:
         llm = get_llm_manager()
         try:
             result = await asyncio.wait_for(
-                llm.complete(
+                llm.complete_role(
                     prompt=prompt,
                     system=(
                         "당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. "
                         "주어진 자료 범위 밖을 단정하지 않는다."
                     ),
-                    task=LLMTask.REPORT_SUMMARY,
-                    max_tokens=1200,
+                    role=LLMRole.MORNING_BRIEF,
                 ),
                 timeout=45.0,
             )

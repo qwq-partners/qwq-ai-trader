@@ -53,14 +53,15 @@ class _FakeLLMResult:
 
 
 class _FakeLLM:
-    """complete()(모닝브리프) + complete_json()(레짐 분류기) 둘 다 대역"""
+    """complete_role()(모닝브리프) + complete_json()(레짐 분류기) 둘 다 대역"""
 
     def __init__(self, complete_content=None, json_result=None):
         self._content = complete_content
         self._json_result = json_result
         self.json_prompts = []
 
-    async def complete(self, **kwargs):
+    async def complete_role(self, prompt, *, role, system=""):
+        assert role == "morning_brief"
         return _FakeLLMResult(self._content)
 
     async def complete_json(self, prompt, system=None, task=None, **kwargs):

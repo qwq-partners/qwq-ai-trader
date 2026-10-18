@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from copy import deepcopy
+import asyncio
 import hashlib
 import json
 import os
@@ -18,6 +20,7 @@ import re
 from collections import OrderedDict
 import queue
 import threading
+import time
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -197,12 +200,26 @@ def safe_attempt_record(role: str, provider: Any, requested_at: Optional[datetim
                 "error": str(error)[:200], "requested_at": _iso(requested_at)}
 
 
+def _decision_id_or_new(decision_id: Optional[str]) -> str:
+    """None 만 새 ID. 빈 문자열·비문자열은 입력 오류라 생략과 구분해 거부한다(4회차 P2)."""
+    if decision_id is None:
+        return new_id("dec")
+    if not isinstance(decision_id, str) or not decision_id.strip():
+        raise ValueError("decision_id must be a non-empty string or None")
+    return decision_id
+
+
 def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, score: Any, market_regime: Any,
                     common_context: Optional[str], stage: str, attempts: List[Dict[str, Any]],
                     approved: Optional[bool], result: Dict[str, Any], budget_context: Optional[Dict[str, Any]],
                     decision_available_at: Optional[datetime] = None,
-                    collected_at: Optional[datetime] = None) -> Dict[str, Any]:
-    """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다."""
+                    collected_at: Optional[datetime] = None,
+                    neutral_sizing: Optional[Dict[str, Any]] = None,
+                    decision_id: Optional[str] = None) -> Dict[str, Any]:
+    """판단 하나의 기록. `common_context` 는 `entry-llm-input-v1` 사실 블록 원문(비밀값 없음)이다.
+
+    `decision_id` 는 호출 전에 한 번 배정한 ID(비교 입력 봉투와 같은 값). 생략하면 기존처럼 새로 만든다.
+    """
     try:
         from ..utils.entry_risk import applied_sha
         code_version = applied_sha()
@@ -211,7 +228,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
     available = decision_available_at if decision_available_at is not None else now_kst()
     return {
         "schema_version": SCHEMA_VERSION,
-        "decision_id": new_id("dec"),
+        "decision_id": _decision_id_or_new(decision_id),
         "decision_kind": "entry_llm_second_check",
         "signal_id": signal_id,
         "symbol": symbol,
@@ -221,6 +238,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
         "code_version": code_version,
         "context_version": "entry-llm-input-v1",
         "inputs": {
+            "neutral_sizing": deepcopy(neutral_sizing),
             "common_context": common_context,
             "common_context_sha256": sha256_text(common_context),
             # 원천 관측 시각은 71차 기준 아직 확보되지 않았다 — 현재 시각으로 채우지 않는다.
@@ -239,7 +257,7 @@ def decision_record(*, signal_id: Optional[str], symbol: str, strategy: str, sco
 
 
 class DecisionRecorder:
-    """유한 큐 + 백그라운드 스레드의 월별 JSONL 기록기. submit 은 절대 블로킹하지 않는다."""
+    """유한 큐 + 백그라운드 스레드의 월별 JSONL 기록기. submit 은 디스크 I/O를 기다리지 않는다."""
 
     def __init__(self, directory: Optional[Path] = None, *, enabled: Optional[bool] = None,
                  max_file_bytes: int = MAX_FILE_BYTES, queue_size: int = QUEUE_SIZE):
@@ -247,10 +265,11 @@ class DecisionRecorder:
             Path.home() / ".cache" / "ai_trader" / "llm_decisions")
         self.enabled = (os.getenv(ENV_FLAG) == "1") if enabled is None else bool(enabled)
         self.max_file_bytes = int(max_file_bytes)
-        self._queue: "queue.Queue[Optional[Dict[str, Any]]]" = queue.Queue(maxsize=int(queue_size))
+        self._queue: "queue.Queue[Dict[str, Any]]" = queue.Queue(maxsize=int(queue_size))
         self.stats = {"queued": 0, "written": 0, "dropped_queue_full": 0, "dropped_file_cap": 0,
-                      "write_errors": 0}
+                      "write_errors": 0, "dropped_closed": 0}
         self._lock = threading.Lock()
+        self._closed = threading.Event()
         self._thread: Optional[threading.Thread] = None
         # 판단 ID별 최종 저장 결과(written / dropped_file_cap / write_error) — 최근 1024건
         self._outcomes: "OrderedDict[str, str]" = OrderedDict()
@@ -270,21 +289,29 @@ class DecisionRecorder:
 
     # ── 제출 ───────────────────────────────────────────────
     def submit(self, record: Dict[str, Any]) -> str:
-        """기록을 큐에 넣고 상태 문자열을 돌려준다: queued / disabled / dropped_queue_full."""
-        if not self.enabled:
-            return "disabled"
-        self._ensure_thread()
-        try:
-            self._queue.put_nowait(record)
-        except queue.Full:
-            with self._lock:
-                self.stats["dropped_queue_full"] += 1
-                self._note_outcome(record, "dropped_queue_full")
-            logger.warning("[판단기록] 큐 포화로 기록 폐기 (판단 영향 없음)")
-            return "dropped_queue_full"
+        """큐 수락·비활성·포화·종료 거절 상태를 반환한다. 디스크 I/O는 기다리지 않는다."""
+        # 종료 경계와 큐 수락을 같은 락으로 묶어 수락한 기록이 종료 뒤에 남지 않게 한다.
         with self._lock:
-            self.stats["queued"] += 1
-        return "queued"
+            if self._closed.is_set():
+                self.stats["dropped_closed"] += 1
+                self._note_outcome(record, "dropped_closed")
+                status = "dropped_closed"
+            elif not self.enabled:
+                return "disabled"
+            else:
+                self._ensure_thread()
+                try:
+                    self._queue.put_nowait(record)
+                except queue.Full:
+                    status = "dropped_queue_full"
+                else:
+                    self.stats["queued"] += 1
+                    return "queued"
+            if status == "dropped_queue_full":
+                self.stats["dropped_queue_full"] += 1
+                self._note_outcome(record, status)
+        logger.warning(f"[판단기록] 기록 수락 거절: {status} (판단 영향 없음)")
+        return status
 
     def _ensure_thread(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -328,17 +355,25 @@ class DecisionRecorder:
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
-            if item is None:
-                return
+            try:
+                item = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                # get의 시간 초과 뒤 종료 경계 전에 마지막 제출이 들어왔을 수 있다.
+                if self._closed.is_set() and self._queue.empty():
+                    return
+                continue
             try:
                 self._write(item)
             except Exception as error:  # 어떤 예외도 기록 스레드를 멈추게 하지 않는다
+                with self._lock:
+                    self.stats["write_errors"] += 1
+                    self._note_outcome(item, "write_error")
                 logger.warning(f"[판단기록] 기록 처리 예외 (계속): {error}")
+            if self._closed.is_set() and self._queue.empty():
+                return
 
     def flush(self, timeout: float = 5.0) -> bool:
         """큐가 비고 쓰기가 끝날 때까지 대기 (시험·종료용). 시간 초과면 False."""
-        import time
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._queue.empty():
@@ -349,17 +384,41 @@ class DecisionRecorder:
             time.sleep(0.01)
         return False
 
-    def close(self, timeout: float = 5.0) -> None:
-        self.flush(timeout)
-        if self._thread is not None and self._thread.is_alive():
-            try:
-                self._queue.put_nowait(None)
-            except queue.Full:
-                pass
+    def close(self, timeout: float = 5.0) -> bool:
+        """제출을 닫고 제한 시간 동안 대기. 수락한 기록 전부 저장·스레드 종료 시만 True.
+
+        시간 초과에도 종료 경계는 유지하고 daemon은 남은 큐를 계속 처리한다.
+        반복 호출은 같은 종료를 기다리며 파일 상한/쓰기 실패를 성공으로 바꾸지 않는다.
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._lock:
+            self._closed.set()
+            worker = self._thread
+        if worker is not None:
+            worker.join(max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            return (worker is None or not worker.is_alive()) and self.stats["written"] == self.stats["queued"]
 
 
 _recorder: Optional[DecisionRecorder] = None
 _recorder_lock = threading.Lock()
+
+
+async def close_decision_recorder(timeout: float = 5.0) -> bool:
+    """기존 기록기만 닫는다. executor 없이 기다려 느린 디스크가 루프/프로세스 종료를 묶지 않는다."""
+    with _recorder_lock:
+        recorder = _recorder
+    if recorder is None:
+        return True
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout)
+    recorder.close(0)
+    while recorder._thread is not None and recorder._thread.is_alive():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.01, remaining))
+    return recorder.close(0)
 
 
 def get_decision_recorder() -> DecisionRecorder:

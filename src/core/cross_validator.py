@@ -10,6 +10,7 @@ PRISM-INSIGHT의 "투자전략가" 패턴을 규칙 기반으로 구현.
 
 from datetime import datetime
 from contextvars import ContextVar
+from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple, Any
 from loguru import logger
@@ -31,6 +32,11 @@ class CrossStrategyValidator:
     # 감점 후 최소 통과 점수 (이하면 차단)
     _MIN_PASS_SCORE: int = 50
     _budget_context = ContextVar('cross_validation_budget', default=None)
+    _neutral_sizing_context = ContextVar('cross_validation_neutral_sizing', default=None)
+    # 판단 ID·공통 입력 시각·비교 전달 상태는 호출(태스크)마다 분리한다 — 동시 판단이 서로 섞이지 않게.
+    _decision_id_context = ContextVar('cross_validation_decision_id', default=None)
+    _collected_at_context = ContextVar('cross_validation_collected_at', default=None)
+    _handoff_status_context = ContextVar('cross_validation_comparison_handoff', default=None)
 
     @property
     def last_llm_budget_status(self):
@@ -72,6 +78,10 @@ class CrossStrategyValidator:
         self.last_llm_context: Dict[str, bool] = {}
         # 64차: 직전 llm_second_check 의 판단 기록 상태 {decision_id, record_status, stage} — 엔진이 신호 메타로 복사
         self.last_llm_decision: Dict[str, Any] = {}
+        # 비교 입력 전달(기본 OFF). 런처가 명시 설정할 때만 봉투를 만들어 비차단으로 넘긴다.
+        # 전달 함수는 put_nowait 류여야 하며 반환 문자열은 수락 상태일 뿐 저장·완료 증거가 아니다.
+        self._comparison_handoff: Optional[Any] = None
+        self._comparison_producer_config: Optional[Dict[str, Any]] = None   # {experiment_id, config_sha256}
 
         # 적대적 교차 검증기 (2026-08-02 추가) — Bull/Bear 역할 분리 + 멀티 LLM 합의
         # 초기화 실패해도 단일 LLM 경로로 폴백되므로 매매에 영향 없음
@@ -735,6 +745,7 @@ class CrossStrategyValidator:
         market_regime: str,
         sector: str = "",
         signal_id: Optional[str] = None,
+        neutral_sizing: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
@@ -747,9 +758,29 @@ class CrossStrategyValidator:
         엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
         """
         self._budget_context.set(None)
+        self._neutral_sizing_context.set(None)
+        self._decision_id_context.set(None)
+        self._collected_at_context.set(None)
+        self._handoff_status_context.set(None)
+        try:
+            self._neutral_sizing_context.set(deepcopy(neutral_sizing))
+        except Exception:
+            pass  # Evidence failure never changes the live verdict.
         self.last_llm_decision = {}
+        _attempts, _adv_attempts = [], []
+        common_context = None
+
+        def unavailable(reason):
+            if self._neutral_sizing_context.get() is None:
+                return True
+            # Keep fail-open behavior, but do not label absence as model approval.
+            return self._finish_decision(
+                True, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                market_regime=market_regime, common_context=common_context, stage="unavailable",
+                attempts=_attempts or _adv_attempts, result={"failed": True, "reason": reason, "verdict": "unavailable"})
+
         if not self._llm_manager:
-            return True
+            return unavailable("llm_manager_unavailable")
 
         # 강세장이면 LLM 검증 생략 (속도 우선)
         if market_regime == "bull":
@@ -774,7 +805,7 @@ class CrossStrategyValidator:
                 f"({self._daily_llm_max}회) → fail-open 통과. "
                 f"고변동 날엔 수동 모니터링 필요."
             )
-            return True
+            return unavailable("validation_daily_call_limit")
         self._daily_llm_count += 1
         logger.info(
             f"[크로스검증] LLM 이중검증 #{self._daily_llm_count}/{self._daily_llm_max}: "
@@ -833,13 +864,22 @@ class CrossStrategyValidator:
                                  "panel_risks": panel_risks},
             )
             from ..analytics.llm_decision_record import now_kst as _now_kst
-            self._decision_collected_at = _now_kst()   # 공통 입력 구성 시각 — 판단 완료 시각과 구분 (3차 리뷰 P2)
+            _collected_at = _now_kst()   # 공통 입력 구성 시각 — 판단 완료 시각과 구분 (3차 리뷰 P2)
+            self._collected_at_context.set(_collected_at)
             prompt = (
                 common_context
                 + "\n이 매수 시그널을 승인하시겠습니까? "
                 + risk_guide
                 + "YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
             )
+            # 공통 입력·역할 조건이 확정됐고 공급자 await 전이다 — 판단 ID 를 여기서 한 번 배정한다.
+            from ..analytics.llm_decision_record import new_id as _new_id
+            _decision_id = _new_id("dec")
+            self._decision_id_context.set(_decision_id)
+            self._offer_comparison(decision_id=_decision_id, signal_id=signal_id, symbol=symbol,
+                                   strategy=strategy, score=score, market_regime=market_regime,
+                                   common_context=common_context, fallback_suffix=prompt[len(common_context):],
+                                   collected_at=_collected_at)
             # 적대적 교차 검증 (2026-08-02~)
             #   Bull(OpenAI) / Bear(Gemini)에게 서로 다른 역할을 주고 합의를 본다.
             #   Bear는 "문제 없음" 답변이 금지되어 반증 책임을 진다 → 확증 편향 완화.
@@ -945,7 +985,36 @@ class CrossStrategyValidator:
                                             "failed": False, "adversarial_failed_reason": _adv_failed_reason})
         except Exception as e:
             logger.debug(f"[크로스검증] LLM 검증 실패 (통과): {e}")
-            return True  # fail-open
+            return unavailable("validation_exception")  # fail-open
+
+    def _offer_comparison(self, *, decision_id, signal_id, symbol, strategy, score, market_regime,
+                          common_context, fallback_suffix, collected_at) -> None:
+        """비교 입력 봉투를 만들어 비차단 전달한다. 어떤 실패도 판단·신호 메타의 판단 필드를 바꾸지 않는다.
+
+        Bull/Bear 패널이 없는 경로(적대검증기 초기화 실패)는 비교 대상이 아니라 봉투를 만들지 않는다.
+        """
+        handoff = self._comparison_handoff
+        if handoff is None or self._adversarial is None:
+            return
+        try:
+            from ..analytics import model_comparison_input as mci
+            from ..analytics.llm_decision_record import now_kst
+            config = self._comparison_producer_config or {}
+            envelope = mci.build_envelope(
+                decision_id=decision_id, signal_id=signal_id, symbol=symbol, strategy=strategy,
+                score=float(score) if isinstance(score, (int, float)) else score, market_regime=market_regime,
+                common_context=common_context,
+                role_controls=mci.operating_role_controls(self._llm_manager, fallback_prompt_suffix=fallback_suffix,
+                                                          fallback_timeout=SINGLE_FALLBACK_TIMEOUT),
+                neutral_sizing=self._neutral_sizing_context.get(),
+                producer=mci.producer_identity(experiment_id=config.get("experiment_id"),
+                                               config_sha256=config.get("config_sha256")),
+                input_available_at=collected_at.isoformat(), handed_off_at=now_kst().isoformat())
+            status = handoff(envelope)
+            self._handoff_status_context.set(status if isinstance(status, str) else "handoff_invalid_status")
+        except Exception as error:
+            self._handoff_status_context.set("handoff_error")
+            logger.debug(f"[크로스검증] 비교 입력 전달 실패 (판단 영향 없음): {type(error).__name__}")
 
     def _finish_decision(self, approved: bool, *, signal_id, symbol, strategy, score, market_regime,
                          common_context, stage, attempts, result) -> bool:
@@ -959,13 +1028,21 @@ class CrossStrategyValidator:
                                      market_regime=market_regime, common_context=common_context, stage=stage,
                                      attempts=attempts, approved=approved, result=result,
                                      budget_context=self._budget_context.get(),
-                                     collected_at=getattr(self, "_decision_collected_at", None))
+                                     collected_at=(None if stage == "unavailable" else
+                                                   self._collected_at_context.get()),
+                                     neutral_sizing=self._neutral_sizing_context.get(),
+                                     decision_id=self._decision_id_context.get())
             status = get_decision_recorder().submit(record)
             self.last_llm_decision = {"decision_id": record["decision_id"], "record_status": status,
                                       "stage": stage, "attempts": len(attempts)}
         except Exception as error:  # 기록은 판단을 막지 않는다
             logger.warning(f"[크로스검증] 판단 기록 실패 (판단 영향 없음): {error}")
-            self.last_llm_decision = {"decision_id": None, "record_status": "error", "stage": stage}
+            # 호출 전에 배정한 ID 는 비교 봉투와 조인돼야 하므로 기록 실패에도 남긴다(배정 전이면 None).
+            self.last_llm_decision = {"decision_id": self._decision_id_context.get(), "record_status": "error",
+                                      "stage": stage}
+        handoff_status = self._handoff_status_context.get()
+        if handoff_status is not None:
+            self.last_llm_decision["comparison_handoff"] = handoff_status
         return approved
 
     def get_stats(self) -> Dict:

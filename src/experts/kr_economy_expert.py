@@ -130,7 +130,7 @@ class KREconomyExpert(ExpertAgent):
         if self.llm_manager is None or not macro_text:
             return ""
         try:
-            from src.utils.llm import LLMTask
+            from src.utils.llm_roles import LLMRole
             prompt = (
                 "한국 거시 지표를 보고 KR 주식시장에 미치는 영향을 한국어 한 줄로 요약하세요.\n"
                 "환율을 언급할 때는 비교 기준을 반드시 명시하세요 (예: '20일 평균 대비 -2.9%'). "
@@ -138,8 +138,8 @@ class KREconomyExpert(ExpertAgent):
                 f"매크로: {macro_text[:400]}\n"
                 f"환율 상태: {json.dumps(krw_state, ensure_ascii=False)}"
             )
-            resp = await self.llm_manager.complete(
-                prompt, task=LLMTask.REPORT_SUMMARY,  # Rule score is already set; summarize only.
+            resp = await self.llm_manager.complete_role(
+                prompt, role=LLMRole.REPORT_ONE_LINE,  # 규칙 점수는 이미 결정됨; 서술만 요약한다.
                 system="당신은 한국 경제 분석가입니다. 한 줄로.",
             )
             if resp.success and resp.content:

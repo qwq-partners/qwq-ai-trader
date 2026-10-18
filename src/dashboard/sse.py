@@ -18,11 +18,14 @@ import aiohttp
 from aiohttp import web
 from loguru import logger
 
+from .market_cache import DashboardMarketCache, session_key
+from src.utils.kis_request_metrics import with_request_source
+
 
 class SSEManager:
     """SSE 클라이언트 관리 및 브로드캐스트 (KR + US 통합)"""
 
-    def __init__(self, data_collector=None, us_engine=None):
+    def __init__(self, data_collector=None, us_engine=None, market_cache=None):
         """
         Args:
             data_collector: KR DashboardDataCollector (None이면 KR 이벤트 비활성)
@@ -30,11 +33,11 @@ class SSEManager:
         """
         self.data_collector = data_collector
         self.us_engine = us_engine
+        self.market_cache = market_cache if market_cache is not None else DashboardMarketCache()
         self._clients: Set[web.StreamResponse] = set()
         self._running = False
         # 지수 전광판 내부 캐시
         self._indices_cache_data: Optional[List[Dict]] = None
-        self._indices_last_fetch: float = 0
         # Yahoo Finance HTTP 세션 재사용
         self._http_session: Optional[aiohttp.ClientSession] = None
 
@@ -135,6 +138,9 @@ class SSEManager:
 
         try:
             while self._running:
+                if not self._clients:
+                    await asyncio.sleep(0.5)
+                    continue
                 now = time.time()
 
                 # --- KR 이벤트 브로드캐스트 ---
@@ -211,6 +217,7 @@ class SSEManager:
             self._running = False
             logger.info("[SSE] 브로드캐스트 루프 종료")
 
+    @with_request_source("dashboard_sse_indices")
     async def _fetch_market_indices(self) -> Optional[List[Dict]]:
         """KOSPI·KOSDAQ 지수 + 미국 3대지수 + KR 개별종목 (펩트론·하이닉스·삼성전자) 조회.
 
@@ -220,10 +227,9 @@ class SSEManager:
           - US 지수   : Yahoo Finance (장중/장외 모두)
         결과는 kr_api의 /api/market/indices 캐시도 갱신해 HTTP 요청과 동기화.
         """
-        # 10초 내부 캐시 (네트워크 호출 최소화)
+        # KR만 세션별 캐시. 미국 지수는 한국 휴장과 무관하게 갱신한다.
         now = time.time()
-        if now - self._indices_last_fetch < 10 and self._indices_cache_data:
-            return self._indices_cache_data
+        current_session = session_key()
 
         dc = self.data_collector
         bot = getattr(dc, "bot", None)
@@ -236,7 +242,8 @@ class SSEManager:
         if kis_md:
             try:
                 for code, label in [("0001", "KOSPI"), ("1001", "KOSDAQ")]:
-                    item = await kis_md.fetch_index_price(code)
+                    item = await self.market_cache.get(
+                        "index:" + code, lambda: kis_md.fetch_index_price(code))
                     if item:
                         results.append(item)
             except Exception as e:
@@ -304,9 +311,8 @@ class SSEManager:
             ("005930", "삼성전자",   "stock_kr"),
         ]
         try:
-            from src.utils.session import KRSession
             from src.core.types import MarketSession
-            kr_session = KRSession().get_session()
+            kr_session = current_session[1]
             is_next = kr_session == MarketSession.NEXT
         except Exception:
             is_next = False
@@ -317,7 +323,7 @@ class SSEManager:
             # KIS get_quote 시도
             if broker:
                 try:
-                    q = await broker.get_quote(sym)
+                    q = await self.market_cache.get("quote:" + sym, lambda: broker.get_quote(sym))
                     if q and q.get("price", 0) > 0:
                         if is_next and q.get("ovtm_price", 0) > 0:
                             price   = q["ovtm_price"]
@@ -334,6 +340,7 @@ class SSEManager:
                             "change": round(chg),
                             "change_pct": round(chg_pct, 2),
                             "source": "kis",
+                            "fetched_at": q["fetched_at"], "stale": q["stale"],
                         }
                 except Exception as e:
                     logger.debug(f"[SSE 개별주] {sym} KIS 오류: {e}")
@@ -387,13 +394,13 @@ class SSEManager:
         results.sort(key=lambda x: order.index(x["label"]) if x["label"] in order else 99)
 
         self._indices_cache_data = results
-        self._indices_last_fetch = now
 
         # kr_api 공유 캐시 갱신 (HTTP /api/market/indices도 동기화)
         try:
             from src.dashboard.kr_api import _indices_cache as _kapi_cache
             _kapi_cache["data"] = results
             _kapi_cache["ts"] = now
+            _kapi_cache["session"] = current_session
         except Exception:
             pass
 

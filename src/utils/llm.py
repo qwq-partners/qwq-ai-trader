@@ -26,8 +26,10 @@ from typing import Any, Dict, List, Optional, Callable
 import aiohttp
 from loguru import logger
 
+from .llm_roles import LLMRole, ROLE_POLICY_VERSION, get_role_profile
 from .llm_pricing import rate_quote
 from .llm_budget import MonthlyBudgetLedger, BudgetBlocked, BudgetStateError
+from .llm_budget_bounds import GEMINI_TIMEOUT_CONTRACT
 from contextvars import ContextVar
 
 # 64차: complete()/complete_with() 한 호출 동안 실제 공급자 시도(재시도·폴백 포함)를 모아 응답에 붙인다
@@ -78,7 +80,7 @@ class LLMConfig:
     # Light: 빠른 분류, 테마 탐지에 사용
     openai_model_light: str = "gpt-5-mini"
     gemini_model_heavy: str = "gemini-3.1-pro-preview"
-    gemini_model_light: str = "gemini-3.1-flash-lite-preview"
+    gemini_model_light: str = "gemini-3.1-flash-lite"
 
     # 2026-06-17 Phase 3: Shadow A/B — light 후속 모델 비교용 (deprecation 마이그레이션)
     # 빈 문자열이면 비활성, 값이 있으면 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출
@@ -106,8 +108,12 @@ class LLMConfig:
     monthly_budget_usd: Optional[float] = None  # Explicit activation only.
     budget_state_path: Optional[str] = None
     budget_policy_enabled: bool = False
+    missing_cost_policy: str = "block"
 
     def __post_init__(self):
+        if (not isinstance(self.missing_cost_policy, str)
+                or self.missing_cost_policy not in {"block", "log_and_continue"}):
+            raise ValueError("llm.missing_cost_policy must be block or log_and_continue")
         if not isinstance(self.budget_policy_enabled, bool):
             raise ValueError("llm.budget_policy_enabled must be boolean")
         if self.budget_policy_enabled and self.monthly_budget_usd is None:
@@ -156,13 +162,14 @@ class LLMConfig:
             monthly_budget_usd=llm_cfg.get("monthly_budget"),
             budget_state_path=llm_cfg.get("budget_state_path"),
             budget_policy_enabled=llm_cfg.get("budget_policy_enabled", False),
+            missing_cost_policy=llm_cfg.get("missing_cost_policy", "block"),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
             gemini_model_heavy=(
                 llm_cfg.get("gemini_model_heavy") or "gemini-3.1-pro-preview"
             ),
             gemini_model_light=(
-                llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite-preview"
+                llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite"
             ),
             openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
             manus_enabled=bool((llm_cfg.get("manus") or {}).get("enabled", False)),
@@ -187,10 +194,18 @@ class LLMUsage:
     cost_missing: bool = False
     unpriced_requests: int = 0
     unknown_usage_requests: int = 0
+    bounded_unknown_requests: int = 0
+    uncertain_cost_ceiling_usd: float = 0.0
     inferred_nonbillable_rejections: int = 0
 
+    @property
+    def unbounded_cost_missing(self) -> bool:
+        return self.cost_missing and (
+            self.unpriced_requests > 0 or self.bounded_unknown_requests == 0
+            or self.unknown_usage_requests != self.bounded_unknown_requests)
+
     def add(self, input_tokens: int, output_tokens: int, model: str,
-            *, usage_known: bool = True):
+            *, usage_known: bool = True, uncertain_cost_ceiling_usd: Optional[float] = None):
         """Add every sent attempt. Known subtotal stays a float, never a full bill."""
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
@@ -203,6 +218,11 @@ class LLMUsage:
         if not usage_known:
             self.unknown_usage_requests += 1
             self.cost_missing = True
+            if (quote is not None and isinstance(uncertain_cost_ceiling_usd, (int, float))
+                    and not isinstance(uncertain_cost_ceiling_usd, bool)
+                    and math.isfinite(uncertain_cost_ceiling_usd) and uncertain_cost_ceiling_usd > 0):
+                self.bounded_unknown_requests += 1
+                self.uncertain_cost_ceiling_usd += uncertain_cost_ceiling_usd
 
 
 @dataclass
@@ -236,6 +256,11 @@ class LLMResponse:
     budget_priority: Optional[str] = None
     budget_reservation_token: Optional[str] = None  # 64차: 월 예산 원장 reservations.token 연결 (정산 시 기록)
     attempt_trail: Optional[list] = None  # 64차: 이 응답을 만들기까지의 실제 공급자 시도 목록(재시도·폴백 각 1행)
+    refusal_detected: bool = False  # 공급자가 명시한 거절 여부만; 본문은 저장하지 않는다.
+    transport_error_kind: Optional[str] = None
+    uncertain_cost_ceiling_usd: Optional[float] = None  # Durable hold, never actual spend.
+    missing_cost_policy: str = "block"
+    cost_accounting_skipped: bool = False
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -266,6 +291,7 @@ _GEMINI_LEVELS = {
     "gemini-3.1-flash-lite": {"minimal", "low", "medium", "high"},
     "gemini-3.1-flash-lite-preview": {"minimal", "low", "medium", "high"},
     "gemini-3.8-flash": {"low", "medium", "high"},
+    "gemini-4-argon": {"low", "medium", "high"},
 }
 
 
@@ -473,7 +499,9 @@ class OpenAIClient(BaseLLMClient):
                 choices = data.get("choices") or []
                 choice = choices[0] if choices else {}
                 metadata["finish_reason"] = choice.get("finish_reason")
-                content = (choice.get("message") or {}).get("content") or ""
+                message = choice.get("message") or {}
+                metadata["refusal_detected"] = bool(message.get("refusal"))
+                content = message.get("content") or ""
                 if not isinstance(content, str):
                     raise ValueError("Provider content must be text")
                 success = resp.status == 200 and bool(choices)
@@ -563,7 +591,7 @@ class GeminiClient(BaseLLMClient):
                                error="Gemini API key not configured", **metadata)
         generation = {"temperature": temperature,
                       "maxOutputTokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
-        if model == "gemini-3.8-flash":
+        if model in {"gemini-3.8-flash", "gemini-4-argon"}:
             generation.pop("temperature")
         if level is not None:
             generation["thinkingConfig"] = {"thinkingLevel": level}
@@ -585,6 +613,10 @@ class GeminiClient(BaseLLMClient):
                     raise ValueError("Provider response must be an object")
                 metadata.update(_provider_errors(data))
                 usage = data.get("usageMetadata") or {}
+                feedback = data.get("promptFeedback") or {}
+                metadata["refusal_detected"] = (
+                    isinstance(feedback, dict)
+                    and feedback.get("blockReason") not in (None, "", "BLOCK_REASON_UNSPECIFIED"))
                 if not isinstance(usage, dict):
                     usage = {}
                 input_count = _token_count(usage.get("promptTokenCount"))
@@ -595,10 +627,13 @@ class GeminiClient(BaseLLMClient):
                 candidates = data.get("candidates") or []
                 candidate = candidates[0] if candidates else {}
                 metadata["finish_reason"] = candidate.get("finishReason")
+                metadata["refusal_detected"] = metadata["refusal_detected"] or (
+                    metadata["finish_reason"] in {
+                        "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"})
                 parts = (candidate.get("content") or {}).get("parts") or []
                 content = "".join(part.get("text", "") for part in parts if not part.get("thought"))
                 metadata["billing_status"] = _billing_status(data, resp.status, metadata["usage_known"])
-                success = resp.status == 200 and bool(candidates)
+                success = resp.status == 200 and bool(candidates) and not metadata["refusal_detected"]
                 return LLMResponse(
                     content, model, LLMProvider.GEMINI,
                     input_tokens=_token_count(usage.get("promptTokenCount")),
@@ -621,6 +656,8 @@ class GeminiClient(BaseLLMClient):
         except Exception as exc:
             if isinstance(exc, aiohttp.ClientConnectorError) and metadata.get("http_status") is None:
                 metadata.update(request_sent=False, billing_status="not_sent")
+            if isinstance(exc, asyncio.TimeoutError):
+                metadata["transport_error_kind"] = "timeout"
             return LLMResponse(
                 "", model, LLMProvider.GEMINI, success=False,
                 input_tokens=input_count, output_tokens=output_count,
@@ -721,6 +758,7 @@ class LLMManager:
                 self.monthly_budget = MonthlyBudgetLedger(
                     self.config.budget_state_path, self.config.monthly_budget_usd,
                     policy_enabled=self.config.budget_policy_enabled,
+                    missing_cost_policy=self.config.missing_cost_policy,
                     economy_summary_models=(self.config.openai_model_light, self.config.gemini_model_light),
                 )
             except BudgetBlocked as exc:
@@ -784,11 +822,23 @@ class LLMManager:
         else:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
 
+    def _daily_unknown_blocks(self) -> bool:
+        return (self.config.missing_cost_policy == "block"
+                and self.daily_usage.unbounded_cost_missing)
+
+    @staticmethod
+    def _trail_has_unknown_cost(trail: Optional[list]) -> bool:
+        return any(item.get("uncertain_cost_ceiling_usd") is not None
+                   or (item.get("request_sent") and item.get("usage_known") is False
+                       and item.get("billing_status") != "rejected_before_generation")
+                   for item in (trail or []))
+
     def _check_budget(self) -> bool:
         """Process-local post-usage gate, not a strict global spending cap.
 
         Concurrent/in-flight calls, unknown timeout charges and process restarts
-        prevent strict enforcement. Unknown cost blocks subsequent paid attempts.
+        prevent strict enforcement. The explicit missing-cost policy controls
+        unknown amounts; certified ceilings remain occupied alongside known cost.
         """
         # 날짜가 바뀌면 리셋
         today = datetime.now().date()
@@ -796,8 +846,69 @@ class LLMManager:
             self.daily_usage = LLMUsage()
             self._usage_reset_date = today
 
-        return (not self.daily_usage.cost_missing
-                and self.daily_usage.estimated_cost_usd < self.config.daily_budget_usd)
+        return (not self._daily_unknown_blocks()
+                and (self.daily_usage.estimated_cost_usd + self.daily_usage.uncertain_cost_ceiling_usd)
+                < self.config.daily_budget_usd)
+
+    async def complete_role(
+        self, prompt: str, role: LLMRole | str, system: str = "",
+    ) -> LLMResponse:
+        """고정 역할을 한 번만 호출한다. 분류·폴백·빈 응답/JSON 재시도는 없다.
+
+        호출자가 모델/출력량/우선순위/시한을 덮어쓸 수 없다. 역할 이름은 공통
+        원장·감사·시도 이력의 task로 남아 기존 task별 절약 라우팅과 구분된다.
+        """
+        role, profile = get_role_profile(role)
+        provider = LLMProvider(profile.provider)
+        controls = profile.controls()
+        if rate_quote(profile.model, 0, 0) is None:
+            raise ValueError("Unpriced LLM role model")
+        _validate_controls(profile.model, provider, controls)
+        if not isinstance(prompt, str) or not isinstance(system, str):
+            raise ValueError("Role prompt and system must be text")
+
+        token = _ATTEMPT_TRAIL.set([])
+        self.stats["total_requests"] += 1
+        try:
+            if self._closing:
+                response = self._monthly_blocked_response(provider, profile.model, "manager_closing")
+            elif not self._check_budget():
+                reason = "daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded"
+                response = self._monthly_blocked_response(provider, profile.model, reason)
+                response.error = "Daily budget exceeded"
+            elif len(prompt.encode("utf-8")) + len(system.encode("utf-8")) > profile.max_input_bytes:
+                response = LLMResponse(
+                    "", profile.model, provider, success=False, requested_model=profile.model,
+                    error="Role input byte limit exceeded", request_sent=False,
+                    usage_known=False, billing_status="not_sent")
+            else:
+                deadline = asyncio.get_running_loop().time() + profile.timeout_seconds
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        response = await self._complete_attempt(
+                            self._get_client(provider), prompt, system, profile.model,
+                            role.value, "primary", _deadline=deadline,
+                            _role_finish_reason="stop" if provider == LLMProvider.OPENAI else "STOP",
+                            budget_priority=profile.budget_priority, **controls)
+                except TimeoutError as exc:
+                    # timeout이 변환한 취소 원인에는 공통 정산 경계의 응답이 남아 있다.
+                    response = getattr(exc.__cause__, "_llm_response", None)
+                    if response is None:
+                        response = LLMResponse(
+                            "", profile.model, provider, success=False, requested_model=profile.model,
+                            error="Role deadline exceeded", request_sent=False,
+                            usage_known=False, billing_status="not_sent")
+                    response.error = "Role deadline exceeded"
+            response.budget_priority = profile.budget_priority
+            self.stats["success_count" if response.success else "error_count"] += 1
+        except BaseException as exc:
+            self._attach_trail_to_exception(exc, _ATTEMPT_TRAIL.get())
+            raise
+        finally:
+            trail = _ATTEMPT_TRAIL.get()
+            _ATTEMPT_TRAIL.reset(token)
+        self._attach_trail(response, trail)
+        return response
 
     async def complete(
         self,
@@ -849,7 +960,7 @@ class LLMManager:
                 content="", model="", provider=LLMProvider.OPENAI,
                 success=False, error="Daily budget exceeded",
                 request_sent=False, usage_known=False, billing_status="not_sent",
-                budget_block_reason="daily_unknown_cost" if self.daily_usage.cost_missing else "daily_limit_exceeded",
+                budget_block_reason="daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded",
             )
 
         # ── Manus 라우팅 (배치 태스크 한정) ──────────────────────
@@ -875,9 +986,24 @@ class LLMManager:
             primary_client, prompt, system, primary_model, task.value, attempt_role, **kwargs
         )
 
+        if response.refusal_detected:
+            # A provider refusal remains a refusal even if transport cleanup
+            # subsequently times out. Never turn it into cross-provider retry.
+            response.success = False
+            response.error = "Provider refused request"
+            self.stats["error_count"] += 1
+            return response
+
+        if response.http_status in {401, 403}:
+            # A billing-policy relaxation does not authorize bypassing a known
+            # authentication/permission refusal, including body-read timeouts.
+            self.stats["error_count"] += 1
+            return response
+
         if response.success:
             self.stats["success_count"] += 1
-            self._maybe_fire_shadow(prompt, system, task, kwargs, response)
+            if not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
+                self._maybe_fire_shadow(prompt, system, task, kwargs, response)
             return response
 
         if response.budget_block_reason:
@@ -885,9 +1011,15 @@ class LLMManager:
             self.stats["fallback_skipped_monthly_budget"] = self.stats.get("fallback_skipped_monthly_budget", 0) + 1
             return response
 
+        # Missing cost during repair ends this logical call instead of creating
+        # another provider send. The next independent call may still proceed.
+        if attempt_role == "json_retry" and self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
+            self.stats["error_count"] += 1
+            return response
+
         if not self._check_budget():
             self.stats["error_count"] += 1
-            reason = ("fallback_skipped_unknown_cost" if self.daily_usage.cost_missing
+            reason = ("fallback_skipped_unknown_cost" if self._daily_unknown_blocks()
                       else "fallback_skipped_budget")
             self.stats[reason] = self.stats.get(reason, 0) + 1
             return response
@@ -906,7 +1038,8 @@ class LLMManager:
 
         if response.success:
             self.stats["success_count"] += 1
-            self._maybe_fire_shadow(prompt, system, task, kwargs, response)
+            if not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get()):
+                self._maybe_fire_shadow(prompt, system, task, kwargs, response)
         else:
             self.stats["error_count"] += 1
             logger.error(f"Fallback LLM도 실패 ({fallback_provider.value}): {response.error}")
@@ -1040,7 +1173,7 @@ class LLMManager:
                 content="", model="", provider=provider,
                 success=False, error="Daily budget exceeded",
                 request_sent=False, usage_known=False, billing_status="not_sent",
-                budget_block_reason="daily_unknown_cost" if self.daily_usage.cost_missing else "daily_limit_exceeded",
+                budget_block_reason="daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded",
             )
 
         client = self._get_client(provider)
@@ -1052,6 +1185,7 @@ class LLMManager:
         attempts = 0
         while (retry_on_empty > attempts
                and response.success
+               and not self._trail_has_unknown_cost(_ATTEMPT_TRAIL.get())
                and not (response.content or "").strip()
                and self._check_budget()):
             attempts += 1
@@ -1116,6 +1250,10 @@ class LLMManager:
                 "input_tokens": response.input_tokens if (response.request_sent and response.usage_known is True) else None,
                 "output_tokens": response.output_tokens if (response.request_sent and response.usage_known is True) else None,
                 "estimated_cost_usd": cost,
+                "transport_error_kind": response.transport_error_kind,
+                "uncertain_cost_ceiling_usd": response.uncertain_cost_ceiling_usd,
+                "missing_cost_policy": response.missing_cost_policy,
+                "cost_accounting_skipped": response.cost_accounting_skipped,
                 "budget_reservation_token": response.budget_reservation_token,
                 "budget_block_reason": response.budget_block_reason,
                 "latency_ms": response.latency_ms, "error": response.error,
@@ -1145,7 +1283,10 @@ class LLMManager:
                 else:
                     self.monthly_budget.settle(token, outcome="known", actual_cost_usd=quote.cost_usd)
             else:
-                self.monthly_budget.settle(token, outcome="unknown")
+                outcome = ("timeout" if response.transport_error_kind == "timeout"
+                           and response.http_status in (None, 200)
+                           and not response.refusal_detected else "unknown")
+                response.uncertain_cost_ceiling_usd = self.monthly_budget.settle(token, outcome=outcome)
         except (BudgetBlocked, ValueError, TypeError) as exc:
             self._monthly_budget_error = exc.reason if isinstance(exc, BudgetBlocked) else "invalid_usage"
             # Preserve every other in-flight request's lock and right to settle.
@@ -1195,6 +1336,8 @@ class LLMManager:
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
         token = None
+        deadline = kwargs.pop("_deadline", None)
+        role_finish_reason = kwargs.pop("_role_finish_reason", None)
         priority = kwargs.pop("budget_priority", "standard")
         if _role == "shadow":
             priority = "research"
@@ -1238,7 +1381,10 @@ class LLMManager:
                         token = self.monthly_budget.reserve(
                             _model, _prompt, _system, output_limit, policy_priority=priority,
                             expected_policy_mode=policy['policy_mode'] if policy else None,
-                            task=_task, role=_role)
+                            task=_task, role=_role,
+                            timeout_hold_contract=(GEMINI_TIMEOUT_CONTRACT
+                                if type(_client) is GeminiClient and _model == "gemini-3.1-flash-lite"
+                                else None))
                         break
                     except BudgetBlocked as exc:
                         if exc.reason != 'budget_profile_changed' or selection == 2:
@@ -1248,6 +1394,17 @@ class LLMManager:
                 self._annotate_budget(response, policy, priority)
                 self._account_attempt(response, _task, _role)
                 return response
+        # 원장의 동기 입장 검사가 시한을 넘겼으면 HTTP 진입 전에 예약을 해제한다.
+        # 이벤트 루프의 timeout callback만으로는 동기 검사 직후 전송을 막을 수 없다.
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            response = LLMResponse(
+                "", _model, provider, success=False, requested_model=_model,
+                error="Role deadline exceeded", request_sent=False,
+                usage_known=False, billing_status="not_sent")
+            self._annotate_budget(response, policy, priority)
+            self._settle_monthly(token, response, _model)
+            self._account_attempt(response, _task, _role)
+            return response
         try:
             response = await _client.complete(_prompt, _system, model=_model, **kwargs)
         except asyncio.CancelledError as exc:
@@ -1278,6 +1435,17 @@ class LLMManager:
             self._account_attempt(unknown, _task, _role)
             exc._llm_response = unknown
             raise
+        # Provider refusal is an unsuccessful result on every route, including
+        # fallback; record that fact before the attempt trail and audit persist.
+        if response.refusal_detected:
+            response.success = False
+            response.error = "Provider refused request"
+        # Fixed roles additionally require complete, non-empty output.
+        if role_finish_reason is not None and response.success and (
+                response.finish_reason != role_finish_reason or response.refusal_detected
+                or not (response.content or "").strip()):
+            response.success = False
+            response.error = "Role completion incomplete, refused or empty"
         self._annotate_budget(response, policy, priority)
         self._settle_monthly(token, response, _model)
         self._account_attempt(response, _task, _role)
@@ -1292,27 +1460,41 @@ class LLMManager:
 
     def _account_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Record known usage even for empty/error responses before another attempt."""
+        response.missing_cost_policy = self.config.missing_cost_policy
+        response.cost_accounting_skipped = bool(
+            self.config.missing_cost_policy == "log_and_continue"
+            and response.request_sent and not response.usage_known
+            and response.billing_status != "rejected_before_generation"
+            and response.uncertain_cost_ceiling_usd is None)
+        if response.cost_accounting_skipped:
+            logger.warning("[LLM] 비용 미확인 시도: 금액 합산 제외, 미확인 기록 보존 (log_and_continue)")
         self._append_trail(response, task, role)
         if response.billing_status == "rejected_before_generation":
             self.daily_usage.inferred_nonbillable_rejections += 1
         elif response.request_sent:
             self.daily_usage.add(response.input_tokens, response.output_tokens,
                                  response.requested_model or response.model,
-                                 usage_known=response.usage_known)
+                                 usage_known=response.usage_known,
+                                 uncertain_cost_ceiling_usd=response.uncertain_cost_ceiling_usd)
         self._audit_attempt(response, task, role)
 
     def _audit_attempt(self, response: LLMResponse, task: str, role: str) -> None:
         """Metadata-only audit; no prompts, content, free-text errors, keys or raw payload."""
-        if self.audit_dir is None:
+        is_role = task in {item.value for item in LLMRole}
+        audit_dir = self.audit_dir
+        role_sink = audit_dir is None and is_role and self.config.monthly_budget_usd is not None
+        if role_sink and self.config.budget_state_path:
+            audit_dir = Path(self.config.budget_state_path).expanduser().parent / "role-audit"
+        if audit_dir is None:
             return
         now = datetime.now()
         today = now.strftime("%Y%m%d")
         try:
-            self.audit_dir.mkdir(parents=True, exist_ok=True)
-            if self._audit_log_date != today:
+            audit_dir.mkdir(mode=0o700 if role_sink else 0o777, parents=True, exist_ok=True)
+            if not role_sink and self._audit_log_date != today:
                 cutoff = (now - timedelta(days=self._LLM_LOG_RETENTION_DAYS)).strftime("%Y%m%d")
                 try:
-                    for path in self.audit_dir.glob("llm-audit-*.jsonl"):
+                    for path in audit_dir.glob("llm-audit-*.jsonl"):
                         date_part = path.stem.removeprefix("llm-audit-")
                         if re.fullmatch(r"\d{8}", date_part) and date_part < cutoff:
                             try:
@@ -1336,6 +1518,10 @@ class LLMManager:
                 "finish_reason": response.finish_reason, "elapsed_ms": response.latency_ms,
                 "request_sent": response.request_sent, "usage_known": response.usage_known,
                 "billing_status": response.billing_status,
+                "transport_error_kind": response.transport_error_kind,
+                "uncertain_cost_ceiling_usd": response.uncertain_cost_ceiling_usd,
+                "missing_cost_policy": response.missing_cost_policy,
+                "cost_accounting_skipped": response.cost_accounting_skipped,
                 "budget_block_reason": response.budget_block_reason,
                 "budget_policy_mode": response.budget_policy_mode,
                 "budget_policy_version": response.budget_policy_version,
@@ -1353,8 +1539,36 @@ class LLMManager:
                 "estimated_cost_usd": quote.cost_usd if quote and response.usage_known else None,
                 "price_basis": quote.basis if quote else "unpriced",
             }
-            with (self.audit_dir / f"llm-audit-{today}.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+            if is_role:
+                row["role_policy_version"] = ROLE_POLICY_VERSION
+                row["refusal_detected"] = response.refusal_detected
+            line = json.dumps(row, ensure_ascii=False) + "\n"
+            filename = f"llm-audit-{today}.jsonl"
+            if role_sink:
+                # 자동 역할 감사만 전용 비공개 경로에 기록한다. symlink를 따라가지 않는다.
+                directory_fd = os.open(audit_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try:
+                    os.fchmod(directory_fd, 0o700)
+                    if getattr(self, "_role_audit_log_date", None) != today:
+                        cutoff = (now - timedelta(days=self._LLM_LOG_RETENTION_DAYS)).strftime("%Y%m%d")
+                        try:
+                            for name in os.listdir(directory_fd):
+                                match = re.fullmatch(r"llm-audit-(\d{8})\.jsonl", name)
+                                if match and match[1] < cutoff:
+                                    os.unlink(name, dir_fd=directory_fd)
+                        except OSError:
+                            logger.warning("[LLM] metadata audit retention failed")
+                        self._role_audit_log_date = today
+                    fd = os.open(filename, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+                                 0o600, dir_fd=directory_fd)
+                    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+                        os.fchmod(stream.fileno(), 0o600)
+                        stream.write(line)
+                finally:
+                    os.close(directory_fd)
+            else:
+                with (audit_dir / filename).open("a", encoding="utf-8") as stream:
+                    stream.write(line)
         except Exception:
             logger.warning("[LLM] metadata audit write failed")
 
@@ -1535,7 +1749,7 @@ class LLMManager:
                 raw=response.content or "", parsed=None, success=False,
             )
             # 1회 재시도 — JSON 형식만 요청하는 접미 추가
-            if _retry == 0:
+            if _retry == 0 and not self._trail_has_unknown_cost(response.attempt_trail):
                 retry_prompt = (
                     prompt + "\n\n**중요: 위 지시에 따라 반드시 순수 JSON만 출력하세요. "
                     "코드블록(```), 설명 텍스트, 마크다운 없이 JSON 객체만 응답하세요.**"
@@ -1601,8 +1815,17 @@ class LLMManager:
             "input_tokens": self.daily_usage.input_tokens,
             "output_tokens": self.daily_usage.output_tokens,
             "estimated_cost_usd": round(self.daily_usage.estimated_cost_usd, 4),
-            "budget_remaining_usd": (None if self.daily_usage.cost_missing else
-                                     round(self.config.daily_budget_usd - self.daily_usage.estimated_cost_usd, 4)),
+            "budget_remaining_usd": (None if self._daily_unknown_blocks() else
+                                     round(max(0, self.config.daily_budget_usd
+                                               - self.daily_usage.estimated_cost_usd
+                                               - self.daily_usage.uncertain_cost_ceiling_usd), 4)),
+            "uncertain_cost_ceiling_usd": self.daily_usage.uncertain_cost_ceiling_usd,
+            "bounded_unknown_requests": self.daily_usage.bounded_unknown_requests,
+            "missing_cost_policy": self.config.missing_cost_policy,
+            "skipped_unknown_requests": (
+                self.daily_usage.unknown_usage_requests - self.daily_usage.bounded_unknown_requests
+                if self.config.missing_cost_policy == "log_and_continue" else 0),
+            "cost_accounting_complete": not self.daily_usage.cost_missing,
             "cost_missing": self.daily_usage.cost_missing,
             "unpriced_requests": self.daily_usage.unpriced_requests,
             "unknown_usage_requests": self.daily_usage.unknown_usage_requests,

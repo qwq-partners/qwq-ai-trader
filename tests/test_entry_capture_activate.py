@@ -403,6 +403,11 @@ def profile_raw(s, profile):
         staged = Path('/etc/qwq-entry-capture/20261008-signal-window-v1-entry-capture.conf')
         state = Path('/var/lib/qwq-entry-capture/20261008-signal-window-v1')
         date, epoch = '2026-10-07', '2026-10-08-engine-entry-signal-window-v1'
+    elif profile == '20261015-llm-window-v1':
+        once = Path('/home/ubuntu/.local/share/qwq-entry-observation/20261015-llm-window-v1/once.json')
+        staged = Path('/etc/qwq-entry-capture/20261015-llm-window-v1-entry-capture.conf')
+        state = Path('/var/lib/qwq-entry-capture/20261015-llm-window-v1')
+        date, epoch = '2026-10-14', '2026-10-15-engine-llm-window-v1'
     else:
         assert profile == '20261007-pilot3'
         once = Path('/home/ubuntu/.local/share/qwq-entry-observation/20261007-pilot3/once.json')
@@ -418,7 +423,7 @@ def profile_raw(s, profile):
     raw['input_hashes'] = {str(p):'e'*64 for p in (
         once, once.with_name('study.json'), once.with_name('manifest.json'),
         m.LAUNCHER_PATH,m.DEPLOYMENT_PATH,Path('/etc/qwq-toss-observer/plan.json'),Path('/etc/qwq-toss-observer/registry.json'))}
-    if profile == SIGNAL_PROFILE:
+    if profile in (SIGNAL_PROFILE, '20261015-llm-window-v1'):
         raw['input_hashes'] = {str(p): 'e'*64 for p in (once, once.with_name('study.json'), once.with_name('manifest.json'))}
     return raw
 

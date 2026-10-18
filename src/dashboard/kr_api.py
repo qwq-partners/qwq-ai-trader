@@ -14,15 +14,17 @@ from typing import Dict, Optional
 import aiohttp as aiohttp_client
 from aiohttp import web
 from loguru import logger
+from .market_cache import DashboardMarketCache, session_key
+from src.utils.kis_request_metrics import with_request_source
 
-# 시장 지수 캐시 (5분)
+# 시장 지수 응답 캐시 (10초). KIS 표시용 시세는 별도 세션 캐시를 공유한다.
 _indices_cache: dict = {"data": None, "ts": 0.0}
 _benchmark_cache: dict = {"data": None, "ts": 0.0, "range": ""}
 
 
-def setup_kr_api_routes(app: web.Application, data_collector):
+def setup_kr_api_routes(app: web.Application, data_collector, market_cache=None):
     """KR API 라우트 등록"""
-    handler = KRAPIHandler(data_collector)
+    handler = KRAPIHandler(data_collector, market_cache=market_cache)
 
     app.router.add_get("/api/status", handler.get_status)
     app.router.add_get("/api/internal/entry-anchors", handler.get_entry_anchors)
@@ -83,8 +85,9 @@ def _cap_text(value, limit: int):
 class KRAPIHandler:
     """KR REST API 핸들러"""
 
-    def __init__(self, data_collector):
+    def __init__(self, data_collector, market_cache=None):
         self.dc = data_collector
+        self.market_cache = market_cache if market_cache is not None else DashboardMarketCache()
 
     # ── T11 (2026-09-15) 팀 심의 실행 상태 — 계약 2.4 execution_state ──────────
     _EXEC_STATES = ("candidate", "waiting_trigger", "plan_rejected", "shadow_ready", "order_submitted", "filled")
@@ -693,20 +696,22 @@ class KRAPIHandler:
             "modified": datetime.fromtimestamp(latest.stat().st_mtime).isoformat(),
         })
 
+    @with_request_source("dashboard_http_indices")
     async def get_market_indices(self, request: web.Request) -> web.Response:
-        """KOSPI·KOSDAQ·S&P500·NASDAQ·DOW 지수 + KR 개별종목 (5분 캐시)
+        """KOSPI·KOSDAQ·S&P500·NASDAQ·DOW 지수 + KR 개별종목 (10초 응답 캐시)
         - 지수: Yahoo Finance
         - KR 개별종목: KIS API 실시간 (프리/넥스트장 포함), 실패 시 Yahoo 폴백
         """
         global _indices_cache
-        if _indices_cache["data"] and (time.time() - _indices_cache["ts"]) < 10:
+        current_session = session_key()
+        if (_indices_cache["data"] and 0 <= time.time() - _indices_cache["ts"] < 10
+                and _indices_cache.get("session") == current_session):
             return web.json_response(_indices_cache["data"])
 
-        from src.utils.session import KRSession
         from src.core.types import MarketSession
 
         # 현재 KR 세션 판단
-        kr_session = KRSession().get_session()
+        kr_session = current_session[1]
         is_next = kr_session == MarketSession.NEXT
 
         index_symbols = [
@@ -769,7 +774,7 @@ class KRAPIHandler:
                 item = None
                 if broker:
                     try:
-                        q = await broker.get_quote(sym)
+                        q = await self.market_cache.get("quote:" + sym, lambda: broker.get_quote(sym))
                         if q and q.get("price", 0) > 0:
                             # 넥스트장(시간외단일가) / 일반
                             if is_next and q.get("ovtm_price", 0) > 0:
@@ -787,6 +792,7 @@ class KRAPIHandler:
                                 "change": round(chg),
                                 "change_pct": round(chg_pct, 2),
                                 "source": "kis",
+                                "fetched_at": q["fetched_at"], "stale": q["stale"],
                             }
                     except Exception as e:
                         logger.debug(f"[KIS 시세] {sym} 오류: {e}")
@@ -820,6 +826,7 @@ class KRAPIHandler:
         if results:
             _indices_cache["data"] = results
             _indices_cache["ts"]   = time.time()
+            _indices_cache["session"] = current_session
         elif _indices_cache["data"]:
             return web.json_response(_indices_cache["data"])
         return web.json_response(results)
@@ -977,6 +984,11 @@ class KRAPIHandler:
         if (runtime.journal.failure_reason is not None
                 or (not closed and not runtime.journal._thread.is_alive())):
             return web.json_response({'status': 'unavailable'}, status=503)
+        try:
+            llm = ({'llm': runtime.llm_readiness()}
+                   if getattr(runtime.buffer, 'llm_admission', False) else {})
+        except Exception:
+            return web.json_response({'status': 'unavailable'}, status=503)
         return web.json_response({
             'schema_version': 'entry-observation-readiness-v1',
             'study_sha256': runtime.plan.study_sha256,
@@ -986,6 +998,7 @@ class KRAPIHandler:
             'capture_closed': closed,
             **({'pilot': runtime.bot.ws_feed._quote_subscription_owner.pilot_snapshot()}
                if runtime.buffer.scan_scope == 'pilot' else {}),
+            **llm,
         }, headers={'Cache-Control': 'no-store'})
 
     async def get_entry_anchors(self, request):

@@ -25,7 +25,7 @@ import sys
 
 from loguru import logger
 
-from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital
+from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital, capture_llm_check_started
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
@@ -2065,6 +2065,9 @@ class RiskManager:
             #   - LLM 거부 시 차단 대신 position_multiplier × _LLM_REJECT_SIZE_MULT(0.5) 완화
             if (self._LLM_CHECK_MIN <= _cv_score < self._LLM_BYPASS_AT
                     and _regime != "bull"):
+                from ..analytics.model_comparison_sizing import capture_policy_sizing_if_enabled
+                _neutral_sizing = capture_policy_sizing_if_enabled(self, event)
+                capture_llm_check_started(getattr(self, "_entry_observation_owner", None), event)
                 _llm_ok = await self._cross_validator.llm_second_check(
                     symbol=event.symbol,
                     strategy=event.strategy.value if event.strategy else "",
@@ -2073,6 +2076,7 @@ class RiskManager:
                     market_regime=_regime,
                     sector=_meta.get("sector", ""),
                     signal_id=event.id,
+                    neutral_sizing=_neutral_sizing,
                 )
                 _llm_ctx = dict(getattr(self._cross_validator, "last_llm_context", {}) or {})
                 # 64차: 판단 기록 ID·기록 상태를 신호 메타에 남겨 signal_events ↔ llm-decision 원장을 조인한다
@@ -2991,12 +2995,14 @@ class RiskManager:
 
         return base_pct, max_pct, pool_equity
 
-    def _calculate_position_size(self, signal: SignalEvent) -> int:
+    def _calculate_position_size(self, signal: SignalEvent, *, sizing_overlays=None,
+                                 sizing_fee_calc=None, record_entry_risk=True, sizing_logger=None) -> int:
         """포지션 크기 계산 (자본 활용률 최적화, 분할익절 최소 수량 보장)
 
         2026-10-10 60차: 단계별 값·배율·중단 사유를 ``signal.metadata["size_trace"]`` 에 남긴다(측정 전용,
         계산 결과 불변). 10/8 005490 이 어느 배율로 2,910,664→142,499원이 됐는지 로그로는 알 수 없었다.
         """
+        _logger = logger if sizing_logger is None else sizing_logger
         trace: Dict[str, Any] = {}
         if signal.metadata is None:
             signal.metadata = {}
@@ -3015,7 +3021,7 @@ class RiskManager:
         price = signal.price or Decimal("0")
 
         if price <= 0 or equity <= 0:
-            logger.warning(
+            _logger.warning(
                 f"[리스크] price/equity 체크 실패: {signal.symbol} "
                 f"(price={price}, equity={equity})"
             )
@@ -3049,7 +3055,7 @@ class RiskManager:
             strat_pct = strategy_position_pct.get(signal.strategy, default_pct)
             # 비활성 전략이 0%면 매수 자체를 차단
             if strat_pct <= 0:
-                logger.warning(
+                _logger.warning(
                     f"[리스크] {signal.symbol} {signal.strategy} 비활성 전략 → 포지션 0% 차단"
                 )
                 return _stop("strategy_inactive")
@@ -3068,7 +3074,7 @@ class RiskManager:
                     # 코어 예산 소진/초과: 코어 실점유분 차감 (초과 비중 보호)
                     pool_equity = max(equity - core_actual, Decimal("0"))
                 if pool_equity <= 0:
-                    logger.info(
+                    _logger.info(
                         f"[리스크] 코어 점유로 가용 풀 없음: {signal.symbol} "
                         f"(equity={equity:,.0f}, core={core_actual:,.0f})"
                     )
@@ -3125,7 +3131,7 @@ class RiskManager:
                     _risk_atr = None
             _resolver = getattr(self, "_resolve_entry_stop", None)
             if _resolver is None:
-                logger.error(
+                _logger.error(
                     f"[리스크] {signal.symbol} risk 모드 진입 손절 해석기 미배선 → 신규 매수 거부 "
                     f"(fail-closed, nominal 자동 복귀 없음)"
                 )
@@ -3134,7 +3140,7 @@ class RiskManager:
                 _stop_decision = _resolver(signal.strategy.value if signal.strategy else None)
             except Exception as _stop_err:
                 # 실제 SL 까지 무효(0·음수·NaN)면 주문을 만들지 않는다 — pending 미생성
-                logger.error(f"[리스크] {signal.symbol} 진입 손절 해석 실패 → 신규 매수 거부: {_stop_err}")
+                _logger.error(f"[리스크] {signal.symbol} 진입 손절 해석 실패 → 신규 매수 거부: {_stop_err}")
                 return _stop("entry_stop_resolve_failed")
             _risk_stop = _stop_decision.stop_pct
             _risk_value = equity * Decimal(str(self.config.risk_per_trade_pct)) / _risk_stop
@@ -3150,7 +3156,7 @@ class RiskManager:
                 _meta["stop_source"] = _stop_decision.source
                 _meta["stop_crash_active"] = bool(_stop_decision.crash_capped)   # 주문 시점 급락 cap 활성 여부 (분모엔 미적용)
                 signal.signal.metadata = _meta
-            logger.info(
+            _logger.info(
                 f"[리스크] {signal.symbol} 위험 사이징: 손절 {float(_risk_stop):.2f}%({_stop_decision.source}"
                 f"{', 급락cap 활성(분모 미적용)' if _stop_decision.crash_capped else ''}) · 위험 "
                 f"{self.config.risk_per_trade_pct}% → {position_value:,.0f}원 "
@@ -3212,41 +3218,49 @@ class RiskManager:
         # 캘린더 시즈널리티 부스트 (월말월초) — 개별 포지션 상한(max_value)은 재적용
         try:
             from ..utils.calendar_seasonality import calendar_multiplier
-            _cal_mult, _ = calendar_multiplier(date.today(), "kr")
+            _cal_mult, _ = (calendar_multiplier(date.today(), "kr") if sizing_overlays is None
+                            else (sizing_overlays["calendar"], "captured"))
+            if _cal_mult is None:
+                raise ValueError("captured calendar overlay failed")
             if _cal_mult != 1.0:
                 position_value = min(
                     position_value * Decimal(str(_cal_mult)), max_value
                 )
             _rec(calendar_multiplier=float(_cal_mult), after_calendar=position_value)
         except Exception as _cal_err:
-            logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
+            _logger.debug(f"[리스크] 시즈널리티 계산 실패 (무시): {_cal_err}")
 
         # 조건부 변동성 타게팅 (2026-08-19) — KOSPI 극단 변동성(>25%) 국면에서
         # 모멘텀 계열 신규 매수 축소 (downscale-only, 캐시 노후/부재 시 무개입).
         # 근거·검증: docs/research/ai-trading-research-2026-08.md + 모듈 docstring
         try:
             from ..utils.volatility_targeting import vol_targeting_multiplier
-            _vt_mult, _ = vol_targeting_multiplier(
+            _vt_mult, _ = (vol_targeting_multiplier(
                 signal.strategy.value if signal.strategy else ""
-            )
+            ) if sizing_overlays is None else (sizing_overlays["volatility"], "captured"))
+            if _vt_mult is None:
+                raise ValueError("captured volatility overlay failed")
             if _vt_mult < 1.0:
                 position_value = position_value * Decimal(str(_vt_mult))
             _rec(vol_targeting_multiplier=float(_vt_mult), after_vol_targeting=position_value)
         except Exception as _vt_err:
-            logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
+            _logger.debug(f"[리스크] 변동성 타게팅 계산 실패 (무시): {_vt_err}")
 
         # 팀 심의 conviction 부스트 (2026-08-20) — BUY 승인 + 고conviction 종목만
         # 소폭 증액 (부스트 전용 — CF 실측상 HOLD 차단은 손해). 상한 재적용.
         try:
             from ..utils.team_conviction import team_conviction_multiplier
-            _tc_mult, _ = team_conviction_multiplier(signal.symbol)
+            _tc_mult, _ = (team_conviction_multiplier(signal.symbol) if sizing_overlays is None
+                           else (sizing_overlays["team"], "captured"))
+            if _tc_mult is None:
+                raise ValueError("captured team overlay failed")
             if _tc_mult > 1.0:
                 position_value = min(
                     position_value * Decimal(str(_tc_mult)), max_value
                 )
             _rec(team_multiplier=float(_tc_mult), after_team=position_value)
         except Exception as _tc_err:
-            logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
+            _logger.debug(f"[리스크] 팀 conviction 계산 실패 (무시): {_tc_err}")
 
         # 부스트(전략 배율/시즈널리티/conviction) 후 전략 예산 잔여 재클램프
         # (2026-08-20 Codex P1 — max_value만 재적용하면 부스트가 전략 캡을 초과)
@@ -3262,7 +3276,7 @@ class RiskManager:
             # 단, 가용현금/개별 상한(max_value) 이내일 때만.
             if (_pre_mult_value >= min_val
                     and min_val <= available and min_val <= max_value):
-                logger.info(
+                _logger.info(
                     f"[리스크] {signal.symbol} 배율 축소로 최소 금액 미달 "
                     f"({position_value:,.0f} < {min_val:,.0f}) → 최소 금액으로 클램프"
                 )
@@ -3301,10 +3315,10 @@ class RiskManager:
         if _stop_decision is not None and quantity > 0:
             _q_cap = risk_quantity_cap(
                 equity, price, _stop_decision.stop_pct,
-                risk_per_trade_pct=self.config.risk_per_trade_pct,
+                risk_per_trade_pct=self.config.risk_per_trade_pct, fee_calc=sizing_fee_calc,
             )
             if quantity > _q_cap:
-                logger.info(
+                _logger.info(
                     f"[리스크] {signal.symbol} 위험 상한 재클램프: {quantity}→{_q_cap}주 "
                     f"(예산 {equity * Decimal(str(self.config.risk_per_trade_pct)) / 100:,.0f}원, "
                     f"net SL {float(_stop_decision.stop_pct):.2f}%, 매수수수료 포함)"
@@ -3312,7 +3326,7 @@ class RiskManager:
                 quantity = _q_cap
                 _rec(risk_quantity_cap=_q_cap)
                 if quantity * price < min_val:
-                    logger.info(
+                    _logger.info(
                         f"[리스크] {signal.symbol} 위험 상한 축소 후 최소 금액 미달 "
                         f"({quantity * price:,.0f} < {min_val:,.0f}) → 매수 거부"
                     )
@@ -3322,7 +3336,7 @@ class RiskManager:
         # event.signal.metadata **양쪽 별개 복사본**에 넣는다. 주문 캐시(_pending_signal_cache)는
         # dict(event.metadata) 를 복사하고, 체결 시 A 배선이 market_context.entry_risk 로 원장에 병합한다.
         # 수량 0(주문·pending 미생성)에는 남기지 않는다 — 주문 없는 계측 태그 방지.
-        if _stop_decision is not None and quantity > 0:
+        if record_entry_risk and _stop_decision is not None and quantity > 0:
             _snapshot = build_entry_risk_snapshot(
                 strategy=signal.strategy.value if signal.strategy else None,
                 stop_decision=_stop_decision,

@@ -186,10 +186,10 @@ def test_zero_budget_and_legacy_descriptive_routes():
     assert manager.TASK_CONFIG[LLMTask.QUICK_CLASSIFY]['primary'] == (LLMProvider.GEMINI, 'light')
 
 
-@pytest.mark.parametrize('model,expected', [('gpt-5-mini', 0.00225), ('gpt-5.6-sol', 0.024),
-    ('gpt-6.1-sol', 0.012), ('gpt-6-astra', 0.060), ('gemini-3.1-pro-preview', 0.014),
+@pytest.mark.parametrize('model,expected', [('gpt-5-mini', 0.00225), ('gpt-5.6-sol', 0.025),
+    ('gpt-6.1-sol', 0.0125), ('gpt-6-astra', 0.0625), ('gemini-3.1-pro-preview', 0.014),
     ('gemini-3.1-flash-lite', 0.00175), ('gemini-3.1-flash-lite-preview', 0.00175),
-    ('gemini-3.8-flash', 0.0045)])
+    ('gemini-3.8-flash', 0.009), ('gemini-4-argon', 0.024)])
 def test_explicit_model_rates(model, expected):
     usage = LLMUsage()
     usage.add(1000, 1000, model)
@@ -197,7 +197,7 @@ def test_explicit_model_rates(model, expected):
     assert not usage.cost_missing
 
 
-@pytest.mark.parametrize('model,inputs,expected', [('gpt-6-astra', 272001, 5.51502),
+@pytest.mark.parametrize('model,inputs,expected', [('gpt-6-astra', 272001, 6.875025),
     ('gemini-3.1-pro-preview', 200001, 0.818004)])
 def test_long_context_prices(model, inputs, expected):
     usage = LLMUsage()
@@ -305,7 +305,7 @@ async def test_shadow_is_gated_and_charged(tmp_path):
     manager.openai._session = Session(openai_reply())
     primary = LLMResponse('ok', 'gpt-5-mini', LLMProvider.OPENAI)
     await manager._fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, primary, 'gpt-6.1-sol')
-    assert manager.daily_usage.estimated_cost_usd == pytest.approx(0.0007)
+    assert manager.daily_usage.estimated_cost_usd == pytest.approx(0.00075)
     manager.config.daily_budget_usd = 0
     await manager._fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, primary, 'gpt-6.1-sol')
     assert len(manager.openai._session.payloads) == 1
@@ -338,16 +338,16 @@ async def test_timeout_has_unknown_usage_and_does_not_expose_url_key():
     assert manager.daily_usage.unknown_usage_requests == 1
 
 
-def test_intro_expiry_unknown_and_preview_basis_explicit():
+def test_intro_expiry_uses_post_promo_ceiling_and_preview_basis_explicit():
     from datetime import date
     from src.utils.llm_pricing import rate_quote
-    assert rate_quote('gemini-3.8-flash', 100, 100, on_date=date(2027, 1, 1)) is None
+    assert rate_quote('gemini-3.8-flash', 100, 100, on_date=date(2027, 1, 1)).cost_usd == pytest.approx(0.0009)
     assert 'unverified_preview_alias' in rate_quote('gemini-3.1-flash-lite-preview', 1, 1).basis
 
 
 def test_threshold_rate_is_not_long_until_exceeded():
     from src.utils.llm_pricing import rate_quote
-    assert rate_quote('gpt-6-astra', 272000, 1000).cost_usd == pytest.approx(2.77)
+    assert rate_quote('gpt-6-astra', 272000, 1000).cost_usd == pytest.approx(3.45)
     assert rate_quote('gemini-3.1-pro-preview', 200000, 1000).cost_usd == pytest.approx(0.412)
 
 
@@ -402,13 +402,17 @@ async def test_elapsed_uses_monotonic_clock_not_wall_clock(monkeypatch, provider
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status', [400, 401, 403, 404, 413, 422, 429])
-async def test_structured_pre_generation_rejection_allows_fallback_without_invented_usage(status, tmp_path):
+async def test_structured_pre_generation_rejection_preserves_usage_and_auth_boundary(status, tmp_path):
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'), audit_dir=tmp_path)
     manager.openai._session = Session(Reply({'error': {'message': 'rejected', 'type': 'request_error'}}, status=status))
     manager.gemini._session = Session(gemini_reply())
     result = await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)
-    assert result.success
-    assert manager.daily_usage.input_tokens == 100
+    if status in {401, 403}:
+        assert not result.success and not manager.gemini._session.payloads
+        assert manager.daily_usage.input_tokens == 0
+    else:
+        assert result.success
+        assert manager.daily_usage.input_tokens == 100
     assert manager.daily_usage.inferred_nonbillable_rejections == 1
     assert not manager.daily_usage.cost_missing
     rows = [json.loads(line) for file in tmp_path.glob('*.jsonl') for line in file.read_text().splitlines()]

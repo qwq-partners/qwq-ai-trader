@@ -1,0 +1,153 @@
+"""66차 C — 모델 비교 비용 상한: Decimal 요율·올림·expected/max 구분·예비 비율·단가 없음 처리 (오프라인)."""
+from decimal import Decimal
+
+import pytest
+
+from src.analytics.model_comparison_budget import call_cost_usd, comparison_budget, decision_cost_usd
+
+CURRENT = [{"role": "bull", "model": "gpt-5-mini", "input_tokens": 900, "output_tokens": 400},
+           {"role": "bear", "model": "gemini-3.1-flash-lite-preview", "input_tokens": 900, "output_tokens": 400}]
+FALLBACK = [{"model": "gpt-5.6-sol", "input_tokens": 900, "output_tokens": 100},
+            {"model": "gemini-3.1-pro-preview", "input_tokens": 900, "output_tokens": 100}]   # STRATEGY_ANALYSIS primary→fallback 체인
+
+
+def test_call_cost_is_decimal_rounded_up_and_none_for_unknown():
+    assert call_cost_usd("gpt-5-mini", 900, 400) == Decimal("0.001025")       # 900×0.25 + 400×2.0 per 1M
+    assert call_cost_usd("gpt-5-mini", 5, 0) == Decimal("0.00000125")          # 1e-9 단위, 축소되지 않음
+    assert call_cost_usd("gpt-5.6-sol", 900, 400) == Decimal("0.0125")
+    assert call_cost_usd("unknown-model", 1, 1) is None
+
+
+def test_decision_cost_reports_expected_and_path_maximum():
+    d = decision_cost_usd(CURRENT, fallback=FALLBACK)
+    assert Decimal(d["total_usd"]) == Decimal("0.00185")
+    assert Decimal(d["total_with_retry_usd"]) == Decimal("0.002035")            # 평균 가정 ×1.1
+    # 최대: Bull 2회 + Bear 2회 + 폴백 체인(gpt-5.6-sol 캐시 쓰기 상한 0.0065 + gemini-3.1-pro 0.003)
+    assert Decimal(d["max_usd"]) == Decimal("0.00185") * 2 + Decimal("0.0065") + Decimal("0.003")
+    assert d["per_role"]["fallback_1"]["model"] == "gemini-3.1-pro-preview"
+    bad = decision_cost_usd(CURRENT + [{"role": "x", "model": "nope", "input_tokens": 1, "output_tokens": 1}])
+    assert bad["total_usd"] is None and bad["max_usd"] is None and bad["unpriced_roles"] == ["x"]
+
+
+def test_comparison_budget_uses_max_basis_by_default_and_keeps_reserve():
+    cur = decision_cost_usd(CURRENT, fallback=FALLBACK)
+    cand = decision_cost_usd([{"role": "bull", "model": "gpt-5.6-sol", "input_tokens": 900, "output_tokens": 400},
+                              {"role": "bear", "model": "gemini-3.1-flash-lite-preview", "input_tokens": 900, "output_tokens": 400}],
+                             fallback=FALLBACK)
+    b = comparison_budget(available_usd="99.703917", reserve_share="0.5", current=cur, candidate=cand, month_days_remaining=18)
+    assert b["basis"] == "max" and Decimal(b["comparison_budget_usd"]) == Decimal("49.851958")
+    pair = Decimal(cur["max_usd"]) + Decimal(cand["max_usd"])
+    assert Decimal(b["pair_cost_usd"]) == pair and b["max_comparisons"] == int(Decimal("49.851958") // pair)
+    e = comparison_budget(available_usd="99.703917", reserve_share="0.5", current=cur, candidate=cand, month_days_remaining=18, basis="expected")
+    assert e["max_comparisons"] > b["max_comparisons"]                          # 평균 가정은 상한보다 크다 — 섞지 않는다
+    none = comparison_budget(available_usd="10", reserve_share="0.5", current=cur,
+                             candidate=decision_cost_usd([{"role": "bull", "model": "nope", "input_tokens": 1, "output_tokens": 1}]),
+                             month_days_remaining=18)
+    assert none["max_comparisons"] is None
+    with pytest.raises(ValueError):
+        comparison_budget(available_usd="10", reserve_share="1", current=cur, candidate=cand, month_days_remaining=1)
+    with pytest.raises(ValueError):
+        comparison_budget(available_usd="10", reserve_share="0.5", current=cur, candidate=cand, month_days_remaining=1, basis="avg")
+
+
+def test_candidate_controls_must_be_supported_by_each_model():
+    """P2: 후보 A 는 gpt-5.6-sol 에 minimal 추론을 요구할 수 없다 — 지원 조합(low)만 비교 조건으로 둔다."""
+    from src.utils.llm import LLMProvider, _validate_controls
+    with pytest.raises(ValueError):
+        _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})
+    _validate_controls("gpt-5.6-sol", LLMProvider.OPENAI, {"reasoning_effort": "low"})
+    _validate_controls("gpt-5-mini", LLMProvider.OPENAI, {"reasoning_effort": "minimal"})
+
+
+@pytest.mark.parametrize("bad", [-1, True, 1.5, "1", float("nan"), float("inf"), None])
+@pytest.mark.parametrize("field", ["input_tokens", "output_tokens"])
+def test_token_counts_reject_invalid_values_before_pricing(field, bad):
+    values = {"input_tokens": 1, "output_tokens": 1, field: bad}
+    for model in ("gpt-5-mini", "unpriced-model"):
+        with pytest.raises(ValueError, match=field):
+            call_cost_usd(model, **values)
+    role = {"role": "bull", "model": "gpt-5-mini", **values}
+    with pytest.raises(ValueError, match=field):
+        decision_cost_usd([role])
+    with pytest.raises(ValueError, match=field):
+        decision_cost_usd(CURRENT, fallback=role)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, True, 1.5, "2", float("nan"), float("inf")])
+def test_attempt_count_is_strict_positive_integer(bad):
+    with pytest.raises(ValueError, match="max_attempts_per_role"):
+        decision_cost_usd(CURRENT, max_attempts_per_role=bad)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, "0.9", True, "NaN", "Infinity", None, "bad"])
+def test_retry_multiplier_must_be_finite_and_at_least_one(bad):
+    with pytest.raises(ValueError, match="retry_factor"):
+        decision_cost_usd(CURRENT, retry_factor=bad)
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("available_usd", -1), ("available_usd", True), ("available_usd", "NaN"),
+    ("available_usd", "Infinity"), ("available_usd", "bad"),
+    ("reserve_share", True), ("reserve_share", "NaN"), ("reserve_share", "Infinity"),
+    ("month_days_remaining", 1.5), ("month_days_remaining", True),
+    ("month_days_remaining", "2"), ("month_days_remaining", float("nan")),
+])
+def test_budget_inputs_reject_invalid_numeric_values(field, bad):
+    kwargs = dict(available_usd="10", reserve_share="0.5", current={"max_usd": "1"},
+                  candidate={"max_usd": "1"}, month_days_remaining=2)
+    kwargs[field] = bad
+    with pytest.raises(ValueError, match=field):
+        comparison_budget(**kwargs)
+
+
+@pytest.mark.parametrize("bad", [-1, True, "NaN", "Infinity", "bad"])
+@pytest.mark.parametrize("basis,key", [("max", "max_usd"), ("expected", "total_with_retry_usd")])
+def test_negative_or_nonfinite_pair_cost_is_not_hidden_by_other_side(bad, basis, key):
+    with pytest.raises(ValueError, match=key):
+        comparison_budget(available_usd="10", reserve_share=0, current={key: bad},
+                          candidate={key: "100"}, month_days_remaining=2, basis=basis)
+    with pytest.raises(ValueError, match=key):
+        comparison_budget(available_usd="10", reserve_share=0, current={key: None},
+                          candidate={key: bad}, month_days_remaining=2, basis=basis)
+
+
+def test_zero_inputs_and_unknown_cost_remain_distinct():
+    assert call_cost_usd("gpt-5-mini", 0, 0) == 0
+    result = decision_cost_usd(CURRENT, retry_factor="1")
+    assert result["total_with_retry_usd"] == result["total_usd"]
+    zero = comparison_budget(available_usd=0, reserve_share=0, current={"max_usd": 0},
+                             candidate={"max_usd": 0}, month_days_remaining=0)
+    assert Decimal(zero["comparison_budget_usd"]) == 0
+    assert zero["pair_cost_usd"] == "0" and zero["max_comparisons"] is None
+
+
+@pytest.mark.parametrize("operation", [
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 26, 0),
+    lambda: call_cost_usd("gpt-5-mini", 10 ** 400, 0),
+    lambda: decision_cost_usd(CURRENT, retry_factor="1e999999999"),
+    lambda: comparison_budget(available_usd="1e100", reserve_share=0, current={"max_usd": 1},
+                              candidate={"max_usd": 1}, month_days_remaining=1),
+])
+def test_unsupported_numeric_range_has_consistent_value_error(operation):
+    with pytest.raises(ValueError):
+        operation()
+
+
+@pytest.mark.parametrize("side", ["current", "candidate"])
+@pytest.mark.parametrize("bad", [None, [], "bad", 1])
+def test_comparison_sides_must_be_explicit_dicts(side, bad):
+    kwargs = dict(available_usd=1, reserve_share=0, current={"max_usd": 1},
+                  candidate={"max_usd": 1}, month_days_remaining=1)
+    kwargs[side] = bad
+    with pytest.raises(ValueError, match=side):
+        comparison_budget(**kwargs)
+
+
+@pytest.mark.parametrize("roles", [
+    [{**CURRENT[0], "role": "fallback_0"}],
+    [CURRENT[0], CURRENT[0]],
+    [{**CURRENT[0], "role": None}],
+])
+def test_role_names_cannot_overwrite_cost_breakdown(roles):
+    with pytest.raises(ValueError, match="role"):
+        decision_cost_usd(roles, fallback=FALLBACK)

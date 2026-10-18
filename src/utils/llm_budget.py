@@ -2,7 +2,9 @@
 
 Money uses integer nano-USD. SQLite serializes admission/settlement; a held flock
 identifies each live reservation. A lost process releases that lock, NOT its
-possible charge. Orphaned/unknown usage blocks all months until explicit repair.
+possible charge. Unbounded orphaned/unknown usage blocks all months by default;
+explicit log_and_continue skips its missing cost without settling the evidence.
+Certified timeout ceilings remain committed across months until reconciliation.
 Reservations are conservative estimates, not provider invoice guarantees.
 """
 from __future__ import annotations
@@ -22,6 +24,8 @@ from zoneinfo import ZoneInfo
 
 from .llm_pricing import rate_quote
 from .llm_budget_policy import BudgetPolicyMixin, POLICY_VERSION
+from .llm_budget_bounds import (GEMINI_INPUT_LIMIT, initialize_bounds, make_certificate,
+                               valid_request, validate_certificate, validate_schema)
 
 KST = ZoneInfo('Asia/Seoul')
 _SCALE = 1_000_000_000
@@ -39,6 +43,28 @@ class BudgetStateError(BudgetBlocked):
     pass
 
 
+_READ_ACTIONS = frozenset({sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ,
+                           sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE})
+
+
+def _read_only(action, *_):
+    # Admission hooks observe the locked snapshot; they cannot write or end it.
+    return sqlite3.SQLITE_OK if action in _READ_ACTIONS else sqlite3.SQLITE_DENY
+
+
+_LINK_TABLES = frozenset({'comparison_requests', 'comparison_attempts'})
+
+
+def _comparison_link_only(action, arg1, *_):
+    # Link hooks may only read and UPDATE the comparison bookkeeping tables; never the
+    # financial tables, never schema, never the transaction boundary.
+    if action in _READ_ACTIONS:
+        return sqlite3.SQLITE_OK
+    if action == sqlite3.SQLITE_UPDATE and arg1 in _LINK_TABLES:
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
 def _units(value) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise BudgetBlocked('invalid_cost')
@@ -50,7 +76,13 @@ def _units(value) -> int:
 
 class MonthlyBudgetLedger(BudgetPolicyMixin):
     def __init__(self, path, monthly_limit_usd: float, *, clock: Optional[Callable] = None,
-                 policy_enabled: bool = False, economy_summary_models: tuple[str, ...] = ()):
+                 policy_enabled: bool = False, economy_summary_models: tuple[str, ...] = (),
+                 missing_cost_policy: str = 'block'):
+        if (not isinstance(missing_cost_policy, str)
+                or missing_cost_policy not in {'block', 'log_and_continue'}):
+            raise BudgetStateError('invalid_missing_cost_policy')
+        self.missing_cost_policy = missing_cost_policy
+        self._observed_skipped_unknowns: set[str] = set()
         if not isinstance(policy_enabled, bool):
             raise BudgetStateError('invalid_budget_policy')
         self.policy_enabled = policy_enabled
@@ -143,6 +175,9 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                     raise BudgetStateError('storage_corrupt')
                 self._settings(db)
                 db.execute('SELECT token, state FROM reservations LIMIT 1').fetchall()
+                db.execute('BEGIN IMMEDIATE')
+                initialize_bounds(db)
+                db.execute('COMMIT')
                 if self.policy_enabled:
                     self._initialize_policy(db)
         except BudgetBlocked:
@@ -182,7 +217,24 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
     def _snapshot(self, db, *, persist_orphans=False, now=None):
         settings = self._settings(db)
         month = (now or self._now()).strftime('%Y-%m')
-        unresolved = db.execute("SELECT COUNT(*) FROM reservations WHERE state='unknown'").fetchone()[0]
+        validate_schema(db)
+        unresolved = unbounded = bounded = uncertain = 0
+        skipped_unknowns = set()
+        for row in db.execute("SELECT * FROM reservations WHERE state='unknown'").fetchall():
+            if row['actual_units'] is not None:
+                raise BudgetStateError('storage_corrupt')
+            unresolved += 1
+            bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (row['token'],)).fetchone()
+            if bound is not None:
+                ceiling = validate_certificate(bound, row)
+            if bound is not None and bound['held'] == 1:
+                if row['actual_units'] is not None or row['finished_at'] is None:
+                    raise BudgetStateError('storage_corrupt')
+                bounded += 1
+                uncertain += ceiling
+            else:
+                unbounded += 1
+                skipped_unknowns.add(row['token'])
         row = db.execute("""SELECT COALESCE(SUM(actual_units),0), COUNT(*) FROM reservations
                           WHERE month=? AND state='settled'""", (month,)).fetchone()
         spent, settled_count = row[0], row[1]
@@ -191,26 +243,51 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         reserved = 0
         # Only outstanding reservations need OS lock checks; settled history is
         # aggregated using month/state indexes, not loaded on every health read.
-        for row in db.execute("SELECT token,month,reserved_units FROM reservations WHERE state='reserved'").fetchall():
+        for row in db.execute("SELECT * FROM reservations WHERE state='reserved'").fetchall():
+            if row['actual_units'] is not None:
+                raise BudgetStateError('storage_corrupt')
+            bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (row['token'],)).fetchone()
+            if bound is not None:
+                validate_certificate(bound, row)
+                if bound['held'] != 0:
+                    raise BudgetStateError('storage_corrupt')
             if self._orphaned(row['token']):
                 unresolved += 1
+                unbounded += 1
+                skipped_unknowns.add(row['token'])
                 if persist_orphans:
                     db.execute("UPDATE reservations SET state='unknown' WHERE token=?", (row['token'],))
-            elif row['month'] == month:
+            elif row['month'] == month or bound is not None:
+                # A certified in-flight request can become an all-month hold
+                # after midnight. Preserve its room before admitting new calls.
                 reserved += row['reserved_units']
         reason = ('reservation_bound_breach' if settings['bound_breach'] else
-                  'unresolved_usage' if unresolved else
-                  'monthly_limit_exceeded' if spent + reserved >= self.limit_units else None)
+                  'unresolved_usage' if unbounded and self.missing_cost_policy == 'block' else
+                  'monthly_limit_exceeded' if spent + reserved + uncertain >= self.limit_units else None)
+        if self.missing_cost_policy == 'log_and_continue':
+            # 상태 조회마다 반복하지 않고 새 미확정 사용량을 관측할 때만 기록한다.
+            # 원장 행과 실제비용 null은 보존하고 식별자/요청 내용은 로그에 넣지 않는다.
+            if skipped_unknowns - self._observed_skipped_unknowns:
+                logging.getLogger(__name__).warning(
+                    '[LLM 예산] missing_cost_policy=log_and_continue: '
+                    '금액 없는 사용량 %d건 합산 제외; 실제비용 미확정 기록 보존', unbounded)
+            self._observed_skipped_unknowns = skipped_unknowns
         return {
             'month': month, 'timezone': 'Asia/Seoul', 'monthly_limit_usd': self.limit_units / _SCALE,
             'activated_at': settings['activated_at'], 'baseline_month': settings['baseline_month'],
             'baseline_cost_usd': 0.0, 'spent_usd': spent / _SCALE, 'reserved_usd': reserved / _SCALE,
             'available_usd': None if reason in {'reservation_bound_breach', 'unresolved_usage'}
-                             else max(0, (self.limit_units - spent - reserved) / _SCALE),
+                             else max(0, (self.limit_units - spent - reserved - uncertain) / _SCALE),
             'unresolved_count': unresolved, 'settled_count': settled_count,
+            'missing_cost_policy': self.missing_cost_policy,
+            'skipped_unknown_count': unbounded if self.missing_cost_policy == 'log_and_continue' else 0,
+            'cost_accounting_complete': unresolved == 0,
+            'unbounded_unresolved_count': unbounded, 'bounded_unresolved_count': bounded,
+            'uncertain_cost_ceiling_usd': uncertain / _SCALE,
+            'committed_usd': (spent + reserved + uncertain) / _SCALE,
             'bound_breach': bool(settings['bound_breach']), 'blocked': bool(reason),
             'block_reason': reason, 'cost_basis': 'published_rate_estimate_not_invoice_guarantee',
-        }, spent + reserved
+        }, spent + reserved + uncertain
 
     def status(self) -> dict:
         """Read-only inspection; does not initialize, reset, release or call APIs."""
@@ -225,16 +302,32 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
             raise BudgetStateError('storage_unavailable') from None
 
     def reserve(self, model: str, prompt: str, system: str, max_output_tokens: int, *,
-                policy_priority='standard', expected_policy_mode=None, task='', role='') -> str:
+                policy_priority='standard', expected_policy_mode=None, task='', role='',
+                admission_check=None, link_reservation=None, timeout_hold_contract=None) -> str:
         """Conservative admission estimate: twice UTF-8 bytes plus 256 overhead.
 
-        OpenAI reserves its completion cap; Gemini gets 2x output headroom.
+        OpenAI reserves its completion cap; uncertified Gemini gets 2x output
+        headroom. A certified request reserves the full published input limit
+        plus the configured combined output/thinking cap at admission rates.
         Month attribution is admission time, not a provider billing promise.
+        admission_check(db, status, committed_units, units, now) runs inside the
+        same BEGIN IMMEDIATE after every existing check and before INSERT. It may
+        only read (SQLite authorizer); BudgetBlocked rejects after COMMIT of the
+        policy observation, with no reservation. Never call providers from it.
         """
+        if admission_check is not None and not callable(admission_check):
+            raise BudgetBlocked('invalid_admission_check')
+        if link_reservation is not None and not callable(link_reservation):
+            raise BudgetBlocked('invalid_link_reservation')
         if (not isinstance(model, str) or not isinstance(prompt, str) or not isinstance(system, str)
                 or isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int)
                 or not 0 < max_output_tokens <= 2 ** 31 - 1):
             raise BudgetBlocked('invalid_request_estimate')
+        if model == 'gemini-3.1-flash-lite-preview':
+            raise BudgetBlocked('retired_model')
+        certified = timeout_hold_contract is not None
+        if certified and not valid_request(model, max_output_tokens, timeout_hold_contract):
+            raise BudgetBlocked('invalid_timeout_hold_contract')
         input_estimate = 2 * (len(prompt.encode('utf-8')) + len(system.encode('utf-8')) + 256)
         if not isinstance(policy_priority, str) or policy_priority not in {'standard', 'essential', 'research'}:
             raise BudgetBlocked('invalid_budget_priority')
@@ -247,16 +340,19 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 # Capture admission once: pricing, budget and row month cannot
                 # straddle midnight and charge a different month than checked.
                 now = self._now()
-                # 2026-10-12: combined limits are documented at
-                # https://ai.google.dev/gemini-api/docs/thinking#token-limits-and-max_output_tokens
-                # but that current guide targets Interactions, not the deployed
-                # 3.1 generateContent path. Reserve 2x as an explicit uncertainty
-                # margin; do not change the payload or claim an invoice guarantee.
+                # Preserve the legacy estimate for uncertified requests. The
+                # narrow certified branch uses the reviewed Generate Content
+                # combined output/thinking limit and full model input limit.
                 output_reserve = max_output_tokens * (2 if model.startswith('gemini-') else 1)
+                if certified:
+                    input_estimate, output_reserve = GEMINI_INPUT_LIMIT, max_output_tokens
                 quote = rate_quote(model, input_estimate, output_reserve, on_date=now.date())
                 if quote is None:
                     raise BudgetBlocked('unpriced_model')
                 units = _units(quote.cost_usd)
+                certificate = None
+                if certified:
+                    units, certificate = make_certificate(token, model, max_output_tokens, now, quote)
                 status, committed = self._snapshot(db, persist_orphans=True, now=now)
                 if self.policy_enabled:
                     status = self._observe_policy(db, status, committed, now)
@@ -279,17 +375,38 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 if committed + units > self.limit_units:
                     db.execute('COMMIT')
                     raise BudgetBlocked('monthly_limit_exceeded')
+                if admission_check is not None:
+                    db.set_authorizer(_read_only)
+                    try:
+                        admission_check(db, status, committed, units, now)
+                    except BudgetBlocked:
+                        db.set_authorizer(None)
+                        db.execute('COMMIT')
+                        raise
+                    finally:
+                        db.set_authorizer(None)
                 fd = os.open(self.lock_dir / (token + '.lock'),
                              os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 staged = True
                 db.execute("INSERT INTO reservations VALUES (?,?,?,?,'reserved',NULL,?,NULL)",
                            (token, now.strftime('%Y-%m'), model, units, now.isoformat()))
+                if certificate is not None:
+                    db.execute('INSERT INTO timeout_bounds VALUES (?,?,?,0)',
+                               (token, certificate, units))
                 if self.policy_enabled:
                     db.execute('INSERT INTO policy_attempts VALUES (?,?,?,?,?,?)',
                                (token, POLICY_VERSION, status['policy_mode'], policy_priority, task, role))
                     after, total = self._snapshot(db, now=now)
                     self._observe_policy(db, after, total, now)
+                if link_reservation is not None:
+                    # link_reservation(db, token): the caller's attempt bookkeeping is bound to this token in the
+                    # SAME transaction, so a process killed mid-call still leaves a reconcilable token link.
+                    db.set_authorizer(_comparison_link_only)
+                    try:
+                        link_reservation(db, token)
+                    finally:
+                        db.set_authorizer(None)
                 db.execute('COMMIT')
             self.active_reservations[token] = fd
             admitted = True
@@ -310,9 +427,10 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 # Leave its lock file and row as durable potential paid usage.
 
     def settle(self, token: str, *, outcome: str, actual_cost_usd=None):
-        if outcome not in {'known', 'unknown', 'not_sent', 'rejected'}:
+        if outcome not in {'known', 'unknown', 'timeout', 'not_sent', 'rejected'}:
             raise BudgetBlocked('invalid_settlement')
         committed = False
+        timeout_ceiling = None
         try:
             actual_units = _units(actual_cost_usd) if outcome == 'known' else None
             with self._connect() as db:
@@ -321,7 +439,16 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 row = db.execute('SELECT * FROM reservations WHERE token=?', (token,)).fetchone()
                 if row is None or row['state'] != 'reserved' or token not in self.active_reservations:
                     raise BudgetStateError('invalid_reservation')
-                state = {'known': 'settled', 'unknown': 'unknown', 'not_sent': 'released', 'rejected': 'released'}[outcome]
+                if outcome == 'timeout':
+                    validate_schema(db)
+                    bound = db.execute('SELECT * FROM timeout_bounds WHERE token=?', (token,)).fetchone()
+                    if bound is not None:
+                        timeout_ceiling = validate_certificate(bound, row) / _SCALE
+                        if bound['held'] != 0:
+                            raise BudgetStateError('storage_corrupt')
+                        db.execute('UPDATE timeout_bounds SET held=1 WHERE token=?', (token,))
+                state = {'known': 'settled', 'unknown': 'unknown', 'timeout': 'unknown',
+                         'not_sent': 'released', 'rejected': 'released'}[outcome]
                 db.execute('UPDATE reservations SET state=?,actual_units=?,finished_at=? WHERE token=?',
                            (state, actual_units, self._now().isoformat(), token))
                 if actual_units is not None and actual_units > row['reserved_units']:
@@ -348,6 +475,8 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
                 self.policy_status()
             except BudgetBlocked:
                 logging.getLogger(__name__).warning('Budget policy refresh failed; financial settlement retained')
+
+        return timeout_ceiling
 
     def abandon(self, token: str):
         """Drop ownership of only this attempt; leave its uncertain row intact."""

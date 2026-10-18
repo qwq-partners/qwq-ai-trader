@@ -31,10 +31,12 @@ from loguru import logger
 
 from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
+from src.utils import kis_direct_metrics  # 직접 KIS GET의 고정 차원 관측
 from src.data.providers.kis_market_data import KISMarketData, get_kis_market_data
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
 from src.analytics.selection_basis import SelectionBasisBuilder
+from src.analytics.selection_modifiers import capture_scope, observe as _capture_modifier, source_scope
 from src.analytics.selection_source_status import SourceCapture, mark_source
 
 
@@ -44,6 +46,13 @@ from src.analytics.selection_source_status import SourceCapture, mark_source
 NAVER_FINANCE_BASE = "https://finance.naver.com"
 NAVER_VOLUME_RANK = f"{NAVER_FINANCE_BASE}/sise/sise_quant.naver"       # 거래량 상위
 NAVER_RISE_RANK = f"{NAVER_FINANCE_BASE}/sise/sise_rise.naver"         # 상승률 상위
+
+
+def _observe_modifier(method, *args):
+    try:
+        _capture_modifier(method, *args)
+    except Exception:
+        pass
 
 
 def _mark_selection_source(event: str, **kwargs) -> None:
@@ -299,13 +308,16 @@ class StockScreener:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "kr_screener", "volume_surge", "FHPST01710000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"거래량 순위 조회 실패: {resp.status}")
                     return stocks
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 if data.get("rt_cd") != "0":
                     _mark_selection_source("error", reason="api")
@@ -509,13 +521,16 @@ class StockScreener:
             }
 
             await kis_rate_limit.acquire()
-            async with session.get(url, headers=headers, params=params) as resp:
+            async with kis_direct_metrics.observe_get(
+                "kr_screener", "new_highs", "FHPST01720000"
+            ) as observed, session.get(url, headers=headers, params=params) as resp:
+                observed.observe_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"신고가 종목 조회 실패: {resp.status}")
                     return stocks
 
-                data = await resp.json()
+                data = await observed.json(resp)
 
                 rt_cd = data.get("rt_cd")
                 if rt_cd != "0":
@@ -1401,6 +1416,8 @@ class StockScreener:
                     stock.reasons.append(f"SPDI중립 수급후행(가격{change:+.1f}%)")
                     spdi_applied += 1
 
+                _observe_modifier("spdi", stock)
+
             if spdi_applied:
                 logger.info(f"[Screener] SPDI 필터 {spdi_applied}개 적용")
         except Exception as e:
@@ -1871,6 +1888,7 @@ class StockScreener:
     # 통합 스크리닝
     # ============================================================
 
+    @capture_scope
     async def screen_all(
         self,
         llm_manager=None,
@@ -1885,6 +1903,7 @@ class StockScreener:
         overnight_volatility: Optional[float] = None,
         capture_selection: bool = False,
         capture_selection_sources: bool = False,
+        capture_selection_modifiers: bool = False,
     ) -> List[ScreenedStock]:
         """
         모든 스크리닝 실행 및 통합
@@ -1918,13 +1937,14 @@ class StockScreener:
                 logger.warning("[원천관측] 초기화 실패 — 선정 흐름 유지")
 
         async def call_source(source_id, func, *args, **kwargs):
-            if selection_sources is not None:
-                # SourceCapture가 함수 호출과 await를 한 번만 맡아 ContextVar를 전달한다.
-                return await selection_sources.call(source_id, func, *args, **kwargs)
-            result = func(*args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            with source_scope(source_id):
+                if selection_sources is not None:
+                    # SourceCapture가 함수 호출과 await를 한 번만 맡아 ContextVar를 전달한다.
+                    return await selection_sources.call(source_id, func, *args, **kwargs)
+                result = func(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
 
         def wrap_selection_sources(stocks, *, fallback=False):
             if selection_sources is None:
@@ -1952,6 +1972,7 @@ class StockScreener:
             """
             if basis is not None:
                 observe_basis("record", stock, weight, source_id, input_rank)
+            _observe_modifier("merge", stock.symbol, stock.score * weight)
             if stock.symbol not in all_stocks:
                 # 소스 캐시의 점수·사유·보조 지표를 후속 보정으로 오염시키지 않는다.
                 stock = deepcopy(stock)
@@ -2009,6 +2030,7 @@ class StockScreener:
                 for rank, stock in enumerate(res, 1):
                     merge_stock(stock, weight, source_id, rank)
 
+        _observe_modifier("begin", "dual_supply_bonus", all_stocks)
         # ── 수급 복합 보너스: 외국인+기관 동시 순매수 (플래그 기반) ──
         try:
             dual_count = 0
@@ -2025,6 +2047,8 @@ class StockScreener:
         # ============================================================
         # 2. 네이버 금융 크롤링 (병렬 호출, KIS 실패 시 주력)
         # ============================================================
+        _observe_modifier("end", "dual_supply_bonus", all_stocks)
+        _observe_modifier("begin", "naver_merge", all_stocks)
         if use_naver:
             naver_weight = 1.0 if not kis_success else 0.3
 
@@ -2058,6 +2082,8 @@ class StockScreener:
         # ============================================================
         # 3. 뉴스 기반 (선택적)
         # ============================================================
+        _observe_modifier("end", "naver_merge", all_stocks)
+        _observe_modifier("begin", "theme_or_llm_news_bonus", all_stocks)
         # theme_detector가 있으면 호재 종목을 직접 추가 (LLM 호출 스킵으로 중복 제거)
         if theme_detector:
             try:
@@ -2097,63 +2123,89 @@ class StockScreener:
         # ============================================================
         # 4. 재무 건전성 평가 (저PER/저PBR/ROE/EPS)
         # ============================================================
+        _observe_modifier("end", "theme_or_llm_news_bonus", all_stocks)
+        _observe_modifier("begin", "valuation", all_stocks)
         await self._apply_valuation_bonus(all_stocks)
+        _observe_modifier("end", "valuation", all_stocks)
 
         # ============================================================
         # 5. 모멘텀 지속성 검증 (5일/20일 추세) — 일봉 캐시 공유
         # ============================================================
         _daily_cache: Dict[str, list] = {}
+        _observe_modifier("begin", "momentum", all_stocks)
         await self._apply_momentum_filter(all_stocks, daily_cache=_daily_cache)
+        _observe_modifier("end", "momentum", all_stocks)
 
         # ============================================================
         # 5-1. RS Ranking 보너스 (KOSPI 대비 상대강도)
         # ============================================================
+        _observe_modifier("begin", "rs_ranking", all_stocks)
         await self._apply_rs_ranking_bonus(all_stocks, daily_cache=_daily_cache)
+        _observe_modifier("end", "rs_ranking", all_stocks)
 
         # ============================================================
         # 5-2. 거래량 비율 보완 — 일봉 캐시 재사용 (추가 API 호출 없음)
         #      기관/외국인 스크리너는 vol_inrt 없이 기본값 1.0 으로 들어오므로
         #      전일 거래량 대비 오늘 누적 거래량 배율로 정확히 채운다.
         # ============================================================
+        _observe_modifier("begin", "volume_ratio_enrichment", all_stocks)
         await self._apply_volume_ratio(all_stocks, daily_cache=_daily_cache)
+        _observe_modifier("end", "volume_ratio_enrichment", all_stocks)
 
         # ============================================================
         # 6. 섹터/업종 분산 조정 (특정 섹터 쏠림 방지)
         # ============================================================
+        _observe_modifier("begin", "sector_diversity", all_stocks)
         await self._apply_sector_diversity(all_stocks)
+        _observe_modifier("end", "sector_diversity", all_stocks)
 
         # ============================================================
         # 6-1. 섹터 로테이션 보너스 (강세 섹터 우선 매수)
         # ============================================================
+        _observe_modifier("begin", "sector_rotation", all_stocks)
         await self._apply_sector_rotation_bonus(all_stocks)
+        _observe_modifier("end", "sector_rotation", all_stocks)
 
         # ============================================================
         # 7. 변동성 필터 (ATR 기반 고변동성 종목 감점) — 일봉 캐시 재사용
         # ============================================================
+        _observe_modifier("begin", "volatility", all_stocks)
         await self._apply_volatility_filter(all_stocks, daily_cache=_daily_cache)
+        _observe_modifier("end", "volatility", all_stocks)
 
         # ============================================================
         # 7-1. 수급-가격 괴리 필터 (SPDI)
         # ============================================================
+        _observe_modifier("begin", "spdi", all_stocks)
         await self._apply_spdi_filter(all_stocks)
+        _observe_modifier("end", "spdi", all_stocks)
 
         # ============================================================
         # 7-2. 기관 순매도 블랙리스트
         # ============================================================
+        _observe_modifier("begin", "institution_sell_blacklist", all_stocks)
         await self._apply_inst_sell_blacklist(all_stocks)
+        _observe_modifier("end", "institution_sell_blacklist", all_stocks)
 
         # ============================================================
         # 7-3. DART 공시 촉매 보너스/차단
         # ============================================================
+        _observe_modifier("begin", "dart_catalyst", all_stocks)
         await self._apply_dart_catalyst(all_stocks)
+        _observe_modifier("end", "dart_catalyst", all_stocks)
 
         # ============================================================
         # 7-4. 수급 누적 이력 기록 + 연속 수급 보너스
         # ============================================================
+        _observe_modifier("begin", "supply_history_record", all_stocks)
         self._record_supply_demand(all_stocks)
+        _observe_modifier("end", "supply_history_record", all_stocks)
+        _observe_modifier("begin", "supply_accumulation", all_stocks)
         self._apply_supply_accumulation_bonus(all_stocks)
+        _observe_modifier("end", "supply_accumulation", all_stocks)
 
         # ============================================================
+        _observe_modifier("begin", "theme_leader_follower", all_stocks)
         # 7-5. 테마 대장주 독식 필터 (Winner Takes All)
         # 같은 테마 내 여러 종목이 있으면 점수 최고 1종목만 유지
         # ============================================================
@@ -2194,6 +2246,8 @@ class StockScreener:
                 logger.warning(f"[Screener] 테마 대장주 독식 필터 오류 (무시): {e}")
 
         # ============================================================
+        _observe_modifier("end", "theme_leader_follower", all_stocks)
+        _observe_modifier("begin", "catalyst_lifecycle", all_stocks)
         # 7-5b. 재료 생애주기 필터 (Buy the rumor, Sell the news)
         # LLM이 [confirmed] 태깅한 종목 + 급등 시 재료 소멸 감점
         # ============================================================
@@ -2225,6 +2279,8 @@ class StockScreener:
                 logger.warning(f"[Screener] 재료 생애주기 필터 오류 (무시): {e}")
 
         # ============================================================
+        _observe_modifier("end", "catalyst_lifecycle", all_stocks)
+        _observe_modifier("begin", "retail_only", all_stocks)
         # 7-6. 개인 순매수 + 기관/외국인 미순매수 감점
         # 스마트머니 없이 개인만 사는 종목 = 물량 넘기기 위험
         # ============================================================
@@ -2242,6 +2298,8 @@ class StockScreener:
             logger.debug(f"[Screener] 개인단독매수 감점 오류 (무시): {e}")
 
         # ============================================================
+        _observe_modifier("end", "retail_only", all_stocks)
+        _observe_modifier("begin", "overnight_regime", all_stocks)
         # 7-7. US 오버나이트 레짐 연동
         # bearish: 수급 없는 종목 강감점, 최소 점수 상향
         # bullish: 기관/외국인 수급 종목 가점
@@ -2274,7 +2332,9 @@ class StockScreener:
         # ============================================================
         # 8. 결과 정리
         # ============================================================
+        _observe_modifier("end", "overnight_regime", all_stocks)
         result = list(all_stocks.values())
+        _observe_modifier("begin", "final_etf_filter", result)
 
         # ETF/ETN/파생상품 제거 → 단일 종목만 추천 (개별 메서드 필터 후 잔존분 최종 정리)
         before_cnt = len(result)
@@ -2290,6 +2350,8 @@ class StockScreener:
         # 시총/지수 유니버스 필터
         # KOSPI500 + KOSDAQ150 + KOSDAQ 시총상위 200개 이외 소형주 제외
         # ============================================================
+        _observe_modifier("end", "final_etf_filter", result)
+        _observe_modifier("begin", "tradeable_universe_filter", result)
         if self._stock_master and hasattr(self._stock_master, 'pool') and self._stock_master.pool:
             try:
                 tradeable = await self._stock_master.get_tradeable_universe(
@@ -2313,6 +2375,8 @@ class StockScreener:
         else:
             logger.debug("[Screener] 유니버스 필터 스킵: stock_master 없음")
 
+        _observe_modifier("end", "tradeable_universe_filter", result)
+        _observe_modifier("begin", "minimum_price_filter", result)
         # 최소 가격 필터 (소형주/저가주 제외)
         if min_price > 0:
             before_price = len(result)
@@ -2324,6 +2388,8 @@ class StockScreener:
         # ============================================================
         # 점수 정규화 (소스 수 기반)
         # ============================================================
+        _observe_modifier("end", "minimum_price_filter", result)
+        _observe_modifier("begin", "occurrence_bonus", result)
         if result:
             if basis is not None:
                 observe_basis("before_bonus", result, source_counts)
@@ -2338,6 +2404,8 @@ class StockScreener:
                     bonus = 0   # 1개 소스
                 stock.score += bonus
 
+            _observe_modifier("end", "occurrence_bonus", result)
+            _observe_modifier("begin", "normalization", result)
             # 2. 0-100 범위로 정규화
             scores = [s.score for s in result]
             min_score = min(scores)
@@ -2359,6 +2427,10 @@ class StockScreener:
                 for stock in result:
                     stock.score = max(0.0, min(100.0, stock.score))
 
+        if not result:
+            _observe_modifier("end", "occurrence_bonus", result)
+            _observe_modifier("begin", "normalization", result)
+        _observe_modifier("end", "normalization", result)
         result.sort(key=lambda x: x.score, reverse=True)
 
         # 중복 reason 제거
@@ -2383,6 +2455,10 @@ class StockScreener:
                 for stock in fallback:
                     if capture_selection is True and stock.selection_basis is not None:
                         stock.selection_basis["cache_fallback"] = True
+                        if capture_selection_modifiers is not True and stock.selection_basis.get("version") == "kr-selection-basis-v2":
+                            from src.analytics.selection_basis import BASIS_FIELDS
+                            stock.selection_basis = {k:v for k,v in stock.selection_basis.items() if k in BASIS_FIELDS}
+                            stock.selection_basis["version"] = "kr-selection-basis-v1"
                     elif capture_selection is not True:
                         stock.selection_basis = None
                 return wrap_selection_sources(fallback, fallback=True)

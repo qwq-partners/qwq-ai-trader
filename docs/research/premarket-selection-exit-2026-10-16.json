@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "contract_id": "premarket-selection-exit-2026-10-16-v1",
+  "fixed_at": "2026-10-15T14:18:28+00:00",
+  "status": "design_revised_data_waiting",
+  "binding": {
+    "study_sha256": "39957565351aaab0ef4c4ce7f8461206118cb0af09719536a0bb7f0686d22024",
+    "deployed_engine_sha": "de6c5bf7f6528517d9d7a219ab2e76ba7b0ba581",
+    "profile": "20261016-llm-window-v1",
+    "evaluation_epoch": "2026-10-16-engine-llm-window-v1",
+    "capture_start": "2026-10-16T00:15:00+00:00",
+    "admission_end": "2026-10-16T00:25:00+00:00",
+    "capture_end": "2026-10-16T00:41:00+00:00"
+  },
+  "cohort": {
+    "unit": "scan_candidate_id",
+    "population": "every returned candidate in every sealed scan",
+    "preserve_duplicates_across_scans": true,
+    "require_selection_basis_for_every_candidate": true,
+    "require_entry_gate_trace_for_every_candidate": true,
+    "do_not_extrapolate_llm_first_five": true,
+    "missing_is_not_cash_or_zero_pnl": true
+  },
+  "source_ablation": {
+    "changed_variable": "removed_source_family",
+    "levels": [
+      "baseline_none",
+      "premarket_gap_and_kis_fluctuation_rank",
+      "naver_rise_rank_and_naver_new_high",
+      "kis_volume_surge",
+      "kis_institutional_buying",
+      "kis_new_highs",
+      "kis_foreign_buying",
+      "naver_volume_rank",
+      "theme_news",
+      "llm_news"
+    ],
+    "known_correlated_families": {
+      "premarket_gap_and_kis_fluctuation_rank": [
+        "premarket_gap",
+        "kis_fluctuation_rank"
+      ],
+      "naver_rise_rank_and_naver_new_high": [
+        "naver_rise_rank",
+        "naver_new_high"
+      ]
+    },
+    "one_family_removed_per_run": true,
+    "same_full_candidate_denominator": true,
+    "same_point_in_time_inputs": true,
+    "same_entry_exit_cost_contract": true,
+    "rerun_exact_deployed_scoring_and_joint_entry_gates": true,
+    "no_threshold_refit": true,
+    "no_independence_claim_for_remaining_sources": true
+  },
+  "score_bonus_shadow": {
+    "changed_variable": "occurrence_bonus_counting_unit",
+    "current": "raw_source_count",
+    "candidate": "known_input_family_count",
+    "same_selection_basis": true,
+    "other_scoring_and_thresholds_fixed": true,
+    "design_ready": true,
+    "economic_result_ready": false,
+    "does_not_establish_full_source_ablation_readiness": true
+  },
+  "economic_contract": {
+    "fees": "inherit exact bound study values",
+    "slippage": "inherit exact bound study values and evaluator-defined sensitivities",
+    "capital": "inherit exact bound study snapshot policy",
+    "entry": "inherit exact order_ready and first eligible KRX ask rules",
+    "outcome": "inherit exact 900-second KRX bid markout",
+    "cash": "allowed only for a deterministic policy rejection with complete inputs",
+    "aggregate": "complete delta is null if any cohort member is unknown",
+    "account_return": null,
+    "profitability_established": false
+  },
+  "exit_comparison_policy": {
+    "version": "same-entry-initial-stop-bid-v1",
+    "policy_ref": "premarket-selection-exit-2026-10-16-v1",
+    "study_sha256": "39957565351aaab0ef4c4ce7f8461206118cb0af09719536a0bb7f0686d22024",
+    "fixed_at": "2026-10-15T14:18:28+00:00",
+    "max_quote_gap_seconds": 5
+  },
+  "session_review": {
+    "version": "entry-session-review-v1",
+    "require_every_krx_quote_from_entry_through_horizon_inclusive": true,
+    "required_session": "KRX_REGULAR_CONTINUOUS",
+    "missing_or_unsupported_quote_makes_pair_unknown": true,
+    "available": false
+  },
+  "data_sufficiency": {
+    "required": [
+      "sealed complete journal bound to the study",
+      "all scan candidates with selection basis and source status",
+      "all candidate gate traces including deterministic accepted or rejected outcome",
+      "exact point-in-time inputs needed to replay source-dependent adjustments",
+      "order_ready quantity and capital snapshot for economic pairs",
+      "entry and 900-second KRX quotes",
+      "session review for every intermediate KRX quote"
+    ],
+    "pre_result_state": "unavailable_until_capture_is_sealed_and_reviewed",
+    "score_bonus_shadow_design_ready": true,
+    "score_bonus_shadow_economic_ready": false,
+    "full_source_ablation_ready": false,
+    "same_entry_exit_ready": false
+  },
+  "exit_comparison_notes": {
+    "gap_semantics": "conservative missing-path cutoff inspired by the capture freshness maximum; not a live stop tolerance",
+    "markout_max_delay_seconds": 5,
+    "markout_delay_is_distinct_from_inter_quote_gap": true,
+    "sparse_path_result": "unknown"
+  }
+}

@@ -10,6 +10,9 @@ telegram:
   enabled: true
 
 llm:
+  # 보고/한 줄 설명/후속 복기는 src/utils/llm_roles.py의 고정 역할 프로필을 사용한다.
+  # 아래 heavy/light 슬롯은 기존 진입·팀·시장 분석 등 task 경로에 계속 적용한다.
+  # 월 예산 원장은 두 경로가 공유하며 역할 실패에 자동 유료 승격은 없다.
   primary: gemini_flash_lite
   fallback: openai_gpt5_mini
   daily_budget: 5.0
@@ -18,6 +21,9 @@ llm:
   monthly_budget: 100.0
   budget_state_path: "~/.local/state/qwq-ai-trader/llm-budget.sqlite3"
   budget_policy_enabled: true  # 80% economy, 95% essential only, 100% paid stop; KST monthly restore
+  # User approved 2026-10-17: log missing amounts and continue; never record them as $0.
+  # Known spend, active reservations and certified timeout holds still count.
+  missing_cost_policy: log_and_continue
   # 2026-06-16: 모델명 config override (Dec 10, 2026 OpenAI GPT-5 snapshot deprecation 대비)
   # 코드 변경 없이 evolved_overrides.yml 또는 default.yml에서 모델 교체 가능
   # 빈 문자열 또는 키 없으면 LLMConfig dataclass 기본값 사용
@@ -30,7 +36,7 @@ llm:
   # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
   openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, Bull/Bear 토론 (light)
   gemini_model_heavy: "gemini-3.1-pro-preview"
-  gemini_model_light: "gemini-3.1-flash-lite-preview"
+  gemini_model_light: "gemini-3.1-flash-lite"  # Stable; retired preview must not receive new calls.
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl

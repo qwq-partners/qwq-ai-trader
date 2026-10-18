@@ -132,6 +132,7 @@ class UnifiedTradingBot:
 
         # 공유 토큰 매니저 (KR + US 동일 KIS API 키 사용)
         self._token_manager = None
+        self._comparison_worker = None   # 비교 작업자(기본 OFF) — 설치 시에만 값이 생긴다
 
         # KR 시장 컴포넌트
         self.broker = None                    # KISBroker
@@ -860,6 +861,13 @@ class UnifiedTradingBot:
                 install_production_recorder()
             except Exception as _rec_err:
                 logger.warning(f"[판단기록] 기록기 설치 실패 (판단 영향 없음): {_rec_err}")
+            # 모델 비교 작업자 — 기본 OFF. COMPARISON_WORKER=1 과 COMPARISON_EXPERIMENT_MANIFEST 가 둘 다 있고
+            # manifest.enabled=true 일 때만 별도 스레드로 시작해 cross_validator 에 비차단 전달을 연결한다.
+            try:
+                from src.analytics.model_comparison_worker import install_from_env
+                self._comparison_worker = install_from_env(engine_risk_manager._cross_validator)
+            except Exception as _cmp_err:
+                logger.warning(f"[비교작업자] 배선 실패 (판단 영향 없음): {type(_cmp_err).__name__}")
             # 자동매도 금지 종목 세트 주입 — 포지션 교체 축출 경로 가드 (2026-08-04 P0)
             # live set 참조라 이후 add/remove_exit_exempt 변경도 즉시 반영된다.
             if self.exit_manager:
@@ -1831,12 +1839,30 @@ class UnifiedTradingBot:
                 except Exception as e:
                     logger.error(f"KR WebSocket 종료 실패: {e}")
 
+            # 비교 작업자는 공유 월 원장을 쓰므로 LLM 매니저가 원장을 닫기 전에 최대 20초 drain 한다.
+            _worker = getattr(self, "_comparison_worker", None)   # 초기화 전 종료에도 안전
+            if _worker is not None:
+                try:
+                    _health = await asyncio.to_thread(_worker.stop, 20)
+                    logger.info(f"[비교작업자] 종료: drained={_health['drained']} finished={_health['finished']} "
+                                f"incomplete={_health['incomplete']} expired={_health['expired']}")
+                except Exception as e:
+                    logger.error(f"[비교작업자] 종료 실패: {type(e).__name__}")
+
             # Existing singleton only: bounded graceful drain before sessions close.
             try:
                 from src.utils.llm import close_llm_manager
                 await asyncio.wait_for(close_llm_manager(), timeout=10.0)
             except Exception as e:
                 logger.error(f"LLM 종료 실패: {type(e).__name__}")
+
+            # 마지막 LLM 호출의 기록까지 저장하되 추가 종료 대기는 최대 5초다.
+            try:
+                from src.analytics.llm_decision_record import close_decision_recorder
+                if not await close_decision_recorder(timeout=5.0):
+                    logger.warning("[판단기록] 종료 저장 미완료: 시간 초과 또는 기록 실패/파일 상한")
+            except Exception as e:
+                logger.error(f"[판단기록] 종료 실패: {type(e).__name__}")
 
             # 토큰 매니저 정리
             if self._token_manager:

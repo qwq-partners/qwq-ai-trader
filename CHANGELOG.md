@@ -7,6 +7,251 @@
 - 변형 가정: 로컬 RTX 5080 16GB+64GB는 LLM 지연/비용/메모리를 풀지만 KIS 세션·한도·한 계좌 두 프로세스 중복 주문·회전 구조는 못 푼다 → 오프라인 재생기/수집기 호스트, 운영 계좌 2호기 금지. KIS+토스 병렬은 관측 폭(41→+100종목)과 원천 교차 확인을 주지만 실행 가격은 KIS KRX 단일·토스 KRX+NXT/LOSSY 재표기 금지 → "병렬 판단"이 아닌 "병렬 관측".
 - 10-13 사전 확인: `t.me/s/<채널>` 공개 미리보기는 인증 없이 수집 가능(글 번호·게시 시각·`?after=`/`?before=` 페이지네이션), 운영 서버 접속 가능 여부는 미확인. 이 확인도 코드 변경 없음.
 
+## 2026-10-18 — 직접 KIS 계측 운영 배포·v4 관측 교체 완료
+
+- PR #216 고정 `a0bc9c94` 배포 rc0·PID2208722·NRestarts0·기동155초 정상. 로컬/PR/main/운영 전체7290 passed/2 skipped/2 xfailed·격리0·문법/비밀검사 통과, 독립 소스/실제 입력 리뷰 P0/P1/P2 0. 보호606경로와 기존 비용 행 보존.
+- v4 실제8파일·이전156파일/백업·소스/설정/PID 대조 완료,10월19일09:25 타이머 enabled/active·미소비. 별도 판독 소스398파일/manifest 사전검사 완료, 판독 미실행·미예약. 신규 계측에 기동 KIS 조회5건/오류0이 나타났으며 장중 절감/수익 효과는 미확정이다.
+
+- 사용자 즉시 배포 지시에 따라 PR #215의 직접 조회 계측과 일치하는 v4 활성화/설치 경로를 구현·설치했다. 고정 해시로 검증한 v3 트랜잭션을 재사용하고 기존 v1/v2/v3 입력·설치·백업156파일을 보존한다.
+- 설치 및 활성화 시 이전 세 예약의 정지·미소비를 재검사한다. 새 날짜/시간창 변경 없이10월19일09:25 활성화·09:30~09:40 입장·10:00 종료를 유지한다. 실패 시 과거 예약은 자동 재가동하지 않는다.
+- [PLAN→DO→SEE와 실제 운영 근거](docs/operations/selection-capture-2026-10-19.md#10월18일-직접-kis-계측-배포와-v4-교체). 구현·검증·배포·설치·실수집을 구분하며 매수 중지·월100·설정과 과거 원장을 보존한다.
+
+## 2026-10-17 — 시장자료·스크리너 KIS 직접 GET 계측 (운영 미배포)
+
+- 기존 브로커 집계에서 빠진 시장자료10곳·스크리너2곳의 GET 시도와 응답/오류를 별도 고정 차원으로 기록한다. 추가 요청·JSON 읽기·재시도 없이 캐시/휴장일 여러 조회/야간선물 대체 경로를 보존하고 네이버는 제외한다.
+- 상태 응답에 `kis_direct_requests`를 별도로 제공한다. 기존 `kis_requests`의 분모는 유지하고 본문/계좌/종목 등은 집계에 저장하지 않는다. non-200 본문의 코드·개별 송수신 시각·다른 프로세스는 범위 밖이다.
+- 검증: 로컬 전체7132 passed/2 skipped/2 xfailed·격리0·문법/비밀검사 통과. 전체 수집 뒤 추가한 개인정보1검사를 포함한 최종 관련26검사도 통과했고 독립 리뷰 미해결 P0/P1/P2 0이다. 최종 전체 건수는 PR/main CI 기록을 따른다.
+- [PLAN→DO→SEE와 운영 적용 경계](docs/integrations/external-apis.md#2026-10-17--시장자료스크리너-직접-get-계측-운영-미배포). 운영 `8003acbd`·월요일 수집 예약·준비한 판독 입력은 유지한다.
+
+## 2026-10-17 — 월요일 v3 판독 입력 준비
+
+- 기존 네 CLI 판독기의 검증된 소스와10월19일 v3 study/원장/월 판단 경로를 비공개 manifest로 고정했다. `--check`는 통과했고 미래 내용/봉인·판독 결과는 미확정이다. 출력·attempt 미생성, 자동 판독 미예약, 추가 증권사·유료 모델 호출 없음.
+- 후보가 있는 v3 자료의 실제 네 CLI 연결을 두 경우로 검증했다. 24단계 선정·판단/호가 결합·장 상태 결측·+899초 대신+900초 선택·세션 미검토·원본 보존을 확인했다. 통합7107 passed/2 skipped/2 xfailed·격리0·문법/비밀검사와 독립 리뷰 P0/P1/P2 0을 통과했다.
+- [질문별 판독 항목·실행 순서](docs/operations/selection-capture-2026-10-19.md#10월17일-후속--판독-입력-고정)를 기록했다. 운영 코드·고정 SHA·수집 예약은 변경하지 않았다.
+
+
+## 2026-10-17 — 대시보드 운영 배포·월요일 v3 관측 교체 완료
+
+- PR #212 고정 `8003acbd` 운영 배포 rc0·PID2140438·NRestarts0·복구ready·미체결0. PR/main/운영 전체7105검사와 독립 중요 리뷰 통과, 매수 중지·월100·unknown1/normal·설정/기존 원장 보존. 새 v3 실제 입력 검토·check/apply·사후 검사 완료,10월19일09:25 예약·미수집. 전후180초 브로커 HTTP시도 51→4; 장중/전체 경로·순수익 효과는 미확정.
+- PR #211의 대시보드 KIS 조회 절약·출처 계측을 사용자 승인으로 운영에 반영하기 위해 별도 v3 관측 설치 경로를 구현·설치했다. 기존 v1/v2 입력·설치·백업68파일을 보존하고 두 이전 타이머의 정지/미소비를 확인한다.
+- 원래09:25 활성화·09:30~09:40 입장·10:00 종료를 유지한다. 새 SHA/PID/설정/소스 지문은 실제 배포 후 고정했고, 설치·예약 완료와 향후 실수집을 구분한다.
+- [PLAN→DO→SEE 및 운영 근거](docs/operations/selection-capture-2026-10-19.md#10월17일-대시보드-배포와-v3-교체). 매수 중지·월100·미확인 비용 로그 후 계속·운영 진화 수정 보존.
+
+## 2026-10-17 — 대시보드 KIS 조회 절약·출처 계측 (운영 미배포)
+
+- PLAN: 무접속/휴장 전광판 반복 조회를 줄이고 요청 출처와 시세 TR을 구분한다.
+- DO: SSE 무접속 수집 중단, HTTP/SSE 공용 표시용 KR 캐시(장중10초·휴장300초·동시호가10초), 날짜/세션 갱신, 동시 요청 합치기, 실패/빈 응답 쿨다운과 원 조회 시각 보존. 미국 지수/거래 가격 경로는 분리한다.
+- DO: 브로커 시세 작업3종/TR3종·대시보드 source2종·일봉 페이지·EGW00201 집계. direct HTTP는 기존 범위 밖이다.
+- SEE: 최종 전체7043 passed/2 skipped/2 xfailed·격리 위반0·문법/비밀 검사 통과, 관련61검사·실제 서버 연결/UTC7검사·JS3경우 확인. 독립 Sol/high 요청 리뷰 P0/P1/P2 0, 실제 모델 metadata 미노출. [설계·흐름·실측 한계](docs/integrations/external-apis.md#2026-10-17--대시보드-kis-조회-절약출처-계측-운영-미배포). 운영846c3215·월요일 v2 고정 입력 보존, 배포/재시작/예약 변경 없음.
+
+
+## 2026-10-17 — 주간 복기 실측·월요일 준비 재확인
+
+- 09:30:42 주간 매도 복기 시작→09:31:21 보고서 저장, 표본10(사후 분류: 놓침0/회피10/중립0). 역할 감사에서 요청/응답 모델 `gpt-6.1-sol`, 요청 추론 medium, 정상 응답·입력1164/출력1681(추론405 포함)·36.708초·추정USD0.01972를 확인했다. 수익성이나 청산 우수성을 입증하는 결과로 승격하지 않는다.
+- shadow/승격점검/수확 주간 리포트의 발송 완료 로그, 모니터링43/SQL12·게이트 분석401건/7종 완료를 확인했다. 별도13:57 후속 스냅샷에서 기존 unknown1·원장 행/설정 보존, 월 정책 normal·진행 중 예약0·복구ready·미체결/정체0을 확인했다.
+- 월요일 v2 새8파일/기존24파일·소스/설정 지문·PID2076300·NRestarts0·09:25 예약·미소비 상태 유지. 이번 점검은 읽기 전용이며 배포/재시작/점검용 증권사·유료 LLM 호출/새 알림 발송 없음.
+- KIS 로그78줄을39개 거절로 중복 제거(현재가36/일봉3). 최근1초 호출 수와 마지막 임의 송신 이후 시간을 실제 송신 간격으로 해석하지 않는다. [PLAN→DO→SEE·원인 귀속 한계·다음 순서](docs/operations/selection-capture-2026-10-19.md#10월17일-오후--주간-복기-실행-확인). 이 문서는 운영에 재배포하지 않는다.
+
+## 2026-10-17 — 비용 미확인 로그 후 계속 정책
+
+- 사용자 명시 요청에 따라 운영 설정에 `missing_cost_policy: log_and_continue`를 추가했다. 과거/신규 미확인 금액은unknown·actual=null로 보존하고 합산에서 제외하며 호출을 허용한다. 원장 초기화·0원 대사는 없다.
+- 확인된 비용·활성 예약·인증 보류액·80/95/100 정책과 저장 손상/상한 위반 방어는 유지한다. 상태/감사/기존 정책 알림에 미확인 개수를 표시하며 공급자 비용 제출을 재개 조건으로 삼지 않는다.
+- 실제 task 폴백 한 번·다음 호출 허용을 연결하고, 미확인 뒤 JSON/빈 응답/섀도우 연쇄 호출과 인증·권한/안전 거절 우회를 제한한다. 최종UTC전체7034passed/2skipped/2xfailed·격리0·문법/비밀검사 통과, 독립 중요소스 두범위와 문서리뷰 지적을 종결했다. PR #208을 `846c3215`로 병합·배포했고 PR/병합 후 CI와 운영 전체검사도 각각7034 passed/2 skipped/2 xfailed로 통과했다.
+- 03:08:35 KST 기동 후162초 점검에서 PID2076300·NRestarts0·복구ready·미체결/정체0·매수 중지·기존 원장/설정 보존을 확인했다. 기존 unknown1/actual=null 유지, 월 정책 normal·새 Gemini 정산1건·초기 오류0. 실제 timeout 폴백은 이 운영 구간에서 발생하지 않았다.
+- 03:14:44 새10월19일 v2 설치 rc0, 03:17:30 사후 검사 rc0. 새8파일·기존24파일/백업·고정 소스/설정·PID 불변, 타이머 enabled/active·다음 실행10월19일09:25·미소비/미수집 확인. 이전 v1은 중지/미소비로 보존했다. 문서 후속은 재배포하지 않는다.
+- [PLAN→DO→SEE·배포/새월요일 관측 순서](docs/research/gemini-timeout-fallback-2026-10-17.md#10월17일-사용자-결정--비용-미확인-로그-후-계속). 아래 엄격한 기존unknown 차단은 변경 전 이력이다.
+
+## 2026-10-17 — PR #207 배포·기존 관측 예약 중지
+
+- PR #207/main `f844d9d6`을02:25:18 KST 배포·기동했다. 운영 전체6918 passed/2 skipped/2 xfailed·격리0·문법/비밀정보 검사 통과, 배포rc0·자동 롤백 없음. 기동154초 뒤 PID2047470·NRestarts0·복구ready·미체결0·KR매수중지를 확인했다.
+- 기동 모델은 정식Lite·월100, 환경/진화 수정·과거 원장/관측 보존. 새timeout 보조표0행이며 기존unknown1/blocked 유지, 예상된 테마 비용 차단ERROR1·그 외 오류/Traceback0. 실제 유료 폴백 성공은 아직 미확인이다.
+- 새SHA와 맞지 않는10월19일v1 타이머만02:20:48 disabled/inactive로 전환했다. 원본 입력/설치/백업과 미소비 상태 보존, 현재 월요일 자동 관측 없음. 기존unknown 근거 처리와 새profile/epoch 검토 후 재준비한다.
+- [PLAN→DO→SEE·검증·남은 순서](docs/research/gemini-timeout-fallback-2026-10-17.md#10월17일-운영-후속--plan--do--see). 독립 중요 운영 리뷰의 가드 결함을 보완했고 후속 문서는 운영에 재배포하지 않는다.
+
+## 2026-10-17 — Gemini 시간 초과 비용 보류와 폴백
+
+- 정식Flash-Lite의 단일 텍스트 요청 상한을 전송 전에 기록하고, 명시 시간 초과에서는 실제비용null·unknown을 유지한 채 가용 예산에 보류액을 반영한다. 대체OpenAI 호출은 별도 입장/예약을 거친다.
+- 일/월 예산·시도 기록·알림에 미확정 보류를 분리하고, JSON후속/섀도우 추가 호출을 제한한다. 취소/고아/불완전 사용량/기존unknown은 자동 해제하지 않는다.
+- 개발 기본 모델을stable로 변경하고 종료preview의 새 월 예산 입장을 거부한다. 과거 원장/보고용 추정 요금은 보존한다.
+- UTC전체6918passed/2skipped/2xfailed·격리0·문법/비밀검사 통과. 독립 중요 리뷰의 월 경계/거절 P1두건과 감사 P2한건을 수정해 최종 미해결P0/P1/P2없음.
+- [PLAN→DO→SEE·검증·운영 미배포/남은 복구](docs/research/gemini-timeout-fallback-2026-10-17.md). 이번 유료 호출·운영 원장 변경·배포·재시작·예약 변경 없음.
+
+## 2026-10-17 — 주말 설정 대조·유료 호출 보류 진단
+
+- 금요일 진화 반환·토요일 리밸런싱 오류/주차소비와 고정 소스/설정/설치 지문을 대조했다. 월요일09:25 예약은 유지하되 유료 판단 준비 완료와 구분한다.
+- Gemini 테마 분석120초 시간 초과로 미확정 비용1건·월 정책 차단을 확인했다. 한도 소진이 아니며 공급자 근거 없는0원/예약 추정 정산·재시작 해제를 하지 않는다.
+- KIS 리미터 경고와 API 재시도 경고의 중복 집계를 제거해221건을 브로커 계측과 대조했고, 직접HTTP500 6건은 별도 미분류했다. 관련 오프라인125검사 통과·격리 위반0, 코드/운영/예약/비용 원장 변경 없음.
+- 공급자 화면은 일별 합계만 확인되어 요청별 정산 근거는 미확보다. 미확정 비용의 별도 점유는 미구현·미승인 설계안으로 분리하고 과거 건 자동 소급/차단 해제를 금지했다.
+- [PLAN→DO→SEE·증거·복구 우선순위](docs/operations/selection-capture-2026-10-19.md). 문서 후속 커밋은 고정 운영에 재배포하지 않는다.
+
+## 2026-10-16 — 선정 근거 배포·10월19일 관측 설치
+
+- PR #204/main `2046e729` 운영 배포,15:57 기동 PID1969596·NRestarts0. 운영 전체6877검사·문법/비밀정보/격리검사 통과, 복구ready·미체결0·매수 중지·월100 보존.
+- 고정 실제 입력 독립 중요 리뷰와 check/apply rc0 후10월19일09:25 단발 예약 설치.09:30~09:40 입장·10:00 종료, 새 once 미소비·실수집 미완료. 과거4입력 백업·소비된 drop-in만 제거, 설치 중 추가 재시작0.
+- 주말 자동 진화/리밸런싱 뒤 설정 지문 대조가 필요하다. 변경 시 활성화는 재시작 전 실패하되 시도가 소비되며 자동 재설정/재시도하지 않는다. KIS 요청 제한은 배포 전부터 발생한 별도 운영 진단 항목이다.
+- [PLAN→DO→SEE·실제 영수증·남은 작업](docs/operations/selection-capture-2026-10-19.md). 이 문서 후속 커밋은 운영에 재배포하지 않는다.
+
+## 2026-10-16 — 휴장 전 연결 검증·선정 근거·다음 관측 후보
+
+- 실제 스케줄러/엔진/교차 검증/LLM 응답/원장/900초 가격 평가/브로커 매수 중지의 연결 시험을 추가한다. 외부 입력은 합성이며 자연 표본·실제 체결/수익 증거가 아니다.
+- 명시 `selection-basis-v3`에 원문 수급의 양수/관측된 비양수/미관측, 순서가 있는24단계 점수 기록, SPDI의 미관측 감점만 억제하는 국소 비교를 추가한다. 과거 v1/v2·기존 후보/점수/호출 수는 유지한다. 정규화 기본0·순위 미등장·빈 캐시는 관측된0으로 바꾸지 않는다.
+- 10월17일 토요일을 제외한10월19일 후보 설치기를 별도로 준비한다.09:25 준비·09:30~09:40 입장·10:00 종료, 새 v3/1,800초 lease만 요구하고 소비된10월16일 증거와 역사 설치기는 보존한다. 실제 설치/예약/배포는 하지 않았다.
+- [PLAN→DO→SEE·시험·독립 리뷰·자원 근거·남은 순서](docs/research/selection-evidence-followthrough-2026-10-16.md). 이번 작업의 유료 모델/브로커 호출·운영 변경 없음, KR 매수 중지·월100·유료 비교OFF 유지.
+
+## 2026-10-16 — 실측 판독과 후속 LLM 시간 방어
+
+- 07:35 역할·08:50 장전·09:45 판독 성공 확인. 봉인 원장 재생과 전날 고정한 원천계열 보너스 대조: 두 반환 후보 모두점수80미달, 보너스 변경0·LLM시작0·후보호가0. 가격/청산/모델 수익 비교는 미완료다.
+- 신규 LLM 관측의09:15 허용이 후속 교차검증09:30 하드 가드와 어긋남을 확인했다. `700494a0`의 설치 runtime/관련 시험5파일로 새 설치만09:30 하한으로 보완하고 과거 원장 해석·실거래 시간/점수는 유지한다. 전체6698검사·독립 중요 리뷰 통과.
+- [PLAN→DO→SEE·검증·운영 보존·다음 순서](docs/research/llm-capture-readout-2026-10-16.md). 운영de6c5bf7·매수 중지·월100·유료 비교OFF 유지, 이번 배포/재시작/새 예약 없음.
+
+## 2026-10-16 — 장전 단발 판독·점검과 비교 계약
+
+- 10월15일23:40 KST 독립 시스템 타이머07:35/08:50/09:45 설치·대기 확인, 고정 소스92a6dcae·설치 영수증 보존. 전체6690검사·독립 리뷰 통과, 보호 지문334개와 봇/기존 예약 불변 확인. 실제 점검·관측/계좌 수익 판정은 미완료다.
+
+- 기존 4개 CLI를 고정 순서로 호출하는 비공개 단발 판독기: 실제 시각/날짜·study/source SHA·중복/동시 실행·snapshot·입출력/메모리/시한 검사, 미봉인·결측·실패를 순수익과 분리한다.
+- 아침 역할 감사/발송 버전 연결 및 장전 코드·설정·예약·로컬 health 읽기 점검. 미래 기록·미전송·거절·중복 비용을 성공으로 취급하지 않는다.
+- 기존 KIS 권리23파일/8행 및 청산29건 집합 재대사, 현재 선정 입력 결함 감사, R1 비용/지문 재확인, 같은 진입 청산5초 공백 계약을 기록했다. 거래 점수/주문/모델 비교 활성화 변경 없음.
+- [PLAN→DO→SEE·검증·설치 상태](docs/operations/premarket-followthrough-2026-10-16.md). 운영 de6c5bf7와 기존09:10관측을 유지하며 개발 커밋은 재배포하지 않는다.
+
+## 2026-10-15 — 모델 역할 배포·10월16일 관측 예약 완료
+
+- PR #200을 `de6c5bf7`로 운영 배포, PR/main CI와 배포 verify6633검사 통과. 22:29 기동 후162초 점검에서 오류0·미체결0·복구ready, KR 매수 중지/기존 예산 기준선/수정 evolved 보존.
+- 실제 최종 소스와 과거 소비 증거를 묶어 독립 검토·설치 check/apply rc0,10월16일09:10 타이머 enabled/active 확인.09:15~09:25 입장·09:41 종료, 설치 시 추가 bot 재시작/Toss 시작 없음. 과거 원장/연구/once/시작영수증 보존, 소비된 drop-in만 원본 백업 후 정리.
+- [실행 지문·검증·다음 PLAN→DO→SEE](docs/research/engine-model-allocation-2026-10-15.md). 이 문서 후속 커밋은 예약의 HEAD 고정을 위해 운영에 재배포하지 않는다.
+
+## 2026-10-15 — 엔진 역할별 LLM·보수적 비용 집계
+
+- 보고 설명/아침 보고를 정식 Gemini 3.1 Flash-Lite/minimal, 주간 매도 후속 복기를 GPT-6.1 Sol/medium으로 분리하고 역할별 입력·출력·시간·예산을 고정했다. 기존 진입/진화 모델과 매수 중지는 유지한다. 새 경로의 불완전·거절 응답을 실패 처리하고 모델/지연/사용량 감사 기록을 남긴다.
+- OpenAI 자동 캐시 쓰기 상한과 Gemini 3.8/Argon 할인 종료 후 요금을 새 비용 추정에 반영했다. 과거 정산과 10월13일 R1 초안은 보존하고 재산출 초안을 별도 disabled 파일로 작성했다.
+- 전체 verify **6633 passed / 2 skipped / 2 xfailed**, rc0·격리 위반0·비밀정보 검사 통과. 독립 Astra/xhigh 요청 리뷰 APPROVE(P0/P1/P2 0); 실제 reviewer metadata 미노출. [공식 근거·실호출·배포/예약 상태](docs/research/engine-model-allocation-2026-10-15.md).
+
+## 2026-10-15 — 자동 판독 대조·10월16일 단발 관측 준비
+
+- Claude 09:35 자동 판독의 실제 완료·모델/비용·텔레그램·cron 제거를 대조하고, 관측 입장 밖 스캔과 기록기 지연 생성에 대한 해석을 보완했다. 기존 실행기의 재사용 전 P1/P2 보강 항목을 기록한다. [정본·검증·후속 순서](docs/operations/llm-capture-followup-2026-10-16.md).
+- 이전 관측은 보존하고 새 고정 날짜/epoch의 설치기·활성화 연결을 구현했다. 신규201·관련UTC/KST873씩·전체UTC6541검사, 문법/비밀정보/격리 검사 통과. 개발 검증과 운영 설치를 분리하며 새 배포/예약/유료 재실행은 하지 않는다. 최종 리뷰/CI는 정본을 따른다.
+
+## 2026-10-15 — 실측 판독·LLM 관측 창의 공통 진입 시간 검증
+
+- 원본 판독에서 후보3건 모두 `entry_time` 차단, LLM시작0·후보호가0·가격 비교쌍0을 확인했다. 09:00~09:10 관측 입장과 실제09:15 진입 시작의 불일치이며, 호가3,515건은 후보와 무관하다. [근거·PDS·미설치 후속안](docs/research/llm-capture-readout-2026-10-15.md).
+- 실행일 매크로 일정에 의존하던 계좌 손실 한도 시험은 해당 시험의 달력 조건만 고정했다. 실제 위험 관리·매매 코드는 그대로다.
+- LLM 관측 설치 전 전체 입장 구간의 공통 진입 시간 포함 여부와 horizon+최대 호가 지연을 넘는 종료 여유를 검증한다. 거래 게이트·과거 원장 재생·소비된10월15일 profile은 보존한다. 최종 전체UTC6340·후속UTC/KST102씩·독립 최종/재리뷰 P0/P1/P2 0·비밀정보 검사 통과. PR/병합 후 CI는 해당 PR을 따른다. 운영 배포·새 예약 없음.
+
+## 2026-10-15 — 가격 평가기의 LLM 관측 형식 호환성
+
+- `received_entry_input.py`에서 사전 검증된 LLM 시작/배정·원문 장 상태 레코드를 수용하고, 명시 장 상태 수집 계약의 `H0STMKO0` 구독 수명을 검사한다. 기존 원본 해시·순서·후보 분모와 주문 준비·장 상태 검토·첫 호가 조건은 유지한다.
+- 실제 수집기와 봉인 원장을 사용하는 신규6·관련KST237·전체UTC6328검사와 독립 리뷰(P0/P1/P2 0)를 통과했다. 기존 분석 결과 바이트 동일·검토 없이 비교 불가·명시 검토 후 비용별 비교쌍 생성 확인. [PDS·검증 결과·후속 실측](docs/research/profitability-kickoff-2026-10-14.md#10월15일--가격-평가기-연결-보완). 전략·수집기·운영 배포·예약 변경 없음; 가격 비교 가능과 순수익 입증은 구분한다.
+
+## 2026-10-15 — 순수익 개선 일정·관측별 판독 준비
+
+- 사용자 승인 우선순위를 [실행 일정](docs/superpowers/plans/2026-10-14-profitability-priority-schedule.md)으로 고정하고 [착수/검증 기록](docs/research/profitability-kickoff-2026-10-14.md)에 기존294검사·설치study 대조·월 전체 판단 혼입 공백을 남긴다.
+- P1의 정확한 관측 신호별 판단 분리·결측 판독을 `report_capture_readiness.py`로 구현했다. 비동기 기록 미확정·null 신호 제외·봉인/전체 시간 범위/경제성 분리, 신규11·전체UTC6322·KST관련89검사와 독립 리뷰 통과. 기존 수집 타이머 외 후속 AI 자동 실행은 미등록이며, 운영5444509·매수 중지·월100·유료 비교OFF·10월15일 수집을 유지한다.
+
+## 2026-10-14 — main Verify의 작업자 시험 동기화 수정
+
+- 문서 PR #194 병합 후 main `29b5bbb`의 Verify에서 모델 비교 시험 1건이 DB 조회 오류로 실패했다. 실행 중 외부 DB polling을 가짜 공급자 진입 Event로 바꾸고, 종료 후 정확한 입장 ID 집합을 확인한다.
+- 제품 예산/DB 보호는 그대로다. 통제 잠금 반례 실패→통과, 관련 45건·반복 40건·전체 6311건 통과, 비밀정보 검사 통과·독립 리뷰 승인. [원인·검증·최종 상태 정본](docs/operations/llm-capture-2026-10-15.md#plandosee--2212-main-verify-실패-후속). 운영 배포·재시작·예약 변경 없음.
+
+## 2026-10-14 21:59 KST — 단발 LLM 관측 운영 배포·예약 완료
+
+- PR #193/main `5444509` 운영 배포: 로컬/CI/운영6311 passed, 실제 Claude Opus5 종결 승인, PID1720809·NRestarts0·복구ready·pending0·판단 기록 활성.
+- 최종 보유 상한512MiB, 복사 전 검증·쌍 원자성 보호. 대표108,804건 저장/봉인·드롭0 실측과 전체검사 근거는 [정본](docs/operations/llm-capture-2026-10-15.md).
+- 10월15일08:55 활성화/09:00~09:10 최초5종목 입장/09:26 종료 단발 예약 설치, 실제 수집은 아직 없음. 설치 중 재시작0, 새8파일·과거4백업 검증, 소비된 drop-in만 정리.
+- 매수 중지·월100 기존 원장·유료 비교OFF 유지. 후속 문서 변경은 main에만 반영하며 고정 예약을 보존하기 위해 운영 재배포하지 않는다.
+
+## 2026-10-14 — 단발 LLM 관측의 보유 메모리 상한
+
+- 실제 BOOK 파서의 대용량 원문이 저널 거부 뒤에도 메모리에 남는 경로를 재현했다. LLM 관측의 복사 전 검증·512MiB 보유 상한·원자적 판단/배정 쌍 보호 및 실제 준비 상태 검사를 보강한다.
+- [자원 실측·PLAN→DO→SEE·운영 배포/설치 결과](docs/operations/llm-capture-2026-10-15.md). 대표 합성 부하와 실제 시장 유량, 구현/병합과 배포/예약을 구분한다. 기존 주문 경로·예산·매수 중지·비교OFF 유지.
+
+## 2026-10-14 — 최초 LLM 판단 5종목의 단발 관측 설치 경로 (운영 미배포·미예약)
+
+- 10월15일 08:55 준비, 09:00~09:10 입장/09:26 종료를 고정하고 기존 REST 상태 보존·50,000/50,000/8,000 기록 할당·사전 배포 SHA·이전 소비 자료를 검사하는 별도 설치기를 추가한다. 디스크 여유·배타 설치·실패 disarm·재시도 금지를 검증한다.
+- 현재 프로세스의 RiskManager/관측 callback 연결·실효 자원·초기화된 운영 구독 수요·현재 피드/소켓/ACK를 확인한다. 기존의 단순 window 준비 판정으로 새 profile을 통과시키지 않는다. 종료 중 이전 ACK가 남는 독립 리뷰 반례도 회귀로 추가했다.
+- [PDS·검증·독립 리뷰·다음 순서](docs/research/llm-capture-installer-2026-10-14.md) · [PR #192 최종 검증/CI/병합 정본](https://github.com/qwq-partners/qwq-ai-trader/pull/192). --check의 payload 검사와 apply의 runtime 검증을 구분하며 RAM 안전/수익성은 미검증이다. 운영 배포·설치·유료 비교는 실행하지 않았다.
+
+## 2026-10-14 — 기존 REST 현재가의 장 상태 근거 보존 (기본 OFF·운영 미배포)
+
+- 추가 증권 API 요청 없이 `get_quote`의 상태 원문·응답종목·논리 호출 시작/반환 시각을 제한된 스냅샷으로 보존한다. 공식 문서 지문·null 거래소 시각/순번을 기록하고 N/00을 정상으로 판정하지 않는다.
+- 명시 `runner-llm-window-v1`의 `rest_market_state_evidence:true`에서만 기존 rest_quote에 저장한다. 과거 연구 형태·기존 가격 반환·WS/경제성 게이트를 보존한다.
+- strict 원장 조인에 별도 원문 가용성·결측 사유를 추가한다. 최신 결측/손상·종목 불일치·시각 역전·동률·노후 자료는 제외하며 항상 UNKNOWN이다.
+- [PLAN→DO→SEE·공식 근거·흐름·검증](docs/research/rest-market-state-evidence-2026-10-14.md): 관련244검사 통과. 시계 오류로 가격 반환이 사라지는 반례2건도 격리했다. 최종1538d29 전체6122 passed(rc0)·KST107·격리0·실제 Claude Opus5 독립 종결 APPROVE(P0/P1 0). 비차단4의견 판정·리뷰 시간초과 진단·최종 [PR #191/CI·병합](https://github.com/qwq-partners/qwq-ai-trader/pull/191)은 PR 정본으로 확인한다. 운영 배포/새 설치/실수집은 별도다.
+
+## 2026-10-14 — 파일럿 실측 판독·시장 상태 시각 정합화 (운영 미배포)
+
+- 08:55 예약 활성화와09:00~09:05 원장 판독: complete·드롭0·호가903/체결상태856/장운영0. 세 채널 ACK와 실제 수신을 구분하고, 시간 의미/상태 충분성을 봉인 성공과 분리한다.
+- 첫 market_state의 수신 시각을 observed_at에도 복사해 앞선 구독 observed 기록보다 역행하는 원인을 재현했다. 실제 수신 시각은 보존하고 복사/발행 시각을 별도로 기록하도록 수정했다. 최초/배치 프레임 red→green, 시계·창 경계 포함 신규13케이스와 관련403검사 통과. 통합bf97cb4 전체6047 passed/2 skipped/2 xfailed(rc0)·격리 위반0, Codex·실제 Claude Opus5 독립 리뷰 차단 결함 없음(비차단 의견과 시계 확인은 정본). 최종 CI/병합은 PR #190 정본 참조.
+- 체크리스트에서 예약에 따른 정상 PID 변경과 미래 수집/보존기간 정리 타이머를 구분했다. 장운영은 VI 사건 채널이므로 초기 상태 근거 없이 관측 기간만 늘리지 않는다. 미래 LLM 관측의 날짜별 설치기는 추가 구현이 필요하다.
+- [PLAN→DO→SEE·실측 근거·검증·남은 순서](docs/research/market-state-pilot-readout-2026-10-14.md). 운영 재시작·배포·새 관측/유료 비교 활성화 없음.
+
+## 2026-10-14 — PR #190 종료·비용 복구·보고 결함 6건 수정 (운영 미배포·유료 비교 OFF)
+
+- 저장 지연 중 `stop()`이 복구 저널을 먼저 닫던 문제를 수정하고 작업자별 저널 ID/중복 번호 검사를 추가한다. 입장 전 종료는 실행 표본에서 제외한다.
+- 예약 COMMIT 후 반환 전 오류에도 요청·슬롯의 토큰 연결을 보존하며, 생성 전 거절도 검증된 대사 결과로 비용을 복구한다. 원래 응답·추정 비용과 재전송 금지는 유지한다.
+- incomplete 저널의 손상·결손·미종료 증거를 보고서에 전달하고 총지출을 null로 둔다. 최종 리뷰의 추가 P2(종료 표식 드롭 누계 누락)도 실제 큐 포화 회귀로 수정했다. 집계 가능한 부분합과 원래 추정액 사용 여부, 저널 중복/충돌 진단을 별도 보존한다.
+- [PLAN→DO→SEE·검증과 남은 순서](docs/research/model-comparison-review-fixes-2026-10-14.md). `fcabf73` UTC 전체 6034 passed / 2 skipped / 2 xfailed(rc 0), 문법·비밀정보 검사 통과·테스트 격리 위반 0. 독립 Codex 재리뷰와 실제 Claude Opus5 종결 리뷰에서 차단 결함 없음. 운영·예약 변경, 실제 비교 호출 없음.
+
+## 2026-10-13 — 실시간 비교 준비 2차 수정: Codex 독립 리뷰 반례 7건(P1 5·P2 2) 반영 (PR #190 갱신·운영 미배포·유료 비교 OFF)
+
+- **#1 호출 전 일/크기 제한(W-A)**: 정책 v2 에 `pairs_per_day`·`max_common_context_bytes`(기본값 없음) 추가. 러너 `_claim` 의 입장 트랜잭션 안에서 KST 당일 입장 수(`admission_day`)를 세어 초과면 `comparison_daily_pair_cap`, 입력 바이트 초과면 `comparison_input_too_large` — 차단된 쌍은 `model-comparison-pair-blocked-v1` 마커 행으로 고정해 다음날 자동 재실행 없음. 작업자 `offer()` 도 전송 전에 같은 조건으로 거부(`rejected_daily_pair_cap`/`rejected_input_too_large`), 당일 입장 수는 `start()` 때 원장에서 읽어 재시작 후 유지. manifest `execution_policy` 에 `pairs_per_day:1`·`max_common_context_bytes:16384`.
+- **#2 복구 무결성(W-A)**: `_verify_attempt` 가 `error` 유무로 검사를 건너뛰지 않고 저장 응답의 모든 키·실패 시도의 차단 사유/상태를 대조, 행 전체를 러너와 같은 `finalize_row` 로 재계산해 일치 요구, `restore_pair_result(..., evidence_path)` 는 작업자 incomplete 저널에 같은 sha256 행이 있을 때만 복원(변조 행 17종 거부 시험).
+- **#3 폴백 체인 시한(W-A)**: `PairSpec.fallback_chain_timeout_seconds`(필수)로 폴백 루프 전체를 하나의 `asyncio.timeout` 으로 감싸 운영 `SINGLE_FALLBACK_TIMEOUT` 의미(체인 합산 10초)와 일치. 봉투 `role_controls`·manifest 키 동일, 불일치는 `rejected_control_mismatch`.
+- **#4 영속 저널(W-A)**: 작업자 `journal_dir`(기본 `~/.cache/ai_trader/comparison_worker/`)의 `offers-YYYY-MM.jsonl`(offer 봉투 전체·상태 전이)·`incomplete-YYYY-MM.jsonl`(저장 실패 원래 행, 복구 증거). 운영 루프는 큐에 넣기만, 작업자 스레드가 fsync 기록, `stop()` 이 저널을 먼저 비움. `read_offer_journal`/`read_incomplete_journal`(상한 초과는 오류).
+- **#5 최신 장 상태 우선(W-B)**: 채널별 최신 레코드를 먼저 고르고 그 레코드가 미자격·빈 값·다른 연결/세대·시각 불명이면 `latest_record_unqualified:<tr>` 로 unknown — 옛 정상값 대체 금지.
+- **#6 경제성 근거 일관성(W-B)**: arm admission 의 `snapshot_id == sizing_snapshot.ref`, `anchor_at == row[anchor]`, 모든 게이트 `as_of` tz-aware·≤ anchor(`ADMISSION_SNAPSHOT_MISMATCH`/`ADMISSION_ANCHOR_MISMATCH`/`ADMISSION_GATE_FUTURE`/`ADMISSION_GATE_TIME_INVALID`).
+- **#7 비용 집계(W-B)**: 시도별 대사액 우선 → 추정 → unknown(`original_estimated_usd`·`reconciled_usd`·`unknown_attempts`·`lookup_failed_attempts`), 그날 모든 행의 고유 attempt 1회 집계(같은 판단 여러 실행 `pair_runs`·`prior_pair_ids`), blocked 마커 행은 excluded 분모. `build_daily_report(offer_records=)` 로 저널 레코드에서 모집단/제외 유도, CLI `--daily --offers`.
+- **통합(코디네이터)**: E2E 를 작업자 저널 산출물 기반으로 교체(테스트 전용 메모리 캡처 제거), 반례 회귀 2건 추가(1쌍/일 두 번째 판단·재시작 뒤 세 번째 판단 호출 전 차단, 64바이트 상한 입력 거부), manifest `known_control_differences` 문장 정정. 검증: 재리뷰 2회차 지적 5건(P1 2: 생성 전 거절이 unknown 정산으로 공유 원장을 차단·pair 행 밖 유료 시도 지출 누락, P2 3: 저널 결손 무시·`event.price or 0`·문서 placeholder/시도별 시한 문장) 반영 — `ComparisonAttemptResult.settlement`(`rejected_before_generation` → 예약 `rejected` 해제·과금 0·lookup `known`), `guard.day_attempts`/`read_day_attempts`(원장만 남은 시도 집계, pending/unknown·incomplete 저널 쌍이 있으면 `total_usd` null), CLI `--incomplete`·`--budget-db`·저널 부재 오류·`offer_journal.complete`, sizing 은 None 만 0. 최종 head 기준 로컬 전체 `scripts/dev/verify.sh`(UTC): **5960 passed / 2 skipped / 2 xfailed**, rc 0, 문법·비밀정보 검사 통과, 격리 위반 0. KST 관련 17파일 607 passed rc 0. 변경 .py 27파일 `py_compile` rc 0, `git diff --check` 통과, dry-run rc 0. 회귀: 1쌍/일 두 번째·재시작 뒤 세 번째 판단 호출 전 차단, 64바이트 상한 입력 거부, 거절 전 생성 뒤 운영 예약 성공, 원장 밖 시도/incomplete/저널 결손 보고, 빈 가격 거부. 재리뷰 2회차(P1 2·P2 2) 반영: 같은 attempt_id 의 원장 정산/대사액(`day_attempts`·`--budget-db`)이 pair 행 추정액보다 우선(`ledger_cost_used_attempts`, 미확정 원장 상태는 unknown), 작업자가 실행 당시 거부한 봉투는 보고서 한도와 무관하게 그 사유로 부적격(`offer_statuses`), CLI `--experiment-manifest` 로 입력 나이·일 표본·입력 크기 한도를 보고에 적용(`selection_limits.source`), 저널 완전성 증거(`run_id`+파일별 `journal_seq` 빈틈·`journal_drop` 마커·비음수 정수 검증, 증거 없으면 `complete=false`), 문서 일치. 재리뷰 3회차(P1 2·P2 2) 반영: 판단별 최초 접수 결과 보존·`rejected_duplicate` 는 제외 사유가 아닌 별도 집계(`duplicate_offers_rejected`), 응답 없이 끊긴 시도의 예약을 대사하면 `known_reconciled` 로 지출 확정(응답 복구 없음·같은 ID 재호출은 `BudgetBlocked` 유지), `journal_seq` 를 파일별로 부여해 월 분할·incomplete 스트림을 유실로 오판하지 않음, 미리보기의 완료 건수와 저널 완전성 Boolean 분리. 재리뷰 4회차(P1 1·P2 3) 반영: 보고서 표본 선정이 작업자 실행 이력을 따름(`started` 이후 판단이 먼저 표본, 수락 뒤 실행 전 `expired` 는 그 사유로 제외 — 슬롯 반환과 일치), 저널 종료 표식 `journal_close`(파일별 `final_seq`·실패/드롭 누계)로 끝부분 유실·열린 run·빈 파일을 완전 판정에서 제외(`open_runs`/`closed_runs`/`write_failures`), 저널 집계를 KST 날짜로 먼저 필터(전날 중복/제외가 섞이지 않음), `nonce`·`decision_id` 는 None 만 기본값이고 빈 값은 거부. 재리뷰 5회차(P0/P1 0·P2 4) 반영: 같은 수신 시각·번호에 내용이 다른 장 상태 기록은 입력 순서와 무관하게 `conflicting_records:<tr>` unknown, 설치기가 manifest `max_input_age_seconds`(0<x≤60 검증)를 작업자에 전달해 보고서와 같은 한도, 원장 시도의 `block_reason` 도 중단 조건 집계에 포함. 재리뷰 6회차(P1 1·P2 4) 반영: 시도 ID↔예약 토큰 연결을 **예약과 같은 트랜잭션** 안에서 영속(`reserve(link_reservation=)`, authorizer 로 `comparison_*` UPDATE 만 허용 — 별도 쓰기 트랜잭션 없이 호출 중 강제 종료 뒤에도 예약 대사가 `known_reconciled` 로 연결), 전이 레코드에 원장 입장 여부 `admitted` 를 기록해 보고서 표본은 `finished` 또는 `admitted=True` 만 실행으로 인정(claim 전 실패·`started` 는 제외 사유로만), 장 상태 충돌 판정을 채널별 최신 키 확정 뒤 전체 비교로 바꿔 순열 불변, `validation_verdict or verdict`·`recorded_at or at` 제거. 재리뷰 7회차(P0/P1 0·P2 3) 반영: 중단 조건에 공유 원장 사유 `unresolved_usage`·`reservation_bound_breach` 포함, 장 상태 분류 `max_age_seconds` 는 유한·하루 이내만(무한/NaN/과대값은 예외 없이 unknown). 최종 검증 수치는 코드 head `5cb1cd5` 기준 로컬 전체 `scripts/dev/verify.sh`(UTC, 워크트리): **5977 passed / 2 skipped / 2 xfailed**, rc 0, 문법·비밀정보 검사 통과, 격리 위반 0. KST(`TZ=Asia/Seoul`) 관련 19파일 649 passed rc 0. 변경 .py 27파일 `py_compile` rc 0, `git diff --check` 통과, dry-run rc 0. 이전 단계 수치(5885/5956/5960/5963/5966/5970/5973/5976)는 각 중간 커밋의 결과이며 이 줄이 최종이다. 이 문서 커밋은 코드 변경 없음. PR CI 는 PR #190 기록.. PR CI 는 PR #190 기록.
+- 개발 라우팅: W-A·W-B 요청 claude-opus-5/high, metadata 표시 `claude-opus-5-5`, effort 미노출. 애플리케이션 유료 호출 0, 운영 변경 0. 병합·배포·활성화는 사용자의 Codex 재리뷰 뒤 결정.
+
+## 2026-10-13 — 실시간 비교 준비: 예산 보호·판단 전 입력 봉투·비교 작업자·진입 조건/장 상태·R1 실험 명세 (PR 대기·운영 미배포·유료 비교 OFF)
+
+- **Task1 예산 보호·비용 복구(W1)**: `MonthlyBudgetLedger.reserve(admission_check=)` — 같은 `BEGIN IMMEDIATE`·같은 units 안에서 읽기 전용(SQLite authorizer) 검사. `ComparisonExecutionPolicy` v2(`experiment_usd_ceiling`·`valid_from/until`·`required_policy_mode=normal`, 저장 v1 정책은 `comparison_policy_mismatch`). 거부: `comparison_policy_disabled`/`_mode_not_normal`/`_experiment_expired`/`_economy_threshold`(이번 예약 포함 80% 초과)/`_experiment_ceiling`(실험 ID 전체 예약+정산+unknown 합), 기존 95%/100% 보호 유지. `guard.lookup` 에 `reconciled`·`original_estimated_cost_usd`·상태 `known_reconciled`(기존 대사 CLI 감사 행 연결, 원래 응답 불변). 신규 `model_comparison_recovery`(`inspect_attempt/inspect_pair/restore_pair_result/export_incomplete_pair` — 원래 행·manifest·시도 ID·원장 상태 일치 시만 `result IS NULL` 복구, 현재 시각 생성 없음). 월 전환·재시작·ID 변경이 실험 상한을 되살리지 않음을 시험. 시험 34+7건(80/95/100 경계·정책 비활성·동시 예약·스레드/fork 손실·대사 중복/변조/오래된 preview·쌍 복구 성공1/거부6, 변이 11/11 검출).
+- **Task2 판단 전 입력·ID·출처(W2)**: `decision_id` 를 공통 입력·역할 조건 확정 직후·공급자 await 전 한 번 생성해 판단 기록(`decision_record(decision_id=)` 호환 인자)·신호 메타·봉투·쌍 행에 전파(ContextVar, 동시 판단 격리). `comparison-input-envelope-v1`(`model_comparison_input`): 공통 입력·역할/폴백 조건(운영 adversarial 값 복사)·중립 수량·생산자(run/pid/code/source/config 지문)·`input_available_at/handed_off_at/received_at`·`envelope_sha256`·같은 프로세스 난수 HMAC attestation(파일 봉투는 `caller_supplied_not_attested`). 훅은 기본 OFF·비차단·실패 시 판단/fail-open/soft-reject 불변. 평가 기준시각 v2: 쌍 행 `model-comparison-pair-v2`(`input_available_at`·`enqueued_at`·`requested_at`·`evaluation_anchor`·`queue_delay_ms`/`provider_latency_ms`), `paired_live_shadow` 는 anchor=`input_available_at`+attestation 필수, v1 행은 `requested_at`(legacy) 의미 유지.
+- **Task3 비교 작업자(W2)**: `ComparisonWorker`(전용 스레드+자체 루프, 큐 8·입력 나이 5초·동시 1쌍·종료 시한 20초, 카운터 offered/accepted/rejected_*/expired/started/finished/incomplete). 재시작 시 큐 미완료 자동 재실행 없음·같은 ID 재전달은 캐시 회수(공급자 호출·예약 0)·다른 명세는 `comparison_pair_manifest_mismatch` 로 거부. 런처는 `COMPARISON_WORKER=1`+`COMPARISON_EXPERIMENT_MANIFEST` 둘 다 있고 manifest `enabled:true` 일 때만 생성(기본 OFF, 미설정 시 변화 없음), 종료 시 LLM 매니저 종료 **전** drain. `scripts/dev/comparison_worker_dryrun.py`(가짜 공급자·임시 원장, rc 0).
+- **Task4 장 상태·진입 조건(W3)**: `model_comparison_admission.replay_admission`(스냅샷·`replay_policy_sizing` trace 로 재생 가능한 게이트만 passed/failed, 보유/pending/쿨다운/매수 중지/증권사 한도 등 외부 상태는 unknown → `admissible` None), `classify_market_state`(같은 연결·세대의 H0STCNT0 20/N/0/2 + H0STMKO0 112·VI N·종목상태 중립일 때만 normal_continuous; 결측·빈 값·오래됨·다른 세대·미지 코드·충돌은 unknown/not_normal; 코드 의미는 저장소 가이드 해시 833b…/4c76… 와 KIS 포털 공개 원문으로 확정, `TRHT_YN`(MKO)·`EXCH_CLS_CODE`·51~54/59 등은 미확정). `compare_policy_outcomes` v2: anchor 선택, arm 별 admission·market_state 게이트 통과 시만 계산, `assumptions` 명시(호가 잔량≠체결/VWAP/슬리피지).
+- **Task5 R1 실험 명세·일별 보고(W3)**: `config/experiments/R1-bull-reasoning-20261013.json`(**`enabled:false`**, Bull gpt-5-mini minimal/400↔low/400, Bear flash-lite 400/temp 0, 폴백 gpt-5.6-sol→gemini-3.1-pro 100, 1쌍/일·동시 1, 최악 10시도/쌍, 쌍당 예약 상한 $0.4700590(예약 추정식+단가표), 실험 상한 $9.4011800=20거래일×1쌍, 유효 10/15~11/11, 공통 입력 ≤16,384바이트, 선정/제외/중단 규칙, 작업자 키 `execution_policy` 등). `model_comparison_daily_report.build_daily_report`(offered/eligible/sampled/complete/excluded 분모·결측 사유·모델/추론·큐/공급자 지연·arm 별 응답 뒤 가격·수량·원래/대사 비용·조건부 경제성·고유 attempt 1회 집계·`telegram_preview` 문자열만), `scripts/report_model_comparison.py --daily`.
+- **Task6 통합(코디네이터)**: 소유권/인터페이스 계획 `docs/superpowers/plans/2026-10-13-live-comparison-implementation-plan.md`, 통합 보정(러너/작업자/dry-run 정책 v2·`policy_enabled=True`, manifest 작업자 키), E2E `tests/test_live_comparison_e2e.py`(훅→작업자→공유 예산→판단 기록→쌍→합성 호가/상태 조인→진입 조건→경제성 게이트→일별 보고, 실험 ceiling 전송 전 차단, unknown 비용→대사→`known_reconciled`·보고, 재시작 무과금), [10월14일 판단 체크리스트](docs/operations/pilot-decision-checklist-2026-10-14.md). 검증 수치는 아래 "검증" 항목.
+- **검증**: 통합 head 기준 로컬 전체 `scripts/dev/verify.sh`(UTC, 워크트리): **5885 passed / 2 skipped / 2 xfailed**, rc 0, 문법·비밀정보 검사 통과, 테스트 격리 위반(운영 상태·외부 네트워크) 0. KST(`TZ=Asia/Seoul`) 관련 17파일 532 passed rc 0. 변경 .py 26파일 `py_compile` rc 0, `git diff --check` 통과. dry-run `scripts/dev/comparison_worker_dryrun.py` rc 0. PR CI 결과는 PR 기록을 따른다. PR #189 의 5758 수치는 재사용하지 않았다.
+- **개발 라우팅**: 워커 3명 모두 요청 claude-opus-5/high, 세션 metadata 표시 모델 `claude-opus-5-5`, 실제 effort 미노출(미확인). 코디네이터 Claude. 애플리케이션 유료 LLM/증권 API 호출 0, 운영 변경 0(`161b394`·PID 1114252·10/14 08:55 예약·매수 중지·월 $100 집계 불변). 병합·배포·유료 비교 활성화는 사용자의 Codex 독립 리뷰 뒤 별도 결정.
+- 정본: [W2 입력·작업자](docs/research/model-comparison-live-input-2026-10-13.md) · [W3 R1 실험·진입 조건·보고](docs/research/model-comparison-experiment-R1-2026-10-13.md) · [W1 복구 절차(러너 문서 갱신)](docs/research/model-comparison-runner-2026-10-13.md) · [인계 원문](docs/superpowers/plans/2026-10-13-live-comparison-claude-handoff.md). 계좌 시작 순자산·입출금·권리 금액 대사와 KODEX200/반도체 제외 벤치마크는 별도 미완 과제.
+
+## 2026-10-13 — 비교 호출 복구·판단 전 사이징·paired worker (운영 미배포)
+
+- 안정 ID와 전체 요청 지문, 응답 선저장/원장 대조 회수로 동일 비교의 재전송을 막는다. 일시 SQLite 잠금에는 같은 응답 저장만 제한적으로 재시도하며 월 정산은 맹목적으로 반복하지 않는다.
+- 실제 LLM 직전 현금·예약·기존 배율·위험/오버레이를 기록하고 동일 엔진 사이징 함수를 격리 재생한다. 이후 위험 게이트가 통과했다고 간주하지 않는다.
+- 명시 단일 공급자 어댑터·같은 Bull 역할 비교·공통 Bear·별도 예약된 재시도/폴백·완성 결과 회수를 연결했다. 읽기 전용 보고서는 각 응답 뒤 첫 호가/공통 종료 시세를 연결한다. 운영 자동 연결/유료 호출 없음.
+- 최종 UTC 전체5758 passed/2 skipped/2 xfailed, KST 관련147 passed, 문법·비밀 검사 통과, 테스트 격리 위반0. 실제 Claude Opus5 독립 리뷰7회에서 응답 저장 잠금·비용 원장 장기 잠금·정산 실패 증거·폴백 공백 처리 등을 반영하고 통합 가능 판정으로 종결했다. CI/병합 상태는 아래 정본을 따른다.
+- [PDS·검증·독립 리뷰·복구와 남은 작업](docs/research/model-comparison-runner-2026-10-13.md). 운영161b394/10월14일 예약/매수 중지/기존 월100 유지, 배포하지 않는다.
+
+## 2026-10-13 — LLM 대상 관측·예산 경계·실제 수량 정책 비교(66차 후속, 운영 미배포)
+
+- 새 `runner-llm-window-v1`은 기존 LLM 검증 직전 최초5종목의 호가/장 상태 구독을 비차단 요청한다. 우회 신호는 슬롯을 쓰지 않고 반복 종목은 최초 배정에 연결한다. 기존 signal-window/H1/기술 파일럿은 유지한다. 명시 호가·상태·기타 몫+스캔 메타데이터의 합산 용량과 원장 재생/identity를 검증한다. 이전 40,000행 초안은 폐기한다.
+- 비용 계산의 음수·비정수·bool·NaN/Inf를 거부한다. 비교 호출 가드는 명시 주입한 기존 월 원장과 불변 정책으로 KST 일별 공급자 시도 한도→월 예약→단일 전송→정산을 연결한다. 재시도·폴백 포함, 불명 과금/취소 보존, 기존 기준선 불변. 실제 공급자 어댑터/자동 실행은 연결하지 않았다.
+- 새 `model_comparison_outcome` 순수 계산기는 선행 사이징 스냅샷·판정별 정책 재생 최종 수량·개별 응답 뒤 가격·고정 공통 종료·명시 거래비용/환율로 조건부 가격 손익 차이를 낸다. reject를 전량 거절로, 판단 후 수량을 중립 수량으로 사용하지 않는다. 누락 행은 null/사유 보존, 입력 참조만으로 원본·체결·수익성을 인증하지 않는다.
+- 모델/추론/출력 한도의 단일요인 비교로 C 계약을 정정했다. 계산상 비교 쌍 수와 실제 일 시도 한도를 구분한다. 권리8건 의미/지급 대사·시작NAV/외부 입출금을 과거 조회 확대보다 우선한다.
+- [PDS·통합 검증 기록](docs/superpowers/plans/2026-10-13-comparison-evidence-remediation.md). 최종 UTC 전체5640통과/2 skipped/2 known xfailed·문법/비밀검사 rc0, KST 관련181통과, 운영/외부 접근0. 경제성 입력 처리P2 두 건과 관측 쌍 기록·무전송 예산 고아 P1을 재현·수정했다. 관측/예산은 실제 Claude Opus5/high 요청 독립 재리뷰에서 통합 승인. 실제 비교 연결 전 중복 재전송·불명 비용 복구 등 P2는 계획에 명시했다. 최신 CI/병합 상태는 [PR #188](https://github.com/qwq-partners/qwq-ai-trader/pull/188)의 검증 기록을 따른다. 운영 `161b394`·10월14일 예약·기존 수정 설정·매수 중지·월100 기준선 보존. 이번 운영/API/유료 비교 호출 없음.
+
+## 2026-10-13 — 권리조회 수집·동시 관측 초안·모델 비교 비용(66차, PR #186 main `45c4742` 병합·운영 미배포)
+
+- **A. KIS 기간별계좌권리현황(CTRGA011R) 읽기 전용 수집**: `KISBroker.get_period_rights`(공식 샘플 파라미터, 리미터는 `_api_get` 재시도마다), `src/analytics/kis_period_rights.py`(월 창 분할·응답 헤더 `tr_cont` 로 전체 페이지 회수·`complete/empty/partial_max_pages/partial_page_repeat/error/malformed` 엄격 구분(dict 아닌 행·알 수 없는 tr_cont·문자열 아닌 연속조회 키는 malformed)·원본 페이지 전체 보존·권리유형별 Decimal 합 집계, 해석 없음), `scripts/ops/kis_period_rights.py`(장중 거부, **`connect()` 를 쓰지 않는 조회 전용 연결 — 운영 실행 원장을 열지 않고 봇과 같은 토큰 캐시를 읽기만 하며 유효하지 않으면 새 발급 없이 중단**, 출력 디렉터리 본인 소유·0700 검증, 파일 0600, 표준 출력은 상태·행 수). `CTRGA011R` 을 `LEDGER_TR_IDS` 에 추가. 재리뷰 반영: 복구 경로도 캐시 토큰만 읽는 `ReadOnlyTokenProvider`(재발급·approval key 없음), 전송 직전마다 장 시작 여유 재검사(`max(margin, 3×timeout+15s)` — 내부 재시도까지 덮음), **봇 가동 중 장외도 기본 거부·`--allow-bot-running` 은 `--min-interval` ≥2.1초일 때만**(별도 프로세스는 봇 리미터를 공유하지 않음), aborted 창 뒤 남은 창 중단·부분 산출물 보존. 4차 리뷰 P1·P2 반영: `systemctl is-active` 는 **확인된 정지(rc 3·inactive/failed)만** 정지로 믿고 조회 실패·전환 상태는 가동 중 취급, 응답 헤더 `tr_cont` 누락은 `partial_missing_header`(완료 집계 제외·CLI rc 1), `api_calls` 를 응답 페이지 수 `pages_fetched`(전송 전 중단 제외)와 브로커 계측의 실제 HTTP 전송 횟수 `http_attempts`(재시도 포함, `CTRGA011R` 을 계측 allowlist 에 추가, 계측 불가면 None)로 분리. 5차 리뷰 P1 반영: 명시 우회가 없으면 **매 전송 직전 봇 상태를 재검사**해 수집 도중 자동 재시작·예약 기동이 있으면 `aborted:BotStartedStop` 으로 중단하고 확보한 창을 보존한다. 6차 리뷰 P1·P2 반영: 재검사를 `_api_get` 이 **재시도마다** 부르는 `_rate_limit` 뒤에 걸어(`_install_send_guard`) 5xx/타임아웃 재전송 직전에도 장중·봇 상태를 보고(남는 경쟁 창은 systemctl 응답~전송 사이 한 요청), `--allow-bot-running` 의 간격 ≥2.1초 검증은 봇 상태와 무관하게 수행. C 문서에 표의 max 가 조건부 추정이며 실행 상한(실측 토큰·원장 출력 2배 예약 기준)과 다름을 명시. 7차 리뷰 P1 반영: `--min-interval` 을 같은 가드에서 **모든 전송**(내부 5xx/401/타임아웃 재시도 포함)에 적용 — 503 뒤 재시도가 리미터 기본 1.05초가 아니라 지정 간격 뒤에 나간다. 8차 리뷰 P2 반영: 연속조회 키 반복으로 중단한 페이지의 행은 집계에서 제외(`rows_excluded_from_totals`, 원본 보존), CLI 가 저장소 `.env` 를 읽고(`override=False`) `KIS_APPKEY`/`KIS_CANO` 없으면 KIS 호출 전에 중단. 9차 리뷰(병합 가능, P2 2) 반영: 비어 있지 않은 출력 디렉터리는 첫 API 호출 전에 거부, 실조회 기록의 호출 수 표기를 '응답 페이지 22개·HTTP 전송 횟수 미확인'으로 통일. 시험 17건. **실조회 1구간(2025-01-01~2026-10-01) 완료**: 22창 complete 3/empty 19, 8행(권리유형 `03` 7·`04` 1), 응답 페이지 22개(실제 HTTP 전송 횟수는 당시 코드가 계측하지 않아 미확인), 봇 로그 한도 오류 0 — 가동 가드 도입 전 코드로 봇 가동 중 1.2초 간격으로 돌았음을 기록. 2024년 이하는 미실행. 상태·건수는 계좌 기준선 문서 "실조회 기록" 절, 금액은 비공개.
+- **B. 판단·호가 동시 관측 준비**: 기존 `runner-signal-window-v1` + `channels.market_state_evidence=true` 가 이미 신호 단계 관측·3채널 배정·같은 세대 수용·용량 검사를 갖춘 것을 확인하고, 10월8일 study 를 복사한 초안(버퍼/큐 40,000·상태 레코드 30,000·저장 상한 2.7GB·창 01:00→01:30→01:50Z)이 실제 `CapturePlan.load` 를 통과함을 확인(미설치). 판독 규칙(판단 0·상태 미수신·구독 지연·재연결·용량 초과·조기 종료)을 사전 고정. [설계](docs/research/concurrent-observation-design-2026-10-13.md).
+- **C. 모델 비교 비용 계획**: `src/analytics/model_comparison_budget.py`(공표 요율을 Decimal 로 직접 계산·1e-9 올림, expected(×1.1)와 max(역할별 2회+단일 폴백의 **공급자 체인 전체** 합산) 분리, 상한은 max 기준, 단가 없음은 None), 원장 가용 $99.70·예비 50%·잔여 18일 기준 후보 3안의 비교 상한(max 기준 일 60~99쌍, expected 참고 176~475)과 보고서 계약 `model-comparison-report-v1` 초안. 교차 공급자 리뷰(Codex 러너, 요청 gpt-6-astra/high) 1차 P1 2(CLI 가 실행 원장 개방·토큰 매니저 누락)·P2 7, 재리뷰 P1 2(복구 경로 토큰 재발급·장중 진입 미재검사), 3차 P1 1(장외도 봇 계좌 조회와 충돌)·P2 2(폴백 공급자 체인 비용·내부 재시도 여유), 4차 P1 1(봇 상태 조회 실패 시 허용)·P2 3(헤더 누락 완료 판정·호출 수 불일치·표의 현행 max), 5차 P1 1(수집 도중 봇 기동 시 차단 무효), 6차 P1 1(내부 재시도 미재검사)·P2 2(우회 간격 검증 누락·max 의 실행 상한 근거), 7차 P1 1(내부 재시도의 최소 간격 미적용), 8차 P2 2(반복 페이지 중복 집계·.env 미로딩), 9차 P2 2(출력 디렉터리 재사용·호출 수 표기) 반영 — 9차는 P0/P1 0·병합 가능 판정. 유료 비교 호출·운영 모델 변경 없음. [계획](docs/research/model-comparison-plan-2026-10-13.md). 시험 3건.
+- 운영 `161b394`·10월14일 08:55 파일럿 예약·매수 중지·예산 원장(사용 $0.296083, 예약 0) 불변.
+
+## 2026-10-13 — 응답 뒤 호가 수신 시각 보정·판단 기록 정상 종료
+
+- `decision-quote-join-v2`: 실제 `received_at`으로 첫 호가/같은 연결·세대의 직전 상태를 선택하고 관측 복사·거래소 시각을 별도 보존한다. 수신 누락/시간대 없음/시계 역전·동률은 평가 불가다. 수신 및 복사 지연 한도도 검사한다. 과거 복사 시각으로 응답 전 호가나 이후 상태를 평가에 섞지 않는다.
+- `DecisionRecorder` 종료 경계·지연 제출 거절·유한 drain, runner의 LLM 정리 뒤 최대5초 저장 대기를 연결했다. 실제 저장 실패/상한/시간 초과는 성공으로 표시하지 않는다. 기록기 미사용 시 새 인스턴스를 만들지 않고 이벤트 루프·default executor를 막지 않는다.
+- KIS 공식 계좌 권리 TR `CTRGA011R` 발견을 문서화했다. 실제 계좌 기간 조회·세전/세후 금액 및 보존기간 검증은 미완료이며, 일반 입출금/과거 시작 NAV와 구분한다.
+- 최종 UTC verify5443 passed/2 skipped/2 known xfailed, 문법·비밀 검사 rc0·운영/외부 API 접근0. 일반 독립 리뷰와 실제 Claude Opus5/xhigh 요청의 중요 변경 종결 APPROVE, SIGTERM/SIGINT 종료 중 재요청 검사 포함.
+- [PDS·검증·다음 실측/우선순위](docs/research/decision-quote-receipt-time-2026-10-13.md). PR #183/184는 main7037717에 병합된 상태로 정정한다. 운영161b394·10월14일 고정 기술 파일럿·매수 중지·월100 기존 원장 보존. 이후 새 판단/호가 동시 관측이 필요하며 이번 운영 배포 없음.
+
+## 2026-10-13 — 판단 기록 ↔ 관측 원장 조인 도구(65차, PR 대기·운영 미배포)
+
+- `src/analytics/decision_quote_join.py` + `scripts/report_decision_quotes.py`: `llm-decision-v1` 의 `decision_available_at` 이후 같은 종목 **첫 `ws_quote`**(지연·ask·수량·bid·거래소 시각)와 그 시점 이전 마지막 `market_state`(status·verdict·장 구분·거래정지·VI 코드) 를 붙여 판단별 행과 요약을 낸다. ask≤0/수량≤0/지연 초과(기본 60초)/장 상태 없음·raw 아님/판단 뒤 호가 없음을 `reasons` 로 남기고 `evaluable` 은 자료 충족일 뿐 체결 가능성·순수익 판정이 아니다. 장 상태 어휘는 해석하지 않고 보고한다.
+- 원장 시각 계약: tz 없는 `observed_at` 은 UTC naive 로 읽고 현재 시각으로 대체하지 않는다. `--study-sha256` 을 주면 기존 strict 리더로 해시 체인을 검증하고 `complete`·`incomplete_reasons`·`dropped_records` 를 보고서 `ledger` 에 보존하며, **미검증(`ledger_unverified`)·미완전(`ledger_incomplete`) 원장에서는 어떤 행도 evaluable 로 세지 않는다**. 장 상태는 호가와 같은 `connection_id`·`generation` 의 기록만 채널(tr_id)별 최신 1건씩 보존한다(체결 채널 H0STCNT0 과 장운영 채널 H0STMKO0 의 필드를 합치지 않음; VI 채널이 없으면 `market_state_vi_channel_missing`, 나이 초과는 `market_state_stale:<tr>`, 채널별 필수 필드(정지·VI·장운영 코드)가 결측/빈 문자열이면 `market_state_fields_missing:<tr>:<fields>` — `"0"` 은 유효값으로 보존). 시각이 손상된 원장 레코드는 조용히 버리지 않고 그 종목의 판단을 `ledger_record_time_invalid` 로 평가 불가 처리하며 요약에 종목별 건수를 싣는다. 시간 한도 인자는 유한한 0 이상 값만 받는다(NaN·음수 거부). 교차 공급자 리뷰(Codex 러너, 요청 gpt-6-astra/high) 1차 P1 1·P2 3, 재리뷰 P1 1·P2 2, 3차 P2 2(읽기 한도 누적 검사·부분 기록 거부, 빈/형식 오류 SHA 는 미지정이 아닌 오류) 반영. 네트워크·운영 상태 접근 없음, 입력 불변.
+- 시험 10건(첫 호가 선택·UTC 해석·미검증/미완전 원장·사유·실제 `parse_market_state` 출력으로 두 채널 교차 수신·재연결 전 상태 배제·빈 필드 vs "0"·손상 시각·NaN/음수 한도·누적 읽기 한도·CLI SHA/NaN 거부·로더/요약). 10월8일 실제 원장에 합성 판단 1건(005490, 10:25:23.3 가정)으로 스모크 실행: 0.578초 뒤 첫 ask 313,000원·813주를 찾았고 그 원장에는 `market_state` 레코드가 없어 `market_state_unknown`(실제 판단 기록은 64차 배포 뒤, 장 상태는 73차 관측부터).
+- 운영 `161b394`·10월14일 관측 예약·매수 중지 불변.
+
 ## 2026-10-13 — LLM 판단 재생 기록·계좌 기준선 결측 확정(64차, PR 대기·운영 미배포)
 
 - **B. 판단 기록(`llm-decision-v1`)**: `src/analytics/llm_decision_record.py` 신설. `cross_validator.llm_second_check` 가 `signal_id` 를 받아 공통 입력 원문·역할 프롬프트 지문·Bull/Bear/단일 폴백 시도별(요청/실제 모델·시각·지연·토큰·추정 비용·예산 모드·**예약 토큰**·결과 분류)·판단 결과·`decision_available_at` 을 월별 JSONL 에 append 하고, 엔진이 `event.metadata.llm_decision`(decision_id·record_status) 을 `signal_events` 에 남긴다. `LLMResponse.budget_reservation_token` 추가(정산 시 기록). 기록은 유한 큐+스레드로 판단을 지연시키지 않고, 시도 기록 생성 예외도 판정을 바꾸지 않는다(`record_error` 행). `record_status` 는 큐 수락 결과이며 저장 결과는 `status_of`·월 파일·`/api/health.llm_decision_record` 로 확인한다. `LLMManager` 가 한 호출의 실제 공급자 시도(재시도·폴백)마다 trail 을 쌓아 응답에 붙여 비용·예약 토큰 누락이 없고, Bull/Bear 는 역할별 완료 시각으로 부분 타임아웃을 구분한다. 비용은 Decimal 문자열, 결측은 None. 기본 기록기는 옵트인, 운영 런처가 켠다(`LLM_DECISION_RECORD=0` 끔). 모델·추론·프롬프트·판정·예산 정책·fail-open 불변. 응답 뒤 첫 호가는 관측 원장과 오프라인 조인(별도 소켓 없음). [설계·흐름·한계](docs/research/llm-decision-record-2026-10-13.md), 시험 27건. 교차 공급자 리뷰(Codex, `scripts/dev/codex_review.sh`, 요청 gpt-6-astra/high) 1차 P1 2·P2 3, 재리뷰 P1 1·P2 3, 3차 P1 1·P2 2, 4차 P2 3(미확인 사용량 토큰 None·취소 응답 메타를 timeout 행에 보존·`or` 패턴 제거) 반영(취소·예외에서도 trail·예약 토큰 보존 — `wait_for` 가 취소를 TimeoutError 로 바꾸므로 폴백 호출도 슬롯에 보존, 직렬화 예외 집계·`ensure_ascii`, 단일 폴백 일반 예외 기록, 공통 입력 구성 시각 `collected_at` 분리, 잘못된 시각은 write_error, `or` 기본값 제거). 시험 27건.

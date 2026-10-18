@@ -11,11 +11,14 @@ from aiohttp import ClientError
 
 SOURCES = frozenset({"startup", "portfolio_sync", "portfolio_sync_consistency_retry",
                      "fill_check", "batch_guard", "dashboard_external_accounts",
-                     "dashboard_settlement", "unknown"})
+                     "dashboard_settlement", "dashboard_sse_indices",
+                     "dashboard_http_indices", "unknown"})
 OPERATIONS = frozenset({"account_summary", "positions", "external_positions",
-                        "daily_fills", "open_orders", "orderable_cash", "other"})
+                        "daily_fills", "open_orders", "orderable_cash", "quote",
+                        "overtime_quote", "daily_prices", "other"})
 TR_IDS = frozenset({"TTTC8434R", "TTTC8908R", "TTTC8001R", "TTTC8036R",
-                    "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R", "other"})
+                    "TTTC0081R", "TTTC0084R", "TTTS3012R", "VTTS3012R", "CTRGA011R",
+                    "FHKST01010100", "FHPST02300000", "FHKST03010100", "other"})
 OUTCOMES = frozenset({"success", "http_error", "api_error", "network_error",
                      "cancelled", "invalid_json", "other"})
 _source = ContextVar("kis_request_source", default="unknown")
@@ -38,7 +41,7 @@ class RequestMetrics:
         rows = self.logical if table == "logical" else self.http
         if key not in rows:
             fields = ("calls", "cache_hits", "cache_misses") if table == "logical" else (
-                "attempts", "retries", "egw00215", *sorted(OUTCOMES))
+                "attempts", "retries", "egw00201", "egw00215", *sorted(OUTCOMES))
             rows[key] = dict.fromkeys(fields, 0)
         rows[key][field] += 1
 
@@ -132,9 +135,11 @@ def record_http_attempt(tr_id, attempt):
         _increment("http", key, "retries")
 
 
-def record_http_result(tr_id, outcome, egw00215=False):
+def record_http_result(tr_id, outcome, egw00215=False, *, egw00201=False):
     key = _http_key(tr_id)
     _increment("http", key, _label(outcome, OUTCOMES, "other"))
+    if egw00201:
+        _increment("http", key, "egw00201")
     if egw00215:
         _increment("http", key, "egw00215")
 
@@ -145,11 +150,11 @@ def http_attempt(tr_id, attempt):
     record_http_attempt(tr_id, attempt)
     finished = False
 
-    def finish(outcome, rejection=False):
+    def finish(outcome, egw00215=False, *, egw00201=False):
         nonlocal finished
         if not finished:
             finished = True
-            record_http_result(tr_id, outcome, rejection)
+            record_http_result(tr_id, outcome, egw00215, egw00201=egw00201)
 
     try:
         yield finish

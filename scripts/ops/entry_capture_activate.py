@@ -97,12 +97,116 @@ def activation_profile(name):
             datetime(2026,10,13,23,55,tzinfo=timezone.utc),
             datetime(2026,10,13,23,57,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261015-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261015-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261015-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261015-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261015-llm-window-v1-entry-capture.conf'),
+            '2026-10-15-engine-llm-window-v1',
+            datetime(2026,10,14,23,55,tzinfo=timezone.utc),
+            datetime(2026,10,14,23,57,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
+    if name == '20261016-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261016-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261016-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261016-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261016-llm-window-v1-entry-capture.conf'),
+            '2026-10-16-engine-llm-window-v1',
+            datetime(2026,10,16,0,10,tzinfo=timezone.utc),
+            datetime(2026,10,16,0,12,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
+    if name == '20261019-llm-window-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261019-llm-window-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261019-llm-window-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v1-entry-capture.conf'),
+            '2026-10-19-engine-llm-window-v1',
+            datetime(2026,10,19,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,19,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
+    if name == '20261019-llm-window-v2':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v2.json'),
+            Path('/var/lib/qwq-entry-capture/20261019-llm-window-v2'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261019-llm-window-v2/once.json'),
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v2-entry-capture.conf'),
+            '2026-10-19-engine-llm-window-v2',
+            datetime(2026,10,19,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,19,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
+    if name == '20261019-llm-window-v3':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v3.json'),
+            Path('/var/lib/qwq-entry-capture/20261019-llm-window-v3'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261019-llm-window-v3/once.json'),
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v3-entry-capture.conf'),
+            '2026-10-19-engine-llm-window-v3',
+            datetime(2026,10,19,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,19,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
+    if name == '20261019-llm-window-v4':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v4.json'),
+            Path('/var/lib/qwq-entry-capture/20261019-llm-window-v4'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261019-llm-window-v4/once.json'),
+            Path('/etc/qwq-entry-capture/20261019-llm-window-v4-entry-capture.conf'),
+            '2026-10-19-engine-llm-window-v4',
+            datetime(2026,10,19,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,19,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
 
 
 def capture_prepared(cfg, projection):
     if not cfg.engine_only:
         return True
+    if cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4'):
+        llm = projection.get('llm')
+        if (projection.get('scan_scope') != 'window' or projection.get('capture_closed') is not False
+                or type(llm) is not dict):
+            return False
+        expected = dict(version='runner-llm-window-v1', quote_admission='llm_check_started',
+            llm_hook_bound=True, rest_market_state_evidence=True, market_state_evidence=True,
+            market_state_max_records=50000, operational_initialized=True,
+            start_at='2026-10-15T00:00:00+00:00', admission_end_at='2026-10-15T00:10:00+00:00',
+            end_at='2026-10-15T00:26:00+00:00', max_scans=4,
+            selection_max_candidates=100, gate_max_candidates=100,
+            max_candidates=5, registration_cap=41, external_reserved=0, operational_headroom=10,
+            required_new_channels=15, buffer_capacity=110000, queue_capacity=110000,
+            batch_size=64, max_record_bytes=65536, max_bytes=7434242048, dropped_records=0,
+            retained_memory_limit_bytes=512 * 1024 * 1024, memory_exhausted=False)
+        if cfg.evaluation_epoch == '2026-10-16-engine-llm-window-v1':
+            expected.update(start_at='2026-10-16T00:15:00+00:00',
+                admission_end_at='2026-10-16T00:25:00+00:00', end_at='2026-10-16T00:41:00+00:00')
+        lease_seconds = 1560
+        if cfg.evaluation_epoch in ('2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4'):
+            expected.update(start_at='2026-10-19T00:30:00+00:00',
+                admission_end_at='2026-10-19T00:40:00+00:00', end_at='2026-10-19T01:00:00+00:00',
+                selection_basis_version='selection-basis-v3', selection_max_modifier_stages=24)
+            lease_seconds = 1800
+        if any(type(llm.get(k)) is not type(v) or llm[k] != v for k,v in expected.items()):
+            return False
+        if (type(llm.get('retained_memory_bytes')) is not int
+                or not 0 <= llm['retained_memory_bytes'] <= llm['retained_memory_limit_bytes']):
+            return False
+        allocations = llm.get('record_allocations')
+        if (type(allocations) is not dict
+                or allocations != dict(ws_quote=50000, market_state=50000, other=8000, scan_metadata=804)
+                or any(type(v) is not int for v in allocations.values())
+                or llm.get('incomplete_reasons') != []
+                or type(llm.get('lease_seconds')) not in (int,float) or llm['lease_seconds'] != lease_seconds):
+            return False
+        if any(type(llm.get(k)) is not int or llm[k] < 0 for k in ('operational_demand','generation')):
+            return False
+        fits = llm['operational_demand'] + 15 + 10 <= 41
+        fresh = (llm.get('connected') is False and llm['generation'] == 0
+                 and llm.get('connection_pristine') is True)
+        live = (llm.get('connected') is True and llm['generation'] > 0
+                and llm.get('operational_stream_ready') is True)
+        return fits and (fresh or live)
     if cfg.evaluation_epoch != '2026-10-14-market-state-pilot-v1':
         return projection.get('scan_scope') == 'window'
     pilot = projection.get('pilot', {})
@@ -226,6 +330,8 @@ def load_config(profile='20261002'):
             raise GuardError()
     if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
         raise GuardError()
+    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1', '20261019-llm-window-v1', '20261019-llm-window-v2', '20261019-llm-window-v3', '20261019-llm-window-v4') and raw['old_head'] != raw['new_head']:
+        raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
         if type(manifest) is not dict or not manifest or len(manifest) > 1000:
@@ -310,6 +416,73 @@ def pending_clear(health):
         risk.get('pending_quantities'),risk.get('pending_sells')))
 
 
+# Replacement epochs retain deliberately retired, unconsumed predecessors.
+RETIRED_OCT19_ATTEMPTS = (
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v1/activation.receipt'), 0),
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v1/status.json'), 0),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v1/startup.receipt'), 1000),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v1/engine.jsonl'), 1000),
+)
+
+RETIRED_OCT19_V2_ATTEMPTS = (
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v2/activation.receipt'), 0),
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v2/status.json'), 0),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v2/startup.receipt'), 1000),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v2/engine.jsonl'), 1000),
+)
+
+RETIRED_OCT19_V3_ATTEMPTS = (
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v3/activation.receipt'), 0),
+    (Path('/var/lib/qwq-entry-capture/20261019-llm-window-v3/status.json'), 0),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v3/startup.receipt'), 1000),
+    (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v3/engine.jsonl'), 1000),
+)
+
+
+def retired_oct19_v1_quiescent(command):
+    for unit, prop, expected in (
+        ('qwq-entry-capture-20261019.timer', 'ActiveState', 'inactive'),
+        ('qwq-entry-capture-20261019.timer', 'UnitFileState', 'disabled'),
+        ('qwq-entry-capture-20261019.service', 'ActiveState', 'inactive'),
+    ):
+        if command(['/usr/bin/systemctl', 'show', '--property='+prop, '--value', unit]).strip() != expected:
+            raise GuardError()
+    for path, owner in RETIRED_OCT19_ATTEMPTS:
+        trusted_dir(path.parent, owner)
+        if path.exists() or path.is_symlink():
+            raise GuardError()
+
+
+def retired_oct19_predecessors_quiescent(command):
+    retired_oct19_v1_quiescent(command)
+    for unit, prop, expected in (
+        ('qwq-entry-capture-20261019-v2.timer', 'ActiveState', 'inactive'),
+        ('qwq-entry-capture-20261019-v2.timer', 'UnitFileState', 'disabled'),
+        ('qwq-entry-capture-20261019-v2.service', 'ActiveState', 'inactive'),
+    ):
+        if command(['/usr/bin/systemctl', 'show', '--property='+prop, '--value', unit]).strip() != expected:
+            raise GuardError()
+    for path, owner in RETIRED_OCT19_V2_ATTEMPTS:
+        trusted_dir(path.parent, owner)
+        if path.exists() or path.is_symlink():
+            raise GuardError()
+
+
+def retired_oct19_v4_predecessors_quiescent(command):
+    retired_oct19_predecessors_quiescent(command)
+    for unit, prop, expected in (
+        ('qwq-entry-capture-20261019-v3.timer', 'ActiveState', 'inactive'),
+        ('qwq-entry-capture-20261019-v3.timer', 'UnitFileState', 'disabled'),
+        ('qwq-entry-capture-20261019-v3.service', 'ActiveState', 'inactive'),
+    ):
+        if command(['/usr/bin/systemctl', 'show', '--property='+prop, '--value', unit]).strip() != expected:
+            raise GuardError()
+    for path, owner in RETIRED_OCT19_V3_ATTEMPTS:
+        trusted_dir(path.parent, owner)
+        if path.exists() or path.is_symlink():
+            raise GuardError()
+
+
 def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc),
              fetch=fetch_loopback, pending_check=pending_clear, sleep=time.sleep,
              trusted_uid=0, lock_uid=1000, engine_input_uid=1000):
@@ -367,6 +540,21 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
     try:
         window()
+        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4')
+                and cfg.old_head != cfg.new_head):
+            raise GuardError()
+        if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v2':
+            phase = 'retired_v1'
+            retired_oct19_v1_quiescent(command)
+        if cfg.evaluation_epoch in ('2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4'):
+            phase = 'retired_predecessors'
+            if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v4':
+                retired_oct19_v4_predecessors_quiescent(command)
+            else:
+                retired_oct19_predecessors_quiescent(command)
+            trusted_dir(cfg.dropin_path.parent, trusted_uid)
+            if cfg.dropin_path.exists() or cfg.dropin_path.is_symlink():
+                raise GuardError()
         phase = 'receipt'
         trusted_dir(cfg.state_dir, trusted_uid)
         write_new(cfg.state_dir/'activation.receipt',json.dumps({
@@ -445,6 +633,18 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
         if not pending_check(fetch('/api/health',timeout=2)):
             raise GuardError()
         window()
+        if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v2':
+            retired_oct19_v1_quiescent(command)
+        if cfg.evaluation_epoch in ('2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4'):
+            if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v4':
+                retired_oct19_v4_predecessors_quiescent(command)
+            else:
+                retired_oct19_predecessors_quiescent(command)
+            # The shared path must now contain only this transaction's drop-in.
+            visible = cfg.dropin_path.lstat()
+            if ((visible.st_dev, visible.st_ino) != dropin_identity
+                    or read_file(cfg.dropin_path, owner=trusted_uid) != staged):
+                raise GuardError()
         phase = 'restart'
         restart_attempted = True  # 요청 결과가 불명이어도 재요청하지 않는다.
         command(['/usr/bin/systemctl','--no-block','restart',BOT_UNIT])
@@ -536,6 +736,18 @@ def main():
             cfg = load_config('20261008-signal-window-v1')
         elif sys.argv[1:] == ['--profile', '20261014-market-state-pilot-v1']:
             cfg = load_config('20261014-market-state-pilot-v1')
+        elif sys.argv[1:] == ['--profile', '20261015-llm-window-v1']:
+            cfg = load_config('20261015-llm-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261016-llm-window-v1']:
+            cfg = load_config('20261016-llm-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261019-llm-window-v1']:
+            cfg = load_config('20261019-llm-window-v1')
+        elif sys.argv[1:] == ['--profile', '20261019-llm-window-v2']:
+            cfg = load_config('20261019-llm-window-v2')
+        elif sys.argv[1:] == ['--profile', '20261019-llm-window-v3']:
+            cfg = load_config('20261019-llm-window-v3')
+        elif sys.argv[1:] == ['--profile', '20261019-llm-window-v4']:
+            cfg = load_config('20261019-llm-window-v4')
         else:
             raise GuardError()
         result = activate(cfg)
