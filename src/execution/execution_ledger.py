@@ -19,6 +19,8 @@ from decimal import Decimal, DecimalException, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
+from ..core.order_attribution import validate_attribution
+
 
 class ExecutionLedgerError(RuntimeError):
     """불명확한 기록 또는 저장 실패. 자동 복구·정상 간주를 허용하지 않는다."""
@@ -306,8 +308,13 @@ def _text(value: Any, *, empty: bool = False) -> None:
 
 def _facts(facts: Any) -> None:
     required = {"local_id", "symbol", "side", "quantity", "order_date", "strategy", "reason", "partial_exit"}
-    if not isinstance(facts, dict) or set(facts) != required:
+    if not isinstance(facts, dict) or set(facts) not in (required, required | {'attribution'}):
         raise ExecutionLedgerError("주문 사실 필드가 일치하지 않습니다")
+    if 'attribution' in facts:
+        try:
+            validate_attribution(facts['attribution'])
+        except ValueError as exc:
+            raise ExecutionLedgerError('주문 귀속 형식 오류') from exc
     for name in ("local_id", "symbol", "order_date"):
         _text(facts[name])
     for name in ("strategy", "reason"):
