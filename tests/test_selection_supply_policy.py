@@ -18,10 +18,11 @@ def native_screener(monkeypatch, raw='MISSING', change=5):
 
 
 @pytest.mark.parametrize('raw', ['MISSING', '', 'x', True, float('nan'), float('inf')])
-def test_unknown_raw_supply_does_not_lower_candidate(monkeypatch, raw):
+@pytest.mark.parametrize('sentiment, expected', [(None, 50), ('bearish', 45)])
+def test_unknown_raw_supply_keeps_only_bearish_baseline_penalty(monkeypatch, raw, sentiment, expected):
     s, _, calls = native_screener(monkeypatch, raw)
-    result = run(s, overnight_sentiment='bearish')
-    assert result[0].score == 50
+    result = run(s, overnight_sentiment=sentiment)
+    assert result[0].score == expected
     assert len(calls) == 4
 
 
@@ -57,7 +58,7 @@ def test_next_scan_failure_does_not_reuse_expired_supply_evidence(monkeypatch):
     async def fail(**kw):
         raise RuntimeError('synthetic fetch failure')
     provider.fetch_foreign_institution = fail
-    assert run(s, overnight_sentiment='bearish')[0].score == 50
+    assert run(s, overnight_sentiment='bearish')[0].score == 45
 
 
 def test_normalized_legacy_provider_cache_cannot_establish_zero(monkeypatch):
@@ -68,7 +69,7 @@ def test_normalized_legacy_provider_cache_cannot_establish_zero(monkeypatch):
             key = f'foreign_inst_{market}_{investor}'
             provider._cache[key] = [dict(symbol='000001', net_buy_qty=0)]
             provider._cache_ts[key] = datetime.now()
-    assert run(s, overnight_sentiment='bearish')[0].score == 50
+    assert run(s, overnight_sentiment='bearish')[0].score == 45
 
 
 @pytest.mark.parametrize('investor', ['1', '2'])
@@ -80,7 +81,7 @@ def test_partial_failure_or_absent_other_side_is_unknown(monkeypatch, investor):
             return []  # ranking miss, not observed zero
         return await fetch(**kw)
     provider.fetch_foreign_institution = partial
-    assert run(s, overnight_sentiment='bearish')[0].score == 50
+    assert run(s, overnight_sentiment='bearish')[0].score == 45
 
 
 def test_filtered_positive_still_prevents_absence_and_supports_bearish_defense(monkeypatch):
@@ -100,7 +101,7 @@ def test_evidence_absolute_age_is_not_renewed_by_layered_cache(monkeypatch, raw)
     assert run(s, overnight_sentiment='bearish')[0].score == (10 if raw == '0' else 45)
     now[0] = 1601.0
     # Leave both cache layers populated: proof's absolute age still wins.
-    assert run(s, overnight_sentiment='bearish')[0].score == 50
+    assert run(s, overnight_sentiment='bearish')[0].score == 45
     assert len(calls) == 4
 
 
@@ -111,7 +112,7 @@ def test_failed_scan_does_not_leak_previous_positive(monkeypatch):
     async def fail(**kw):
         raise RuntimeError('synthetic fetch failure')
     provider.fetch_foreign_institution = fail
-    assert run(s, overnight_sentiment='bearish')[0].score == 50
+    assert run(s, overnight_sentiment='bearish')[0].score == 45
 
 
 @pytest.mark.parametrize('raw', [True, False, '', 'x', float('nan'), float('inf'), 1.5, '1000000000001'])
@@ -160,3 +161,63 @@ def test_cached_decision_proof_does_not_claim_legacy_unknown_shadow_comparison(m
     assert basis['same_input_shadow']['status'] == 'inputs_incomplete'
     assert basis['same_input_shadow']['shadow_delta_vs_actual'] is None
     assert len(calls) == 4
+
+
+@pytest.mark.parametrize('raw, expected', [(' +1 ', 1), (' 0\n', 0), ('\t-1 ', -1)])
+def test_provider_preserves_whitespace_padded_integer_proof(monkeypatch, raw, expected):
+    import asyncio
+    provider, calls = provider_fixture(monkeypatch, raw)
+    rows = asyncio.run(provider.fetch_foreign_institution(market='0001', investor='1'))
+    assert rows[0]['net_buy_qty'] == expected
+    assert rows[0]['_supply_proof']['value'] == expected
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('raw, malformed', [('x', True), (True, True), ('1,000', True), ('1.0', True), ('', True), ('MISSING', False)])
+def test_provider_marks_present_invalid_quantity_schema_without_inventing_evidence(monkeypatch, raw, malformed):
+    import asyncio
+    from src.analytics.selection_source_status import SourceCapture
+    from src.data.providers import kis_market_data
+    provider, calls = provider_fixture(monkeypatch, raw)
+    messages = []
+    monkeypatch.setattr(kis_market_data.logger, 'warning', messages.append)
+    capture = SourceCapture()
+    rows = asyncio.run(capture.call('kis_foreign_buying', provider.fetch_foreign_institution,
+                                   market='0001', investor='1'))
+    source = next(row for row in capture.wrap(rows).selection_sources['runs']
+                  if row['source_id'] == 'kis_foreign_buying')
+    assert rows[0]['net_buy_qty'] == 0 and rows[0]['_supply_proof'] is None
+    assert source['failure_count'] == int(malformed)
+    assert source['failure_reason'] == ('schema' if malformed else None)
+    assert len(messages) == int(malformed)
+    assert len(calls) == 1
+
+
+def test_many_invalid_rows_emit_one_capped_warning_and_schema_marker(monkeypatch):
+    import asyncio
+    from src.analytics.selection_source_status import SourceCapture
+    from src.data.providers import kis_market_data
+    provider, calls = provider_fixture(monkeypatch, 'bad-private-value')
+    original_session = provider._get_session
+    async def session():
+        original = await original_session()
+        class Session:
+            def get(self, *args, **kwargs):
+                response = original.get(*args, **kwargs)
+                response.payload['output'] *= 600
+                return response
+        return Session()
+    provider._get_session = session
+    messages = []
+    monkeypatch.setattr(kis_market_data.logger, 'warning', messages.append)
+    capture = SourceCapture()
+    rows = asyncio.run(capture.call('kis_foreign_buying', provider.fetch_foreign_institution,
+                                   market='0001', investor='1'))
+    source = next(row for row in capture.wrap(rows).selection_sources['runs']
+                  if row['source_id'] == 'kis_foreign_buying')
+    assert len(rows) == 600
+    assert source['failure_count'] == 1 and source['failure_reason'] == 'schema'
+    assert len(messages) == 1 and 'rows=512' in messages[0]
+    assert 'bad-private-value' not in messages[0]
+    asyncio.run(provider.fetch_foreign_institution(market='0001', investor='1'))
+    assert len(messages) == 1 and len(calls) == 1

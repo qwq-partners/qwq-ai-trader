@@ -423,6 +423,19 @@ class KISMarketData:
                 else:
                     _mark_selection_source("payload", count=len(output))
 
+                from src.analytics.selection_supply_policy import supply_proof, validated_quantity
+                invalid_qty_count = min(512, sum(
+                    1 for item in output
+                    if isinstance(item, dict) and "ntby_qty" in item
+                    and validated_quantity(item["ntby_qty"]) is None
+                ))
+                if invalid_qty_count:
+                    _mark_selection_source("error", reason="schema")
+                    logger.warning(
+                        f"[KISMarketData] {investor_name} invalid ntby_qty rows={invalid_qty_count} "
+                        "(count capped at 512); supply evidence unknown"
+                    )
+
                 for item in output:
                     symbol = item.get("mksc_shrn_iscd", "").zfill(6)
                     name = item.get("hts_kor_isnm", "").strip()
@@ -435,7 +448,6 @@ class KISMarketData:
                     except Exception:
                         pass  # observation failures never alter provider results
 
-                    from src.analytics.selection_supply_policy import supply_proof
                     proof = supply_proof(item.get("ntby_qty"))
                     net_qty = proof["value"] if proof is not None else 0
 

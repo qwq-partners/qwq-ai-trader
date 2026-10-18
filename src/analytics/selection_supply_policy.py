@@ -19,7 +19,10 @@ _ACTIVE = ContextVar('selection_supply_policy', default=None)
 def validated_quantity(raw):
     if type(raw) is int:
         value = raw
-    elif type(raw) is str and len(raw) <= 14 and re.fullmatch(r'[+-]?[0-9]+', raw):
+    elif type(raw) is str:
+        raw = raw.strip()
+        if len(raw) > 14 or re.fullmatch(r'[+-]?[0-9]+', raw) is None:
+            return None
         value = int(raw)
     else:
         return None

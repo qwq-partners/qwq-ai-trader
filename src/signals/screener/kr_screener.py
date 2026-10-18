@@ -2343,10 +2343,12 @@ class StockScreener:
                         stock.score = max(stock.score - 20, 0)
                         stock.reasons.append("US 야간 약세 + 수급부재 감점")
                         regime_applied += 1
-                    elif observed_buying(stock):
-                        # 약세장이지만 수급 있는 종목 → 소폭 감점만
+                    else:
+                        # 수급 결측도 약세장 자체의 기본 위험 감점은 유지한다.
                         stock.score = max(stock.score - 5, 0)
-                        stock.reasons.append("US 야간 약세 (수급 방어)")
+                        reason = "수급 방어" if observed_buying(stock) else "수급 미확인"
+                        stock.reasons.append(f"US 야간 약세 ({reason})")
+                        regime_applied += 1
             elif overnight_sentiment == "bullish":
                 for symbol, stock in all_stocks.items():
                     if stock.has_foreign_buying or stock.has_inst_buying:
