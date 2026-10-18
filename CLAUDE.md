@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-18 — 종목별 실시간 RAG 파이프라인 검토(문서만):** [대조·변형 가정·적용 순서](docs/research/realtime-rag-pipeline-review-2026-10-18.md). 전체 구조는 미적용(회전/수수료 구조·기준선 결측·KIS 41건/1세션·월100 예산·뉴스 선행성 미입증). 가져올 조각은 수집 시점 종목 태깅+원천 시각 → 후보 공시 거절 근거 → 맥락 확장 오프라인 비교 → 토스 관측 전용 재가동 순이며 전부 주문 경로 불변. 로컬 GPU는 오프라인 재생/수집기, 운영 계좌 2호기 금지. 토스는 "병렬 관측"만. 코드·운영·예약·매수 중지 변경 없음.
+
 > **2026-10-13 — 64차 LLM 판단 재생 기록·계좌 기준선 결측(PR 대기·운영 미배포):** `llm_second_check` 판단마다 공통 입력 원문·역할 지문·Bull/Bear/폴백 시도별 요청/실제 모델·시각·토큰·비용·예산 예약 토큰·결과를 `~/.cache/ai_trader/llm_decisions/decisions-YYYY-MM.jsonl` 에 남기고 `signal_events.metadata.llm_decision` 으로 조인한다(기록 실패는 `record_status`, 판단 불변, 별도 소켓 없음). 계좌 기준선은 시작 순자산·입출금·배당·운영비 결측으로 TWR null 보존, 새 KIS 호출 0. [B 설계](docs/research/llm-decision-record-2026-10-13.md) · [A 상태](docs/operations/account-baseline-status-2026-10-13.md). 10월14일 관측·운영 `161b394` 불변.
 
 > **2026-10-13 07:34 KST — 73차 배포·예약 완료:** [PDS·통합 흐름·남은 작업](docs/research/market-state-pilot-2026-10-13.md). PR #181/운영 `161b394a`·PID1114252·NRestarts0·오류/pending0·복구ready. 로컬/CI/운영5373통과·독립 실제 Opus5 승인. **10월14일08:55 활성화/09:00~09:05 한 종목 기술 관측 예약**, 새 요청 미소비·실수집 미완료. 소비된10월8일 drop-in만 백업 후 정리, 나머지 보호13경로/매수 중지/월100 기존 집계 보존. 수집 전 운영 HEAD/설정 변경 금지(고정 예약 중단). 새20일 미예약·순수익 미검증. 아래는 당시 기록이다.
