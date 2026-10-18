@@ -82,17 +82,17 @@ class SelectionBasisBuilder:
             for stock, snapshot in zip(result, snapshots):
                 extension = current_extension(stock)
                 if extension is not None:
-                    snapshot.update(extension, version="kr-selection-basis-v2")
+                    snapshot.update(extension, version=("kr-selection-basis-v3" if "supply_policy_id" in extension else "kr-selection-basis-v2"))
                 stock.selection_basis = snapshot
         except Exception:
             self.failed = True
 
 
 def validate_settings(settings):
-    v3 = type(settings) is dict and settings.get('version') == 'selection-basis-v3'
+    v3 = type(settings) is dict and settings.get('version') in ('selection-basis-v3', 'selection-basis-v4')
     keys = {'version', 'max_candidates', 'max_source_terms'} | ({'max_modifier_stages'} if v3 else set())
     if (type(settings) is not dict or set(settings) != keys
-            or settings['version'] not in ('selection-basis-v1', 'selection-basis-v2', 'selection-basis-v3')
+            or settings['version'] not in ('selection-basis-v1', 'selection-basis-v2', 'selection-basis-v3', 'selection-basis-v4')
             or (v3 and (type(settings['max_modifier_stages']) is not int or not 24 <= settings['max_modifier_stages'] <= 32))
             or type(settings['max_candidates']) is not int or not 1 <= settings['max_candidates'] <= 100
             or type(settings['max_source_terms']) is not int or not 1 <= settings['max_source_terms'] <= MAX_TERMS):
@@ -114,10 +114,11 @@ def _equal(a, b):
 
 
 def validate_basis(basis, *, score, rank, observed_at, max_terms=MAX_TERMS):
-    from .selection_modifiers import EXTRA_FIELDS, validate_extension
-    v2 = type(basis) is dict and basis.get('version') == 'kr-selection-basis-v2'
-    fields = BASIS_FIELDS | (EXTRA_FIELDS if v2 else frozenset())
-    if (type(basis) is not dict or set(basis) != fields or basis['version'] not in (VERSION, 'kr-selection-basis-v2')
+    from .selection_modifiers import EXTRA_FIELDS, POLICY_FIELDS, validate_extension, validate_policy_extension
+    v3 = type(basis) is dict and basis.get('version') == 'kr-selection-basis-v3'
+    v2 = type(basis) is dict and basis.get('version') in ('kr-selection-basis-v2', 'kr-selection-basis-v3')
+    fields = BASIS_FIELDS | (EXTRA_FIELDS if v2 else frozenset()) | (POLICY_FIELDS if v3 else frozenset())
+    if (type(basis) is not dict or set(basis) != fields or basis['version'] not in (VERSION, 'kr-selection-basis-v2', 'kr-selection-basis-v3')
             or basis['policy_ref'] != 'kr-screen-all-source-accounting-v1'
             or not isinstance(basis['basis_id'], str) or len(basis['basis_id']) != 32
             or any(c not in '0123456789abcdef' for c in basis['basis_id'])
@@ -152,6 +153,8 @@ def validate_basis(basis, *, score, rank, observed_at, max_terms=MAX_TERMS):
         raise ValueError('선정 보정/정규화/최종 점수 불일치')
     if v2:
         validate_extension(basis)
+    if v3:
+        validate_policy_extension(basis)
     return deepcopy(basis)
 
 
@@ -184,8 +187,11 @@ def build_selection_report(observations):
             modifiers_expected = record.get('selection_modifiers_expected', False)
             if type(modifiers_expected) is not bool or (modifiers_expected and not expected) or (not modifiers_expected and 'selection_modifier_max_stages' in record):
                 raise ValueError('modifier opt-in contract')
+            policy_version = record.get('selection_basis_version')
+            if policy_version is not None and (policy_version != 'selection-basis-v4' or not modifiers_expected):
+                raise ValueError('explicit supply policy scan version required')
             if modifiers_expected:
-                validate_settings(dict(version='selection-basis-v3',max_candidates=record.get('selection_basis_max_candidates'),max_source_terms=record.get('selection_basis_max_terms'),max_modifier_stages=record.get('selection_modifier_max_stages')))
+                validate_settings(dict(version=policy_version or 'selection-basis-v3',max_candidates=record.get('selection_basis_max_candidates'),max_source_terms=record.get('selection_basis_max_terms'),max_modifier_stages=record.get('selection_modifier_max_stages')))
             if expected:
                 settings = validate_settings({'version': 'selection-basis-v1',
                     'max_candidates': record.get('selection_basis_max_candidates'),
@@ -228,9 +234,12 @@ def build_selection_report(observations):
                 basis = {k:v for k,v in record.items() if k not in common}
                 basis = validate_basis(basis, score=candidate['score'], rank=row['returned_rank'],
                                        observed_at=scan['observed_at'], max_terms=settings['max_source_terms'])
-                if basis['version'] == 'kr-selection-basis-v2' and scan.get('selection_modifiers_expected') is not True:
+                if basis['version'] in ('kr-selection-basis-v2', 'kr-selection-basis-v3') and scan.get('selection_modifiers_expected') is not True:
                     raise ValueError('modifier evidence without opt-in')
-                if scan.get('selection_modifiers_expected') is True and basis['version'] != 'kr-selection-basis-v2' and not basis['cache_fallback']:
+                required = 'kr-selection-basis-v3' if scan.get('selection_basis_version') == 'selection-basis-v4' else 'kr-selection-basis-v2'
+                if basis['version'] == 'kr-selection-basis-v3' and required != 'kr-selection-basis-v3':
+                    raise ValueError('policy payload without matching scan version')
+                if scan.get('selection_modifiers_expected') is True and basis['version'] != required and not basis['cache_fallback']:
                     raise ValueError('fresh modifier evidence missing')
                 row.update(status='cached_basis' if basis['cache_fallback'] else 'accounted', basis=basis)
                 row['lineage'] = lineage_diagnostic(basis)
@@ -250,8 +259,12 @@ def build_selection_report(observations):
                 if not basis['cache_fallback'] and not (_time(snapshot['started_at']) <= produced <= _time(snapshot['completed_at'])):
                     raise ValueError('현재 원천 호출 밖에서 생성된 선정 근거')
                 if not basis['cache_fallback']:
+                    if basis['version'] == 'kr-selection-basis-v3':
+                        for decision in basis['supply_policy_decisions'].values():
+                            if decision is not None and _time(decision['captured_at']) < _time(snapshot['started_at']):
+                                raise ValueError('policy decision before current scan source boundary')
                     runs = {r['source_id']: r for r in snapshot['runs']}
-                    if basis['version'] == 'kr-selection-basis-v2':
+                    if basis['version'] in ('kr-selection-basis-v2', 'kr-selection-basis-v3'):
                         for investor, source_id in (('foreign','kis_foreign_buying'),('institution','kis_institutional_buying')):
                             evidence = basis['supply_evidence'][investor]
                             if evidence['state'] != 'unobserved':
@@ -289,7 +302,7 @@ def build_selection_report(observations):
                 '출현 횟수는 독립 정보원 수가 아님. 정규화는 전체 반환 후보에 의존함.',
                 '계산 기여는 비용 차감 수익 기여나 인과적 효과가 아님.']}
 
-    extended = [r['basis'] for r in rows if r['basis'] and r['basis']['version'] == 'kr-selection-basis-v2']
+    extended = [r['basis'] for r in rows if r['basis'] and r['basis']['version'] in ('kr-selection-basis-v2', 'kr-selection-basis-v3')]
     if extended or any(r.get('selection_modifiers_expected') is True for r in observations['records'] if r.get('kind') == 'scan'):
         states = {'positive':0, 'observed_nonpositive':0, 'unobserved':0}
         statuses = {}
@@ -305,4 +318,28 @@ def build_selection_report(observations):
             removed_candidate_details_captured=False, destructive_stage_counts=None,
             full_source_ablation=False, final_score_effect=None, economic_effect=None)
         report['limitations'][2] = 'v3 보정은 실제 경계 점수 차이이며 unchanged는 후보 평가 성공을 뜻하지 않음. 파괴적 제외 상세/건수는 미수집.'
+    policy_bases = [b for b in extended if b['version'] == 'kr-selection-basis-v3']
+    if policy_bases or any(r.get('selection_basis_version') == 'selection-basis-v4' for r in observations['records']):
+        from .selection_modifiers import POLICY_STAGES
+        from .selection_supply_policy import POLICY_ID
+        by_stage = {stage: {scope: dict(native_evaluated=0, not_evaluated=0, aborted=0,
+            states=dict(positive=0, observed_nonpositive=0, unobserved=0))
+            for scope in ('fresh', 'cached')} for stage in POLICY_STAGES}
+        for basis in policy_bases:
+            scope = 'cached' if basis['cache_fallback'] else 'fresh'
+            for stage in POLICY_STAGES:
+                decision = basis['supply_policy_decisions'][stage]
+                tally = by_stage[stage][scope]
+                if decision is None:
+                    tally['not_evaluated'] += 1
+                elif not decision['native_evaluated']:
+                    tally['aborted'] += 1
+                else:
+                    tally['native_evaluated'] += 1
+                    for side in ('foreign', 'institution'):
+                        tally['states'][decision[side]['state']] += 1
+        report['supply_policy_evidence'] = dict(policy_id=POLICY_ID, candidates=len(policy_bases),
+            comparable_spdi_shadows=sum(b['supply_policy_shadow']['status'] == 'comparable' for b in policy_bases),
+            cached_bases=sum(b['cache_fallback'] for b in policy_bases), by_stage=by_stage,
+            final_score_effect=None, gate_effect=None, economic_effect=None, source_as_of_known=False)
     return report

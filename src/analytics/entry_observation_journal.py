@@ -22,6 +22,7 @@ from .entry_observation import EntryObservationBuffer
 from .entry_price_shadow import _timestamp as parse_timestamp
 from .selection_basis import BASIS_FIELDS, TERM_FIELDS, MAX_TERMS
 from .selection_modifiers import EXTRA_FIELDS, STAGE_FIELDS, SUPPLY_FIELDS, SHADOW_FIELDS, ORDER as MODIFIER_ORDER
+from .selection_modifiers import POLICY_FIELDS, POLICY_STAGES, POLICY_ROW_FIELDS, DECISION_FIELDS, POLICY_SHADOW_FIELDS
 from .selection_source_status import SCAN_FIELDS, RUN_FIELDS, ORDER
 from .entry_gate_trace import TRACE_FIELDS, STEP_FIELDS, STAGES, SCAN_FIELDS as GATE_SCAN_FIELDS
 
@@ -43,8 +44,8 @@ FIELDS = {
     "quote_subscription": "observed_at status generation connection_id candidate_id tr_id symbol reason expires_at frame_diagnostic signal_id order_id allocation_signal_id",
     "market_state": "schema_version observed_at received_at connection_id generation symbol tr_id local_frame_index record_index message_count raw_field_count market_state_schema market_state_source_sha256 market_state_status source_sequence state_verdict business_date exchange_time new_mkop_cls_code trht_yn hour_cls_code market_cls_code mkop_cls_code antc_mkop_cls_code mrkt_trtm_cls_code divi_app_cls_code iscd_stat_cls_code vi_cls_code ovtm_vi_cls_code exch_cls_code",
 }
-FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS | EXTRA_FIELDS))
-FIELDS['scan'] += ' selection_modifiers_expected selection_modifier_max_stages'
+FIELDS['selection_basis'] = 'candidate_id symbol observed_at basis_status ' + ' '.join(sorted(BASIS_FIELDS | EXTRA_FIELDS | POLICY_FIELDS))
+FIELDS['scan'] += ' selection_modifiers_expected selection_modifier_max_stages selection_basis_version'
 FIELDS['scan'] += ' ' + ' '.join(sorted(SCAN_FIELDS | GATE_SCAN_FIELDS))
 FIELDS['entry_gate_trace'] = ' '.join(sorted(TRACE_FIELDS))
 NESTED = {
@@ -63,6 +64,7 @@ NESTED['supply_evidence'] = frozenset(('foreign', 'institution'))
 NESTED['foreign'] = SUPPLY_FIELDS
 NESTED['institution'] = SUPPLY_FIELDS
 NESTED['same_input_shadow'] = SHADOW_FIELDS
+NESTED['supply_policy_shadow'] = POLICY_SHADOW_FIELDS
 NESTED['source_terms'] = TERM_FIELDS
 NESTED['selection_source_runs'] = RUN_FIELDS
 NESTED['steps'] = STEP_FIELDS
@@ -116,7 +118,8 @@ def _record_shape(record, maximum):
         validate_diagnostic(record["frame_diagnostic"], reason=record.get("reason"))
     if record.get("kind") == "selection_basis" and record.get("basis_status") == "observed":
         common = {"kind", "sequence", "candidate_id", "symbol", "observed_at", "basis_status"}
-        expected = BASIS_FIELDS | (EXTRA_FIELDS if record.get("version") == "kr-selection-basis-v2" else frozenset())
+        expected = (BASIS_FIELDS | (EXTRA_FIELDS if record.get("version") in ("kr-selection-basis-v2", "kr-selection-basis-v3") else frozenset())
+                    | (POLICY_FIELDS if record.get("version") == "kr-selection-basis-v3" else frozenset()))
         if set(record) != common | expected:
             raise ValueError("selection basis version field mismatch")
     budget = maximum
@@ -138,14 +141,23 @@ def _record_shape(record, maximum):
         if budget < 0:
             raise ValueError("관측 크기 한도 초과")
 
-    def mapping(values, allowed, nested=False):
+    def mapping(values, allowed, nested=False, policy=False):
         nonlocal budget
         if type(values) is not dict or set(values) - allowed:
             raise ValueError("관측의 허용하지 않은 필드")
         for key, value in values.items():
             scalar(key)
             budget -= 2
-            if nested and key in NESTED:
+            if policy and key in POLICY_STAGES:
+                if value is None:
+                    scalar(None)
+                else:
+                    mapping(value, DECISION_FIELDS, nested=True, policy=True)
+            elif policy and key in ('foreign', 'institution'):
+                mapping(value, POLICY_ROW_FIELDS)
+            elif nested and key == 'supply_policy_decisions':
+                mapping(value, set(POLICY_STAGES), nested=True, policy=True)
+            elif nested and key in NESTED:
                 if key == "capital_snapshot" and value is None:
                     scalar(None)
                 elif key in ("candidates", "source_terms", "selection_source_runs", "steps", "modifier_stages"):
@@ -159,9 +171,9 @@ def _record_shape(record, maximum):
             else:
                 scalar(value)
     mapping(record, set(FIELDS[record["kind"]].split()) | {"kind", "sequence"}, nested=True)
-    if record.get('kind') == 'selection_basis' and record.get('version') == 'kr-selection-basis-v2':
+    if record.get('kind') == 'selection_basis' and record.get('version') in ('kr-selection-basis-v2', 'kr-selection-basis-v3'):
         from .selection_basis import validate_basis
-        basis = {k:v for k,v in record.items() if k in BASIS_FIELDS | EXTRA_FIELDS}
+        basis = {k:v for k,v in record.items() if k in BASIS_FIELDS | EXTRA_FIELDS | POLICY_FIELDS}
         validate_basis(basis, score=record['final_score'], rank=record['returned_rank'], observed_at=record['observed_at'])
 
 

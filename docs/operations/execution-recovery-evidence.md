@@ -44,10 +44,10 @@ SQLite는 **동시에 쓰는 주체가 없는 완결된 독립 복사본**만 �
 {"ord_dt":"20261002","odno":"000123","orgn_odno":"","pdno":"005930","sll_buy_dvsn_cd":"02","ord_qty":"10","tot_ccld_qty":"10","avg_prvs":"106","cncl_yn":"N","cnc_cfrm_qty":"0","rmn_qty":"0","rjct_qty":"0"}
 ```
 
-거래 이벤트: `event_id`는 실제 DB 행의 고유 ID, `trade_id`는 해당 거래의 실제 ID를 문자열로 전달한다. 하나의 주문에 여러 증분 행을 허용하며 같은 event ID의 중복은 오류다. 주문번호를 모르면 NULL로 남긴다. 거래일을 새로 추정하거나 여러 행을 평균가 한 행으로 합치지 않는다.
+거래 이벤트: `event_id`는 실제 DB 행의 고유 ID, `trade_id`는 해당 거래의 실제 ID를 문자열로 전달한다. 실행 원장의 실제 증분 ID가 기록된 행은 선택 필드 `execution_id`를 원문 그대로 전달한다. 빈 문자열·NUL·1024자 초과·문자열이 아닌 값은 무효 행이다. 과거 실행 ID의 원문 형식은 보존하며 귀속 ID의 ASCII/160자 규약을 적용하지 않는다. ID가 없는 과거 행은 NULL 또는 필드 생략으로 전달하며 수량/가격으로 ID를 만들어 채우지 않는다. 하나의 주문에 여러 증분 행을 허용하며 같은 event ID의 중복은 오류다. 주문번호를 모르면 NULL로 남긴다. 거래일을 새로 추정하거나 여러 행을 평균가 한 행으로 합치지 않는다.
 
 ```json
-{"event_id":"entry-row-1","trade_id":"trade-1","market":"KR","event_date":"2026-10-02","date_basis":"Asia/Seoul","symbol":"005930","side":"buy","kis_order_no":"000123","quantity":4,"price":"100"}
+{"event_id":"entry-row-1","trade_id":"trade-1","execution_id":"s1:o1:4","market":"KR","event_date":"2026-10-02","date_basis":"Asia/Seoul","symbol":"005930","side":"buy","kis_order_no":"000123","quantity":4,"price":"100"}
 ```
 
 잔고: `owner`는 `broker`/`internal` 각 최대 한 행. 같은 종목 중복은 오류이며 현금 0은 유효값이다. 현금을 모르면 `amount:null`, 종류를 모르면 `basis:"unknown"`으로 남긴다. 주문가능금액과 예수금/포트폴리오 현금을 같은 값으로 간주하지 않는다.
@@ -85,6 +85,23 @@ python scripts/reconcile_execution_evidence.py \
 | `mismatch` | 수량/가격/증분 구성/종목·방향/중복/잔고 등에 차이. 결측도 함께 있을 수 있으므로 전체 이슈 확인 |
 
 항상 `runtime_release_allowed=false`, `replay_allowed=false`, `state_mutated=false`, `baseline_inclusion="unverified"`다. 일치해도 과거 체결을 현재 시작 잔고에 재생하면 중복 반영할 수 있다. 정상 보류 해제는 이 도구에서 수행하지 않는다.
+
+## 주문 귀속과 실행 ID 연결 (2026-10-18)
+
+보고서의 `attribution_chains`와 `intent_count`는 비교 기간 안에 **원장에 기록된 모든 의도**를 분모로 삼는다. 의도 기록 전 차단된 신호와 전체 후보는 이 분모에 포함되지 않는다. 기존 `orders`의 체결 대사와 별개로 미전송(`not_sent`), 거절(`rejected`), 접수 불명(`unknown`), 접수 후 0체결, 취소 후 0체결도 남긴다. 기간 밖 의도 수는 기존 `orders_outside_window`에 보존한다.
+
+각 행은 `local_order_id`, 원장 `order_key`, 증권사 `broker_order_no`, `account_scope`, `order_date`를 구분한다. `requested_quantity`, `observed_quantity`, `terminal_quantity`와 함께 `unfilled_quantity_at_terminal`을 제공한다. 마지막 값은 요청 수량에서 명시 최종 체결 수량을 뺀 **계산값**이며 증권사 취소 확인 수량을 뜻하지 않는다. 최종 수량이 미확정이면 NULL이다.
+
+새 `attribution` 봉투는 `order-attribution-v1`과 후보·계획·신호·LLM 판단 ID, 결측 사유를 그대로 보존한다. 귀속 필드가 없는 과거 사실은 네 ID 모두 NULL, 각 사유 `legacy_not_recorded`인 표시용 봉투로 나타낸다. 원본 입력에 봉투나 ID를 추가하지 않는다.
+
+후보·계획·신호·판단과 주문 의도는 1:1 관계를 보장하지 않는다. 재주문·분할 주문 등에서 같은
+상위 ID가 여러 의도로 이어질 수 있다. `intent_count`를 고유 후보/판단 수로 해석하지 않고,
+그 수가 필요하면 결측을 제외한 각 ID별로 따로 집계한다. 체결 합계는 원장 주문 key와
+execution_id를 기준으로 계산하며, 상위 ID가 같은 정상 주문들을 중복 체결로 제거하지 않는다.
+
+각 `executions`에는 실제 `execution_id`, `delta_quantity`, 원장 증분 `price`, 기존 Fill과 같은 소수 두 자리 `journal_price`, `portfolio_applied`, `handoff_returned`가 들어간다. `journal_event_id`와 `journal_trade_id`는 제출 행의 **실행 ID·계좌 범위·주문일·증권사 주문번호·종목·방향·증분 수량·저널 가격이 모두 일치**할 때만 표시한다. 그때도 `journal_identity_status="matched_supplied_row"`이며 DB commit 인증은 아니다. 전체 보고서와 각 실행의 `journal_durability`는 항상 `unverified`다. 반환 영수증도 영속 commit 증거로 해석하지 않는다.
+
+실행 ID 누락은 `missing`/`missing_execution_id`, 교차 주문·날짜·계좌·수량·가격 충돌이나 중복 ID는 `conflict`로 남긴다. 같은 ID를 서로 다른 event/trade 행이 주장하거나 무효 행이 같은 ID를 재사용해도 임의로 한 행을 선택하지 않는다. 새 귀속 주문의 ID 없는 장부는 기존 수량·금액 합계가 맞더라도 `incomplete`다. 과거 ID 없는 장부는 기존 합계 대사 판정을 유지하지만 개별 실행 연결은 미확인으로 남긴다. 같은 종목·수량·가격만으로 연결을 보충하지 않는다. 같은 주문 안에서 수량·가격이 같은 두 행의 ID만 바뀐 경우에는 원래 행별 대응을 증명할 독립 원천이 없으므로 그 교환까지 판별했다고 주장하지 않는다. 제출 자료의 일치는 출처 진실 인증과 구분한다.
 
 ## 다음 우선순위와 수익 평가 연결
 

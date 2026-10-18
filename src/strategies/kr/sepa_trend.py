@@ -16,6 +16,7 @@ from ...core.types import (
     Signal, Position, OrderSide, SignalStrength, StrategyType
 )
 from ...utils.sizing import atr_position_multiplier
+from ...analytics.swing_supply import supply_age, supply_values, sides, pair_basis
 
 
 class SEPATrendStrategy(BaseStrategy):
@@ -61,23 +62,6 @@ class SEPATrendStrategy(BaseStrategy):
         all_scores: List[tuple] = []
         rr_blocked: List[tuple] = []  # (symbol, stop_pct, target_pct, rr) 추적
 
-        # supply_data_age 기반 min_score 동적 완화
-        # T-2 캐시 사용 시 수급 최대점수 20→14점으로 감소 → min_score 보정
-        supply_age_sample = 0
-        if candidates:
-            _supply_age_raw = candidates[0].indicators.get("supply_data_age")
-            supply_age_sample = _supply_age_raw if _supply_age_raw is not None else 0
-        effective_min_score = self.config.min_score
-        if supply_age_sample >= 2:
-            effective_min_score = max(50.0, self.config.min_score - 10.0)
-        elif supply_age_sample >= 1:
-            effective_min_score = max(48.0, self.config.min_score - 5.0)
-        if effective_min_score != self.config.min_score:
-            logger.info(
-                f"[SEPA] 수급 T-{supply_age_sample} → min_score 완화: "
-                f"{self.config.min_score:.0f} → {effective_min_score:.0f}"
-            )
-
         # 장중 후반 진입 차단: 14:30 이후 → 익일 갭 리스크
         from datetime import datetime as _dt
         _now_hm = _dt.now().strftime("%H:%M")
@@ -93,8 +77,17 @@ class SEPATrendStrategy(BaseStrategy):
                     logger.debug(f"[SEPA] {candidate.symbol} 과확장 차단: MA200 대비 +{ma200_dist:.0f}%")
                     continue
 
+                age = supply_age(candidate.indicators)
+                effective_min_score = self.config.min_score
+                if age is not None and age >= 2:
+                    effective_min_score = max(50.0, self.config.min_score - 10.0)
+                elif age is not None and age >= 1:
+                    effective_min_score = max(48.0, self.config.min_score - 5.0)
                 score = self._calculate_sepa_score(candidate)
-                all_scores.append((score, candidate.symbol, candidate.name))
+                # Keep diagnostics with the actual row; duplicate symbols can
+                # have different evidence ages and admission thresholds.
+                all_scores.append((score, candidate.symbol, candidate.name,
+                                   effective_min_score, candidate))
 
                 if score < effective_min_score:
                     continue
@@ -177,10 +170,12 @@ class SEPATrendStrategy(BaseStrategy):
                 )
                 signals.append(signal)
 
+                displayed_lci = (candidate.indicators.get("lci")
+                                 if pair_basis(sides(candidate.indicators)) is not None else None)
                 logger.info(
                     f"[SEPA] 시그널: {candidate.symbol} {candidate.name} "
                     f"점수={score:.0f} MRS={candidate.indicators.get('mrs', 'N/A')} "
-                    f"LCI={candidate.indicators.get('lci', 'N/A')}"
+                    f"LCI={displayed_lci}"
                 )
 
             except Exception as e:
@@ -197,27 +192,22 @@ class SEPATrendStrategy(BaseStrategy):
 
         # 점수 분포 요약 로그
         if all_scores:
-            all_scores.sort(reverse=True)
+            all_scores.sort(key=lambda row: row[:3], reverse=True)
             top = all_scores[:10]
-            passed = sum(1 for s, _, _ in all_scores if s >= effective_min_score)
+            passed = sum(1 for s, _, _, threshold, _ in all_scores if s >= threshold)
             rr_block_count = len(rr_blocked)
             logger.info(
                 f"[SEPA] 점수분포: 전체={len(all_scores)}개, "
-                f"통과={passed}개 (min={effective_min_score:.0f}), "
+                f"통과={passed}개 (종목별 검증된 수급 날짜 기준), "
                 f"R/R차단={rr_block_count}개, "
-                f"평균={sum(s for s,_,_ in all_scores)/len(all_scores):.1f}, "
+                f"평균={sum(row[0] for row in all_scores)/len(all_scores):.1f}, "
                 f"최고={all_scores[0][0]:.1f}"
             )
             logger.info(f"[SEPA] 상위 10개 점수:")
-            for score_val, sym, name in top:
-                lci = None
-                atr_val = None
-                for c in candidates:
-                    if c.symbol == sym:
-                        lci = c.indicators.get("lci")
-                        atr_val = c.indicators.get("atr_14")
-                        break
-                mark = "v" if score_val >= effective_min_score else " "
+            for score_val, sym, name, threshold, c in top:
+                lci = c.indicators.get("lci") if pair_basis(sides(c.indicators)) is not None else None
+                atr_val = c.indicators.get("atr_14")
+                mark = "v" if score_val >= threshold else " "
                 logger.info(
                     f"  {mark} {sym} {name}: {score_val:.1f}pt  "
                     f"LCI={f'{lci:.2f}' if lci is not None else 'None'}  "
@@ -304,10 +294,10 @@ class SEPATrendStrategy(BaseStrategy):
 
         # 2. 수급 LCI z-score 기반 (20점)
         # supply_data_age: 0=당일, 1=전일(T-1), 2=캐시(T-2+)
-        supply_age = ind.get("supply_data_age", 0) if ind.get("supply_data_age") is not None else 0
-        lci_discount = max(0.7, 1.0 - supply_age * 0.15)  # T-1: 85%, T-2: 70%
+        age = supply_age(ind)
+        lci_discount = max(0.7, 1.0 - (age if age is not None else 0) * 0.15)  # T-1: 85%, T-2: 70%
 
-        lci = ind.get("lci")
+        lci = ind.get("lci") if pair_basis(sides(ind)) is not None else None
         if lci is not None:
             if lci > 1.5:
                 score += int(20 * lci_discount)
@@ -318,12 +308,14 @@ class SEPATrendStrategy(BaseStrategy):
             elif lci > 0:
                 score += int(5 * lci_discount)
         else:
-            foreign_net = ind.get("foreign_net_buy") if ind.get("foreign_net_buy") is not None else 0
-            inst_net = ind.get("inst_net_buy") if ind.get("inst_net_buy") is not None else 0
-            if foreign_net > 0 or inst_net > 0:
-                supply_score = (10 if foreign_net > 0 else 0) + (10 if inst_net > 0 else 0)
-                score += int(min(supply_score, 20) * lci_discount)
-            else:
+            foreign_net, inst_net = supply_values(ind)
+            positives = sum(value is not None and value > 0 for value in (foreign_net, inst_net))
+            if positives:
+                # Different dates/sources cannot establish a two-investor bonus.
+                if pair_basis(sides(ind)) is None:
+                    positives = 1
+                score += int(10 * positives * lci_discount)
+            elif pair_basis(sides(ind)) is not None:
                 score += 5
 
         # 3. 재무 (10점)

@@ -19,7 +19,8 @@ US: numpy/pandas 기반 함수형 API (sma, ema, rsi, atr 등)
   MRS: Mansfield Relative Strength
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from math import isfinite
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -649,6 +650,47 @@ class TechnicalIndicators:
             mrs_slope = 0.0
 
         return {"mrs": round(mrs, 3), "mrs_slope": round(mrs_slope, 3)}
+
+    @staticmethod
+    def calculate_mrs_dated(stock_bars, index_bars, *, before: date,
+                            period: int = 20) -> Optional[Dict[str, float]]:
+        """MRS on common completed dates, strictly before the scan's KST date.
+
+        Inputs are ascending (date, close) pairs. Never fill missing sessions or
+        silently replace a missing date with its list position. The latest
+        completed benchmark session must also exist for the stock.
+        """
+        if type(before) is not date or type(period) is not int or period <= 0:
+            return None
+
+        def validated(bars):
+            result = {}
+            previous = None
+            for day, close in bars:
+                if type(day) is not date or (previous is not None and day <= previous):
+                    raise ValueError("unordered_or_invalid_date")
+                previous = day
+                if day >= before:
+                    continue
+                if isinstance(close, bool):
+                    raise ValueError("invalid_close")
+                value = float(close)
+                if not isfinite(value) or value <= 0:
+                    raise ValueError("invalid_close")
+                result[day] = value
+            return result
+
+        try:
+            stock, index = validated(stock_bars), validated(index_bars)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not stock or not index or max(index) not in stock:
+            return None
+        days = sorted(stock.keys() & index.keys())
+        if len(days) < period + 5:
+            return None
+        return TechnicalIndicators.calculate_mrs(
+            [stock[d] for d in days], [index[d] for d in days], period=period)
 
     def invalidate_cache(self, symbol: Optional[str] = None):
         """캐시 무효화"""

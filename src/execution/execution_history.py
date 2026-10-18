@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from loguru import logger
 
+from ..core.order_attribution import OrderAttribution, freeze_attribution
 from .execution_ledger import ExecutionLedger, order_unresolved
 
 
@@ -86,6 +87,19 @@ class ExecutionHistory:
         if order.id in self.keys:
             # 같은 객체 재전송을 새 의도로 바꾸지 않는다.
             raise ValueError('이미 제출 의도가 기록된 주문')
+        try:
+            attribution = getattr(order, 'attribution', None)
+            if attribution is None:
+                attribution = freeze_attribution()
+            if type(attribution) is not OrderAttribution:
+                raise ValueError('유효하지 않은 주문 귀속 객체')
+            attribution_payload = attribution.to_dict()
+        except Exception:
+            # 관측 메타데이터 결함으로 기존 매매 경로에 새 보류를 만들지 않는다.
+            attribution_payload = freeze_attribution(missing_reasons={
+                name: 'invalid' for name in
+                ('candidate_id', 'plan_id', 'signal_id', 'llm_decision_id')
+            }).to_dict()
         key = f'{self.session_id}:{order.id}'
         self.keys[order.id] = key
         await self._write('intent', key, {
@@ -93,6 +107,7 @@ class ExecutionHistory:
             'quantity': order.quantity, 'order_date': order_date,
             'strategy': order.strategy or '', 'reason': order.reason or '',
             'partial_exit': order.partial_exit is True,
+            'attribution': attribution_payload,
         })
 
     async def accepted(self, order_id, odno, orgno):

@@ -387,9 +387,14 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
 - 예: ATR 6% → max(4.0, min(8.0, 12.0)) = **8.0%**, ATR 1% → **4.0%**
 
 ### 본전 보호
-- FIRST 단계 이후: **-0.5%** 도달 시 본전 청산 (코드 `sell_fee_buffer` — 2026-09-13 문서 정정, -1.5는 구값. NONE 단계는 -2.0%)
+- 일반 비코어 포지션은 FIRST 체결 이후에만 본전 보호를 활성화할 수 있다. 활성화 후
+  FIRST/SECOND는 순손익 **-0.5%**, THIRD/TRAILING은 KR **+0.25%**·US **0%** 이하에서 청산한다.
+  코어의 **-2.0%** 예외를 일반 NONE 단계의 규칙으로 해석하지 않는다.
 
 ### ATR 연동 트레일링 (ATR-linked trailing)
+
+> 2026-10-18 개발 보완(운영 미배포): 비코어 본전 보호 이후 `max(ATR×1.5, effective_ts 또는 base_ts)`에도 활성 `atr_link_cap_pct`를 적용한다. FIRST/SECOND 고점 재설정과 THIRD/TRAILING 청산은 유지한다. 아래 백테스트 동기화 설명은 저장 임계값 공식에 한정되며, 일봉과 운영의 전체 청산 순서는 아직 다르다. [검증·남은 범위](../reviews/exit-selection-correctness-2026-10-18.md).
+
 - **배경**: SK하이닉스 4/13 일시 저점에서 고정 3% 트레일링에 조기 청산 → 4/14~ +16% 반등 누락. 매크로 노이즈에 과민.
 - **공식**: `effective_ts = min( max(config_ts, ATR_pct × atr_link_multiplier), atr_link_cap_pct )`
   - `atr_link_multiplier = 1.2` (기본)
@@ -399,14 +404,16 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
   - ATR 5%, config_ts 3% → effective = min(max(3.0, 6.0), 6.0) = **6.0%**
   - ATR 2%, config_ts 3% → effective = min(max(3.0, 2.4), 6.0) = **3.0%** (기존 방식 유지)
   - ATR 10%, config_ts 3% → effective = min(max(3.0, 12.0), 6.0) = **6.0%** (상한 clamp)
-- **비활성 조건**: ATR 미전달(fallback) / 코어홀딩(is_core=True, 고정 트레일링 우선)
+- **등록 시 예외**: ATR 미전달 시 저장된 유효값 또는 기본 트레일링을 사용한다. 본전 보호 이후
+  ATR 미확인 대체값은 2.0%이며, 활성 비코어 정책의 상한은 이 경로에도 적용한다.
+  코어홀딩(is_core=True)은 기존 트레일링과 예외를 유지한다.
 - **전달 경로**: 매수 체결 시 `_pending_signal_cache[symbol].metadata.atr_pct` → `register_position(atr_pct_hint=...)`
 - **로그**: 트레일링 발동 시 `ATR-linked trailing: 고점 대비 X% (한도=-Y%)` 형태로 출력
 - **상태 저장**: `PositionExitState.effective_trailing_stop_pct` 필드에 보관
-- **백테스트 동기화 (2026-08-02)**: `scripts/backtest_strategies.py`도 동일 공식을 사용한다.
+- **백테스트 등록 임계값 동기화 (2026-08-02)**: `scripts/backtest_strategies.py`도 등록 시 공식을 사용한다.
   이전에는 백테스트만 고정 3%를 써서 실제보다 비관적인 결과가 나왔다
   (SEPA 3개월 -12.02% vs 실제 설정 -7.19%). 진화 백테스트 게이트가 올바른 판정을 내리려면
-  **두 구현이 항상 같아야 한다** — 한쪽을 고치면 반드시 다른 쪽도 고칠 것.
+  활성 시점·단계별 고점 재설정·체결 순서는 아직 다르므로 전체 청산 동등성으로 해석하지 않는다.
 
 ### 1차 익절 재조정 (2026-08-02, 백테스트 검증)
 - **변경**: `+5% / 비중 20%` → **`+10% / 비중 10%`**

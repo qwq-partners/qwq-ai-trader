@@ -15,6 +15,8 @@ from enum import Enum, auto
 from typing import Optional, Dict, Any, List, Set
 import uuid
 
+from .order_attribution import OrderAttribution
+
 
 # ============================================================
 # 열거형 (Enums)
@@ -191,6 +193,7 @@ class Order:
     updated_at: Optional[datetime] = None
     broker_order_id: Optional[str] = None  # 브로커 주문번호
     partial_exit: bool = False             # Original intent, even if broker reduces quantity.
+    attribution: Optional[OrderAttribution] = None  # 제출 전 고정한 관측 ID
 
     @property
     def is_active(self) -> bool:
