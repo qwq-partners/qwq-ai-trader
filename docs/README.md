@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [10월18일 귀속 기능 배포 계획](superpowers/plans/2026-10-18-attribution-rollout.md): 호환 읽기 복구 기준을 먼저 확보한 뒤 기능 배포와 v5 관측 입력 교체를 진행한다. 실제 적용 상태는 실행 근거를 따른다.
+
 > [10월18일 수급 근거 후속](reviews/supply-evidence-correctness-2026-10-18.md): Swing 결측/중복 수급·일별 날짜·새 정책 관측 형식. 운영 미배포이며 검증·리뷰·후속 계측 순서를 구분한다.
 
 > [10월18일 청산·선정 입력 정비](reviews/exit-selection-correctness-2026-10-18.md): 설정 전달·활성 ATR 상한·수급 결측/중복 감점·MRS 날짜 조인. 운영 미배포, 로컬 전체7452검사·독립 중요 리뷰 승인 완료. 남은 일봉 parity·관측 스키마·실험 순서를 구분한다.
