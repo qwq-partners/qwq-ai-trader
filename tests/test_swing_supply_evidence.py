@@ -62,12 +62,8 @@ def screener(monkeypatch, foreign=None, inst=None, estimates=None):
 
 
 def freeze(monkeypatch):
-    try:
-        from src.analytics import swing_supply
-    except ImportError:
-        pass
-    else:
-        monkeypatch.setattr(swing_supply, 'utc_now', lambda: NOW)
+    from src.analytics import swing_supply
+    monkeypatch.setattr(swing_supply, 'utc_now', lambda: NOW)
     import src.signals.screener.swing_screener as module
     class Clock(datetime):
         @classmethod
@@ -371,3 +367,105 @@ def test_daily_fallback_uses_exact_day_and_refreshes_response_clock(monkeypatch)
 def test_provider_proof_rejects_malformed_or_naive_capture(capture):
     from src.analytics.swing_supply import daily_evidence
     assert daily_evidence(0, '20261019', capture) is None
+
+
+@pytest.mark.parametrize('second_market,expected', [('0001', [1.5, -1.0]), ('0002', [None, None])])
+def test_live_lci_cohorts_require_same_market(monkeypatch, second_market, expected):
+    freeze(monkeypatch)
+    from src.analytics.swing_supply import ranking_evidence, apply_lci
+    rows = []
+    for symbol, value, market in [('000001', 100, '0001'), ('000002', -100, second_market)]:
+        proof = ranking_evidence([(market, [live(value, symbol, market)])], NOW)[symbol]
+        rows.append(candidate(symbol, supply_evidence={'foreign': proof, 'institution': proof}))
+    apply_lci(rows)
+    assert [row.indicators['lci'] for row in rows] == expected
+
+
+def test_real_daily_batch_wrapper_preserves_partial_proof(monkeypatch):
+    from src.data.providers.kis_market_data import KISMarketData
+    provider = object.__new__(KISMarketData)
+    expected = {'foreign_net_buy': 0, 'inst_net_buy': 0,
+                '_supply_evidence': {'foreign': daily(0), 'institution': None}}
+    async def child(symbol, days):
+        return {'20261019': expected} if symbol == '000001' else {'20261016': expected}
+    monkeypatch.setattr(provider, 'fetch_stock_investor_daily', child)
+    result = asyncio.run(provider.fetch_batch_investor_daily(['000001', '000002'], '20261019'))
+    assert result == {'000001': expected}
+    assert result['000001']['_supply_evidence']['institution'] is None
+
+
+@pytest.mark.parametrize('count,expected_count', [(512, 512), (513, 0)])
+def test_ranking_evidence_bound_does_not_promote_truncated_snapshot(count, expected_count):
+    from src.analytics.swing_supply import ranking_evidence
+    rows = [live(0, f'{n:06d}') for n in range(1, count + 1)]
+    for row in rows[256:]:
+        row['_supply_capture']['market'] = '0002'
+    result = ranking_evidence([('0001', rows[:256]), ('0002', rows[256:])], NOW)
+    assert len(result) == expected_count
+
+
+def test_oversized_swing_cache_is_not_saved_or_promoted(monkeypatch, tmp_path):
+    import json
+    from src.analytics.swing_supply import CACHE_VERSION
+    sc, _ = screener(monkeypatch)
+    rows = {f'{n:06d}': {'foreign': daily(0), 'institution': daily(0)} for n in range(1, 514)}
+    sc._save_swing_supply_cache(rows, NOW)
+    path = tmp_path / '.cache' / 'ai_trader' / 'swing_supply_v1_20261020.json'
+    assert not path.exists()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'version': CACHE_VERSION, 'saved_at': NOW.isoformat(), 'rows': rows}))
+    assert sc._load_swing_supply_cache(NOW) == {}
+
+
+def sepa_log_capture(monkeypatch):
+    freeze(monkeypatch)
+    import src.strategies.kr.sepa_trend as module
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+    monkeypatch.setattr('datetime.datetime', Clock)
+    messages = []
+    monkeypatch.setattr(module, 'logger', SimpleNamespace(info=messages.append, warning=messages.append, debug=messages.append))
+    return messages
+
+
+def test_sepa_log_does_not_display_expired_lci(monkeypatch):
+    messages = sepa_log_capture(monkeypatch)
+    from src.analytics.swing_supply import ranking_evidence
+    proof = ranking_evidence([('0001', [live(100)])], NOW)['000001']
+    proof['captured_at'] = (NOW - timedelta(seconds=601)).isoformat()
+    row = candidate(lci=2, sepa_pass=True, atr_14=5,
+                    supply_evidence={'foreign': proof, 'institution': proof})
+    strategy = SEPATrendStrategy()
+    strategy.config.min_score = 0
+    signals = asyncio.run(strategy.generate_batch_signals([row]))
+    assert len(signals) == 1
+    signal_detail = next(msg for msg in messages if '[SEPA] 시그널:' in msg)
+    assert 'LCI=None' in signal_detail
+    detail = next(msg for msg in messages if 'pt  LCI=' in msg)
+    assert 'LCI=None' in detail
+
+
+def test_sepa_duplicate_symbol_diagnostics_use_each_candidate_threshold(monkeypatch):
+    messages = sepa_log_capture(monkeypatch)
+    dated = observed('000001', 0, 0)
+    missing = candidate('000001')
+    dated.name, missing.name = 'dated', 'missing'
+    for row in (dated, missing):
+        row.indicators['atr_14'] = 5
+    strategy = SEPATrendStrategy()
+    monkeypatch.setattr(strategy, '_calculate_sepa_score', lambda row: 66)
+    signals = asyncio.run(strategy.generate_batch_signals([dated, missing]))
+    assert len(signals) == 1
+    summary = next(msg for msg in messages if '점수분포:' in msg)
+    assert '통과=1개' in summary
+    assert any('v 000001 dated:' in msg for msg in messages)
+    assert not any('v 000001 missing:' in msg for msg in messages)
+
+
+@pytest.mark.parametrize('rows', [[], [candidate(ma200_distance_pct=81)]])
+def test_sepa_threshold_diagnostics_handle_no_scored_rows(monkeypatch, rows):
+    messages = sepa_log_capture(monkeypatch)
+    assert asyncio.run(SEPATrendStrategy().generate_batch_signals(rows)) == []
+    assert not any('시그널 생성 실패' in msg for msg in messages)

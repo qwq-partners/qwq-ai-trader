@@ -62,9 +62,6 @@ class SEPATrendStrategy(BaseStrategy):
         all_scores: List[tuple] = []
         rr_blocked: List[tuple] = []  # (symbol, stop_pct, target_pct, rr) 추적
 
-        # Only the candidate's own observed, dated pair permits freshness relief.
-        thresholds = {}
-
         # 장중 후반 진입 차단: 14:30 이후 → 익일 갭 리스크
         from datetime import datetime as _dt
         _now_hm = _dt.now().strftime("%H:%M")
@@ -86,9 +83,11 @@ class SEPATrendStrategy(BaseStrategy):
                     effective_min_score = max(50.0, self.config.min_score - 10.0)
                 elif age is not None and age >= 1:
                     effective_min_score = max(48.0, self.config.min_score - 5.0)
-                thresholds[candidate.symbol] = effective_min_score
                 score = self._calculate_sepa_score(candidate)
-                all_scores.append((score, candidate.symbol, candidate.name))
+                # Keep diagnostics with the actual row; duplicate symbols can
+                # have different evidence ages and admission thresholds.
+                all_scores.append((score, candidate.symbol, candidate.name,
+                                   effective_min_score, candidate))
 
                 if score < effective_min_score:
                     continue
@@ -171,10 +170,12 @@ class SEPATrendStrategy(BaseStrategy):
                 )
                 signals.append(signal)
 
+                displayed_lci = (candidate.indicators.get("lci")
+                                 if pair_basis(sides(candidate.indicators)) is not None else None)
                 logger.info(
                     f"[SEPA] 시그널: {candidate.symbol} {candidate.name} "
                     f"점수={score:.0f} MRS={candidate.indicators.get('mrs', 'N/A')} "
-                    f"LCI={candidate.indicators.get('lci', 'N/A')}"
+                    f"LCI={displayed_lci}"
                 )
 
             except Exception as e:
@@ -191,27 +192,22 @@ class SEPATrendStrategy(BaseStrategy):
 
         # 점수 분포 요약 로그
         if all_scores:
-            all_scores.sort(reverse=True)
+            all_scores.sort(key=lambda row: row[:3], reverse=True)
             top = all_scores[:10]
-            passed = sum(1 for s, sym, _ in all_scores if s >= thresholds[sym])
+            passed = sum(1 for s, _, _, threshold, _ in all_scores if s >= threshold)
             rr_block_count = len(rr_blocked)
             logger.info(
                 f"[SEPA] 점수분포: 전체={len(all_scores)}개, "
                 f"통과={passed}개 (종목별 검증된 수급 날짜 기준), "
                 f"R/R차단={rr_block_count}개, "
-                f"평균={sum(s for s,_,_ in all_scores)/len(all_scores):.1f}, "
+                f"평균={sum(row[0] for row in all_scores)/len(all_scores):.1f}, "
                 f"최고={all_scores[0][0]:.1f}"
             )
             logger.info(f"[SEPA] 상위 10개 점수:")
-            for score_val, sym, name in top:
-                lci = None
-                atr_val = None
-                for c in candidates:
-                    if c.symbol == sym:
-                        lci = c.indicators.get("lci")
-                        atr_val = c.indicators.get("atr_14")
-                        break
-                mark = "v" if score_val >= thresholds[sym] else " "
+            for score_val, sym, name, threshold, c in top:
+                lci = c.indicators.get("lci") if pair_basis(sides(c.indicators)) is not None else None
+                atr_val = c.indicators.get("atr_14")
+                mark = "v" if score_val >= threshold else " "
                 logger.info(
                     f"  {mark} {sym} {name}: {score_val:.1f}pt  "
                     f"LCI={f'{lci:.2f}' if lci is not None else 'None'}  "

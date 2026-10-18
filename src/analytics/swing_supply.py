@@ -131,7 +131,7 @@ def pair_basis(proofs):
         days = [datetime.fromisoformat(p['captured_at']).astimezone(KST).date() for p in proofs]
         if days[0] != days[1]:
             return None
-        return (LIVE_SOURCE, days[0].isoformat(), 'capture_date_only')
+        return (LIVE_SOURCE, days[0].isoformat(), 'capture_date_only', foreign['market'])
     return (DAILY_SOURCE, foreign['source_date'], 'provider_date')
 
 
