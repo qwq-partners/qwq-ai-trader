@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 
 import aiohttp
@@ -424,6 +424,7 @@ class KISMarketData:
                     _mark_selection_source("payload", count=len(output))
 
                 from src.analytics.selection_supply_policy import supply_proof, validated_quantity
+                captured_at = datetime.now(timezone.utc).isoformat()
                 invalid_qty_count = min(512, sum(
                     1 for item in output
                     if isinstance(item, dict) and "ntby_qty" in item
@@ -461,6 +462,7 @@ class KISMarketData:
                         "name": name,
                         "net_buy_qty": net_qty,
                         "_supply_proof": proof,
+                        "_supply_capture": {"captured_at": captured_at, "market": market},
                         "net_buy_amt": int(item.get("ntby_tr_pbmn", 0) or 0),
                         "price": float(item.get("stck_prpr", 0) or 0),
                         "change_pct": float(item.get("prdy_ctrt", 0) or 0),
@@ -606,19 +608,34 @@ class KISMarketData:
                 data = await observed.json(resp)
                 if data.get("rt_cd") != "0":
                     return result
+                from src.analytics.swing_supply import daily_evidence
+                captured_at = datetime.now(timezone.utc).isoformat()
+                seen_proofs = {}
                 for item in data.get("output", []):
                     date_str = item.get("stck_bsop_date", "")
-                    frgn_raw = item.get("frgn_ntby_qty", "")
-                    orgn_raw = item.get("orgn_ntby_qty", "")
-                    if not date_str or (not frgn_raw and not orgn_raw):
+                    foreign = daily_evidence(item.get("frgn_ntby_qty"), date_str, captured_at)
+                    institution = daily_evidence(item.get("orgn_ntby_qty"), date_str, captured_at)
+                    if daily_evidence(0, date_str, captured_at) is None:
+                        continue  # malformed dates cannot become cache keys
+                    # Keep legacy numeric fields, but never promote their fallback
+                    # zeros to evidence of an observed investor quantity.
+                    quantities = {"foreign_net_buy": foreign["value"] if foreign is not None else 0,
+                                  "inst_net_buy": institution["value"] if institution is not None else 0}
+                    proofs = {"foreign": foreign, "institution": institution}
+                    if date_str in seen_proofs:
+                        previous = seen_proofs[date_str]
+                        for side, proof in proofs.items():
+                            old = previous[side]
+                            if old is None or proof is None or old["value"] != proof["value"]:
+                                proofs[side] = None  # conflict is sticky within this response
+                    seen_proofs[date_str] = proofs
+                    if foreign is None and institution is None:
+                        # Preserve legacy omission of wholly malformed rows, while
+                        # keeping their duplicate conflicts sticky for proof users.
+                        if date_str in result:
+                            result[date_str]["_supply_evidence"] = proofs
                         continue
-                    try:
-                        result[date_str] = {
-                            "foreign_net_buy": int(frgn_raw) if frgn_raw else 0,
-                            "inst_net_buy":    int(orgn_raw) if orgn_raw else 0,
-                        }
-                    except (ValueError, TypeError):
-                        pass
+                    result[date_str] = {**quantities, "_supply_evidence": proofs}
             if result:
                 self._cache[cache_key] = result
                 self._cache_ts[cache_key] = datetime.now()
