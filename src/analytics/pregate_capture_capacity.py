@@ -17,7 +17,8 @@ from .entry_markout import MarkoutPolicy
 from .entry_observation_journal import MAX_LINE_BYTES
 from .entry_price_shadow import KST, _timestamp
 from .first_scan_resources import (FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES,
-                                   first_scan_record_limits)
+                                   first_scan_record_limits, first_scan_record_byte_limits,
+                                   first_scan_journal_bound)
 from .kis_frame_diagnostics import validate_settings as validate_frame_settings
 from .selection_basis import validate_settings as validate_selection_settings
 
@@ -45,7 +46,7 @@ _CAPTURE_FIELDS = frozenset((
     "journal_path", *_RESOURCE_FIELDS, "open_timeout_seconds", "close_timeout_seconds",
     "channels", "selection_basis", "entry_gate_trace", "frame_diagnostics",
 ))
-_OPTIONAL_CAPTURE_FIELDS = frozenset(("record_allocations",))
+_OPTIONAL_CAPTURE_FIELDS = frozenset(("record_allocations", "record_max_bytes"))
 _MARKOUT_FIELDS = frozenset(("version", "policy_ref", "fixed_at", "horizon_seconds",
                              "max_delay_seconds", "anchor"))
 
@@ -177,6 +178,8 @@ def assess_pregate_capture_resources(
     markout_tail_seconds = (end - admission_end).total_seconds()
     minimum_journal_bytes = (resources["buffer_capacity"]
                              * (resources["max_record_bytes"] + 2048) + 2048)
+    if guarded_limits is not None:
+        minimum_journal_bytes = first_scan_journal_bound(capture, guarded_limits)
 
     checks = {
         "registration_capacity": _check(passed=registration_used <= configured_cap,
@@ -249,6 +252,7 @@ def assess_pregate_capture_resources(
             "markout_max_delay_seconds": MARKOUT_MAX_DELAY_SECONDS,
             "runtime_channel_cap": RUNTIME_CHANNEL_CAP,
             "guarded_record_allocations": guarded_limits,
+            "guarded_record_max_bytes": first_scan_record_byte_limits(capture),
             "guarded_record_total": sum(guarded_limits.values()) if guarded_limits is not None else None,
         },
         "checks": checks,

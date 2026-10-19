@@ -14,8 +14,11 @@ from pathlib import Path
 import stat
 
 from .entry_observation import EntryObservationBuffer
-from .entry_observation_journal import ObservationJournal, MAX_LINE_BYTES, _unique_keys, _reject_constant
+from .entry_observation_journal import ObservationJournal, MAX_LINE_BYTES, _unique_keys, _reject_constant, _json
 from .entry_price_shadow import build_report, _timestamp, KST
+from .first_scan_resources import (FIRST_SCAN_VERSION, FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES,
+                                   first_scan_record_limits, first_scan_record_byte_limits,
+                                   first_scan_journal_bound)
 
 
 READY_VERSION = 'runner-order-ready-window-v1'
@@ -52,6 +55,17 @@ def _decode(raw):
 def validate_window_contract(context, observations=None):
     """Offline as well as install-time binding; never reopen or amend a study."""
     s = context.get('capture', {})
+    first_limits = first_scan_record_limits(s)
+    if first_limits is not None and observations is not None:
+        counts = dict.fromkeys(first_limits, 0)
+        byte_limits = first_scan_record_byte_limits(s)
+        for record in observations['records']:
+            category = _record_category(record)
+            counts[category] += 1
+            if counts[category] > first_limits[category]:
+                raise ValueError('첫 스캔 replay exceeds declared record allocation')
+            if byte_limits is not None and len(_json(record)) > byte_limits[category]:
+                raise ValueError('첫 스캔 replay exceeds declared record byte limit')
     rest_opt_in = 'rest_market_state_evidence' in s
     if rest_opt_in and (s.get('version') != LLM_VERSION or s['rest_market_state_evidence'] is not True):
         raise ValueError('REST 상태 근거는 명시 LLM 창의 true 계약만 허용')
@@ -394,6 +408,10 @@ class CapturePlan:
             expected.add('frame_diagnostics')
         if type(s) is dict and s.get('version') in WINDOW_VERSIONS:
             expected.update(('max_scans', 'quote_admission'))
+        if type(s) is dict and s.get('version') == FIRST_SCAN_VERSION and 'record_allocations' in s:
+            expected.add('record_allocations')
+            if 'record_max_bytes' in s:
+                expected.add('record_max_bytes')
         if type(s) is dict and s.get('version') == LLM_VERSION:
             expected.add('record_allocations')
             if 'rest_market_state_evidence' in s:
@@ -404,7 +422,7 @@ class CapturePlan:
         if s['version'] in ('runner-first-scan-v4', 'runner-signal-window-v1', 'runner-order-ready-window-v1', LLM_VERSION):
             from .kis_frame_diagnostics import validate_settings as validate_frame_settings
             validate_frame_settings(s['frame_diagnostics'])
-        if s['version'] in WINDOW_VERSIONS:
+        if s['version'] in WINDOW_VERSIONS or first_scan_record_limits(s) is not None:
             validate_window_contract(context)
         for key in ('study_ref', 'scan_admission_ref', 'source_version_ref', 'configuration_ref',
                     'fee_evidence_ref', 'capital_evidence_ref', 'capacity_evidence_ref'):
@@ -481,9 +499,12 @@ class CapturePlan:
         if contract.get('market_state_evidence'):
             # 전체 유한 버퍼가 한 번에 큐에 들어가도 상태 추가 때문에 writer가
             # 끊기지 않도록 보수적으로 예약한다. 실제 유량 충족은 파일럿 검증이다.
+            first_limits = first_scan_record_limits(s)
+            journal_bound = (first_scan_journal_bound(s, first_limits) if first_limits is not None
+                             else s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048)
             if (s['buffer_capacity'] < metadata_records + contract['market_state_max_records']
                     or s['queue_capacity'] < s['buffer_capacity']
-                    or s['max_bytes'] < s['buffer_capacity'] * (s['max_record_bytes'] + 2048) + 2048):
+                    or s['max_bytes'] < journal_bound):
                 raise ValueError('market-state 유한 메모리/큐/저장 예산 부족')
         if contract['lease_seconds'] < (end-start).total_seconds():
             raise ValueError('관측 종료까지 충분한 lease 필요')
@@ -492,6 +513,8 @@ class CapturePlan:
 class _WindowBuffer(EntryObservationBuffer):
     def __init__(self, plan, now):
         s = plan.settings
+        first_limits = first_scan_record_limits(s)
+        guarded = s['version'] == LLM_VERSION or first_limits is not None
         super().__init__(evaluation_epoch=plan.context['evaluation_epoch'], capacity=s['buffer_capacity'],
                          scan_scope='window' if s['version'] in WINDOW_VERSIONS else 'first',
                          max_scans=s.get('max_scans'), scan_admission_ref=s['scan_admission_ref'],
@@ -499,8 +522,9 @@ class _WindowBuffer(EntryObservationBuffer):
                          entry_gate_trace_settings=s.get('entry_gate_trace'),
                          frame_diagnostics_settings=s.get('frame_diagnostics'),
                          retained_memory_limit_bytes=(LLM_RETAINED_MEMORY_LIMIT_BYTES
-                             if s['version'] == LLM_VERSION else None),
-                         max_record_bytes=s['max_record_bytes'] if s['version'] == LLM_VERSION else None)
+                             if s['version'] == LLM_VERSION else
+                             FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES if first_limits is not None else None),
+                         max_record_bytes=s['max_record_bytes'] if guarded else None)
         self.rest_market_state_evidence = s.get('rest_market_state_evidence') is True
         self.llm_admission = s['version'] == LLM_VERSION
         self.llm_quote_submit = None
@@ -508,7 +532,8 @@ class _WindowBuffer(EntryObservationBuffer):
         self._llm_seen = set()
         self._record_counts = {}
         self._record_limits = ({**s['record_allocations'], 'scan_metadata': _scan_records(s)}
-                               if self.llm_admission else {})
+                               if self.llm_admission else first_limits or {})
+        self._record_byte_limits = first_scan_record_byte_limits(s)
         self.order_ready_admission = s['version'] == READY_VERSION
         self.order_ready_quote_submit = None
         self._ready_signals = {}
@@ -520,6 +545,16 @@ class _WindowBuffer(EntryObservationBuffer):
         self.admission_end = _timestamp(s['admission_end_at'], 'admission_end_at')
         self.ended = False
         self._last_clock = now()
+
+    def _retention_input_allowed(self, record, count=1, sequence=None):
+        if not super()._retention_input_allowed(record, count, sequence):
+            return False
+        if self._record_byte_limits is not None:
+            # 기본 버퍼가 scan 범위 필드를 붙인 뒤에도 같은 검사를 다시 거친다.
+            checked = {**record, 'sequence': len(self._records) + 1 if sequence is None else sequence}
+            if len(_json(checked)) > self._record_byte_limits[_record_category(record)]:
+                return self._memory_rejected(count, 'record_byte_limit')
+        return True
 
     def current_time(self):
         now = self._now()
@@ -558,12 +593,15 @@ class _WindowBuffer(EntryObservationBuffer):
         if self.llm_admission and record.get('kind') == 'llm_check_started':
             return self._publish_llm_check(record)
         category = _record_category(record)
-        if self.llm_admission and self._record_counts.get(category, 0) >= self._record_limits[category]:
+        if self._record_limits and self._record_counts.get(category, 0) >= self._record_limits[category]:
+            if not self.llm_admission:
+                self._dropped += 1
             self.mark_incomplete(category + '_record_limit')
             return False
         recorded = super().publish(record)
-        if recorded and self.llm_admission:
+        if recorded and self._record_limits:
             self._record_counts[category] = self._record_counts.get(category, 0) + 1
+        if recorded and self.llm_admission:
             try:
                 if record.get('kind') == 'scan':
                     for candidate in record.get('candidates', []):
