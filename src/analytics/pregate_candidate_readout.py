@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import timedelta
+from decimal import Decimal, DecimalException
 import hashlib
 from typing import Mapping
 
@@ -66,6 +67,19 @@ def _book_valid(record):
                 or p.get("message_count") != 1 or p.get("source_as_of") is not None
                 or received > observed):
             return False
+        for key in ("bid", "ask"):
+            value = record.get(key)
+            if type(value) is bool or not isinstance(value, (str, int, float, Decimal)):
+                return False
+            try:
+                if not Decimal(str(value)).is_finite() or Decimal(str(value)) <= 0:
+                    return False
+            except (DecimalException, ValueError):
+                return False
+        if Decimal(str(record["bid"])) > Decimal(str(record["ask"])):
+            return False
+        if any(type(record.get(key)) is not int or record[key] <= 0 for key in ("bid_size", "ask_size")):
+            return False
         return True
     except ValueError:
         return False
@@ -74,9 +88,13 @@ def _book_valid(record):
 def _compact_quote(record):
     if record is None:
         return None
-    fields = ("quote_id", "symbol", "bid", "ask", "bid_size", "ask_size", "observed_at")
+    fields = ("sequence", "quote_id", "symbol", "bid", "ask", "bid_size", "ask_size", "observed_at")
     out = {key: deepcopy(record.get(key)) for key in fields}
-    out["received_at"] = deepcopy(record.get("provenance", {}).get("received_at"))
+    provenance = record.get("provenance", {})
+    out["received_at"] = deepcopy(provenance.get("received_at"))
+    out["provenance"] = {key: deepcopy(provenance.get(key)) for key in
+                         ("tr_id", "connection_id", "generation", "exchange_time", "hour_class_code",
+                          "market_class_code", "raw_field_count", "message_count", "source_as_of")}
     return out
 
 
@@ -104,7 +122,7 @@ def _allocation(records, candidate_id, symbol, scan_sequence):
     return None, "not_recorded", history
 
 
-def _first_book_after(records, *, symbol, after_sequence, as_of):
+def _first_book_after(records, *, symbol, after_sequence, scan_at, allocation_at, capture_end, as_of):
     for row in records:
         if row.get("sequence", 0) <= after_sequence or row.get("kind") != "ws_quote" or row.get("symbol") != symbol:
             continue
@@ -114,24 +132,27 @@ def _first_book_after(records, *, symbol, after_sequence, as_of):
             received, observed = _quote_time(row)
         except ValueError:
             return row, "first_krx_book_invalid"
-        if received > as_of or observed > as_of:
+        if received < scan_at or received < allocation_at:
+            return row, "first_krx_book_before_scan_or_allocation"
+        if received > capture_end or received > as_of or observed > capture_end or observed > as_of:
             continue
         return row, None if _book_valid(row) else "first_krx_book_invalid"
     return None, "first_krx_book_missing"
 
 
-def _market_state(records, entry, as_of):
-    if entry is None or not _book_valid(entry):
+def _market_state(records, quote, as_of):
+    if quote is None or not _book_valid(quote):
         return {"verdict": "unknown", "basis": ["entry_quote_unavailable"], "source_refs": []}
-    p = entry["provenance"]
+    p = quote["provenance"]
     connection, generation = p.get("connection_id"), p.get("generation")
     if type(connection) is not str or not connection or type(generation) is not int or type(generation) is bool:
         return {"verdict": "unknown", "basis": ["entry_connection_or_generation_missing"], "source_refs": []}
-    received, _ = _quote_time(entry)
+    received, _ = _quote_time(quote)
     state_rows = []
     equal_time_channels = set()
     for row in records:
-        if row.get("kind") != "market_state" or row.get("sequence", 0) >= entry["sequence"]:
+        if (row.get("kind") != "market_state" or row.get("symbol") != quote.get("symbol")
+                or row.get("sequence", 0) >= quote["sequence"]):
             continue
         state_rows.append(row)
         try:
@@ -172,44 +193,45 @@ def _market_state(records, entry, as_of):
         result["verdict"] = "unknown"
         result["basis"] = list(result.get("basis", [])) + ["state_not_strictly_prior:" + tr
                                                                for tr in sorted(equal_time_channels & {"H0STCNT0", "H0STMKO0"})]
+    result = deepcopy(result)
+    result["raw_channel_evidence"] = {tr: deepcopy(latest[tr][1]) if tr in latest else None
+                                      for tr in ("H0STCNT0", "H0STMKO0")}
     return result
 
 
-def _markout(records, entry, as_of, study):
+def _markout(records, entry, as_of, study, capture_end):
     if entry is None or not _book_valid(entry):
         return None, "entry_quote_unavailable"
     _, entry_observed = _quote_time(entry)
     target = entry_observed + timedelta(seconds=HORIZON_SECONDS)
+    if target > capture_end:
+        return None, "missing_mature_markout_window"
     if target > as_of:
         return None, "markout_not_matured"
-    quotes = [row for row in records if row.get("kind") == "ws_quote" and row.get("symbol") == entry.get("symbol")
-              and row.get("sequence", 0) > entry.get("sequence", 0)]
-    # Reuse the shared selector only when its fixed policy says exactly the contract here.
-    policy_data = study.get("markout_policy") if type(study) is dict else None
+    quotes = [row for row in records if (row.get("kind") == "ws_quote" and row.get("symbol") == entry.get("symbol")
+                                         and row.get("sequence", 0) > entry.get("sequence", 0)
+                                         and row.get("provenance", {}).get("tr_id") == BOOK_TR)]
     try:
-        policy = MarkoutPolicy.from_dict(policy_data)
-        if policy.horizon_seconds == HORIZON_SECONDS and policy.max_delay_seconds == MAX_MARKOUT_DELAY_SECONDS:
-            selected = select_markout_quote(entry, quotes, policy)
-            if selected is not None:
-                received, observed = _quote_time(selected)
-                if received <= as_of and observed <= as_of:
-                    return (selected, None if _book_valid(selected) and observed - target <= timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS)
-                            else "first_markout_book_invalid")
+        policy = MarkoutPolicy.from_dict(study.get("markout_policy"))
+        start = _timestamp(study["capture"]["start_at"], "capture start_at")
+        if (policy.horizon_seconds != HORIZON_SECONDS or policy.max_delay_seconds != Decimal(MAX_MARKOUT_DELAY_SECONDS)
+                or policy.fixed_at > start):
+            raise ValueError("incompatible pregate markout policy")
+        selected = select_markout_quote(entry, quotes, policy)
     except (ValueError, TypeError, KeyError):
-        pass
-    for row in quotes:
-        if row.get("provenance", {}).get("tr_id") != BOOK_TR:
-            continue
+        return None, "markout_stream_invalid"
+    if selected is not None:
         try:
-            received, observed = _quote_time(row)
+            selected_received, selected_observed = _quote_time(selected)
         except ValueError:
-            return None, "first_markout_book_invalid"
-        if received > as_of or observed > as_of:
-            continue
-        if received >= target:
-            if received - target > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
-                return None, "first_markout_book_too_late"
-            return (row, None if _book_valid(row) else "first_markout_book_invalid")
+            return selected, "first_markout_book_invalid"
+        if selected_received > capture_end or selected_observed > capture_end or selected_received > as_of or selected_observed > as_of:
+            return None, "markout_book_missing"
+        if selected_received - target > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
+            return selected, "first_markout_book_too_late"
+        if selected_observed - selected_received > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
+            return selected, "first_markout_book_publication_delayed"
+        return selected, None if _book_valid(selected) else "first_markout_book_invalid"
     return None, "markout_book_missing"
 
 
@@ -221,6 +243,15 @@ def build_pregate_candidate_report(study_bytes, observations, *, study_sha256, a
     study = load_json_bytes(study_bytes)
     if type(study) is not dict or study.get("capture", {}).get("version") != PROFILE:
         raise ValueError("runner-first-scan-v4 study required")
+    capture = study["capture"]
+    channels = capture.get("channels")
+    if (type(channels) is not dict or channels.get("max_candidates") != TOP_CANDIDATES
+            or type(channels.get("max_candidates")) is not int
+            or channels.get("market_state_evidence") is not True):
+        raise ValueError("pregate requires fixed five BOOK/state channel contract")
+    capture_start = _timestamp(capture.get("start_at"), "capture start_at")
+    capture_admission_end = _timestamp(capture.get("admission_end_at"), "capture admission_end_at")
+    capture_end = _timestamp(capture.get("end_at"), "capture end_at")
     as_of = _timestamp(analysis_as_of, "analysis_as_of")
     _strict_complete(observations, sha)
     if observations.get("evaluation_epoch") != study.get("evaluation_epoch"):
@@ -236,36 +267,53 @@ def build_pregate_candidate_report(study_bytes, observations, *, study_sha256, a
         raise ValueError("exactly one first scan required")
     scan = scans[0]
     if (scan.get("population_scope") != "first_returned_scan_candidates"
-            or scan.get("scan_admission_ref") != study["capture"].get("scan_admission_ref")
+            or scan.get("scan_admission_ref") != capture.get("scan_admission_ref")
             or type(scan.get("candidates")) is not list):
         raise ValueError("first returned scan binding required")
+    scan_at = _timestamp(scan.get("observed_at"), "first scan observed_at")
+    if not capture_start <= scan_at <= capture_admission_end:
+        raise ValueError("first scan outside capture admission window")
     candidates = scan["candidates"]
     seen = set()
     rows = []
-    for rank, candidate in enumerate(candidates[:TOP_CANDIDATES], 1):
+    for rank, candidate in enumerate(candidates, 1):
         if type(candidate) is not dict or type(candidate.get("symbol")) is not str or type(candidate.get("candidate_id")) is not str:
             raise ValueError("candidate identity required")
         cid, symbol = candidate["candidate_id"], candidate["symbol"]
         if cid != f"{scan.get('scan_id')}:{symbol}" or cid in seen:
             raise ValueError("candidate identity mismatch")
         seen.add(cid)
+        if rank > TOP_CANDIDATES:
+            rows.append({"candidate_id": cid, "symbol": symbol, "rank": rank,
+                         "allocation_status": "not_subscribed_by_fixed_top_n", "allocation_history": [],
+                         "entry_quote": None, "markout_quote": None,
+                         "entry_market_state": {"verdict": "unknown", "basis": ["not_subscribed_by_fixed_top_n"], "source_refs": []},
+                         "markout_market_state": {"verdict": "unknown", "basis": ["not_subscribed_by_fixed_top_n"], "source_refs": []},
+                         "reasons": ["not_subscribed_by_fixed_top_n"]})
+            continue
         allocation, allocation_status, history = _allocation(records, cid, symbol, scan["sequence"])
-        entry, entry_reason = (None, "allocation_not_recorded") if allocation is None else _first_book_after(
-            records, symbol=symbol, after_sequence=allocation["sequence"], as_of=as_of)
-        markout, markout_reason = _markout(records, entry, as_of, study)
+        try:
+            allocation_at = _timestamp(allocation["observed_at"], "allocation observed_at") if allocation else None
+        except ValueError:
+            allocation_at = None
+        entry, entry_reason = (None, "allocation_not_recorded") if allocation is None or allocation_at is None else _first_book_after(
+            records, symbol=symbol, after_sequence=allocation["sequence"], scan_at=scan_at, allocation_at=allocation_at,
+            capture_end=capture_end, as_of=as_of)
+        markout, markout_reason = _markout(records, entry, as_of, study, capture_end)
         reasons = [reason for reason in (entry_reason, markout_reason) if reason is not None]
         rows.append({"candidate_id": cid, "symbol": symbol, "rank": rank,
                      "allocation_status": allocation_status, "allocation_history": history,
                      # Preserve the first raw BOOK even when it is unusable.  Hiding it
                      # would make a later valid quote look like the baseline.
                      "entry_quote": _compact_quote(entry), "markout_quote": _compact_quote(markout),
-                     "market_state": _market_state(records, entry, as_of), "reasons": reasons})
+                     "entry_market_state": _market_state(records, entry, as_of),
+                     "markout_market_state": _market_state(records, markout, as_of), "reasons": reasons})
     return {"schema_version": "pregate-candidate-readout-v1", "evaluation_epoch": observations["evaluation_epoch"],
             "analysis_as_of": as_of.isoformat(), "study_sha256": sha,
             "denominator": {"population_scope": "first_returned_scan_candidates", "returned_candidates": len(candidates),
-                            "sampled_candidates": len(rows), "sampling_limit": TOP_CANDIDATES},
+                            "sampled_candidates": min(TOP_CANDIDATES, len(candidates)), "sampling_limit": TOP_CANDIDATES},
             "candidates": rows, "validation": {"frame": frame, "selection": selection, "gates": gates},
             "account_return": None, "profitability_pass": False, "production_eligible": False,
             "source_authenticity_verified": False,
             "limitations": ["Prices and states are observations, not orders, fills, capital allocation, or P&L.",
-                            "Only the returned first scan is the denominator; ranks after five are intentionally unobserved."]}
+                            "Only the returned first scan is the denominator; ranks after five are intentionally unsubscribed."]}

@@ -16,7 +16,12 @@ def module():
 
 def fixture():
     study = {"evaluation_epoch": "synthetic-firstscan-v4", "capture": {
-        "version": "runner-first-scan-v4", "scan_admission_ref": "synthetic"}}
+        "version": "runner-first-scan-v4", "scan_admission_ref": "synthetic",
+        "start_at": "2026-10-19T00:59:00+00:00", "admission_end_at": "2026-10-19T01:10:00+00:00",
+        "end_at": AT, "channels": {"max_candidates": 5, "market_state_evidence": True}},
+        "markout_policy": {"version": "fixed-horizon-bid-v1", "policy_ref": "synthetic-pregate-900",
+        "fixed_at": "2026-10-18T00:00:00+00:00", "horizon_seconds": 900, "max_delay_seconds": 5,
+        "anchor": "entry_quote_observed_at"}}
     raw = json.dumps(study, separators=(",", ":")).encode()
     candidates = [{"candidate_id": f"scan:{n:06d}", "symbol": f"{n:06d}"} for n in range(7)]
     rows = [{"kind": "scan", "sequence": 1, "scan_id": "scan", "observed_at": "2026-10-19T01:00:00+00:00",
@@ -59,9 +64,10 @@ def test_preserves_all_first_candidates_but_samples_top_five(monkeypatch):
     raw, obs = fixture(); m = valid(monkeypatch)
     report = m.build_pregate_candidate_report(raw, obs, study_sha256=hashlib.sha256(raw).hexdigest(), analysis_as_of=AT)
     assert report["denominator"]["returned_candidates"] == 7
-    assert len(report["candidates"]) == 5
+    assert len(report["candidates"]) == 7
     assert report["candidates"][0]["entry_quote"]["quote_id"] == "q-0"
     assert report["candidates"][0]["markout_quote"]["quote_id"] == "m-0"
+    assert all(row["allocation_status"] == "not_subscribed_by_fixed_top_n" for row in report["candidates"][5:])
     assert report["account_return"] is None and report["profitability_pass"] is False
 
 
@@ -83,6 +89,28 @@ def test_bad_first_and_future_markout_are_not_replaced(monkeypatch):
     assert "first_krx_book_invalid" in report["candidates"][0]["reasons"]
 
 
+@pytest.mark.parametrize("field,value", [("bid", "0"), ("ask", "NaN"), ("bid_size", 0), ("ask_size", True), ("ask", "99")])
+def test_bad_first_book_price_or_depth_is_preserved_not_replaced(monkeypatch, field, value):
+    raw, obs = fixture(); m = valid(monkeypatch)
+    first = next(r for r in obs["records"] if r.get("quote_id") == "q-0")
+    first[field] = value
+    report = m.build_pregate_candidate_report(raw, obs, study_sha256=hashlib.sha256(raw).hexdigest(), analysis_as_of=AT)
+    assert report["candidates"][0]["entry_quote"]["quote_id"] == "q-0"
+    assert "first_krx_book_invalid" in report["candidates"][0]["reasons"]
+
+
+def test_markout_clock_regression_does_not_select_later_quote(monkeypatch):
+    raw, obs = fixture(); m = valid(monkeypatch); study = json.loads(raw)
+    entry = next(r for r in obs["records"] if r.get("quote_id") == "q-0")
+    prior = deepcopy(entry); prior.update(sequence=100, quote_id="before-target", observed_at="2026-10-19T01:15:10+00:00")
+    prior["provenance"]["received_at"] = "2026-10-19T01:15:04+00:00"
+    candidate = deepcopy(entry); candidate.update(sequence=101, quote_id="regressed", observed_at="2026-10-19T01:15:06+00:00")
+    candidate["provenance"]["received_at"] = "2026-10-19T01:15:06+00:00"
+    selected, reason = m._markout([entry, prior, candidate], entry, m._timestamp(AT, "as_of"), study,
+                                  m._timestamp(AT, "capture_end"))
+    assert selected is None and reason == "markout_stream_invalid"
+
+
 @pytest.mark.parametrize("defect", ["unsealed", "dropped", "study_mismatch"])
 def test_integrity_mismatch_is_rejected(monkeypatch, defect):
     raw, obs = fixture(); m = valid(monkeypatch)
@@ -96,10 +124,11 @@ def test_integrity_mismatch_is_rejected(monkeypatch, defect):
 def test_same_time_or_stale_market_state_is_never_normal(monkeypatch):
     m = module()
     entry = {"sequence": 4, "kind": "ws_quote", "symbol": "000001", "observed_at": "2026-10-19T01:00:02+00:00",
+             "bid": "100", "ask": "101", "bid_size": 1, "ask_size": 1,
              "provenance": {"tr_id": "H0STASP0", "message_count": 1, "source_as_of": None,
                             "received_at": "2026-10-19T01:00:01+00:00", "connection_id": "c", "generation": 1}}
     monkeypatch.setattr(m, "classify_market_state", lambda *_a, **_k: {"verdict": "normal_continuous", "basis": [], "source_refs": []})
-    state = {"sequence": 3, "kind": "market_state", "tr_id": "H0STCNT0", "received_at": "2026-10-19T01:00:01+00:00"}
+    state = {"sequence": 3, "kind": "market_state", "symbol": "000001", "tr_id": "H0STCNT0", "received_at": "2026-10-19T01:00:01+00:00"}
     report = m._market_state([state], entry, m._timestamp(AT, "as_of"))
     assert report["verdict"] == "unknown" and "state_not_strictly_prior:H0STCNT0" in report["basis"]
 
