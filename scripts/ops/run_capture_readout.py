@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = 'deterministic-capture-readout-v1'
+PREGATE_VERSION = 'deterministic-pregate-readout-v1'
 MAX_INPUT = 268435456
 MAX_STUDY = 4 * 1024 * 1024
 MAX_OUTPUT = 32 * 1024 * 1024
@@ -30,6 +31,9 @@ TOOLS = (
 )
 FIELDS = {'version', 'study', 'study_sha256', 'ledger', 'decisions', 'output_dir',
           'not_before', 'not_after', 'source_sha256'}
+PREGATE_FIELDS = FIELDS - {'decisions'}
+PROFILE_ALIASES = {'legacy': VERSION, 'pregate': PREGATE_VERSION}
+PREGATE_SCRIPTS = ('report_pregate_candidate_observation.py', 'report_entry_gate_trace.py')
 
 
 def _json(raw):
@@ -94,9 +98,20 @@ def _read_small(path, maximum):
     return raw
 
 
-def source_fingerprint():
+def _version(version):
+    version = PROFILE_ALIASES.get(version, version)
+    if version not in (VERSION, PREGATE_VERSION):
+        raise ValueError('unknown readout profile')
+    return version
+
+
+def source_fingerprint(version=VERSION):
     """실행 코드 전체의 경로/바이트 결합 SHA. Git·환경 파일은 읽지 않는다."""
-    files = [ROOT / 'scripts' / script for _, script in TOOLS]
+    version = _version(version)
+    if version == VERSION:
+        files = [ROOT / 'scripts' / script for _, script in TOOLS]
+    else:
+        files = [ROOT / 'scripts' / script for script in PREGATE_SCRIPTS]
     files.append(ROOT / 'scripts/ops/run_capture_readout.py')
     for optional in ('scripts/__init__.py', 'scripts/ops/__init__.py'):
         path = ROOT / optional
@@ -128,12 +143,17 @@ def _manifest(path):
     path = _path(str(path))
     raw = _read_small(path, 65536)
     data = _json(raw)
-    if type(data) is not dict or set(data) != FIELDS or data['version'] != VERSION:
+    if type(data) is not dict or not isinstance(data.get('version'), str):
+        raise ValueError('manifest schema mismatch')
+    version = _version(data['version'])
+    fields = FIELDS if version == VERSION else PREGATE_FIELDS
+    if set(data) != fields or data['version'] != version:
         raise ValueError('manifest schema mismatch')
     for field in ('study_sha256', 'source_sha256'):
         if not isinstance(data[field], str) or not re.fullmatch('[0-9a-f]{64}', data[field]):
             raise ValueError('expected SHA-256 required')
-    paths = [_path(data[key]) for key in ('study', 'ledger', 'decisions', 'output_dir')]
+    input_keys = ('study', 'ledger', 'decisions') if version == VERSION else ('study', 'ledger')
+    paths = [_path(data[key]) for key in (*input_keys, 'output_dir')]
     if len(set(paths)) != len(paths):
         raise ValueError('paths must be distinct')
     output = paths[-1]
@@ -185,12 +205,12 @@ def check(path):
     """미래 수집 파일은 없어도 된다. once/output 쓰기는 하지 않는다."""
     try:
         data, sha = _manifest(path)
-        if source_fingerprint() != data['source_sha256']:
+        if source_fingerprint(data['version']) != data['source_sha256']:
             raise ValueError('source fingerprint mismatch')
         parent = _directory(Path(data['output_dir']).parent)
         os.close(parent)
         _inspect_optional(Path(data['output_dir']), directory=True)
-        for key in ('study', 'ledger', 'decisions'):
+        for key in (('study', 'ledger', 'decisions') if data['version'] == VERSION else ('study', 'ledger')):
             info = _inspect_optional(Path(data[key]))
             maximum = MAX_STUDY if key == 'study' else MAX_INPUT
             if info is not None and info.st_size > maximum:
@@ -288,8 +308,15 @@ def _limits():
     resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
 
 
-def _commands(output, timestamp):
+def _commands(output, timestamp, version=VERSION):
+    version = _version(version)
     study, ledger = str(output / 'study.json'), str(output / 'ledger.jsonl')
+    if version == PREGATE_VERSION:
+        args = ['--study', study, '--journal', ledger, '--as-of', timestamp,
+                '--max-journal-bytes', str(MAX_INPUT)]
+        return [('pregate-candidate-observation',
+                 [sys.executable, '-I', '-B', '-X', 'pycache_prefix=' + str(output / 'tmp/pycache'),
+                  str(ROOT / 'scripts/report_pregate_candidate_observation.py'), *args])]
     shared = ['--study', study, '--journal', ledger, '--max-journal-bytes', str(MAX_INPUT)]
     arguments = (
         ['--study', study, '--ledger', ledger, '--decisions', str(output / 'decisions.jsonl'),
@@ -339,13 +366,42 @@ def _child(name, argv, output, directory_fd):
             'valid_json': valid_json, 'stdout_bytes': size}
 
 
+def _pregate_report(report, *, study_sha256, analysis_as_of):
+    if (not isinstance(report, dict)
+            or report.get('schema_version') != 'pregate-candidate-readout-v1'
+            or report.get('study_sha256') != study_sha256
+            or report.get('analysis_as_of') != analysis_as_of):
+        raise ValueError('pregate report binding mismatch')
+    denominator = report.get('denominator')
+    validation = report.get('validation')
+    if (not isinstance(denominator, dict)
+            or denominator.get('population_scope') != 'first_returned_scan_candidates'
+            or type(denominator.get('returned_candidates')) is not int
+            or type(denominator.get('sampled_candidates')) is not int
+            or denominator.get('sampling_limit') != 5
+            or denominator['sampled_candidates'] != min(5, denominator['returned_candidates'])
+            or not isinstance(report.get('candidates'), list)
+            or len(report['candidates']) != denominator['returned_candidates']
+            or not isinstance(validation, dict)
+            or not all(isinstance(validation.get(key), dict) and validation[key]
+                       for key in ('frame', 'selection', 'gates'))):
+        raise ValueError('pregate report schema mismatch')
+    if (report.get('account_return') is not None or report.get('profitability_pass') is not False
+            or report.get('production_eligible') is not False
+            or report.get('source_authenticity_verified') is not False):
+        raise ValueError('pregate economic invariant mismatch')
+
+
 def _execute(data, directory_fd, timestamp, manifest_sha):
     output = Path(data['output_dir'])
-    result = {'version': VERSION, 'status': 'blocked', 'analysis_as_of': timestamp,
+    pregate = data['version'] == PREGATE_VERSION
+    result = {'version': data['version'], 'status': 'blocked', 'analysis_as_of': timestamp,
               'manifest_sha256': manifest_sha, 'source_sha256': data['source_sha256'],
               'commands': [], 'inputs': {}, 'human_review_required': True,
-              'decision_recording_finality': 'unverified', 'account_return': None,
+              'decision_recording_finality': 'not_applicable' if pregate else 'unverified', 'account_return': None,
               'profitability_pass': False, 'production_eligible': False}
+    if pregate:
+        result['source_authenticity_verified'] = False
     try:
         _write_json(directory_fd, 'manifest.json', data)
         for subdir in ('home', 'tmp'):
@@ -354,28 +410,35 @@ def _execute(data, directory_fd, timestamp, manifest_sha):
         if result['inputs']['study']['sha256'] != data['study_sha256']:
             raise ValueError('study hash mismatch')
         result['inputs']['ledger'] = _snapshot(Path(data['ledger']), directory_fd, 'ledger.jsonl', MAX_INPUT)
-        try:
-            result['inputs']['decisions'] = _snapshot(Path(data['decisions']), directory_fd,
-                                                     'decisions.jsonl', MAX_INPUT, allow_append=True)
-        except FileNotFoundError:
-            result['inputs']['decisions'] = {'status': 'missing', 'path': data['decisions']}
-        for name, argv in _commands(output, timestamp):
-            if source_fingerprint() != data['source_sha256']:
+        if not pregate:
+            try:
+                result['inputs']['decisions'] = _snapshot(Path(data['decisions']), directory_fd,
+                                                         'decisions.jsonl', MAX_INPUT, allow_append=True)
+            except FileNotFoundError:
+                result['inputs']['decisions'] = {'status': 'missing', 'path': data['decisions']}
+        for name, argv in _commands(output, timestamp, data['version']):
+            if source_fingerprint(data['version']) != data['source_sha256']:
                 raise ValueError('source fingerprint changed')
             result['commands'].append(_child(name, argv, output, directory_fd))
-        if source_fingerprint() != data['source_sha256']:
+        if source_fingerprint(data['version']) != data['source_sha256']:
             raise ValueError('source fingerprint changed')
         if not all(c['returncode'] == 0 and c['valid_json'] for c in result['commands']):
             raise ValueError('one or more diagnostics failed; inspect command receipts')
-        readiness = _json(_read_small(output / 'readiness.json', MAX_OUTPUT))
-        journal, technical = readiness.get('journal', {}), readiness.get('technical', {})
-        if not (isinstance(journal, dict) and isinstance(technical, dict)
-                and journal.get('verified') is True and journal.get('complete') is True
-                and type(journal.get('dropped_records')) is int and journal['dropped_records'] == 0
-                and technical.get('technical_ready') is True):
-            raise ValueError('capture integrity/completeness gate blocked')
+        if pregate:
+            report = _json(_read_small(output / 'pregate-candidate-observation.json', MAX_OUTPUT))
+            _pregate_report(report, study_sha256=data['study_sha256'], analysis_as_of=timestamp)
+        else:
+            readiness = _json(_read_small(output / 'readiness.json', MAX_OUTPUT))
+            journal, technical = readiness.get('journal', {}), readiness.get('technical', {})
+            if not (isinstance(journal, dict) and isinstance(technical, dict)
+                    and journal.get('verified') is True and journal.get('complete') is True
+                    and type(journal.get('dropped_records')) is int and journal['dropped_records'] == 0
+                    and technical.get('technical_ready') is True):
+                raise ValueError('capture integrity/completeness gate blocked')
         result['status'] = 'diagnostics_complete'
-        result['note'] = 'Commands completed; inspect individual reports and missing evidence. This is not price evaluability or profit.'
+        result['note'] = ('Pregate diagnostics completed; inspect observed prices, states, and limitations. '
+                          'This is not price evaluability or profit.' if pregate else
+                          'Commands completed; inspect individual reports and missing evidence. This is not price evaluability or profit.')
     except (OSError, ValueError, TypeError, UnicodeError, RecursionError, subprocess.SubprocessError) as exc:
         result['error'] = str(exc)
     _write_json(directory_fd, 'summary.json', result)
@@ -404,7 +467,7 @@ def run(path, *, now=None):
                 pass
             finally:
                 os.close(existing)
-        if source_fingerprint() != data['source_sha256']:
+        if source_fingerprint(data['version']) != data['source_sha256']:
             raise ValueError('source fingerprint mismatch')
         output_fd = _output(output_path)
         lock_fd = os.open('run.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -421,7 +484,7 @@ def run(path, *, now=None):
         if not _window(data, actual):
             return {'status': 'time_rejected'}
         try:
-            _write_json(output_fd, 'attempted.json', {'version': VERSION, 'attempted_at': actual.isoformat(),
+            _write_json(output_fd, 'attempted.json', {'version': data['version'], 'attempted_at': actual.isoformat(),
                                                      'manifest_sha256': manifest_sha,
                                                      'source_sha256': data['source_sha256'],
                                                      'state': 'attempted_no_automatic_retry'})
@@ -440,6 +503,7 @@ def run(path, *, now=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path)
+    parser.add_argument('--profile', choices=tuple(PROFILE_ALIASES))
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--check', action='store_true')
     group.add_argument('--source-fingerprint', action='store_true')
@@ -447,8 +511,10 @@ def main(argv=None):
     if args.source_fingerprint:
         if args.manifest is not None:
             parser.error('--source-fingerprint does not accept --manifest')
-        print(source_fingerprint())
+        print(source_fingerprint(args.profile or VERSION))
         return 0
+    if args.profile is not None:
+        parser.error('--profile is only valid with --source-fingerprint')
     if args.manifest is None:
         parser.error('--manifest required')
     result = check(args.manifest) if args.check else run(args.manifest)
