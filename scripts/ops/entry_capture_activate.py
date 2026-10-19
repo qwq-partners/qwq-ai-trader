@@ -167,12 +167,70 @@ def activation_profile(name):
             datetime(2026,10,19,0,25,tzinfo=timezone.utc),
             datetime(2026,10,19,0,27,tzinfo=timezone.utc),
             allow_predeployed=True, engine_only=True)
+    if name == '20261020-pregate-v1':
+        return ActivationProfile(
+            Path('/etc/qwq-entry-capture/20261020-pregate-v1.json'),
+            Path('/var/lib/qwq-entry-capture/20261020-pregate-v1'),
+            Path('/home/ubuntu/.local/share/qwq-entry-observation/20261020-pregate-v1/once.json'),
+            Path('/etc/qwq-entry-capture/20261020-pregate-v1-entry-capture.conf'),
+            '2026-10-20-engine-pregate-v1',
+            datetime(2026,10,20,0,25,tzinfo=timezone.utc),
+            datetime(2026,10,20,0,27,tzinfo=timezone.utc),
+            allow_predeployed=True, engine_only=True)
     raise GuardError()
+
+
+def pregate_prepared(projection):
+    # 이 고정 계약만 허용한다. 과거 첫 스캔의 준비 판정을 넓히지 않는다.
+    s = projection.get('first_scan')
+    if (projection.get('scan_scope') != 'first' or projection.get('capture_closed') is not False
+            or type(s) is not dict):
+        return False
+    expected = dict(version='runner-first-scan-v4', quote_admission='first_scan',
+        scan_scope='first', observer_bound=True, rest_market_state_evidence=False,
+        market_state_evidence=True, market_state_max_records=19000, operational_initialized=True,
+        start_at='2026-10-20T00:30:00+00:00', admission_end_at='2026-10-20T00:35:00+00:00',
+        end_at='2026-10-20T00:50:08+00:00', max_scans=1,
+        selection_basis_version='selection-basis-v4', selection_max_modifier_stages=24,
+        selection_max_candidates=100, gate_max_candidates=100,
+        max_candidates=5, registration_cap=41, external_reserved=0, operational_headroom=10,
+        required_new_channels=15, buffer_capacity=40713, queue_capacity=40713, batch_size=100,
+        max_record_bytes=65536, max_bytes=262492160, dropped_records=0,
+        retained_memory_limit_bytes=512*1024*1024, memory_exhausted=False)
+    if any(type(s.get(k)) is not type(v) or s[k] != v for k,v in expected.items()):
+        return False
+    for key, expected_map in (
+        ('record_allocations', dict(scan_metadata=201,ws_quote=21000,market_state=19000,other=512)),
+        ('record_max_bytes', dict(scan_metadata=65536,ws_quote=4096,market_state=4096,other=4096))):
+        value = s.get(key)
+        if (type(value) is not dict or value != expected_map
+                or any(type(v) is not int for v in value.values())):
+            return False
+    counts = s.get('record_counts')
+    if (type(counts) is not dict or set(counts) != set(s['record_allocations'])
+            or any(type(v) is not int or not 0 <= v <= s['record_allocations'][k]
+                   for k,v in counts.items())
+            or any(counts[k] for k in ('scan_metadata','market_state'))
+            or type(s.get('retained_memory_bytes')) is not int
+            or not 0 <= s['retained_memory_bytes'] <= s['retained_memory_limit_bytes']
+            or s.get('incomplete_reasons') != []
+            or type(s.get('lease_seconds')) not in (int,float) or s['lease_seconds'] != 1210):
+        return False
+    if any(type(s.get(k)) is not int or s[k] < 0 for k in ('operational_demand','generation')):
+        return False
+    fits = s['operational_demand'] + 15 + 10 <= 41
+    fresh = (s.get('connected') is False and s['generation'] == 0
+             and s.get('connection_pristine') is True)
+    live = (s.get('connected') is True and s['generation'] > 0
+            and s.get('operational_stream_ready') is True)
+    return fits and (fresh or live)
 
 
 def capture_prepared(cfg, projection):
     if not cfg.engine_only:
         return True
+    if cfg.evaluation_epoch == '2026-10-20-engine-pregate-v1':
+        return pregate_prepared(projection)
     if cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4', '2026-10-19-engine-llm-window-v5'):
         llm = projection.get('llm')
         if (projection.get('scan_scope') != 'window' or projection.get('capture_closed') is not False
@@ -342,7 +400,7 @@ def load_config(profile='20261002'):
             raise GuardError()
     if raw['old_head'] == raw['new_head'] and not selected.allow_predeployed:
         raise GuardError()
-    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1', '20261019-llm-window-v1', '20261019-llm-window-v2', '20261019-llm-window-v3', '20261019-llm-window-v4', '20261019-llm-window-v5') and raw['old_head'] != raw['new_head']:
+    if profile in ('20261015-llm-window-v1', '20261016-llm-window-v1', '20261019-llm-window-v1', '20261019-llm-window-v2', '20261019-llm-window-v3', '20261019-llm-window-v4', '20261019-llm-window-v5', '20261020-pregate-v1') and raw['old_head'] != raw['new_head']:
         raise GuardError()
     for name in ('source_hashes','protected_hashes','input_hashes'):
         manifest = raw[name]
@@ -457,6 +515,16 @@ RETIRED_OCT19_V4_ATTEMPTS = (
     (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v4/startup.receipt'), 1000),
     (Path('/home/ubuntu/.local/state/qwq-entry-observation/20261019-llm-window-v4/engine.jsonl'), 1000),
 )
+
+
+def consumed_oct19_v5_quiescent(command):
+    # 소비된 v5의 증거는 보존한다. 옛 타이머 재무장은 새 관측도 중단시킨다.
+    for unit,prop,expected in (
+        ('qwq-entry-capture-20261019-v5.timer','ActiveState','inactive'),
+        ('qwq-entry-capture-20261019-v5.timer','UnitFileState','disabled'),
+        ('qwq-entry-capture-20261019-v5.service','ActiveState','inactive')):
+        if command(['/usr/bin/systemctl','show','--property='+prop,'--value',unit]).strip()!=expected:
+            raise GuardError()
 
 
 def retired_oct19_v1_quiescent(command):
@@ -575,7 +643,7 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
 
     try:
         window()
-        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4', '2026-10-19-engine-llm-window-v5')
+        if (cfg.evaluation_epoch in ('2026-10-15-engine-llm-window-v1', '2026-10-16-engine-llm-window-v1', '2026-10-19-engine-llm-window-v1', '2026-10-19-engine-llm-window-v2', '2026-10-19-engine-llm-window-v3', '2026-10-19-engine-llm-window-v4', '2026-10-19-engine-llm-window-v5', '2026-10-20-engine-pregate-v1')
                 and cfg.old_head != cfg.new_head):
             raise GuardError()
         if cfg.evaluation_epoch == '2026-10-19-engine-llm-window-v2':
@@ -592,6 +660,9 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
             trusted_dir(cfg.dropin_path.parent, trusted_uid)
             if cfg.dropin_path.exists() or cfg.dropin_path.is_symlink():
                 raise GuardError()
+        if cfg.evaluation_epoch == '2026-10-20-engine-pregate-v1':
+            phase = 'consumed_v5'
+            consumed_oct19_v5_quiescent(command)
         phase = 'receipt'
         trusted_dir(cfg.state_dir, trusted_uid)
         write_new(cfg.state_dir/'activation.receipt',json.dumps({
@@ -680,6 +751,12 @@ def activate(cfg, *, runner=run_command, clock=lambda:datetime.now(timezone.utc)
             else:
                 retired_oct19_predecessors_quiescent(command)
             # The shared path must now contain only this transaction's drop-in.
+            visible = cfg.dropin_path.lstat()
+            if ((visible.st_dev, visible.st_ino) != dropin_identity
+                    or read_file(cfg.dropin_path, owner=trusted_uid) != staged):
+                raise GuardError()
+        if cfg.evaluation_epoch == '2026-10-20-engine-pregate-v1':
+            consumed_oct19_v5_quiescent(command)
             visible = cfg.dropin_path.lstat()
             if ((visible.st_dev, visible.st_ino) != dropin_identity
                     or read_file(cfg.dropin_path, owner=trusted_uid) != staged):
@@ -789,6 +866,8 @@ def main():
             cfg = load_config('20261019-llm-window-v4')
         elif sys.argv[1:] == ['--profile', '20261019-llm-window-v5']:
             cfg = load_config('20261019-llm-window-v5')
+        elif sys.argv[1:] == ['--profile', '20261020-pregate-v1']:
+            cfg = load_config('20261020-pregate-v1')
         else:
             raise GuardError()
         result = activate(cfg)

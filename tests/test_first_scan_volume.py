@@ -28,11 +28,13 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False):
         study['as_of'] = (NOW + timedelta(minutes=1, seconds=1208)).isoformat()
         s.update(end_at=study['as_of'], admission_end_at=(NOW + timedelta(minutes=6)).isoformat())
         s['channels']['lease_seconds'] = 1210
-        s['record_allocations'] = {'ws_quote': 22000, 'market_state': 19000, 'other': 512}
+        s['selection_basis'].update(version='selection-basis-v4', max_candidates=100, max_modifier_stages=24)
+        s['entry_gate_trace']['max_candidates'] = 100
+        s['record_allocations'] = {'ws_quote': 21000, 'market_state': 19000, 'other': 512}
         s['channels']['market_state_max_records'] = 19000
         s['record_max_bytes'] = {'scan_metadata': 65536, 'ws_quote': 4096, 'market_state': 4096, 'other': 4096}
-        s.update(buffer_capacity=41533, queue_capacity=41533, batch_size=100,
-                 max_bytes=21 * (65536 + 2048) + 41512 * (4096 + 2048) + 2048, close_timeout_seconds=10)
+        s.update(buffer_capacity=40713, queue_capacity=40713, batch_size=100,
+                 max_bytes=201 * (65536 + 2048) + 40512 * (4096 + 2048) + 2048, close_timeout_seconds=10)
     plan, study = load(tmp_path, change)
     clock = advancing_capture_clock(monkeypatch)
     clock[0] = NOW
@@ -121,7 +123,7 @@ async def test_guarded_pilot_scaled_synthetic_stream_seals_and_reads(tmp_path, m
     assert capacity['numeric_configuration_passed']
     uniform = deepcopy(study)
     uniform['capture'].pop('record_max_bytes')
-    uniform['capture']['max_bytes'] = 41533 * (65536 + 2048) + 2048
+    uniform['capture']['max_bytes'] = 40713 * (65536 + 2048) + 2048
     assert not assess_pregate_capture_resources(uniform, operational_registrations=2,
         external_registrations=0)['checks']['readout_limit']['passed']
     assert not capacity['installation_ready']

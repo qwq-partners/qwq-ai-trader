@@ -987,6 +987,9 @@ class KRAPIHandler:
         try:
             llm = ({'llm': runtime.llm_readiness()}
                    if getattr(runtime.buffer, 'llm_admission', False) else {})
+            first_scan = ({'first_scan': runtime.first_scan_readiness()}
+                          if (getattr(runtime.buffer, 'scan_scope', None) == 'first'
+                              and bool(getattr(runtime.buffer, '_record_limits', {}))) else {})
         except Exception:
             return web.json_response({'status': 'unavailable'}, status=503)
         return web.json_response({
@@ -999,6 +1002,7 @@ class KRAPIHandler:
             **({'pilot': runtime.bot.ws_feed._quote_subscription_owner.pilot_snapshot()}
                if runtime.buffer.scan_scope == 'pilot' else {}),
             **llm,
+            **first_scan,
         }, headers={'Cache-Control': 'no-store'})
 
     async def get_entry_anchors(self, request):
