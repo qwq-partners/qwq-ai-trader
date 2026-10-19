@@ -86,12 +86,66 @@ def test_exact_capacity_boundary_reports_numeric_pass_but_never_installation_rea
     assert report["numeric_configuration_passed"] is True
     assert report["installation_ready"] is False
     assert report["runtime_memory_safety_verified"] is False
+    assert report["runtime_memory_guard_configured"] is False
+    assert report["retained_memory_limit_bytes"] is None
     assert report["first_scan_runtime_readiness_verified"] is False
     assert {row["code"] for row in report["blockers"]} >= {
         "runtime_memory_guard_unavailable", "first_scan_runtime_readiness_unavailable",
         "consumed_v5_rotation_unimplemented", "calendar_unverified", "live_demand_not_verified",
     }
     assert original == study()
+
+
+def test_explicit_v4_record_allocations_configure_the_retained_memory_guard_without_runtime_claims():
+    """Breaks if the offline guard configuration is reported as live memory safety."""
+    value_study = study()
+    value_study["capture"]["record_allocations"] = {
+        "ws_quote": 10, "market_state": 20, "other": 116,
+    }
+
+    report = assess(value_study)
+
+    assert report["requirements"]["guarded_record_allocations"] == {
+        "ws_quote": 10, "market_state": 20, "other": 116, "scan_metadata": 11,
+    }
+    assert report["requirements"]["guarded_record_total"] == 157
+    assert report["checks"]["guarded_record_total"]["passed"] is True
+    assert report["checks"]["guarded_market_state_anchors"]["passed"] is True
+    assert report["checks"]["guarded_ws_quote_anchors"]["passed"] is True
+    assert report["checks"]["guarded_other_lifecycle"]["passed"] is True
+    assert report["runtime_memory_guard_configured"] is True
+    assert report["retained_memory_limit_bytes"] == 512 * 1024 * 1024
+    assert report["runtime_memory_safety_verified"] is False
+    assert report["record_volume_qualified"] is False
+    assert report["installation_ready"] is False
+    blocker_codes = {row["code"] for row in report["blockers"]}
+    assert "runtime_memory_guard_unavailable" not in blocker_codes
+    assert "runtime_memory_guard_unverified" in blocker_codes
+
+
+@pytest.mark.parametrize("category, value", [
+    ("market_state", 19), ("ws_quote", 9), ("other", 115),
+])
+def test_guarded_allocations_must_cover_their_anchor_or_lifecycle_minimums(category, value):
+    """Breaks if a tiny record class can hide behind the aggregate guarded total."""
+    value_study = study()
+    value_study["capture"]["record_allocations"] = {
+        "ws_quote": 10, "market_state": 20, "other": 116,
+    }
+    value_study["capture"]["record_allocations"][category] = value
+    if category == "market_state":
+        value_study["capture"]["channels"]["market_state_max_records"] = value
+    # Keep the buffer above the declared aggregate; each category still has
+    # its own event-class lower bound.
+    value_study["capture"]["buffer_capacity"] = 200
+    value_study["capture"]["queue_capacity"] = 200
+    value_study["capture"]["batch_size"] = 200
+    value_study["capture"]["max_bytes"] = 200 * (65536 + 2048) + 2048
+
+    report = assess(value_study)
+
+    assert report["numeric_configuration_passed"] is False
+    assert report["checks"][f"guarded_{category}_{'lifecycle' if category == 'other' else 'anchors'}"]["passed"] is False
 
 
 def test_full_returned_population_expands_metadata_but_not_fixed_five_subscriptions():
@@ -164,7 +218,6 @@ def test_invalid_resource_numbers_are_rejected_before_reporting(field, value):
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda value: value["capture"].update(record_allocations={"ws_quote": 1}),
     lambda value: value["capture"].update(journal_path="relative.jsonl"),
     lambda value: value.update(as_of="2026-10-19T09:45:04+09:00"),
     lambda value: value["markout_policy"].update(horizon_seconds=901),

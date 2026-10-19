@@ -16,6 +16,8 @@ from .entry_gate_trace import validate_settings as validate_gate_settings
 from .entry_markout import MarkoutPolicy
 from .entry_observation_journal import MAX_LINE_BYTES
 from .entry_price_shadow import KST, _timestamp
+from .first_scan_resources import (FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES,
+                                   first_scan_record_limits)
 from .kis_frame_diagnostics import validate_settings as validate_frame_settings
 from .selection_basis import validate_settings as validate_selection_settings
 
@@ -43,6 +45,7 @@ _CAPTURE_FIELDS = frozenset((
     "journal_path", *_RESOURCE_FIELDS, "open_timeout_seconds", "close_timeout_seconds",
     "channels", "selection_basis", "entry_gate_trace", "frame_diagnostics",
 ))
+_OPTIONAL_CAPTURE_FIELDS = frozenset(("record_allocations",))
 _MARKOUT_FIELDS = frozenset(("version", "policy_ref", "fixed_at", "horizon_seconds",
                              "max_delay_seconds", "anchor"))
 
@@ -71,7 +74,9 @@ def _capture(study: Any) -> dict[str, Any]:
 
 
 def _validate_contract(study: dict[str, Any], capture: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any, Any, Any]:
-    if capture.get("version") != "runner-first-scan-v4" or set(capture) != _CAPTURE_FIELDS:
+    if (capture.get("version") != "runner-first-scan-v4"
+            or not _CAPTURE_FIELDS <= set(capture)
+            or set(capture) - _CAPTURE_FIELDS - _OPTIONAL_CAPTURE_FIELDS):
         raise ValueError("pre-gate assessment requires runner-first-scan-v4")
     for field in _REFERENCE_FIELDS:
         if type(capture[field]) is not str or not capture[field].strip() or len(capture[field]) > 200:
@@ -150,6 +155,7 @@ def assess_pregate_capture_resources(
     resources = {field: _positive_integer(capture.get(field), field) for field in _RESOURCE_FIELDS}
     if resources["max_record_bytes"] > MAX_LINE_BYTES - 2048:
         raise ValueError("max_record_bytes exceeds the runtime journal row limit")
+    guarded_limits = first_scan_record_limits(capture)
 
     metadata_records = 1 + selection["max_candidates"] + gate["max_candidates"]
     # One fresh state per channel at each of two anchors per candidate.
@@ -198,15 +204,36 @@ def assess_pregate_capture_resources(
         "lease_window": _check(passed=channels["lease_seconds"] >= window_seconds,
             lease_seconds=channels["lease_seconds"], required=window_seconds),
     }
+    if guarded_limits is not None:
+        guarded_total = sum(guarded_limits.values())
+        checks.update({
+            "guarded_record_total": _check(
+                passed=resources["buffer_capacity"] >= guarded_total,
+                buffer_capacity=resources["buffer_capacity"], required=guarded_total),
+            "guarded_market_state_anchors": _check(
+                passed=guarded_limits["market_state"] >= minimum_state_records,
+                market_state_records=guarded_limits["market_state"], required=minimum_state_records),
+            "guarded_ws_quote_anchors": _check(
+                passed=guarded_limits["ws_quote"] >= minimum_book_records,
+                ws_quote_records=guarded_limits["ws_quote"], required=minimum_book_records),
+            "guarded_other_lifecycle": _check(
+                passed=guarded_limits["other"] >= subscription_baseline,
+                other_records=guarded_limits["other"], required=subscription_baseline),
+        })
     numeric_configuration_passed = all(row["passed"] for row in checks.values())
     blockers = [
-        {"code": "runtime_memory_guard_unavailable", "detail": "first-scan-v4 has no dedicated runtime memory guard"},
         {"code": "first_scan_runtime_readiness_unavailable", "detail": "first-scan readiness has not been implemented or verified"},
         {"code": "consumed_v5_rotation_unimplemented", "detail": "safe rotation of a consumed v5 capture is unimplemented"},
         {"code": "calendar_unverified", "detail": "this offline check does not verify a trading calendar or installation date"},
         {"code": "live_demand_not_verified", "detail": "caller-supplied registration counts are not verified live demand"},
         {"code": "record_volume_unqualified", "detail": "two-anchor, one-connection arithmetic is not a full-window traffic qualification"},
     ]
+    if guarded_limits is None:
+        blockers.insert(0, {"code": "runtime_memory_guard_unavailable",
+                            "detail": "first-scan-v4 has no dedicated runtime memory guard"})
+    else:
+        blockers.insert(0, {"code": "runtime_memory_guard_unverified",
+                            "detail": "the configured retained-record guard has not been verified in a live runtime"})
     return {
         "requirements": {
             "candidate_limit": MAX_CANDIDATES,
@@ -221,12 +248,17 @@ def assess_pregate_capture_resources(
             "markout_seconds": MARKOUT_SECONDS,
             "markout_max_delay_seconds": MARKOUT_MAX_DELAY_SECONDS,
             "runtime_channel_cap": RUNTIME_CHANNEL_CAP,
+            "guarded_record_allocations": guarded_limits,
+            "guarded_record_total": sum(guarded_limits.values()) if guarded_limits is not None else None,
         },
         "checks": checks,
         "caller_supplied_registrations": {"operational": operational, "external": external},
         "live_demand_verified": False,
         "calendar_verified": False,
         "runtime_memory_safety_verified": False,
+        "runtime_memory_guard_configured": guarded_limits is not None,
+        "retained_memory_limit_bytes": (FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES
+                                        if guarded_limits is not None else None),
         "record_volume_qualified": False,
         "first_scan_runtime_readiness_verified": False,
         "consumed_v5_rotation_supported": False,
