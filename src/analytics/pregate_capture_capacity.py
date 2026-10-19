@@ -1,0 +1,177 @@
+"""Offline-only assessment of first-scan-v4 pre-gate capture resources.
+
+This checks declared study arithmetic only.  It neither opens a runtime nor
+turns a passing configuration into permission to install one.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+from .entry_gate_trace import validate_settings as validate_gate_settings
+from .entry_price_shadow import _timestamp
+from .kis_frame_diagnostics import validate_settings as validate_frame_settings
+from .selection_basis import validate_settings as validate_selection_settings
+
+
+READOUT_DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+CHANNELS_PER_CANDIDATE = 3
+MAX_CANDIDATES = 5
+MARKOUT_SECONDS = 900
+MARKOUT_MAX_DELAY_SECONDS = 5
+MIN_RECORD_BYTES = 65536
+RUNTIME_CHANNEL_CAP = 41
+
+_CHANNEL_FIELDS = frozenset((
+    "registration_cap", "external_reserved", "operational_headroom",
+    "max_candidates", "lease_seconds", "evidence_ref",
+    "market_state_evidence", "market_state_max_records",
+))
+_RESOURCE_FIELDS = ("buffer_capacity", "queue_capacity", "batch_size",
+                    "max_bytes", "max_record_bytes")
+
+
+def _positive_integer(value: Any, name: str, *, zero: bool = False) -> int:
+    if type(value) is not int or value < (0 if zero else 1):
+        raise ValueError(f"{name} must be a {'non-negative' if zero else 'positive'} integer")
+    return value
+
+
+def _positive_seconds(value: Any, name: str) -> float:
+    if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
+        raise ValueError(f"{name} must be a finite positive number")
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError(f"{name} must be a finite positive number")
+    return value
+
+
+def _check(*, passed: bool, **values: Any) -> dict[str, Any]:
+    return {"passed": bool(passed), **values}
+
+
+def _capture(study: Any) -> dict[str, Any]:
+    if type(study) is not dict or type(study.get("capture")) is not dict:
+        raise ValueError("study.capture must be an object")
+    return study["capture"]
+
+
+def _validate_contract(capture: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    if capture.get("version") != "runner-first-scan-v4":
+        raise ValueError("pre-gate assessment requires runner-first-scan-v4")
+    selection = validate_selection_settings(capture.get("selection_basis"))
+    gate = validate_gate_settings(capture.get("entry_gate_trace"))
+    validate_frame_settings(capture.get("frame_diagnostics"))
+    if selection["max_candidates"] != MAX_CANDIDATES or gate["max_candidates"] != MAX_CANDIDATES:
+        raise ValueError("first-scan-v4 pre-gate assessment requires exactly five candidates")
+    if (gate["source_version_ref"] != capture.get("source_version_ref")
+            or gate["configuration_ref"] != capture.get("configuration_ref")):
+        raise ValueError("entry gate source/configuration binding mismatch")
+
+    channels = capture.get("channels")
+    if type(channels) is not dict or set(channels) != _CHANNEL_FIELDS:
+        raise ValueError("explicit three-channel capture contract required")
+    if channels["max_candidates"] != MAX_CANDIDATES:
+        raise ValueError("channel contract must reserve exactly five candidates")
+    if channels["market_state_evidence"] is not True:
+        raise ValueError("three-channel capture requires explicit market-state evidence")
+    _positive_integer(channels["market_state_max_records"], "market_state_max_records")
+    _positive_integer(channels["registration_cap"], "registration_cap")
+    _positive_integer(channels["external_reserved"], "external_reserved", zero=True)
+    _positive_integer(channels["operational_headroom"], "operational_headroom", zero=True)
+    _positive_seconds(channels["lease_seconds"], "lease_seconds")
+    if (channels["registration_cap"] > RUNTIME_CHANNEL_CAP
+            or channels["external_reserved"] + channels["operational_headroom"] > channels["registration_cap"]):
+        raise ValueError("registration cap/reserve contract is invalid")
+    if type(channels["evidence_ref"]) is not str or not channels["evidence_ref"].strip():
+        raise ValueError("channels.evidence_ref must be non-empty text")
+    return selection, gate, deepcopy(channels)
+
+
+def assess_pregate_capture_resources(
+        study: Any, *, operational_registrations: int, external_registrations: int,
+        readout_max_bytes: int = READOUT_DEFAULT_MAX_BYTES) -> dict[str, Any]:
+    """Assess declared pre-gate capacity without probing a live process.
+
+    ``operational_registrations`` and ``external_registrations`` are caller
+    evidence, not verified runtime demand.  Numeric success is deliberately
+    insufficient for installation readiness.
+    """
+    capture = _capture(study)
+    selection, gate, channels = _validate_contract(capture)
+    operational = _positive_integer(operational_registrations, "operational_registrations", zero=True)
+    external = _positive_integer(external_registrations, "external_registrations", zero=True)
+    readout_limit = _positive_integer(readout_max_bytes, "readout_max_bytes")
+    resources = {field: _positive_integer(capture.get(field), field) for field in _RESOURCE_FIELDS}
+
+    start = _timestamp(capture.get("start_at"), "capture.start_at")
+    admission_end = _timestamp(capture.get("admission_end_at"), "capture.admission_end_at")
+    end = _timestamp(capture.get("end_at"), "capture.end_at")
+    if not start < admission_end < end:
+        raise ValueError("capture timestamps must be timezone-aware and chronological")
+
+    metadata_records = 1 + selection["max_candidates"] + gate["max_candidates"]
+    minimum_buffer_records = metadata_records + channels["market_state_max_records"]
+    candidate_channels = MAX_CANDIDATES * CHANNELS_PER_CANDIDATE
+    configured_cap = min(channels["registration_cap"], RUNTIME_CHANNEL_CAP)
+    registration_used = (candidate_channels + operational + external
+                         + channels["external_reserved"] + channels["operational_headroom"])
+    window_seconds = (end - start).total_seconds()
+    markout_tail_seconds = (end - admission_end).total_seconds()
+    minimum_journal_bytes = (resources["buffer_capacity"]
+                             * (resources["max_record_bytes"] + 2048) + 2048)
+
+    checks = {
+        "registration_capacity": _check(passed=registration_used <= configured_cap,
+            candidate_channels=candidate_channels, operational_registrations=operational,
+            external_registrations=external, external_reserved=channels["external_reserved"],
+            operational_headroom=channels["operational_headroom"], used=registration_used,
+            cap=configured_cap),
+        "buffer_metadata_and_market_state": _check(
+            passed=resources["buffer_capacity"] >= minimum_buffer_records,
+            buffer_capacity=resources["buffer_capacity"], required=minimum_buffer_records),
+        "queue_capacity": _check(passed=resources["queue_capacity"] >= resources["buffer_capacity"],
+            queue_capacity=resources["queue_capacity"], required=resources["buffer_capacity"]),
+        "batch_size": _check(passed=resources["batch_size"] <= resources["queue_capacity"],
+            batch_size=resources["batch_size"], queue_capacity=resources["queue_capacity"]),
+        "record_size": _check(passed=resources["max_record_bytes"] >= MIN_RECORD_BYTES,
+            max_record_bytes=resources["max_record_bytes"], required=MIN_RECORD_BYTES),
+        "journal_budget": _check(passed=resources["max_bytes"] >= minimum_journal_bytes,
+            max_bytes=resources["max_bytes"], required=minimum_journal_bytes),
+        "readout_limit": _check(passed=resources["max_bytes"] <= readout_limit,
+            max_bytes=resources["max_bytes"], readout_max_bytes=readout_limit),
+        "markout_tail": _check(passed=markout_tail_seconds >= MARKOUT_SECONDS + MARKOUT_MAX_DELAY_SECONDS,
+            tail_seconds=markout_tail_seconds, required=MARKOUT_SECONDS + MARKOUT_MAX_DELAY_SECONDS),
+        "lease_window": _check(passed=channels["lease_seconds"] >= window_seconds,
+            lease_seconds=channels["lease_seconds"], required=window_seconds),
+    }
+    numeric_configuration_passed = all(row["passed"] for row in checks.values())
+    blockers = [
+        {"code": "runtime_memory_guard_unavailable", "detail": "first-scan-v4 has no dedicated runtime memory guard"},
+        {"code": "first_scan_runtime_readiness_unavailable", "detail": "first-scan readiness has not been implemented or verified"},
+        {"code": "consumed_v5_rotation_unimplemented", "detail": "safe rotation of a consumed v5 capture is unimplemented"},
+        {"code": "calendar_unverified", "detail": "this offline check does not verify a trading calendar or installation date"},
+        {"code": "live_demand_not_verified", "detail": "caller-supplied registration counts are not verified live demand"},
+    ]
+    return {
+        "requirements": {
+            "candidate_limit": MAX_CANDIDATES,
+            "channels_per_candidate": CHANNELS_PER_CANDIDATE,
+            "candidate_channels": candidate_channels,
+            "metadata_records": metadata_records,
+            "market_state_records": channels["market_state_max_records"],
+            "minimum_buffer_records": minimum_buffer_records,
+            "markout_seconds": MARKOUT_SECONDS,
+            "markout_max_delay_seconds": MARKOUT_MAX_DELAY_SECONDS,
+            "runtime_channel_cap": RUNTIME_CHANNEL_CAP,
+        },
+        "checks": checks,
+        "caller_supplied_registrations": {"operational": operational, "external": external},
+        "live_demand_verified": False,
+        "calendar_verified": False,
+        "runtime_memory_safety_verified": False,
+        "first_scan_runtime_readiness_verified": False,
+        "consumed_v5_rotation_supported": False,
+        "numeric_configuration_passed": numeric_configuration_passed,
+        "installation_ready": False,
+        "blockers": blockers,
+    }
