@@ -54,7 +54,8 @@ def _positive_integer(value: Any, name: str, *, zero: bool = False) -> int:
 
 
 def _positive_seconds(value: Any, name: str) -> float:
-    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+    if (type(value) not in (int, float) or (type(value) is int and value.bit_length() > 256)
+            or not math.isfinite(value) or value <= 0):
         raise ValueError(f"{name} must be a finite positive number")
     return value
 
@@ -151,7 +152,17 @@ def assess_pregate_capture_resources(
         raise ValueError("max_record_bytes exceeds the runtime journal row limit")
 
     metadata_records = 1 + selection["max_candidates"] + gate["max_candidates"]
-    minimum_buffer_records = metadata_records + channels["market_state_max_records"]
+    # One fresh state per channel at each of two anchors per candidate.
+    # These are only the baseline records for one successful connection, not
+    # an upper bound on streaming traffic, reconnects, or operational events.
+    minimum_state_records = MAX_CANDIDATES * 2 * 2
+    minimum_book_records = MAX_CANDIDATES * 2
+    # Connected + desired/allocated per candidate + requested/ACK/observed
+    # per channel. Operational channel lifecycle also uses this same journal.
+    subscription_baseline = (1 + MAX_CANDIDATES * (2 + 3 * CHANNELS_PER_CANDIDATE)
+                             + operational * 3 + int(selection['max_candidates'] > MAX_CANDIDATES))
+    minimum_buffer_records = (metadata_records + channels["market_state_max_records"]
+                              + minimum_book_records + subscription_baseline)
     candidate_channels = MAX_CANDIDATES * CHANNELS_PER_CANDIDATE
     configured_cap = min(channels["registration_cap"], RUNTIME_CHANNEL_CAP)
     registration_used = (candidate_channels + operational + external
@@ -170,6 +181,8 @@ def assess_pregate_capture_resources(
         "buffer_metadata_and_market_state": _check(
             passed=resources["buffer_capacity"] >= minimum_buffer_records,
             buffer_capacity=resources["buffer_capacity"], required=minimum_buffer_records),
+        "state_anchor_coverage": _check(passed=channels['market_state_max_records'] >= minimum_state_records,
+            market_state_max_records=channels['market_state_max_records'], required=minimum_state_records),
         "queue_capacity": _check(passed=resources["queue_capacity"] >= resources["buffer_capacity"],
             queue_capacity=resources["queue_capacity"], required=resources["buffer_capacity"]),
         "batch_size": _check(passed=resources["batch_size"] <= resources["queue_capacity"],
@@ -192,6 +205,7 @@ def assess_pregate_capture_resources(
         {"code": "consumed_v5_rotation_unimplemented", "detail": "safe rotation of a consumed v5 capture is unimplemented"},
         {"code": "calendar_unverified", "detail": "this offline check does not verify a trading calendar or installation date"},
         {"code": "live_demand_not_verified", "detail": "caller-supplied registration counts are not verified live demand"},
+        {"code": "record_volume_unqualified", "detail": "two-anchor, one-connection arithmetic is not a full-window traffic qualification"},
     ]
     return {
         "requirements": {
@@ -201,6 +215,9 @@ def assess_pregate_capture_resources(
             "metadata_records": metadata_records,
             "market_state_records": channels["market_state_max_records"],
             "minimum_buffer_records": minimum_buffer_records,
+            "minimum_state_anchor_records": minimum_state_records,
+            "minimum_book_anchor_records": minimum_book_records,
+            "subscription_baseline_records": subscription_baseline,
             "markout_seconds": MARKOUT_SECONDS,
             "markout_max_delay_seconds": MARKOUT_MAX_DELAY_SECONDS,
             "runtime_channel_cap": RUNTIME_CHANNEL_CAP,
@@ -210,6 +227,7 @@ def assess_pregate_capture_resources(
         "live_demand_verified": False,
         "calendar_verified": False,
         "runtime_memory_safety_verified": False,
+        "record_volume_qualified": False,
         "first_scan_runtime_readiness_verified": False,
         "consumed_v5_rotation_supported": False,
         "numeric_configuration_passed": numeric_configuration_passed,

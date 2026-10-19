@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -12,7 +13,7 @@ from src.analytics.entry_observation_journal import MAX_LINE_BYTES
 
 
 ROOT = Path(__file__).parents[1]
-PYTHON = Path("/home/ubuntu/projects/qwq-ai-trader/venv/bin/python")
+PYTHON = Path(sys.executable)
 CLI = ROOT / "scripts" / "assess_pregate_capture.py"
 
 
@@ -35,11 +36,11 @@ def study():
             "start_at": "2026-10-19T09:25:00+09:00",
             "admission_end_at": "2026-10-19T09:30:00+09:00",
             "end_at": "2026-10-19T09:45:05+09:00",
-            "buffer_capacity": 15,
-            "queue_capacity": 15,
+            "buffer_capacity": 157,
+            "queue_capacity": 157,
             "batch_size": 15,
             "max_record_bytes": 65536,
-            "max_bytes": 15 * (65536 + 2048) + 2048,
+            "max_bytes": 157 * (65536 + 2048) + 2048,
             "open_timeout_seconds": 1, "close_timeout_seconds": 1,
             "selection_basis": {
                 "version": "selection-basis-v4", "max_candidates": 5,
@@ -54,7 +55,7 @@ def study():
                 "registration_cap": 41, "external_reserved": 0,
                 "operational_headroom": 0, "max_candidates": 5,
                 "lease_seconds": 1205, "evidence_ref": "offline-capacity-evidence",
-                "market_state_evidence": True, "market_state_max_records": 4,
+                "market_state_evidence": True, "market_state_max_records": 20,
             },
         }
     }
@@ -74,7 +75,7 @@ def test_exact_capacity_boundary_reports_numeric_pass_but_never_installation_rea
 
     assert report["requirements"]["candidate_channels"] == 15
     assert report["requirements"]["metadata_records"] == 11
-    assert report["requirements"]["minimum_buffer_records"] == 15
+    assert report["requirements"]["minimum_buffer_records"] == 157
     assert report["checks"]["registration_capacity"] == {
         "passed": True, "candidate_channels": 15, "operational_registrations": 20,
         "external_registrations": 6, "external_reserved": 0,
@@ -107,7 +108,19 @@ def test_full_returned_population_expands_metadata_but_not_fixed_five_subscripti
     report = assess(value_study)
     assert report["requirements"]["metadata_records"] == 15
     assert report["requirements"]["candidate_channels"] == 15
-    assert report["requirements"]["minimum_buffer_records"] == 19
+    assert report["requirements"]["minimum_buffer_records"] == 162
+
+
+@pytest.mark.parametrize('defect', ['state_anchors', 'book_and_subscription_records'])
+def test_basic_anchor_and_subscription_volume_must_fit(defect):
+    value = study()
+    if defect == 'state_anchors':
+        value['capture']['channels']['market_state_max_records'] = 19
+    else:
+        value['capture']['buffer_capacity'] = 156
+    report = assess(value)
+    assert report['numeric_configuration_passed'] is False
+    assert report['installation_ready'] is False
 
 
 def test_maximum_returned_population_reserves_201_metadata_records():

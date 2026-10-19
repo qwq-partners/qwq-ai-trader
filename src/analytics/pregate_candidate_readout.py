@@ -5,7 +5,6 @@ from copy import deepcopy
 from datetime import timedelta
 from decimal import Decimal, DecimalException
 import hashlib
-from typing import Mapping
 
 from .entry_evaluation_bundle import load_json_bytes
 from .entry_gate_report import build_gate_report
@@ -64,7 +63,8 @@ def _book_valid(record):
         received, observed = _quote_time(record)
         p = record["provenance"]
         if (record.get("kind") != "ws_quote" or p.get("tr_id") != BOOK_TR
-                or p.get("message_count") != 1 or p.get("source_as_of") is not None
+                or type(p.get("message_count")) is not int or p.get("message_count") != 1
+                or p.get("source_as_of") is not None
                 or received > observed):
             return False
         for key in ("bid", "ask"):
@@ -112,7 +112,8 @@ def _allocation(records, candidate_id, symbol, scan_sequence):
     events = [r for r in _subscription_events(records, candidate_id, symbol) if r["sequence"] > scan_sequence]
     history = [{key: deepcopy(row.get(key)) for key in ("sequence", "observed_at", "status", "reason", "connection_id", "generation")}
                for row in events]
-    allocated = next((row for row in events if row.get("status") in ("allocated", "shared_operational")), None)
+    allocated = next((row for row in events if row.get("candidate_id") == candidate_id
+                      and row.get("status") in ("allocated", "shared_operational")), None)
     if allocated is not None:
         return allocated, allocated["status"], history
     if events:
@@ -132,10 +133,12 @@ def _first_book_after(records, *, symbol, after_sequence, scan_at, allocation_at
             received, observed = _quote_time(row)
         except ValueError:
             return row, "first_krx_book_invalid"
+        if received > observed:
+            return row, "first_krx_book_invalid"
         if received < scan_at or received < allocation_at:
             return row, "first_krx_book_before_scan_or_allocation"
         if received > capture_end or received > as_of or observed > capture_end or observed > as_of:
-            continue
+            return row, "first_krx_book_outside_window"
         return row, None if _book_valid(row) else "first_krx_book_invalid"
     return None, "first_krx_book_missing"
 
@@ -204,7 +207,7 @@ def _markout(records, entry, as_of, study, capture_end):
         return None, "entry_quote_unavailable"
     _, entry_observed = _quote_time(entry)
     target = entry_observed + timedelta(seconds=HORIZON_SECONDS)
-    if target > capture_end:
+    if target + timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS) > capture_end:
         return None, "missing_mature_markout_window"
     if target > as_of:
         return None, "markout_not_matured"
@@ -229,7 +232,7 @@ def _markout(records, entry, as_of, study, capture_end):
             return None, "markout_book_missing"
         if selected_received - target > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
             return selected, "first_markout_book_too_late"
-        if selected_observed - selected_received > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
+        if selected_observed - target > timedelta(seconds=MAX_MARKOUT_DELAY_SECONDS):
             return selected, "first_markout_book_publication_delayed"
         return selected, None if _book_valid(selected) else "first_markout_book_invalid"
     return None, "markout_book_missing"
@@ -252,6 +255,17 @@ def build_pregate_candidate_report(study_bytes, observations, *, study_sha256, a
     capture_start = _timestamp(capture.get("start_at"), "capture start_at")
     capture_admission_end = _timestamp(capture.get("admission_end_at"), "capture admission_end_at")
     capture_end = _timestamp(capture.get("end_at"), "capture end_at")
+    if (not capture_start < capture_admission_end < capture_end
+            or _timestamp(study.get('as_of'), 'study as_of') != capture_end):
+        raise ValueError('capture chronology/as_of mismatch')
+    if (capture_end - capture_admission_end).total_seconds() < HORIZON_SECONDS + MAX_MARKOUT_DELAY_SECONDS:
+        raise ValueError('capture requires 905-second markout tail')
+    policy = MarkoutPolicy.from_dict(study.get('markout_policy'))
+    if (study.get('outcome_basis') != 'fixed_horizon_bid_markout'
+            or policy.horizon_seconds != HORIZON_SECONDS
+            or policy.max_delay_seconds != MAX_MARKOUT_DELAY_SECONDS
+            or policy.fixed_at > capture_start):
+        raise ValueError('pre-fixed 900-second/5-second policy required')
     as_of = _timestamp(analysis_as_of, "analysis_as_of")
     _strict_complete(observations, sha)
     if observations.get("evaluation_epoch") != study.get("evaluation_epoch"):
@@ -271,9 +285,26 @@ def build_pregate_candidate_report(study_bytes, observations, *, study_sha256, a
             or type(scan.get("candidates")) is not list):
         raise ValueError("first returned scan binding required")
     scan_at = _timestamp(scan.get("observed_at"), "first scan observed_at")
-    if not capture_start <= scan_at <= capture_admission_end:
+    if not capture_start <= scan_at < capture_admission_end:
         raise ValueError("first scan outside capture admission window")
     candidates = scan["candidates"]
+    selection_settings = capture['selection_basis']
+    gate_settings = capture['entry_gate_trace']
+    if (scan.get('selection_basis_expected') is not True
+            or scan.get('selection_basis_max_candidates') != selection_settings['max_candidates']
+            or scan.get('selection_basis_max_terms') != selection_settings['max_source_terms']
+            or len(candidates) > min(selection_settings['max_candidates'], gate_settings['max_candidates'])):
+        raise ValueError('selection study/scan limits mismatch')
+    modifiers = selection_settings['version'] in ('selection-basis-v3', 'selection-basis-v4')
+    if (scan.get('selection_modifiers_expected', False) != modifiers
+            or scan.get('selection_modifier_max_stages') != selection_settings.get('max_modifier_stages')
+            or scan.get('selection_basis_version') != ('selection-basis-v4' if selection_settings['version'] == 'selection-basis-v4' else None)):
+        raise ValueError('selection modifier/version binding mismatch')
+    references = gates.get('references') or {}
+    for key, marker in (('source_version_ref', 'entry_gate_source_version_ref'),
+                        ('configuration_ref', 'entry_gate_configuration_ref')):
+        if references.get(marker) != capture[key]:
+            raise ValueError('gate study/scan source binding mismatch')
     seen = set()
     rows = []
     for rank, candidate in enumerate(candidates, 1):
@@ -310,6 +341,10 @@ def build_pregate_candidate_report(study_bytes, observations, *, study_sha256, a
                      "markout_market_state": _market_state(records, markout, as_of), "reasons": reasons})
     return {"schema_version": "pregate-candidate-readout-v1", "evaluation_epoch": observations["evaluation_epoch"],
             "analysis_as_of": as_of.isoformat(), "study_sha256": sha,
+            "price_observation_policy": {"anchor": "first_krx_book_after_candidate_allocation",
+                "horizon_anchor": "entry_quote_observed_at", "horizon_seconds": HORIZON_SECONDS,
+                "max_markout_delay_seconds": MAX_MARKOUT_DELAY_SECONDS,
+                "market_state_max_age_seconds": MARKET_STATE_MAX_AGE_SECONDS},
             "denominator": {"population_scope": "first_returned_scan_candidates", "returned_candidates": len(candidates),
                             "sampled_candidates": min(TOP_CANDIDATES, len(candidates)), "sampling_limit": TOP_CANDIDATES},
             "candidates": rows, "validation": {"frame": frame, "selection": selection, "gates": gates},

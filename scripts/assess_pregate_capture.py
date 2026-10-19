@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
-import stat
 import sys
 
 
@@ -16,38 +14,15 @@ if str(ROOT) not in sys.path:
 
 from src.analytics.pregate_capture_capacity import (READOUT_DEFAULT_MAX_BYTES,
                                                      assess_pregate_capture_resources)
+from scripts.report_entry_gate_trace import _study
 
 
 MAX_STUDY_BYTES = 4 * 1024 * 1024
 
 
-def _unique_keys(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate JSON object key")
-        value[key] = item
-    return value
-
-
-def _reject_constant(value):
-    raise ValueError(f"non-finite JSON constant: {value}")
-
-
 def read_study(path: str) -> dict:
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise ValueError("study input must be a regular file")
-        if info.st_size > MAX_STUDY_BYTES:
-            raise ValueError("study input exceeds byte limit")
-        raw = os.read(fd, MAX_STUDY_BYTES + 1)
-    finally:
-        os.close(fd)
-    if len(raw) > MAX_STUDY_BYTES:
-        raise ValueError("study input exceeds byte limit")
-    value = json.loads(raw, object_pairs_hook=_unique_keys, parse_constant=_reject_constant)
+    # Reuse the established nofollow, regular-file, bounded, stable read.
+    _, value = _study(Path(path))
     if type(value) is not dict:
         raise ValueError("study input must be a JSON object")
     return value

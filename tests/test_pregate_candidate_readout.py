@@ -15,9 +15,13 @@ def module():
 
 
 def fixture():
-    study = {"evaluation_epoch": "synthetic-firstscan-v4", "capture": {
+    study = {"evaluation_epoch": "synthetic-firstscan-v4", "as_of": AT,
+        "outcome_basis": "fixed_horizon_bid_markout", "capture": {
         "version": "runner-first-scan-v4", "scan_admission_ref": "synthetic",
-        "start_at": "2026-10-19T00:59:00+00:00", "admission_end_at": "2026-10-19T01:10:00+00:00",
+        "source_version_ref": "synthetic-source", "configuration_ref": "synthetic-config",
+        "selection_basis": {"version": "selection-basis-v2", "max_candidates": 10, "max_source_terms": 16},
+        "entry_gate_trace": {"max_candidates": 10},
+        "start_at": "2026-10-19T00:59:00+00:00", "admission_end_at": "2026-10-19T01:04:00+00:00",
         "end_at": AT, "channels": {"max_candidates": 5, "market_state_evidence": True}},
         "markout_policy": {"version": "fixed-horizon-bid-v1", "policy_ref": "synthetic-pregate-900",
         "fixed_at": "2026-10-18T00:00:00+00:00", "horizon_seconds": 900, "max_delay_seconds": 5,
@@ -26,6 +30,7 @@ def fixture():
     candidates = [{"candidate_id": f"scan:{n:06d}", "symbol": f"{n:06d}"} for n in range(7)]
     rows = [{"kind": "scan", "sequence": 1, "scan_id": "scan", "observed_at": "2026-10-19T01:00:00+00:00",
              "population_scope": "first_returned_scan_candidates", "scan_admission_ref": "synthetic",
+             "selection_basis_expected": True, "selection_basis_max_candidates": 10, "selection_basis_max_terms": 16,
              "candidates": candidates}]
     for n in range(5):
         symbol = f"{n:06d}"; cid = f"scan:{symbol}"
@@ -56,7 +61,8 @@ def valid(monkeypatch):
     monkeypatch.setattr(m, "validate_study_binding", lambda *_: None)
     monkeypatch.setattr(m, "build_frame_report", lambda *_a, **_k: {"source_complete": True})
     monkeypatch.setattr(m, "build_selection_report", lambda *_: {"ok": True})
-    monkeypatch.setattr(m, "build_gate_report", lambda *_a, **_k: {"ok": True})
+    monkeypatch.setattr(m, "build_gate_report", lambda *_a, **_k: {"references": {
+        "entry_gate_source_version_ref": "synthetic-source", "entry_gate_configuration_ref": "synthetic-config"}})
     return m
 
 
