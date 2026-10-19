@@ -726,7 +726,8 @@ class ObservationRuntime:
             if now() >= plan.start_at or _read(plan.study_path) != plan.study_bytes:
                 raise ValueError('원장 준비 중 시작 시각/연구 지문 변경')
             feed.enable_quote_observation(self.buffer, **s['channels'])
-            if getattr(self.buffer, 'llm_admission', False) and self.buffer.rest_market_state_evidence:
+            if ((getattr(self.buffer, 'llm_admission', False) and self.buffer.rest_market_state_evidence)
+                    or (s['version'] == FIRST_SCAN_VERSION and bool(self.buffer._record_limits))):
                 # Stopped feed only: measure existing demand before reporting readiness.
                 # No candidate is selected and no socket/API is started here.
                 await feed._apply_subscriptions()
@@ -816,6 +817,53 @@ class ObservationRuntime:
                 and connected and snapshot['operational_missing'] == 0),
             record_allocations=dict(b._record_limits), buffer_capacity=b.capacity,
             queue_capacity=j._queue.maxsize, batch_size=j._batch_size,
+            max_record_bytes=j._max_record_bytes, max_bytes=j._max_bytes,
+            retained_memory_limit_bytes=b.retained_memory_limit_bytes,
+            retained_memory_bytes=b.retained_memory_bytes, memory_exhausted=b.memory_exhausted,
+            dropped_records=b._dropped, incomplete_reasons=sorted(b._incomplete_reasons))
+
+    def first_scan_readiness(self):
+        """Actual guarded first-scan bindings and counters; no candidate data."""
+        b, j = self.buffer, self.journal
+        if self.plan.settings['version'] != FIRST_SCAN_VERSION or not b._record_limits:
+            raise ValueError('guarded first-scan runtime required')
+        feed = self.bot.ws_feed
+        owner = feed._quote_subscription_owner
+        snapshot = owner.snapshot()
+        socket = getattr(feed, '_ws', None)
+        connected = (owner._send is not None and getattr(feed, '_connected', False) is True
+                     and getattr(feed, '_should_connect', False) is True
+                     and socket is not None and socket.closed is False)
+        pristine = (owner._send is None and owner.generation == 0 and socket is None
+                    and getattr(feed, '_connected', False) is False)
+        bound = (owner.observer is b and b._journal_sink is j and j.buffer is b
+                 and getattr(self.bot, '_entry_price_observer', None) is b)
+        return dict(version=FIRST_SCAN_VERSION, quote_admission='first_scan',
+            observer_bound=bool(bound), scan_scope=b.scan_scope, max_scans=1,
+            rest_market_state_evidence=b.rest_market_state_evidence,
+            market_state_evidence=owner.market_state_evidence,
+            market_state_max_records=owner.market_state_max_records,
+            start_at=b.start_at.isoformat(), admission_end_at=b.admission_end.isoformat(),
+            end_at=b.end_at.isoformat(),
+            selection_max_candidates=b.selection_basis_settings['max_candidates'],
+            **(dict(selection_basis_version=b.selection_basis_settings['version'],
+                    selection_max_modifier_stages=b.selection_basis_settings['max_modifier_stages'])
+               if b.selection_basis_settings['version'] in ('selection-basis-v3', 'selection-basis-v4')
+               else dict(selection_basis_version=b.selection_basis_settings['version'])),
+            gate_max_candidates=b.entry_gate_trace_settings['max_candidates'],
+            max_candidates=owner.max_candidates, lease_seconds=owner.lease_seconds,
+            registration_cap=owner.cap, external_reserved=owner.reserved,
+            operational_headroom=owner.headroom,
+            operational_initialized=owner._operational_initialized,
+            operational_demand=snapshot['operational_demand'],
+            required_new_channels=owner.max_candidates * (3 if owner.market_state_evidence else 1),
+            connected=connected, connection_pristine=pristine, generation=owner.generation,
+            operational_stream_ready=bool(owner._operational_initialized
+                and connected and snapshot['operational_missing'] == 0),
+            record_allocations=dict(b._record_limits),
+            record_max_bytes=(dict(b._record_byte_limits) if b._record_byte_limits is not None else None),
+            record_counts={key: b._record_counts.get(key, 0) for key in b._record_limits},
+            buffer_capacity=b.capacity, queue_capacity=j._queue.maxsize, batch_size=j._batch_size,
             max_record_bytes=j._max_record_bytes, max_bytes=j._max_bytes,
             retained_memory_limit_bytes=b.retained_memory_limit_bytes,
             retained_memory_bytes=b.retained_memory_bytes, memory_exhausted=b.memory_exhausted,
