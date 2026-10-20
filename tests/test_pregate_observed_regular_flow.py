@@ -270,6 +270,26 @@ def test_anchor_published_after_allocation_window_is_preserved_but_never_evaluat
     assert "anchor_outside_preparation_window" in row["reasons"]
 
 
+@pytest.mark.parametrize("mutate,reason", [
+    (lambda anchor: anchor.update(observed_at="bad-time"), "anchor_time_invalid"),
+    (lambda anchor: anchor.update(observed_at=_stamp(8)), "anchor_outside_preparation_window"),
+    (lambda anchor: anchor["provenance"].update(generation=2), "qualifying_cnt_connection_or_generation_mismatch"),
+])
+def test_rejected_frozen_anchor_keeps_prior_adverse_mko_evidence(monkeypatch, mutate, reason):
+    raw, observations = fixture()
+    anchor = next(row for row in observations["records"] if row.get("quote_id") == "anchor-000001")
+    mutate(anchor)
+    anchor_index = observations["records"].index(anchor)
+    observations["records"].insert(anchor_index, _mko(1, _stamp(4), _stamp(4), code="164"))
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    state = row["anchor_state"]
+    assert row["anchor_quote"]["quote_id"] == "anchor-000001"
+    assert state["flow_context"] == "unknown"
+    assert state["raw_mko_count"] == 1 and state["raw_mko_evidence"]["mkop_cls_code"] == "164"
+    assert reason in row["reasons"] and reason in state["reasons"]
+
+
 def test_late_or_delayed_endpoint_is_preserved_without_a_quote_move(monkeypatch):
     raw, observations = fixture()
     endpoint = next(row for row in observations["records"] if row.get("quote_id") == "markout-000001")

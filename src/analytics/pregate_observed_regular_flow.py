@@ -390,22 +390,30 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
         if anchor is None:
             base["reasons"].append("anchor_book_missing")
             rows.append(base); continue
+        # A frozen anchor remains evidence even when a following timing or
+        # connection guard rejects it.  Preserve its bounded prior state rows.
+        anchor_state = _state_context(records, anchor, capture_day, policy)
+        base["anchor_state"] = anchor_state
         try:
             anchor_received, anchor_observed = _quote_times(anchor)
             if (anchor_received < allocation_at or anchor_observed < allocation_at or anchor_received > deadline
                     or anchor_observed > deadline or anchor_received > capture_end or anchor_observed > capture_end
                     or anchor_received > as_of or anchor_observed > as_of):
                 base["reasons"].append("anchor_outside_preparation_window")
+                anchor_state["flow_context"] = "unknown"
+                anchor_state["reasons"].append("anchor_outside_preparation_window")
                 rows.append(base); continue
         except ValueError:
             base["reasons"].append("anchor_time_invalid")
+            anchor_state["flow_context"] = "unknown"
+            anchor_state["reasons"].append("anchor_time_invalid")
             rows.append(base); continue
         anchor_p = anchor.get("provenance") if isinstance(anchor.get("provenance"), dict) else {}
         if cnt.get("connection_id") != anchor_p.get("connection_id") or cnt.get("generation") != anchor_p.get("generation"):
             base["reasons"].append("qualifying_cnt_connection_or_generation_mismatch")
+            anchor_state["flow_context"] = "unknown"
+            anchor_state["reasons"].append("qualifying_cnt_connection_or_generation_mismatch")
             rows.append(base); continue
-        anchor_state = _state_context(records, anchor, capture_day, policy)
-        base["anchor_state"] = anchor_state
         try:
             original = strict_row.get("entry_quote")
             if original is not None:
