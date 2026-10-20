@@ -21,7 +21,7 @@ from test_market_state_capture import advancing_capture_clock, frame, PRICE, BOO
 from test_quote_subscription import ack, make_feed
 
 
-async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False):
+async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_factory=None, cycles=1205):
     def change(study):
         guarded_study(study)
         s = study['capture']
@@ -35,7 +35,7 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False):
         s['record_max_bytes'] = {'scan_metadata': 65536, 'ws_quote': 4096, 'market_state': 4096, 'other': 4096}
         s.update(buffer_capacity=40713, queue_capacity=40713, batch_size=100,
                  max_bytes=201 * (65536 + 2048) + 40512 * (4096 + 2048) + 2048, close_timeout_seconds=10)
-    plan, study = load(tmp_path, change)
+    plan, study = load(tmp_path, change) if plan_factory is None else plan_factory(tmp_path)
     clock = advancing_capture_clock(monkeypatch)
     clock[0] = NOW
     monkeypatch.setattr(entry_gate_trace, '_now', lambda: clock[0].isoformat())
@@ -72,7 +72,7 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False):
         if fail_memory:
             runtime.buffer.retained_memory_limit_bytes = runtime.buffer.retained_memory_bytes
         anchor = clock[0] + timedelta(seconds=1)
-        cycles = 3 if fail_memory else 1205
+        cycles = 3 if fail_memory else cycles
         for tick in range(cycles):
             clock[0] = anchor + timedelta(seconds=tick)
             # 파일럿의 약3 BOOK/초·2.85 체결상태/초를 참고한 약3Hz 합성.

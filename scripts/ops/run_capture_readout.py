@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -15,10 +16,12 @@ import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal, DecimalException
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = 'deterministic-capture-readout-v1'
 PREGATE_VERSION = 'deterministic-pregate-readout-v1'
+OBSERVED_FLOW_VERSION = 'deterministic-observed-flow-readout-v1'
 MAX_INPUT = 268435456
 MAX_STUDY = 4 * 1024 * 1024
 MAX_OUTPUT = 32 * 1024 * 1024
@@ -32,8 +35,10 @@ TOOLS = (
 FIELDS = {'version', 'study', 'study_sha256', 'ledger', 'decisions', 'output_dir',
           'not_before', 'not_after', 'source_sha256'}
 PREGATE_FIELDS = FIELDS - {'decisions'}
-PROFILE_ALIASES = {'legacy': VERSION, 'pregate': PREGATE_VERSION}
+PROFILE_ALIASES = {'legacy': VERSION, 'pregate': PREGATE_VERSION,
+                   'observed-flow': OBSERVED_FLOW_VERSION}
 PREGATE_SCRIPTS = ('report_pregate_candidate_observation.py', 'report_entry_gate_trace.py')
+OBSERVED_FLOW_SCRIPTS = ('report_pregate_observed_regular_flow.py', 'report_entry_gate_trace.py')
 
 
 def _json(raw):
@@ -100,7 +105,7 @@ def _read_small(path, maximum):
 
 def _version(version):
     version = PROFILE_ALIASES.get(version, version)
-    if version not in (VERSION, PREGATE_VERSION):
+    if version not in (VERSION, PREGATE_VERSION, OBSERVED_FLOW_VERSION):
         raise ValueError('unknown readout profile')
     return version
 
@@ -110,8 +115,10 @@ def source_fingerprint(version=VERSION):
     version = _version(version)
     if version == VERSION:
         files = [ROOT / 'scripts' / script for _, script in TOOLS]
-    else:
+    elif version == PREGATE_VERSION:
         files = [ROOT / 'scripts' / script for script in PREGATE_SCRIPTS]
+    else:
+        files = [ROOT / 'scripts' / script for script in OBSERVED_FLOW_SCRIPTS]
     files.append(ROOT / 'scripts/ops/run_capture_readout.py')
     for optional in ('scripts/__init__.py', 'scripts/ops/__init__.py'):
         path = ROOT / optional
@@ -311,12 +318,15 @@ def _limits():
 def _commands(output, timestamp, version=VERSION):
     version = _version(version)
     study, ledger = str(output / 'study.json'), str(output / 'ledger.jsonl')
-    if version == PREGATE_VERSION:
+    if version in (PREGATE_VERSION, OBSERVED_FLOW_VERSION):
         args = ['--study', study, '--journal', ledger, '--as-of', timestamp,
                 '--max-journal-bytes', str(MAX_INPUT)]
-        return [('pregate-candidate-observation',
+        name, script = (('pregate-candidate-observation', PREGATE_SCRIPTS[0])
+                        if version == PREGATE_VERSION else
+                        ('pregate-observed-regular-flow', OBSERVED_FLOW_SCRIPTS[0]))
+        return [(name,
                  [sys.executable, '-I', '-B', '-X', 'pycache_prefix=' + str(output / 'tmp/pycache'),
-                  str(ROOT / 'scripts/report_pregate_candidate_observation.py'), *args])]
+                  str(ROOT / 'scripts' / script), *args])]
     shared = ['--study', study, '--journal', ledger, '--max-journal-bytes', str(MAX_INPUT)]
     arguments = (
         ['--study', study, '--ledger', ledger, '--decisions', str(output / 'decisions.jsonl'),
@@ -392,9 +402,108 @@ def _pregate_report(report, *, study_sha256, analysis_as_of):
         raise ValueError('pregate economic invariant mismatch')
 
 
+def _flow_quote_prices(quote, symbol):
+    """Validate only a claimed eligible compact quote; rejected raw quotes remain evidence."""
+    fields = {'sequence', 'quote_id', 'symbol', 'bid', 'ask', 'bid_size', 'ask_size',
+              'observed_at', 'received_at', 'provenance'}
+    if (type(quote) is not dict or set(quote) != fields or quote.get('symbol') != symbol
+            or type(quote.get('sequence')) is not int or quote['sequence'] <= 0
+            or type(quote.get('quote_id')) is not str or not quote['quote_id']
+            or any(type(quote.get(k)) is not int or quote[k] <= 0 for k in ('bid_size', 'ask_size'))
+            or type(quote.get('provenance')) is not dict
+            or _time(quote.get('received_at')) > _time(quote.get('observed_at'))):
+        raise ValueError('observed flow quote shape mismatch')
+    prices = []
+    for name in ('bid', 'ask'):
+        value = quote.get(name)
+        if type(value) not in (str, int, float) or len(str(value)) > 128:
+            raise ValueError('observed flow quote price invalid')
+        try:
+            price = Decimal(str(value))
+            if not price.is_finite() or price <= 0 or not math.isfinite(float(price)):
+                raise ValueError('observed flow quote price invalid')
+            prices.append(price)
+        except (DecimalException, OverflowError):
+            raise ValueError('observed flow quote price invalid') from None
+    if prices[0] > prices[1]:
+        raise ValueError('observed flow crossed quote')
+    return prices
+
+
+def _observed_flow_report(report, *, study, study_sha256, analysis_as_of):
+    """Check binding, denominator and conservative labels, not economic validity."""
+    if (not isinstance(report, dict)
+            or report.get('schema_version') != 'pregate-observed-regular-flow-v1'
+            or report.get('study_sha256') != study_sha256
+            or report.get('analysis_as_of') != analysis_as_of):
+        raise ValueError('observed flow report binding mismatch')
+    strict = report.get('strict_report')
+    _pregate_report(strict, study_sha256=study_sha256, analysis_as_of=analysis_as_of)
+    policy = report.get('observed_regular_flow_policy')
+    fixed = {'preparation_seconds': 5, 'state_max_age_seconds': 5,
+             'horizon_seconds': 900, 'max_markout_delay_seconds': 5}
+    if (type(study) is not dict or type(study.get('capture')) is not dict
+            or report.get('evaluation_epoch') != study.get('evaluation_epoch')
+            or type(policy) is not dict or set(policy) != {'version', 'fixed_at', *fixed}
+            or policy != study.get('observed_regular_flow_policy')
+            or policy.get('version') != 'pregate-observed-regular-flow-v1'
+            or any(type(policy.get(k)) is not int or policy[k] != v for k, v in fixed.items())
+            or _time(policy.get('fixed_at')) > _time(study['capture'].get('start_at'))
+            or _time(policy.get('fixed_at')) >= _time(analysis_as_of)):
+        raise ValueError('observed flow policy mismatch')
+    rows, counts = report.get('candidates'), report.get('counts')
+    if (report.get('evaluation_epoch') != strict.get('evaluation_epoch')
+            or report.get('denominator') != strict['denominator']
+            or type(rows) is not list or len(rows) != len(strict['candidates'])
+            or type(counts) is not dict or set(counts) != {'denominator', 'eligible_pairs'}
+            or any(type(value) is not int for value in counts.values())
+            or counts['denominator'] != len(rows)):
+        raise ValueError('observed flow report denominator mismatch')
+    eligible = 0
+    for row, original in zip(rows, strict['candidates']):
+        if (type(row) is not dict or type(original) is not dict
+                or any(row.get(k) != original.get(k)
+                       for k in ('candidate_id', 'symbol', 'rank', 'allocation_status'))
+                or row.get('original_entry_quote') != original.get('entry_quote')):
+            raise ValueError('observed flow candidate binding mismatch')
+        for field in ('anchor_state', 'markout_state'):
+            state = row.get(field)
+            if (type(state) is not dict or state.get('vi_state') != 'unknown'
+                    or state.get('tradability') != 'not_evaluated'
+                    or state.get('fillability') != 'not_evaluated'
+                    or state.get('flow_context') not in
+                    ('observed_regular_flow', 'contrary_observed', 'unknown')):
+                raise ValueError('observed flow state invariant mismatch')
+        move = row.get('gross_quote_move_pct')
+        if move is not None:
+            if (type(move) not in (float, int)
+                    or (type(move) is int and move.bit_length() > 1023) or not math.isfinite(move)
+                    or row['anchor_state']['flow_context'] != 'observed_regular_flow'
+                    or row['markout_state']['flow_context'] != 'observed_regular_flow'
+                    or row.get('anchor_quote') is None or row.get('markout_quote') is None):
+                raise ValueError('observed flow pair invariant mismatch')
+            _, ask = _flow_quote_prices(row['anchor_quote'], row['symbol'])
+            bid, _ = _flow_quote_prices(row['markout_quote'], row['symbol'])
+            try:
+                expected_move = float((bid / ask - 1) * 100)
+            except (DecimalException, OverflowError):
+                raise ValueError('observed flow quote movement invalid') from None
+            if not math.isfinite(expected_move) or move != expected_move:
+                raise ValueError('observed flow quote movement mismatch')
+            eligible += 1
+    if counts['eligible_pairs'] != eligible or eligible > strict['denominator']['sampled_candidates']:
+        raise ValueError('observed flow eligible count mismatch')
+    if (report.get('account_return') is not None or report.get('net_pnl') is not None
+            or report.get('profitability_pass') is not False
+            or report.get('production_eligible') is not False
+            or report.get('source_authenticity_verified') is not False):
+        raise ValueError('observed flow economic invariant mismatch')
+
+
 def _execute(data, directory_fd, timestamp, manifest_sha):
     output = Path(data['output_dir'])
-    pregate = data['version'] == PREGATE_VERSION
+    observed_flow = data['version'] == OBSERVED_FLOW_VERSION
+    pregate = data['version'] in (PREGATE_VERSION, OBSERVED_FLOW_VERSION)
     result = {'version': data['version'], 'status': 'blocked', 'analysis_as_of': timestamp,
               'manifest_sha256': manifest_sha, 'source_sha256': data['source_sha256'],
               'commands': [], 'inputs': {}, 'human_review_required': True,
@@ -402,6 +511,8 @@ def _execute(data, directory_fd, timestamp, manifest_sha):
               'profitability_pass': False, 'production_eligible': False}
     if pregate:
         result['source_authenticity_verified'] = False
+    if observed_flow:
+        result['net_pnl'] = None
     try:
         _write_json(directory_fd, 'manifest.json', data)
         for subdir in ('home', 'tmp'):
@@ -424,7 +535,12 @@ def _execute(data, directory_fd, timestamp, manifest_sha):
             raise ValueError('source fingerprint changed')
         if not all(c['returncode'] == 0 and c['valid_json'] for c in result['commands']):
             raise ValueError('one or more diagnostics failed; inspect command receipts')
-        if pregate:
+        if observed_flow:
+            report = _json(_read_small(output / 'pregate-observed-regular-flow.json', MAX_OUTPUT))
+            _observed_flow_report(report, study=_json(_read_small(output / 'study.json', MAX_STUDY)),
+                                  study_sha256=data['study_sha256'], analysis_as_of=timestamp)
+            result['observed_flow_counts'] = report['counts']
+        elif pregate:
             report = _json(_read_small(output / 'pregate-candidate-observation.json', MAX_OUTPUT))
             _pregate_report(report, study_sha256=data['study_sha256'], analysis_as_of=timestamp)
         else:
