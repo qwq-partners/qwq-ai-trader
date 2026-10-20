@@ -1,8 +1,9 @@
-# 10월 21일 체결 관측 후 호가 — 단발 수집 준비
+# 10월 21일 체결 관측 후 호가 — 단발 수집 설치 완료
 
-상태: **구현·로컬 검증·독립 리뷰 완료, 운영 미반영·미설치·미예약·미수집**.
-이 문서의 시간표는 설치 대상 계약이며 실제 예약 영수증이 아니다.
-PR CI·병합의 최종 상태는 [PR #232](https://github.com/qwq-partners/qwq-ai-trader/pull/232) 영수증을 따른다.
+상태: **10월20일15:58 KST 운영 배포·예약 설치·판독 사전검사 완료, 실수집·실제 판독 대기**.
+[PR #232](https://github.com/qwq-partners/qwq-ai-trader/pull/232)의 운영 `d5dd37bc`와
+10월21일09:25 타이머를 확인했다. 실제 적용 근거는 아래 운영 영수증 절을 따른다.
+설치 완료는 미래 관측 성공이나 순수익 입증을 뜻하지 않는다.
 
 ## PLAN — 무엇을 알아내려는가
 
@@ -90,6 +91,26 @@ python scripts/ops/run_capture_readout.py --manifest <고정-manifest.json>
 사본과 소스 지문을 검증하고, 원장 미봉인·불완전·드롭·정책 누락이면 차단 결과를 남긴다.
 시도는 한 번만 소비하며 자동 재시도하지 않는다. 완료 표시는 진단 실행의 완료다.
 
+### 고정 판독 소스
+
+10월20일 승인된 병합 `d5dd37bc83bd837f1ff2bc0e648e424a3ee22dfd`의
+`src/`·`scripts/` 414개 파일을 저장소 밖 비공개 디렉터리에 별도로 준비했다.
+`observed-flow` 소스 SHA256은
+`a9399c7c6eacca623850a453072a33e75f9a9f6a315886aebff5448981cf560b`이다.
+소스 사본·manifest 준비와 실제 판독은 별도 단계다.
+
+```bash
+/home/ubuntu/projects/qwq-ai-trader/venv/bin/python -I -B \
+  /home/ubuntu/.local/share/qwq-capture-readout/20261021-pregate-v1/source/scripts/ops/run_capture_readout.py \
+  --manifest /home/ubuntu/.local/share/qwq-capture-readout/20261021-pregate-v1/manifest.json --check
+```
+
+09:51 이후 봉인과 실제 원장을 확인하고 **09:55~10:30 KST 안에** 위 명령에서
+`--check`를 빼고 한 번 실행한다. 결과 경로는
+`/home/ubuntu/.local/state/qwq-capture-readout/20261021-pregate-v1/`다.
+자동 판독 예약·유료 AI 판독·텔레그램 발송은 등록하지 않았다.
+오래된 판독 입력·시도·결과를 덮어쓰지 않는다.
+
 ## SEE — 검증 및 이후 순서
 
 - 고정 날짜 설치/활성화 및 과거 회귀: **757 passed / 2 skipped**, 13.36초, rc0.
@@ -119,3 +140,79 @@ python scripts/ops/run_capture_readout.py --manifest <고정-manifest.json>
 5. 판독: 기존 strict 결과와 보조 비교쌍을 함께 확인하고 제외 사유를 집계.
 6. 선정 순위·선정 근거와 가격 변화, 첫 BOOK 대비 새 기준 호가의 지연을 대조한다.
    5종목·하루 표본으로 전략이나 매수 재개를 승인하지 않는다.
+
+## 10월20일 운영 적용 영수증
+
+### PLAN
+
+사용자가 고정 SHA 운영 배포·재시작과10월21일09:25 단발 예약 설치를 승인했다.
+배포 → 새 프로세스 확인 → 실제 소스·설정·PID 고정 → 설치 → 사후 확인 순서다.
+KR 매수 중지·거래 규칙·월 USD100 예산·모델 배분을 유지한다.
+계좌·비용 원문과 로그는 저장소 밖 비공개 경로에만 보관한다.
+
+### DO — 배포
+
+- 승인 SHA `d5dd37bc83bd837f1ff2bc0e648e424a3ee22dfd`를 기존
+  `local_deploy.sh`로 배포했다. 이전 SHA는 `89537b329222de62fbd4f2e075fded348d383dc9`다.
+- 배포 전15:44 KST: PID2550238·active·NRestarts0·미체결0·복구ready·매수 중지,
+  기존 관측 종료와 운영 구독 수요2채널을 확인했다. 내부 조회 주소/전용 헤더를
+  잘못 지정한 두 읽기 전용 요청은404/403이었다. 실제 소스의 조회 규약으로
+  바로잡은 뒤 정상 응답을 확인했으며 이 두 요청으로 배포·예약이 시작되지는 않았다.
+- 운영 전체 verify **8,452 passed /2 skipped /2 xfailed**,488.59초·기존 경고8개·rc0,
+  구문/비밀정보 검사 통과·운영 상태/외부 네트워크 접근 시도0건.
+  병합 main CI `39381533458`도SUCCESS다.
+- **15:53:32 KST**, 새 PID **2598868**로 기동했다. 배포 결과rc0,
+  롤백은 실행하지 않았다. 초기 저널148행에서 오류 수준 로그와 traceback은0이었다.
+- 예약 입력 builder·준비 adapter·스냅샷 도우미는 독립 Astra/xhigh 검토에서
+  P0/P1/P2 지적0이었다. 순수 메모리 검사로 이전 입력/경제값 보존·새 계약 통과·
+  잘못된 정책 시각 거부를 확인했다. 실제 모델/유효 effort metadata는 미노출이다.
+
+### DO — 설치와 판독 준비
+
+- 새 PID 기동171초 후15:56:24 KST에 active·NRestarts0·미체결0·복구ready를
+  확인했다. 보호1,201경로의 지문과 기존 비용 원장 행이 보존됐다.
+  월 USD100·baseline0·unknown1·reserved0·normal을 유지했다.
+  정상 운영 중 settled 행은1,886→1,888로 늘었으며 이를 새 작업의 유료 호출0으로
+  표시하지 않는다. 기존 미확인 비용의 `log_and_continue` 정책은 변경하지 않았다.
+- 실제 운영 Python354파일·보호 설정·PID·명령 바이트로 입력을 고정했다.
+  정책 `fixed_at`은 **10월20일15:56:30.375948 KST**다.
+  입력 준비 시 가용 메모리2,324,819,968B·디스크43,845,419,008B를 확인했다.
+  미래 최대 시장 유량이나 프로세스 전체 RSS를 보장하는 측정은 아니다.
+- 고정 manifest 검사 후 설치rc0. 실제 `CapturePlan`·활성화 설정·systemd 단위
+  검사를 통과했다. 이전 타이머는inactive/disabled, 새 타이머는active/enabled이며
+  다음 실행은 **Wed 2026-10-21 09:25:00 KST**다.
+- 소비된 이전 once·startup receipt·status·drop-in을 root 전용 백업에 보존하고
+  사용이 끝난 drop-in만 제거했다. 이전 study·원장·판독 결과는 원래 경로 그대로다.
+  설치 중 봇 추가 재시작과 Toss 기동은 없었다.
+- 15:57:38 KST 사후 검사에서 같은 PID2598868·NRestarts0·복구ready·미체결0,
+  매수 중지와 보호1,201경로 보존을 다시 확인했다(drop-in의 의도된 제거만 예외).
+  root 전용 활성화 영수증 경로를 일반 사용자로 조회한 후속 검사1회는
+  `PermissionError`로 중단됐다. 권한을 바꾸지 않고 승인된 root 읽기로 부재를 확인했으며
+  설치를 재실행하지 않았다.
+- 15:58:19 KST 새8개 입력 지문·다음 예약 시각·이전 타이머 종료를 대조했다.
+  새 activation/startup 영수증·원장은 아직 없고, 별도 판독 manifest의
+  `--check`는rc0/`preflight_ok`다. 판독 시도·결과는 생성하지 않았다.
+  systemd 검사에서 기존 별개 `claude-session.service`의 `KillMode=none` 경고가
+  나왔으나 새 단위 검사는 통과했으며 해당 서비스 설정은 변경하지 않았다.
+
+| 고정 자료 | SHA256 |
+|---|---|
+| 설치 manifest | `437cbd513a9d305c33d67a22ec7d5217ca47f4af0046bebc6d60cc9852e058fc` |
+| 새 study | `e0f58f1d922b794384efb5e8842e103cbb5b40a1d333225e2f6551cc398f9928` |
+| 판독 manifest | `d4b379a0e6254f13bcbf6cc41c11866b83ba9a6089df28a8fee6137e125510de` |
+
+### SEE — 다음 실제 확인
+
+1. **10월21일09:25**: 단발 활성화 성공/실패와 새 프로세스·시작 영수증.
+2. **09:51 이후**: 원장 봉인·완전성·드롭·전체 후보/상위5 배정·채널 수신.
+3. **09:55~10:30**: 준비한 별도 소스로 수동 판독. strict와 보조 호가 변화,
+   전체 분모·제외 사유·진입 지연을 함께 확인한다. 자동 판독 예약은 없다.
+4. 자료가 확보되면 종목 선정 근거와 가격 변화를 비교하고 다음 한 가지 개선을 정한다.
+   미수신·불완전 자료와 소표본을 순수익이나 매수 재개 근거로 바꾸지 않는다.
+
+운영 영수증 루트는
+`/home/ubuntu/.local/state/qwq-deploy/pregate-20261021/`다.
+설치 이후 봉인 전에는 운영 소스와 보호 설정을 변경하지 않는다.
+기존 야간 진화는 조건을 충족하면 설정을 쓸 수 있으므로 야간 무변경을 보장하지 않는다.
+설정이 달라지면 활성화는 지문 불일치로 멈추며, 자동으로 지문을 다시 고정하거나
+소비된 시도를 지워 재시도하지 않는다.
