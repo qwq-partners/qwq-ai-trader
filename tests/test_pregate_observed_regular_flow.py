@@ -203,17 +203,61 @@ def test_preparation_deadline_does_not_substitute_a_later_normal_cnt(monkeypatch
     row = _report(monkeypatch, raw, observations)["candidates"][0]
     assert row["anchor_quote"] is None
     assert "qualifying_cnt_missing_in_preparation_window" in row["reasons"]
+    assert row["anchor_state"]["reasons"] != ["not_sampled"]
 
 
 def test_latest_bad_cnt_before_anchor_shadows_the_selected_older_normal_cnt(monkeypatch):
     raw, observations = fixture()
     anchor_index = next(i for i, row in enumerate(observations["records"]) if row.get("quote_id") == "anchor-000001")
-    observations["records"].insert(anchor_index, _cnt(1, _stamp(4), _stamp(4), raw_field_count=46))
+    bad = _cnt(1, _stamp(4), _stamp(4), raw_field_count=46); bad["local_frame_index"] = 999
+    observations["records"].insert(anchor_index, bad)
     for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
     row = _report(monkeypatch, raw, observations)["candidates"][0]
     assert row["anchor_quote"]["quote_id"] == "anchor-000001"
     assert row["anchor_state"]["flow_context"] == "unknown"
     assert row["gross_quote_move_pct"] is None
+
+
+def test_latest_causal_receipt_not_sequence_controls_cnt_context(monkeypatch):
+    raw, observations = fixture()
+    normal = next(row for row in observations["records"] if row.get("tr_id") == "H0STCNT0")
+    normal["received_at"] = "2026-10-19T01:00:03.500000+00:00"
+    normal["observed_at"] = "2026-10-19T01:00:04.500000+00:00"
+    anchor_index = next(i for i, row in enumerate(observations["records"]) if row.get("quote_id") == "anchor-000001")
+    observations["records"].insert(anchor_index, _cnt(1, _stamp(4), _stamp(4), hour_cls_code="C"))
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["anchor_state"]["flow_context"] == "contrary_observed"
+    assert row["gross_quote_move_pct"] is None
+
+
+def test_conflicting_latest_cnt_key_is_unknown_without_falling_back(monkeypatch):
+    raw, observations = fixture()
+    normal = next(row for row in observations["records"] if row.get("tr_id") == "H0STCNT0")
+    anchor_index = next(i for i, row in enumerate(observations["records"]) if row.get("quote_id") == "anchor-000001")
+    conflicting = _cnt(1, _stamp(4), _stamp(4), hour_cls_code="C")
+    conflicting["local_frame_index"] = normal["local_frame_index"]
+    observations["records"].insert(anchor_index, conflicting)
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["anchor_state"]["flow_context"] == "unknown"
+    assert row["gross_quote_move_pct"] is None
+
+
+def test_invalid_frozen_book_retains_prior_mko_evidence(monkeypatch):
+    raw, observations = fixture()
+    anchor = next(row for row in observations["records"] if row.get("quote_id") == "anchor-000001")
+    anchor["provenance"]["message_count"] = 2
+    anchor_index = observations["records"].index(anchor)
+    mko = _mko(1, _stamp(4), _stamp(4), antc_mkop_cls_code="A", mrkt_trtm_cls_code="B",
+               divi_app_cls_code="C", ovtm_vi_cls_code="N", exch_cls_code="K", source_sequence=7,
+               message_count=1, state_verdict="UNKNOWN")
+    observations["records"].insert(anchor_index, mko)
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    state = _report(monkeypatch, raw, observations)["candidates"][0]["anchor_state"]
+    assert state["raw_mko_count"] == 1
+    assert state["raw_mko_evidence"]["tr_id"] == "H0STMKO0"
+    assert state["raw_mko_evidence"]["antc_mkop_cls_code"] == "A"
 
 
 def test_anchor_published_after_allocation_window_is_preserved_but_never_evaluated(monkeypatch):
@@ -291,6 +335,18 @@ def test_adverse_mko_marks_context_contrary_without_substituting_endpoint(monkey
     assert row["markout_quote"]["quote_id"] == endpoint["quote_id"]
     assert row["markout_state"]["flow_context"] == "contrary_observed"
     assert row["gross_quote_move_pct"] is None
+
+
+def test_adverse_mko_remains_contrary_when_latest_cnt_is_unqualified(monkeypatch):
+    raw, observations = fixture()
+    endpoint = next(row for row in observations["records"] if row.get("quote_id") == "markout-000001")
+    endpoint_cnt = [row for row in observations["records"] if row.get("tr_id") == "H0STCNT0"][-1]
+    endpoint_cnt["raw_field_count"] = 46
+    observations["records"].insert(-1, _mko(1, _stamp(905), _stamp(905), code="164"))
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    state = _report(monkeypatch, raw, observations)["candidates"][0]["markout_state"]
+    assert state["flow_context"] == "contrary_observed"
+    assert "latest_cnt_unqualified" in state["reasons"] and "contrary_mko" in state["reasons"]
 
 
 def test_preserves_empty_and_all_sixteen_unsampled_candidates_in_denominator(monkeypatch):

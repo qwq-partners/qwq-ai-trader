@@ -27,13 +27,6 @@ _CNT_NOT_NORMAL = {
 }
 _MKO_NOT_NORMAL = {"110", "121", "129", "130", "139", "140", "146", "149", "150", "156", "159",
                    "164", "174", "182", "184"}
-_STATE_EVIDENCE = ("sequence", "symbol", "tr_id", "received_at", "observed_at", "connection_id", "generation",
-                   "local_frame_index", "record_index", "schema_version", "market_state_schema",
-                   "market_state_source_sha256", "market_state_status", "raw_field_count", "business_date",
-                   "exchange_time", "new_mkop_cls_code", "trht_yn", "hour_cls_code", "market_cls_code",
-                   "mkop_cls_code", "vi_cls_code", "iscd_stat_cls_code")
-
-
 def _compact_quote(row):
     if row is None:
         return None
@@ -49,7 +42,10 @@ def _compact_quote(row):
 
 
 def _evidence(row):
-    return None if row is None else {field: deepcopy(row.get(field)) for field in _STATE_EVIDENCE}
+    # State rows are already bounded by the sealed journal schema.  Preserve the
+    # complete raw state record rather than claiming evidence while omitting an
+    # accepted MKO field.
+    return None if row is None else deepcopy(row)
 
 
 def _time(row, field):
@@ -64,7 +60,8 @@ def _quote_times(row):
 
 
 def _six_digits(value):
-    return type(value) is str and len(value) == 6 and value.isdigit() and 0 <= int(value[:2]) <= 23 and 0 <= int(value[2:4]) <= 59 and 0 <= int(value[4:]) <= 59
+    return (type(value) is str and len(value) == 6 and all("0" <= char <= "9" for char in value)
+            and 0 <= int(value[:2]) <= 23 and 0 <= int(value[2:4]) <= 59 and 0 <= int(value[4:]) <= 59)
 
 
 def _book_valid(row):
@@ -165,18 +162,47 @@ def _mko_kind(row, capture_day):
     return "unknown"
 
 
-def _latest(records, *, tr, symbol, quote):
-    values = [row for row in records if row.get("kind") == "market_state" and row.get("tr_id") == tr
-              and row.get("symbol") == symbol and type(row.get("sequence")) is int
-              and row["sequence"] < quote.get("sequence", 0)]
-    return max(values, key=lambda row: row["sequence"], default=None)
+def _state_rows(records, *, tr, symbol, quote):
+    return [row for row in records if row.get("kind") == "market_state" and row.get("tr_id") == tr
+            and row.get("symbol") == symbol and type(row.get("sequence")) is int
+            and row["sequence"] < quote.get("sequence", 0)]
+
+
+def _latest(rows):
+    """Use causal receive ordering; an untimed or conflicting latest state is unknown."""
+    if not rows:
+        return None, None
+    parsed = []
+    for row in rows:
+        try:
+            received, observed = _state_times(row)
+        except ValueError:
+            return max(rows, key=lambda item: item["sequence"]), "untimed"
+        key = (received,
+               row.get("local_frame_index") if type(row.get("local_frame_index")) is int else -1,
+               row.get("record_index") if type(row.get("record_index")) is int else -1)
+        parsed.append((key, observed, row))
+    top_key = max(item[0] for item in parsed)
+    top = [item for item in parsed if item[0] == top_key]
+    first = top[0][2]
+    if any(item[2] != first for item in top[1:]):
+        return first, "conflicting"
+    return first, None
 
 
 def _state_context(records, quote, capture_day, policy):
     base = {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated",
             "fillability": "not_evaluated", "reasons": [], "raw_cnt_evidence": None,
             "raw_mko_evidence": None, "raw_mko_count": 0}
-    if quote is None or not _book_valid(quote):
+    if quote is None or type(quote.get("sequence")) is not int or type(quote.get("symbol")) is not str:
+        base["reasons"].append("book_unavailable_or_invalid")
+        return base
+    cnt_rows = _state_rows(records, tr=CNT_TR, symbol=quote["symbol"], quote=quote)
+    mko_rows = _state_rows(records, tr=MKO_TR, symbol=quote["symbol"], quote=quote)
+    cnt, cnt_issue = _latest(cnt_rows)
+    mko, mko_issue = _latest(mko_rows)
+    base["raw_cnt_evidence"], base["raw_mko_evidence"], base["raw_mko_count"] = _evidence(cnt), _evidence(mko), len(mko_rows)
+    if not _book_valid(quote):
         base["reasons"].append("book_unavailable_or_invalid")
         return base
     p = quote["provenance"]
@@ -184,55 +210,52 @@ def _state_context(records, quote, capture_day, policy):
     if type(connection) is not str or not connection or type(generation) is not int or type(generation) is bool:
         base["reasons"].append("book_connection_or_generation_invalid")
         return base
-    cnt = _latest(records, tr=CNT_TR, symbol=quote.get("symbol"), quote=quote)
-    mko_rows = [row for row in records if row.get("kind") == "market_state" and row.get("tr_id") == MKO_TR
-                and row.get("symbol") == quote.get("symbol") and type(row.get("sequence")) is int
-                and row["sequence"] < quote.get("sequence", 0)]
-    mko = max(mko_rows, key=lambda row: row["sequence"], default=None)
-    base["raw_cnt_evidence"], base["raw_mko_evidence"], base["raw_mko_count"] = _evidence(cnt), _evidence(mko), len(mko_rows)
+    cnt_kind = "unknown"
     if cnt is None:
         base["reasons"].append("missing_prior_cnt")
-        return base
-    if cnt.get("connection_id") != connection or cnt.get("generation") != generation:
+    elif cnt_issue:
+        base["reasons"].append("latest_cnt_" + cnt_issue)
+    elif cnt.get("connection_id") != connection or cnt.get("generation") != generation:
         base["reasons"].append("latest_cnt_connection_or_generation_mismatch")
-        return base
-    if not _state_before(cnt, quote):
+    elif not _state_before(cnt, quote):
         base["reasons"].append("latest_cnt_not_strictly_causal")
-        return base
-    try:
-        if _quote_times(quote)[0] - _state_times(cnt)[0] > timedelta(seconds=policy["state_max_age_seconds"]):
-            base["reasons"].append("latest_cnt_stale")
-            return base
-    except ValueError:
-        base["reasons"].append("latest_cnt_time_invalid")
-        return base
-    cnt_kind = _cnt_kind(cnt, capture_day)
-    if cnt_kind == "contrary":
-        base["flow_context"] = "contrary_observed"; base["reasons"].append("contrary_cnt")
-        return base
-    if cnt_kind != "normal":
-        base["reasons"].append("latest_cnt_unqualified")
-        return base
+    else:
+        try:
+            if _quote_times(quote)[0] - _state_times(cnt)[0] > timedelta(seconds=policy["state_max_age_seconds"]):
+                base["reasons"].append("latest_cnt_stale")
+            else:
+                cnt_kind = _cnt_kind(cnt, capture_day)
+                if cnt_kind == "contrary":
+                    base["reasons"].append("contrary_cnt")
+                elif cnt_kind != "normal":
+                    base["reasons"].append("latest_cnt_unqualified")
+        except ValueError:
+            base["reasons"].append("latest_cnt_time_invalid")
+    mko_kind = "none"
     if mko is not None:
-        if (mko.get("connection_id") != connection or mko.get("generation") != generation or not _state_before(mko, quote)):
+        if mko_issue:
+            base["reasons"].append("latest_mko_" + mko_issue)
+            mko_kind = "unknown"
+        elif (mko.get("connection_id") != connection or mko.get("generation") != generation or not _state_before(mko, quote)):
             base["reasons"].append("latest_mko_unqualified")
-            return base
-        mko_kind = _mko_kind(mko, capture_day)
-        if mko_kind == "contrary":
-            base["flow_context"] = "contrary_observed"; base["reasons"].append("contrary_mko")
-            return base
-        if mko_kind == "unknown":
-            base["reasons"].append("latest_mko_unknown")
-            return base
-    base["flow_context"] = "observed_regular_flow"
+            mko_kind = "unknown"
+        else:
+            mko_kind = _mko_kind(mko, capture_day)
+            if mko_kind == "contrary":
+                base["reasons"].append("contrary_mko")
+            elif mko_kind == "unknown":
+                base["reasons"].append("latest_mko_unknown")
+    if cnt_kind == "contrary" or mko_kind == "contrary":
+        base["flow_context"] = "contrary_observed"
+    elif cnt_kind == "normal" and mko_kind in {"none", "neutral"}:
+        base["flow_context"] = "observed_regular_flow"
     return base
 
 
 def _allocation(records, candidate_id, symbol, scan, capture_start, scan_at):
     values = [row for row in records if row.get("kind") == "quote_subscription" and row.get("candidate_id") == candidate_id
               and row.get("symbol") == symbol and row.get("tr_id") == BOOK_TR and row.get("status") in {"allocated", "shared_operational"}]
-    values = [row for row in values if type(row.get("sequence")) is int and row["sequence"] > scan.get("sequence", 0)
-              and _allocation_time_in_window(row, capture_start, scan_at)]
+    values = [row for row in values if type(row.get("sequence")) is int and row["sequence"] > scan.get("sequence", 0)]
     return min(values, key=lambda row: row["sequence"], default=None)
 
 
@@ -336,9 +359,11 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
                 "allocation_status": strict_row["allocation_status"],
                 "original_entry_quote": deepcopy(strict_row.get("entry_quote")), "anchor_quote": None,
                 "markout_quote": None, "anchor_delay_from_first_book": None, "gross_quote_move_pct": None,
-                "anchor_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_sampled"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0},
-                "markout_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_sampled"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0}, "reasons": []}
+                "anchor_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_evaluated"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0},
+                "markout_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_evaluated"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0}, "reasons": []}
         if rank > 5:
+            base["anchor_state"]["reasons"] = ["not_sampled"]
+            base["markout_state"]["reasons"] = ["not_sampled"]
             rows.append(base); continue
         allocation = _allocation(records, candidate_id, symbol, scan, capture_start, scan_at)
         if allocation is None:
@@ -348,6 +373,9 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
             allocation_at = _time(allocation, "observed_at")
         except ValueError:
             base["reasons"].append("allocation_time_invalid")
+            rows.append(base); continue
+        if allocation_at < capture_start or allocation_at < scan_at:
+            base["reasons"].append("allocation_before_capture_or_scan")
             rows.append(base); continue
         deadline = allocation_at + timedelta(seconds=policy["preparation_seconds"])
         if allocation_at + timedelta(seconds=policy["preparation_seconds"] + policy["horizon_seconds"] + policy["max_markout_delay_seconds"]) > capture_end:
