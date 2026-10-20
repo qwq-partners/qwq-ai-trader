@@ -34,7 +34,7 @@ def study_change(study):
         'max_delay_seconds': 5, 'anchor': 'entry_quote_observed_at'})
 
 
-async def collect_first_scan(tmp_path, monkeypatch, empty_first=False):
+async def collect_first_scan(tmp_path, monkeypatch, empty_first=False, *, initial_book=False):
     plan, _ = load(tmp_path, study_change)
     clock = advancing_capture_clock(monkeypatch)
     clock[0] = NOW
@@ -76,11 +76,13 @@ async def collect_first_scan(tmp_path, monkeypatch, empty_first=False):
             for key in list(coordinator._states):
                 await coordinator.handle_ack(ack(key), coordinator.generation)
             for symbol in symbols[:5]:
+                if initial_book:
+                    await receive(feed, coordinator, frame(BOOK, symbol))
                 await receive(feed, coordinator, frame(PRICE, symbol))
                 await receive(feed, coordinator, frame(STATUS, symbol))
                 await receive(feed, coordinator, frame(BOOK, symbol))
             entries = [r for r in runtime.buffer.export()['records'] if r['kind'] == 'ws_quote']
-            assert len(entries) == 5
+            assert len(entries) == (10 if initial_book else 5)
             clock[0] += timedelta(seconds=901)
             for symbol in symbols[:5]:
                 await receive(feed, coordinator, frame(PRICE, symbol))
