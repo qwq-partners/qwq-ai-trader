@@ -143,6 +143,11 @@ def test_full_runtime_loads_unmodified_candidate_artifact(m,tmp_path,monkeypatch
 @pytest.mark.parametrize('failure',[None,'check','static','enable','post_enable','backup_write','disk_before','disk_locked','disk_arm','disarm','partial_disable'])
 def test_offline_transaction_preserves_old_data_and_disarms_partial_failure(m,tmp_path,monkeypatch,failure):
     import os
+    class PreDeadlineClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 20, 0, 19, 59, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(m, 'datetime', PreDeadlineClock)
     for name in ('INSTALL','BACKUP','INPUT','ENGINE_STATE','STATE','OLD_ONCE','OLD_RECEIPT','OLD_STATUS','DROPIN','LOCK'):
         monkeypatch.setattr(m,name,tmp_path/name)
     old=(m.OLD_ONCE,m.OLD_RECEIPT,m.OLD_STATUS,m.DROPIN); monkeypatch.setattr(m,'OLD',old)
