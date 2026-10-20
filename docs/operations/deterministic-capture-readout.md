@@ -1,5 +1,7 @@
 # 고정 관측의 단발 오프라인 판독
 
+> **체결 관측 후 호가 프로필:** [10월21일 준비·실행 계약](pregate-capture-2026-10-21.md)은 `deterministic-observed-flow-readout-v1`을 사용한다. `--source-fingerprint --profile observed-flow`로 별도 지문을 고정하고 판단 파일 없이 보조 CLI 하나를 실행한다. 출력에는 기존 `strict_report`·전체 분모·보조 비교쌍이 함께 남으며 `decision_recording_finality=not_applicable`, `net_pnl=null`이다. 아래 기존 v1의 네 명령·판단 파일 설명과 혼용하지 않는다.
+
 > **후보 관측 전용 프로필:** [10월20일 판독 준비](pregate-readout-2026-10-20.md)는 `deterministic-pregate-readout-v1`을 명시한다. 판단 파일 없이 후보 판독 CLI 하나만 실행한다. 아래 기존 v1 manifest·4개 명령·판단 완결성 설명은 LLM 관측 프로필에 해당하며 새 프로필의 입력으로 혼용하지 않는다.
 
 > **2026-10-18 운영 갱신:** [직접 KIS 계측 배포·v4 예약/판독](selection-capture-2026-10-19.md#10월18일-직접-kis-계측-배포와-v4-교체). 고정 `a0bc9c94`·PID2208722·NRestarts0·복구ready·미체결0. 운영 전체7290검사와 독립 중요 리뷰 통과, 매수 중지·월100·unknown1/normal·기존 설정/자료 보존.10월19일09:25 v4 예약과10:05~10:20 판독 입력 사전검사 완료. 실수집·판독은 아직이며 자동 판독은 미예약이다. 후속 문서 커밋은 재배포하지 않는다. 아래 미배포/v3 표시는 당시 이력이다.
