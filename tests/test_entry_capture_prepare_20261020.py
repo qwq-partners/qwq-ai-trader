@@ -13,11 +13,16 @@ def test_candidate_installer_available():
 
 
 @pytest.fixture
-def m():
+def m(monkeypatch):
     assert SCRIPT.exists(), 'October 20 candidate installer is missing'
     spec = importlib.util.spec_from_file_location('prepare_oct20', SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    class PreDeadlineClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 20, 0, 19, 59, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr(mod, 'datetime', PreDeadlineClock)
     return mod
 
 
