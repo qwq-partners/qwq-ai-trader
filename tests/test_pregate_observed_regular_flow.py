@@ -163,7 +163,8 @@ def test_freezes_first_book_after_qualifying_cnt_when_it_has_wrong_generation(mo
     row = _report(monkeypatch, raw, observations)["candidates"][0]
     assert row["anchor_quote"]["quote_id"] == "anchor-000001"
     assert row["anchor_state"]["flow_context"] == "unknown"
-    assert row["markout_quote"]["quote_id"] == "markout-000001"
+    assert row["markout_quote"] is None
+    assert "qualifying_cnt_connection_or_generation_mismatch" in row["reasons"]
 
 
 def test_missing_endpoint_cnt_keeps_quote_but_not_flow_or_price_move(monkeypatch):
@@ -202,6 +203,83 @@ def test_preparation_deadline_does_not_substitute_a_later_normal_cnt(monkeypatch
     row = _report(monkeypatch, raw, observations)["candidates"][0]
     assert row["anchor_quote"] is None
     assert "qualifying_cnt_missing_in_preparation_window" in row["reasons"]
+
+
+def test_latest_bad_cnt_before_anchor_shadows_the_selected_older_normal_cnt(monkeypatch):
+    raw, observations = fixture()
+    anchor_index = next(i for i, row in enumerate(observations["records"]) if row.get("quote_id") == "anchor-000001")
+    observations["records"].insert(anchor_index, _cnt(1, _stamp(4), _stamp(4), raw_field_count=46))
+    for sequence, row in enumerate(observations["records"], 1): row["sequence"] = sequence
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["anchor_quote"]["quote_id"] == "anchor-000001"
+    assert row["anchor_state"]["flow_context"] == "unknown"
+    assert row["gross_quote_move_pct"] is None
+
+
+def test_anchor_published_after_allocation_window_is_preserved_but_never_evaluated(monkeypatch):
+    raw, observations = fixture()
+    anchor = next(row for row in observations["records"] if row.get("quote_id") == "anchor-000001")
+    anchor["observed_at"] = _stamp(8)
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["anchor_quote"]["quote_id"] == "anchor-000001"
+    assert row["markout_quote"] is None and row["gross_quote_move_pct"] is None
+    assert "anchor_outside_preparation_window" in row["reasons"]
+
+
+def test_late_or_delayed_endpoint_is_preserved_without_a_quote_move(monkeypatch):
+    raw, observations = fixture()
+    endpoint = next(row for row in observations["records"] if row.get("quote_id") == "markout-000001")
+    endpoint["provenance"]["received_at"] = endpoint["observed_at"] = _stamp(912)
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["markout_quote"]["quote_id"] == "markout-000001"
+    assert row["gross_quote_move_pct"] is None
+    assert "first_endpoint_too_late" in row["reasons"]
+    endpoint["provenance"]["received_at"] = _stamp(905); endpoint["observed_at"] = _stamp(906)
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["markout_quote"]["quote_id"] == "markout-000001"
+    assert row["gross_quote_move_pct"] is None
+    assert "first_endpoint_publication_delayed" in row["reasons"]
+
+
+def test_endpoint_connection_mismatch_is_preserved_and_ineligible(monkeypatch):
+    raw, observations = fixture()
+    endpoint = next(row for row in observations["records"] if row.get("quote_id") == "markout-000001")
+    endpoint["provenance"]["generation"] = 2
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["markout_quote"]["quote_id"] == "markout-000001"
+    assert row["gross_quote_move_pct"] is None
+    assert "endpoint_connection_or_generation_mismatch" in row["reasons"]
+
+
+def test_invalid_first_anchor_book_is_not_skipped_for_a_later_good_book(monkeypatch):
+    raw, observations = fixture()
+    anchor = next(row for row in observations["records"] if row.get("quote_id") == "anchor-000001")
+    anchor["provenance"]["message_count"] = True
+    later = deepcopy(anchor); later["sequence"] = len(observations["records"]) + 1
+    later["quote_id"] = "later-good"; later["provenance"]["message_count"] = 1
+    observations["records"].append(later)
+    row = _report(monkeypatch, raw, observations)["candidates"][0]
+    assert row["anchor_quote"]["quote_id"] == "anchor-000001"
+    assert row["gross_quote_move_pct"] is None
+
+
+def test_rank_six_with_malicious_allocation_is_never_evaluated(monkeypatch):
+    raw, observations = fixture(candidate_count=6)
+    sixth = "000006"; cid = "scan:000006"; sequence = len(observations["records"]) + 1
+    observations["records"].extend([
+        {"kind": "quote_subscription", "sequence": sequence, "observed_at": _stamp(2), "candidate_id": cid,
+         "symbol": sixth, "tr_id": "H0STASP0", "status": "allocated", "connection_id": "c1", "generation": 1},
+        _cnt(sequence + 1, _stamp(4), _stamp(4), symbol=sixth),
+        _book(sequence + 2, "malicious-anchor", _stamp(6), _stamp(5), symbol=sixth),
+    ])
+    row = _report(monkeypatch, raw, observations)["candidates"][5]
+    assert row["anchor_quote"] is None and row["anchor_state"]["reasons"] == ["not_sampled"]
+
+
+def test_valid_empty_scan_stays_empty_under_the_new_opt_in(monkeypatch):
+    raw, observations = fixture(candidate_count=0)
+    report = _report(monkeypatch, raw, observations)
+    assert report["counts"] == {"denominator": 0, "eligible_pairs": 0} and report["candidates"] == []
 
 
 def test_adverse_mko_marks_context_contrary_without_substituting_endpoint(monkeypatch):

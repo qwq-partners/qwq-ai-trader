@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import timedelta, timezone
 from decimal import Decimal, DecimalException
+import math
 
 from .entry_evaluation_bundle import load_json_bytes
 from .entry_price_shadow import _timestamp
@@ -70,12 +71,15 @@ def _book_valid(row):
     try:
         received, observed = _quote_times(row)
         p = row.get("provenance")
-        if (row.get("kind") != "ws_quote" or p.get("tr_id") != BOOK_TR or p.get("message_count") != 1
+        generation = p.get("generation")
+        if (row.get("kind") != "ws_quote" or p.get("tr_id") != BOOK_TR or type(p.get("message_count")) is not int or p.get("message_count") != 1
                 or p.get("source_as_of") is not None or type(p.get("raw_field_count")) is not int
                 or p.get("raw_field_count") != 63 or p.get("market_state_schema") != "H0STASP0-63-v1"
                 or p.get("market_state_source_sha256") != BOOK_SHA or p.get("market_state_status") != "raw_observed"
                 or p.get("hour_class_code") != "0" or p.get("market_class_code") != "2"
-                or not _six_digits(p.get("exchange_time")) or received > observed):
+                or not _six_digits(p.get("exchange_time")) or received > observed
+                or type(p.get("connection_id")) is not str or not p.get("connection_id")
+                or type(generation) is not int or generation < 1):
             return False
         values = []
         for key in ("bid", "ask"):
@@ -130,6 +134,9 @@ def _state_schema_valid(row, tr, capture_day):
     if (row.get("schema_version") != "kis-market-state-raw-v1" or row.get("market_state_schema") != "kis-public-guide-20261012"
             or row.get("market_state_source_sha256") != sha or row.get("market_state_status") != "raw_only"
             or type(row.get("raw_field_count")) is not int or row.get("raw_field_count") != width):
+        return False
+    if (type(row.get("connection_id")) is not str or not row.get("connection_id")
+            or type(row.get("generation")) is not int or row.get("generation") < 1):
         return False
     if tr == CNT_TR:
         return (row.get("business_date") == capture_day and _six_digits(row.get("exchange_time"))
@@ -221,10 +228,19 @@ def _state_context(records, quote, capture_day, policy):
     return base
 
 
-def _allocation(records, candidate_id, symbol):
+def _allocation(records, candidate_id, symbol, scan, capture_start, scan_at):
     values = [row for row in records if row.get("kind") == "quote_subscription" and row.get("candidate_id") == candidate_id
               and row.get("symbol") == symbol and row.get("tr_id") == BOOK_TR and row.get("status") in {"allocated", "shared_operational"}]
-    return min(values, key=lambda row: row.get("sequence", 0), default=None)
+    values = [row for row in values if type(row.get("sequence")) is int and row["sequence"] > scan.get("sequence", 0)
+              and _allocation_time_in_window(row, capture_start, scan_at)]
+    return min(values, key=lambda row: row["sequence"], default=None)
+
+
+def _allocation_time_in_window(row, capture_start, scan_at):
+    try:
+        return _time(row, "observed_at") >= capture_start and _time(row, "observed_at") >= scan_at
+    except ValueError:
+        return False
 
 
 def _normal_cnt_after(records, allocation, symbol, allocation_at, deadline, capture_day):
@@ -248,7 +264,7 @@ def _first_book_after(records, after, symbol):
     return min(values, key=lambda row: row.get("sequence", 0), default=None)
 
 
-def _endpoint(records, anchor, symbol, end, policy):
+def _endpoint(records, anchor, symbol, end, as_of, policy):
     if anchor is None:
         return None, "anchor_missing"
     try:
@@ -257,17 +273,34 @@ def _endpoint(records, anchor, symbol, end, policy):
         return None, "anchor_time_invalid"
     if target + timedelta(seconds=policy["max_markout_delay_seconds"]) > end:
         return None, "markout_window_not_mature"
+    try:
+        anchor_received, anchor_observed = _quote_times(anchor)
+        anchor_p = anchor["provenance"]
+    except (ValueError, KeyError, TypeError):
+        return None, "anchor_time_invalid"
+    previous_received, previous_observed = anchor_received, anchor_observed
     for row in records:
         if row.get("kind") != "ws_quote" or row.get("symbol") != symbol or row.get("provenance", {}).get("tr_id") != BOOK_TR or row.get("sequence", 0) <= anchor.get("sequence", 0):
             continue
         try:
-            _, observed = _quote_times(row)
+            received, observed = _quote_times(row)
         except ValueError:
             return row, "first_endpoint_time_invalid"
-        if observed >= target:
-            if observed > target + timedelta(seconds=policy["max_markout_delay_seconds"]):
+        if not previous_received <= received <= observed or observed < previous_observed:
+            return row, "first_endpoint_clock_regression"
+        if received > end or observed > end or received > as_of or observed > as_of:
+            return row, "first_endpoint_outside_capture_or_analysis"
+        if received >= target or observed >= target:
+            if received < target:
+                return row, "first_endpoint_publication_delayed"
+            if (received > target + timedelta(seconds=policy["max_markout_delay_seconds"])
+                    or observed > target + timedelta(seconds=policy["max_markout_delay_seconds"])):
                 return row, "first_endpoint_too_late"
+            p = row.get("provenance")
+            if not isinstance(p, dict) or p.get("connection_id") != anchor_p.get("connection_id") or p.get("generation") != anchor_p.get("generation"):
+                return row, "endpoint_connection_or_generation_mismatch"
             return row, None
+        previous_received, previous_observed = received, observed
     return None, "endpoint_missing"
 
 
@@ -276,7 +309,8 @@ def _move(anchor, endpoint, anchor_state, endpoint_state):
             or not _book_valid(anchor) or not _book_valid(endpoint)):
         return None
     try:
-        return float((Decimal(str(endpoint["bid"])) / Decimal(str(anchor["ask"])) - 1) * 100)
+        value = float((Decimal(str(endpoint["bid"])) / Decimal(str(anchor["ask"])) - 1) * 100)
+        return value if math.isfinite(value) else None
     except (DecimalException, ValueError, TypeError):
         return None
 
@@ -287,12 +321,14 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
         raise ValueError("study bytes required")
     study = load_json_bytes(study_bytes)
     policy, capture_start, capture_end = _policy(study)
+    as_of = _timestamp(analysis_as_of, "analysis_as_of")
     strict = build_pregate_candidate_report(study_bytes, observations, study_sha256=study_sha256, analysis_as_of=analysis_as_of)
     records = observations.get("records") if isinstance(observations, dict) else None
     if not isinstance(records, list):
         raise ValueError("bounded journal records required")
     capture_day = capture_start.astimezone(KST).strftime("%Y%m%d")
     scan = next(row for row in records if row.get("kind") == "scan")
+    scan_at = _time(scan, "observed_at")
     rows, eligible = [], 0
     for strict_row in strict["candidates"]:
         candidate_id, symbol, rank = strict_row["candidate_id"], strict_row["symbol"], strict_row["rank"]
@@ -302,7 +338,9 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
                 "markout_quote": None, "anchor_delay_from_first_book": None, "gross_quote_move_pct": None,
                 "anchor_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_sampled"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0},
                 "markout_state": {"flow_context": "unknown", "vi_state": "unknown", "tradability": "not_evaluated", "fillability": "not_evaluated", "reasons": ["not_sampled"], "raw_cnt_evidence": None, "raw_mko_evidence": None, "raw_mko_count": 0}, "reasons": []}
-        allocation = _allocation(records, candidate_id, symbol)
+        if rank > 5:
+            rows.append(base); continue
+        allocation = _allocation(records, candidate_id, symbol, scan, capture_start, scan_at)
         if allocation is None:
             base["reasons"].append("allocation_missing")
             rows.append(base); continue
@@ -324,6 +362,20 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
         if anchor is None:
             base["reasons"].append("anchor_book_missing")
             rows.append(base); continue
+        try:
+            anchor_received, anchor_observed = _quote_times(anchor)
+            if (anchor_received < allocation_at or anchor_observed < allocation_at or anchor_received > deadline
+                    or anchor_observed > deadline or anchor_received > capture_end or anchor_observed > capture_end
+                    or anchor_received > as_of or anchor_observed > as_of):
+                base["reasons"].append("anchor_outside_preparation_window")
+                rows.append(base); continue
+        except ValueError:
+            base["reasons"].append("anchor_time_invalid")
+            rows.append(base); continue
+        anchor_p = anchor.get("provenance") if isinstance(anchor.get("provenance"), dict) else {}
+        if cnt.get("connection_id") != anchor_p.get("connection_id") or cnt.get("generation") != anchor_p.get("generation"):
+            base["reasons"].append("qualifying_cnt_connection_or_generation_mismatch")
+            rows.append(base); continue
         anchor_state = _state_context(records, anchor, capture_day, policy)
         base["anchor_state"] = anchor_state
         try:
@@ -332,13 +384,13 @@ def build_observed_regular_flow_report(study_bytes, observations, *, study_sha25
                 base["anchor_delay_from_first_book"] = (_quote_times(anchor)[1] - _timestamp(original.get("observed_at"), "original observed_at")).total_seconds()
         except ValueError:
             base["reasons"].append("anchor_or_original_time_invalid")
-        endpoint, endpoint_reason = _endpoint(records, anchor, symbol, capture_end, policy)
+        endpoint, endpoint_reason = _endpoint(records, anchor, symbol, capture_end, as_of, policy)
         base["markout_quote"] = _compact_quote(endpoint)
         endpoint_state = _state_context(records, endpoint, capture_day, policy)
         base["markout_state"] = endpoint_state
         if endpoint_reason:
             base["reasons"].append(endpoint_reason)
-        base["gross_quote_move_pct"] = _move(anchor, endpoint, anchor_state, endpoint_state)
+        base["gross_quote_move_pct"] = None if endpoint_reason else _move(anchor, endpoint, anchor_state, endpoint_state)
         if base["gross_quote_move_pct"] is not None:
             eligible += 1
         rows.append(base)
