@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -191,7 +192,7 @@ class ExpertOrchestrator:
         out: List[tuple] = []
         for name in self.MARKET_REGIME_EXPERTS:
             op = opinions.get(name)
-            if op is None or not op.is_valid:
+            if op is None or not op.is_valid or op.expert != name:
                 continue
             # 2026-09-14 (T9 요청 4)/2026-09-15 (T10 F16): 자료 부족(insufficient)은
             # confidence 상한만으로도 기여가 작아지지만, "가중 0으로 완전 제외"를
@@ -201,8 +202,16 @@ class ExpertOrchestrator:
             if getattr(op, "data_status", "ok") not in ("ok", "partial"):
                 continue
             # P0-4 (2026-05-29 리뷰): 음수 가중치/confidence 방어
-            cfg_w = max(0.0, float(self.config.weights.get(name, 1.0)))
-            conf = max(0.0, min(1.0, float(op.confidence)))
+            try:
+                cfg_w = float(self.config.weights.get(name, 1.0))
+                conf = float(op.confidence)
+                score = float(op.score)
+            except (TypeError, ValueError):
+                continue
+            if not all(math.isfinite(v) for v in (cfg_w, conf, score)):
+                continue
+            cfg_w = max(0.0, cfg_w)
+            conf = max(0.0, min(1.0, conf))
             w = cfg_w * conf
             if w <= 0:
                 continue
@@ -239,7 +248,7 @@ class ExpertOrchestrator:
         return int(max(-30, min(30, avg * 0.3)))
 
     # 시장 체제 집계에서 제외되는 전문가 (종목 단위 판단 전용)
-    NON_REGIME_EXPERTS = frozenset({"sector_council"})
+    NON_REGIME_EXPERTS = frozenset({"sector_council", "news_curator", "earnings_expert"})
 
     def aggregate_bias(
         self,
@@ -249,16 +258,8 @@ class ExpertOrchestrator:
         if opinions is None:
             opinions = self.snapshot()
         counts = {RegimeBias.BULL: 0.0, RegimeBias.NEUTRAL: 0.0, RegimeBias.BEAR: 0.0}
-        for op in opinions.values():
-            if not op.is_valid or op.expert in self.NON_REGIME_EXPERTS:
-                continue
-            # 2026-09-14 (T9 리뷰 blocking)/2026-09-15 (T10 F16): aggregate_regime_score와
-            # 동일한 allowlist(ok/partial만 허용)로 insufficient·unknown을 제외한다 —
-            # "모른다"가 NEUTRAL 표로 집계되지 않게.
-            if getattr(op, "data_status", "ok") not in ("ok", "partial"):
-                continue
-            w = self.config.weights.get(op.expert, 1.0) * op.confidence
-            counts[op.regime_bias] += w
+        for name, _, weight in self._market_expert_contributions(opinions):
+            counts[opinions[name].regime_bias] += weight
         if not any(counts.values()):
             # 유효 표가 0 이면 dict 첫 키(BULL)로 떨어지던 동표 회귀 방지 — '모른다' 는 NEUTRAL (2026-09-14 재리뷰)
             return RegimeBias.NEUTRAL
@@ -300,7 +301,14 @@ class ExpertOrchestrator:
         short_n = counts["insufficient"] + unknown_n
         note = f"자료 부족 {short_n}명" if short_n else None
         valid_n = len(self._market_expert_contributions(opinions))
+        market_counts = {"ok": 0, "partial": 0, "insufficient": 0, "unknown": 0, "unavailable": 0}
+        for name in self.MARKET_REGIME_EXPERTS:
+            op = opinions.get(name)
+            status = getattr(op, "data_status", "unknown") if op is not None and op.is_valid else "unavailable"
+            market_counts[status if status in market_counts else "unknown"] += 1
         return {
+            "market_counts": market_counts,
+            "contributors": [name for name, _, _ in self._market_expert_contributions(opinions)],
             "counts": counts,
             "insufficient_experts": insufficient_experts,
             "unknown_experts": unknown_experts,
@@ -321,12 +329,13 @@ class ExpertOrchestrator:
         """confidence ≥ threshold인 BEAR 의견이 min_count 이상이면 True"""
         if opinions is None:
             opinions = self.snapshot()
+        contributions = self._market_expert_contributions(opinions)
+        if len(contributions) < self.MIN_VALID_EXPERTS:
+            return False
         bear_strong = [
-            op for op in opinions.values()
-            if op.is_valid
-            and op.expert not in self.NON_REGIME_EXPERTS
-            and op.regime_bias == RegimeBias.BEAR
-            and op.confidence >= threshold_confidence
+            opinions[name] for name, _, _ in contributions
+            if opinions[name].regime_bias == RegimeBias.BEAR
+            and opinions[name].confidence >= threshold_confidence
         ]
         return len(bear_strong) >= min_count
 

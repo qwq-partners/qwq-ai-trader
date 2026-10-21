@@ -265,6 +265,7 @@ def test_weekend_expert_kr_futures_fresh_as_of_applies_existing_rule(monkeypatch
     async def _signals():
         return {
             "kr_futures_pct": 2.0, "kr_futures_source": "KIS:TEST",
+            "kr_futures_session": "night",
             "kr_futures_as_of": now.isoformat(),
             "kr_futures_as_of_ttl_seconds": 3600,
             "kr_futures_unchanged_minutes": 0.0,
@@ -274,7 +275,7 @@ def test_weekend_expert_kr_futures_fresh_as_of_applies_existing_rule(monkeypatch
     op = asyncio.run(expert._analyze())
 
     assert op.score == 12
-    assert any("KR/JP 야간선물" in f and "갭업" in f for f in op.key_findings)
+    assert any("직전 야간세션 등락" in f and "+2.00%" in f for f in op.key_findings)
 
 
 def test_weekend_expert_kr_futures_expired_as_of_is_not_counted(monkeypatch):

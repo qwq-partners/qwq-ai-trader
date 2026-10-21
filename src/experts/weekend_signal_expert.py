@@ -91,19 +91,28 @@ class WeekendSignalExpert(ExpertAgent):
                 session="night",
                 ttl_seconds=signals.get("kr_futures_as_of_ttl_seconds"),
             )
-            kr_fresh = isinstance(kr, (int, float)) and is_fresh(kr_dp)
+            # yfinance preserves an offset-aware bar index; KIS legacy session
+            # timestamps are local-naive. Compare like with like while keeping
+            # the original source timestamp unchanged in raw evidence.
+            freshness_now = datetime.now(_kr_as_of.tzinfo) if _kr_as_of and _kr_as_of.tzinfo else None
+            kr_fresh = isinstance(kr, (int, float)) and is_fresh(kr_dp, now=freshness_now)
         else:
             kr_fresh = isinstance(kr, (int, float))
         if kr_fresh:
+            kr_source = str(signals.get("kr_futures_source") or "source 미확인")
+            kr_session = str(signals.get("kr_futures_session") or "세션 미확인")
+            kr_as_of = str(signals.get("kr_futures_as_of") or "기준시각 미확인")
+            period_label = "직전 야간세션 등락" if kr_session == "night" else "대체지표·관측구간 등락"
+            kr_fact = f"{kr_source} {period_label} {kr:+.2f}% ({kr_session}, {kr_as_of})"
             if kr <= -2.0:
                 score -= 25
-                findings.append(f"⚠️ KR/JP 야간선물 {kr:+.2f}% — 월요일 갭다운 큰 위험")
+                findings.append(f"⚠️ {kr_fact}")
             elif kr <= -1.0:
                 score -= 12
-                findings.append(f"KR/JP 야간선물 {kr:+.2f}% — 갭다운 주의")
+                findings.append(kr_fact)
             elif kr >= 1.5:
                 score += 12
-                findings.append(f"🟢 KR/JP 야간선물 {kr:+.2f}% — 갭업 기대")
+                findings.append(f"🟢 {kr_fact}")
 
         # 3) 원/달러 (외환 risk)
         krw_pct = signals.get("krw_pct")
@@ -219,7 +228,7 @@ class WeekendSignalExpert(ExpertAgent):
                         period=period, interval=interval, auto_adjust=False
                     )
                     if hist.empty or len(hist) < 2:
-                        return {"last": None, "pct": None}
+                        return {"last": None, "pct": None, "as_of": None}
                     close = hist["Close"]
                     last = float(close.iloc[-1])
                     # 24시간 전 가격 (interval=1h → 24봉 전)
@@ -228,14 +237,18 @@ class WeekendSignalExpert(ExpertAgent):
                     else:
                         prev = float(close.iloc[0])
                     pct = (last - prev) / prev * 100 if prev > 0 else 0.0
-                    return {"last": round(last, 2), "pct": round(pct, 2)}
+                    try:
+                        as_of = close.index[-1].isoformat()
+                    except AttributeError:
+                        as_of = None
+                    return {"last": round(last, 2), "pct": round(pct, 2), "as_of": as_of}
                 except Exception:
-                    return {"last": None, "pct": None}
+                    return {"last": None, "pct": None, "as_of": None}
 
             try:
                 return await asyncio.to_thread(_sync)
             except Exception:
-                return {"last": None, "pct": None}
+                return {"last": None, "pct": None, "as_of": None}
 
         # 병렬 fetch (KS200=F는 야후 상장폐지로 제거 — 2026-08-06)
         es, nq, nkd, krw, vix, btc, zb = await asyncio.gather(
@@ -269,6 +282,7 @@ class WeekendSignalExpert(ExpertAgent):
             if q and q.get("session") == "night" and q.get("change_pct") is not None:
                 out["kr_futures_pct"] = q["change_pct"]
                 out["kr_futures_source"] = f"KIS:{q.get('symbol')}"
+                out["kr_futures_session"] = q.get("session")
                 # 2026-09-14 (T9 요청 4): 기준시각을 raw_evidence까지 보존 — 반복 값이
                 # 고착인지 정상 유지인지는 여기 담긴 자료로만 판단(이 자리에서 단정 안 함).
                 # as_of/as_of_ttl_seconds는 kr_night_futures_as_of(세션 규칙, T10 F17)로
@@ -284,6 +298,8 @@ class WeekendSignalExpert(ExpertAgent):
             if isinstance(nkd_pct, (int, float)):
                 out["kr_futures_pct"] = round(nkd_pct * 0.7, 2)
                 out["kr_futures_source"] = "NKD=F(proxy×0.7)"
+                out["kr_futures_session"] = "yfinance_1h_proxy"
+                out["kr_futures_as_of"] = _safe(nkd, "as_of")
 
         out["krw_pct"] = _safe(krw, "pct")
         out["krw_last"] = _safe(krw, "last")

@@ -24,10 +24,11 @@ SEPA 스코어 5번 항목: 개별 종목 change_20d 대신 섹터 ETF 모멘텀
 
 import asyncio
 import json
+import math
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -109,6 +110,41 @@ def _keyword_sector(stock_name: str) -> Optional[str]:
     return None
 
 
+def _is_finite_number(value: Any) -> bool:
+    """True for usable numerical evidence; bool/NaN/infinity are not prices or returns."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _close_price(bar: Any) -> Optional[float]:
+    """Extract a positive finite close without letting malformed values become evidence."""
+    if not isinstance(bar, dict):
+        return None
+    value = bar.get("stck_clpr") or bar.get("close")
+    if isinstance(value, bool):
+        return None
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if _is_finite_number(price) and price > 0 else None
+
+
+def _bar_as_of(bar: Any) -> Optional[str]:
+    """Return an actual daily-bar date in ISO form, or unknown when the source omitted it."""
+    if not isinstance(bar, dict):
+        return None
+    raw = bar.get("stck_bsop_date") or bar.get("date")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    try:
+        if len(text) == 8 and text.isdigit():
+            return datetime.strptime(text, "%Y%m%d").date().isoformat()
+        return datetime.fromisoformat(text).date().isoformat()
+    except (TypeError, ValueError):
+        return None
+
+
 class SectorMomentumProvider:
     """
     섹터 모멘텀 프로바이더
@@ -129,7 +165,7 @@ class SectorMomentumProvider:
         self._sector_miss: set = set()
         self._etf_momentum: Dict[str, float] = {} # sector_name → 20d_pct
         # sector_name → {"r5": 5d_pct, "r20": 20d_pct} (2026-08-07)
-        self._etf_momentum_multi: Dict[str, Dict[str, float]] = {}
+        self._etf_momentum_multi: Dict[str, Dict[str, Any]] = {}
         self._etf_last_fetch: float = 0.0
         # pykrx 업종분류 실패 백오프 만료 시각 (monotonic) — KRX 인증 등 구조적 실패 시
         # 5분마다 재시도하며 pykrx 내부 stderr("Error occurred in get_market_sector_classifications")
@@ -193,10 +229,11 @@ class SectorMomentumProvider:
         await self._refresh_etf_momentum()
         return dict(self._etf_momentum)
 
-    async def get_all_sector_momentum_multi(self) -> Dict[str, Dict[str, float]]:
-        """전체 섹터 5일+20일 수익률 맵 (섹터명 → {"r5": %, "r20": %})
+    async def get_all_sector_momentum_multi(self) -> Dict[str, Dict[str, Any]]:
+        """전체 섹터 수익률과 관측 근거 맵을 반환한다.
 
-        2026-08-07 섹터 카운슬 블렌드용. 구버전 캐시만 있으면 r20만 채워진다.
+        새 항목은 r1/r5/r20, 실제 세션 수, 시작일, 마지막 일봉일(as_of), 원천을
+        포함한다. 구버전 캐시의 가격 날짜/원천은 추정하지 않고 unknown으로 남긴다.
         """
         await self._refresh_etf_momentum()
         return {k: dict(v) for k, v in self._etf_momentum_multi.items()}
@@ -384,21 +421,26 @@ class SectorMomentumProvider:
         # 파일 캐시 시도
         cached = _load_json_cache(_ETF_MOMENTUM_CACHE, _ETF_MOMENTUM_TTL)
         if cached:
-            self._etf_momentum = cached
-            cached_multi = _load_json_cache(_ETF_MOMENTUM_MULTI_CACHE, _ETF_MOMENTUM_TTL)
-            # 멀티 캐시 부재(구버전 파일만 존재) → 레거시 20일로 합성 (r5 없음)
-            self._etf_momentum_multi = cached_multi or {
-                s: {"r20": v} for s, v in cached.items()
+            self._etf_momentum = {
+                sector: value for sector, value in cached.items()
+                if _is_finite_number(value)
             }
+            cached_multi = _load_json_cache(_ETF_MOMENTUM_MULTI_CACHE, _ETF_MOMENTUM_TTL)
+            # 구버전 캐시는 파일 mtime로 가격 날짜를 복원할 수 없다. 해당 관측은
+            # 명시적으로 provenance unknown으로 남긴다.
+            self._etf_momentum_multi = self._load_multi_cache(cached_multi, self._etf_momentum)
             self._etf_last_fetch = now
             return
 
         # KIS API로 ETF 가격 조회
         if not self._broker:
+            # 캐시도 만료된 상태에서는 과거 인메모리 값을 새 관측처럼 내보내지 않는다.
+            self._etf_momentum = {}
+            self._etf_momentum_multi = {}
             return
 
         results: Dict[str, float] = {}
-        results_multi: Dict[str, Dict[str, float]] = {}
+        results_multi: Dict[str, Dict[str, Any]] = {}
         for sector, etf_ticker in SECTOR_ETF_MAP.items():
             try:
                 rets = await self._calc_etf_returns(etf_ticker)
@@ -421,10 +463,37 @@ class SectorMomentumProvider:
         else:
             # 전체 실패 네거티브 캐시 (2026-08-08 P1): 2분 후 재시도 — 장애 중
             # 호출마다 13개 ETF API를 반복 조회하던 폭주 방지
+            # 만료된 인메모리 값은 현재 갱신값처럼 반환하면 안 된다. 비어 있는
+            # 결과로 실패를 드러내되, 재시도 폭주 방지 시간만 별도로 기록한다.
+            self._etf_momentum = {}
+            self._etf_momentum_multi = {}
             self._etf_last_fetch = now - _ETF_MOMENTUM_TTL + 120
             logger.warning("[SectorMomentum] ETF 모멘텀 전체 실패 — 2분 후 재시도")
 
-    async def _calc_etf_returns(self, etf_ticker: str) -> Optional[Dict[str, float]]:
+    def _load_multi_cache(
+        self, cached_multi: Optional[dict], legacy: Dict[str, float]
+    ) -> Dict[str, Dict[str, Any]]:
+        """캐시 스키마를 안전하게 읽되, 없는 가격 근거를 만들지 않는다."""
+        out: Dict[str, Dict[str, Any]] = {}
+        if isinstance(cached_multi, dict):
+            for sector, entry in cached_multi.items():
+                if not isinstance(entry, dict) or not _is_finite_number(entry.get("r20")):
+                    continue
+                normalized = dict(entry)
+                for key in ("r1", "r5"):
+                    if key in normalized and not _is_finite_number(normalized[key]):
+                        normalized[key] = None
+                normalized.setdefault("as_of", None)
+                normalized.setdefault("source", "unknown")
+                out[str(sector)] = normalized
+            if out:
+                return out
+        return {
+            sector: {"r20": value, "as_of": None, "source": "unknown"}
+            for sector, value in legacy.items()
+        }
+
+    async def _calc_etf_returns(self, etf_ticker: str) -> Optional[Dict[str, Any]]:
         """ETF 5일/20일 수익률 계산 (KIS get_daily_prices 1회 조회).
 
         ⚠️ get_daily_prices는 **오래된 순서**(oldest-first)로 반환한다 (docstring 명시).
@@ -438,29 +507,43 @@ class SectorMomentumProvider:
 
             # 최신 종가 = 리스트 마지막 (oldest-first)
             latest = prices[-1]
-            current_price = float(latest.get("stck_clpr") or latest.get("close") or 0)
-            if current_price <= 0:
+            current_price = _close_price(latest)
+            if current_price is None:
                 return None
 
-            def _ret(n_days: int) -> Optional[float]:
+            def _ret(n_days: int) -> Tuple[Optional[float], int, Optional[str]]:
                 # n_days 세션 전 = 끝에서 n_days+1번째
-                idx = max(0, len(prices) - 1 - n_days)
-                old_price = float(
-                    prices[idx].get("stck_clpr") or prices[idx].get("close") or 0
-                )
-                if old_price <= 0:
-                    return None
-                return (current_price - old_price) / old_price * 100
+                sessions = min(n_days, len(prices) - 1)
+                idx = len(prices) - 1 - sessions
+                old_price = _close_price(prices[idx])
+                if old_price is None:
+                    return None, sessions, _bar_as_of(prices[idx])
+                value = (current_price - old_price) / old_price * 100
+                if not _is_finite_number(value):
+                    return None, sessions, _bar_as_of(prices[idx])
+                return value, sessions, _bar_as_of(prices[idx])
 
-            r20 = _ret(20)
+            r1, r1_sessions, r1_start = _ret(1)
+            r20, r20_sessions, r20_start = _ret(20)
             if r20 is None:
                 return None
-            out = {"r20": r20}
+            r5, r5_sessions, r5_start = _ret(5)
+            out: Dict[str, Any] = {
+                "r1": r1,
+                "r1_sessions": r1_sessions,
+                "r1_start": r1_start,
+                "r5": None,
+                "r5_sessions": r5_sessions,
+                "r5_start": r5_start,
+                "r20": r20,
+                "r20_sessions": r20_sessions,
+                "r20_start": r20_start,
+                "as_of": _bar_as_of(latest),
+                "source": f"KIS:{etf_ticker}",
+            }
             # 이력 6봉 미만이면 r5가 r20과 같은 인덱스로 수렴해 라벨이 왜곡됨 → 생략
-            if len(prices) >= 6:
-                r5 = _ret(5)
-                if r5 is not None:
-                    out["r5"] = r5
+            if len(prices) >= 6 and r5 is not None:
+                out["r5"] = r5
             return out
 
         except Exception as e:

@@ -48,10 +48,10 @@ class EarningsExpert(ExpertAgent):
         if isinstance(avg_surprise, (int, float)):
             if avg_surprise > 0.05:
                 score += 15
-                findings.append(f"US 어닝 평균 surprise +{avg_surprise*100:.1f}% — 강세")
+                findings.append(f"US 최근 7일 EPS surprise +{avg_surprise*100:.1f}% (표본 {recent_us.get('count', 0)}건)")
             elif avg_surprise < -0.02:
                 score -= 10
-                findings.append(f"US 어닝 평균 surprise {avg_surprise*100:.1f}% — 약세")
+                findings.append(f"US 최근 7일 EPS surprise {avg_surprise*100:.1f}% (표본 {recent_us.get('count', 0)}건)")
 
         # raise/cut 비율
         beats = recent_us.get("beats", 0)
@@ -66,10 +66,10 @@ class EarningsExpert(ExpertAgent):
                 score -= 8
 
         # 임박 어닝 종목 수
-        upcoming_n = len(upcoming_us.get("symbols", []))
+        upcoming_n = upcoming_us.get("count", len(upcoming_us.get("symbols", [])))
         if upcoming_n > 0:
             findings.append(
-                f"향후 5일 임박 어닝: {upcoming_n}건 ({', '.join(upcoming_us['symbols'][:5])})"
+                f"향후 5달력일 예정 어닝: {upcoming_n}건 ({', '.join(upcoming_us['symbols'][:5])})"
             )
 
         # P1-10 (2026-05-29 리뷰): KR 잠정실적 공시 반영
@@ -78,9 +78,7 @@ class EarningsExpert(ExpertAgent):
             findings.append(
                 f"KR 잠정실적 공시 3일: {kr_count}건 (DART)"
             )
-            # 다수 발표 = 어닝시즌 진행 시그널
-            if kr_count >= 10:
-                score += 5
+            # Filing activity alone says nothing about earnings direction.
 
         bias = (
             RegimeBias.BULL if score > 10
@@ -100,8 +98,11 @@ class EarningsExpert(ExpertAgent):
             raw=dict(
                 upcoming=upcoming_us,
                 recent=recent_us,
+                kr_disclosures=kr_recent,
             ),
             valid_hours=4,
+            data_status="partial" if isinstance(avg_surprise, (int, float)) else "insufficient",
+            missing_inputs=["KR 실적 방향·금액 검증"] + ([] if isinstance(avg_surprise, (int, float)) else ["US EPS 표본"]),
         )
 
     # ─────────────────────────────────────────

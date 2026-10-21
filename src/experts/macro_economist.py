@@ -91,10 +91,17 @@ class MacroEconomist(ExpertAgent):
             else RegimeBias.NEUTRAL
         )
 
-        # 5) LLM 종합 (있을 때만)
-        llm_finding = await self._llm_synthesize(prices, macro_context)
-        if llm_finding:
-            findings.insert(0, llm_finding)
+        indicator_evidence = dict(getattr(self, "_indicator_evidence", {}))
+        for key in overrides:
+            indicator_evidence[key] = {"source": "manual_override", "as_of": None}
+        rate_evidence = indicator_evidence.get("us10y", {})
+        rate_delta = rate_evidence.get("change_bp")
+        if isinstance(prices.get("us10y"), (int, float)):
+            change = f"직전 관측 대비 {rate_delta:+.1f}bp" if isinstance(rate_delta, (int, float)) else "전일 변화 미확인"
+            findings.insert(0, f"US10Y {prices['us10y']:.2f}% · {change}")
+
+        # Numeric evidence is the report: a current level cannot substantiate a
+        # daily move or a confident future return. No extra narrative LLM call.
 
         # confidence는 보유 지표 수에 비례
         confidence = min(0.85, 0.3 + len(prices) * 0.07)
@@ -138,6 +145,7 @@ class MacroEconomist(ExpertAgent):
             sectors=affected,
             raw=dict(
                 prices=prices,
+                indicator_evidence=indicator_evidence,
                 has_macro_context=bool(macro_context),
                 manual_override_keys=list(overrides.keys()),
             ),
@@ -219,18 +227,24 @@ class MacroEconomist(ExpertAgent):
         }
 
     async def _fetch_yfinance_indicators(self) -> Dict[str, float]:
+        self._indicator_evidence = {}
         try:
             import yfinance as yf
         except ImportError:
             logger.warning("[거시] yfinance 미설치")
             return {}
 
-        def _fetch_one(ticker: str) -> Optional[float]:
+        def _fetch_one(ticker: str) -> Optional[Dict[str, Any]]:
             try:
                 hist = yf.Ticker(ticker).history(period="2d", interval="1d", auto_adjust=False)
                 if hist.empty:
                     return None
-                return float(hist["Close"].iloc[-1])
+                close = hist["Close"]
+                value = float(close.iloc[-1])
+                stamp = close.index[-1]
+                as_of = stamp.isoformat() if hasattr(stamp, "isoformat") else None
+                prev = float(close.iloc[-2]) if len(close) >= 2 else None
+                return {"value": value, "as_of": as_of, "previous": prev}
             except Exception:
                 return None
 
@@ -240,9 +254,9 @@ class MacroEconomist(ExpertAgent):
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         out: Dict[str, float] = {}
-        for (name, _), result in zip(_TICKERS.items(), results):
-            if isinstance(result, (int, float)) and result is not None:
-                val = float(result)
+        for (name, ticker), result in zip(_TICKERS.items(), results):
+            if isinstance(result, dict) and isinstance(result.get("value"), (int, float)):
+                val = float(result["value"])
                 # 정상 범위 검증
                 lo, hi = self._VALID_RANGES.get(name, (-1e9, 1e9))
                 if not (lo <= val <= hi):
@@ -251,6 +265,11 @@ class MacroEconomist(ExpertAgent):
                     )
                     continue
                 out[name] = round(val, 3)
+                evidence = {"source": f"yfinance:{ticker}", "as_of": result["as_of"]}
+                previous = result.get("previous")
+                if name == "us10y" and isinstance(previous, (int, float)) and lo <= previous <= hi:
+                    evidence["change_bp"] = round((val - previous) * 100, 2)
+                self._indicator_evidence[name] = evidence
         return out
 
     # ─────────────────────────────────────────

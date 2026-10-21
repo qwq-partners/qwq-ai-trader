@@ -24,6 +24,17 @@ _INDEX_TICKERS = ["SPY", "QQQ", "IWM", "DIA"]
 _SECTOR_TICKERS = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC"]
 
 
+def _bar_date(value: Any) -> Optional[str]:
+    """Use the history index's actual bar date; never substitute the fetch time."""
+    try:
+        return value.date().isoformat()
+    except AttributeError:
+        try:
+            return value.isoformat()
+        except AttributeError:
+            return None
+
+
 class USMarketExpert(ExpertAgent):
     name = "us_market_expert"
     refresh_minutes = 60
@@ -35,7 +46,7 @@ class USMarketExpert(ExpertAgent):
 
     async def _analyze(self) -> ExpertOpinion:
         # 병렬 fetch
-        indices, sectors, vix, earnings, semis = await asyncio.gather(
+        indices, sector_result, vix, earnings, semis = await asyncio.gather(
             self._fetch_index_states(),
             self._fetch_sector_rs(),
             self._fetch_vix(),
@@ -45,7 +56,18 @@ class USMarketExpert(ExpertAgent):
         )
 
         indices = indices if isinstance(indices, dict) else {}
-        sectors = sectors if isinstance(sectors, dict) else {}
+        # The fetcher returns numeric values plus their independently observed
+        # daily-bar period.  Older test doubles/private callers may still
+        # return only the numeric map; never describe those as 20 days.
+        if isinstance(sector_result, tuple) and len(sector_result) == 2:
+            sectors, sector_periods = sector_result
+            sectors = sectors if isinstance(sectors, dict) else {}
+            sector_periods = sector_periods if isinstance(sector_periods, dict) else {}
+        else:
+            sectors = sector_result if isinstance(sector_result, dict) else {}
+            sector_periods = {
+                ticker: {"label": "구간 미확인"} for ticker in sectors
+            }
         vix = vix if isinstance(vix, (int, float)) else None
         earnings = earnings if isinstance(earnings, dict) else {}
         semis = semis if isinstance(semis, dict) else {}
@@ -85,8 +107,14 @@ class USMarketExpert(ExpertAgent):
         if sectors:
             top = sorted(sectors.items(), key=lambda x: -x[1])[:3]
             bot = sorted(sectors.items(), key=lambda x: x[1])[:2]
+            labels = set()
+            for ticker, _ in top:
+                period = sector_periods.get(ticker) or {}
+                count = period.get("session_count") if isinstance(period, dict) else None
+                labels.add(f"{count}세션" if type(count) is int and count > 0 else "구간 미확인")
+            period_label = next(iter(labels)) if len(labels) == 1 else "구간 미확인"
             findings.append(
-                f"강세 섹터: {','.join(f'{s}({r:+.1f}%)' for s, r in top)}"
+                f"수익률 상위 섹터 ({period_label}): {','.join(f'{s}({r:+.1f}%)' for s, r in top)}"
             )
             # Energy/Financials 강세 → 가치주 → bull
             top_sectors = [s for s, _ in top]
@@ -109,7 +137,7 @@ class USMarketExpert(ExpertAgent):
         if isinstance(sox_5d, (int, float)):
             if sox_5d <= -3.0:
                 score -= 18
-                findings.append(f"⚠️ SOX 5일 {sox_5d:+.1f}% — 반도체 단기 약세 (KR 직격)")
+                findings.append(f"⚠️ SOX 5일 {sox_5d:+.1f}% — 미국 반도체 단기 약세")
             elif sox_5d <= -1.5:
                 score -= 8
                 findings.append(f"SOX 5일 {sox_5d:+.1f}% — 반도체 부진")
@@ -176,6 +204,8 @@ class USMarketExpert(ExpertAgent):
                 top_sector=affected[0] if affected else None,
                 avg_surprise=surprise,
                 semis=semis,
+                sector_returns=sectors,
+                sector_periods=sector_periods,
             ),
             valid_hours=4,
             data_status=data_status,
@@ -185,7 +215,7 @@ class USMarketExpert(ExpertAgent):
     # ─────────────────────────────────────────
     # 지수 상태 (SPY/QQQ/IWM/DIA)
     # ─────────────────────────────────────────
-    async def _fetch_index_states(self) -> Dict[str, Dict[str, float]]:
+    async def _fetch_index_states(self) -> Dict[str, Dict[str, Any]]:
         def _one(ticker: str):
             try:
                 import yfinance as yf
@@ -200,6 +230,8 @@ class USMarketExpert(ExpertAgent):
                     "last": round(last, 2),
                     "vs_ma50_pct": round((last - ma50) / ma50 * 100, 2) if ma50 > 0 else 0.0,
                     "vs_ma200_pct": round((last - ma200) / ma200 * 100, 2) if ma200 > 0 else 0.0,
+                    "as_of": _bar_date(close.index[-1]),
+                    "source": f"yfinance:{ticker}",
                 }
             except Exception:
                 return ticker, {}
@@ -208,7 +240,7 @@ class USMarketExpert(ExpertAgent):
             *[asyncio.to_thread(_one, t) for t in _INDEX_TICKERS],
             return_exceptions=True,
         )
-        out: Dict[str, Dict[str, float]] = {}
+        out: Dict[str, Dict[str, Any]] = {}
         for r in results:
             if isinstance(r, tuple) and len(r) == 2:
                 tkr, data = r
@@ -219,33 +251,42 @@ class USMarketExpert(ExpertAgent):
     # ─────────────────────────────────────────
     # 섹터 ETF RS (20일 수익률)
     # ─────────────────────────────────────────
-    async def _fetch_sector_rs(self) -> Dict[str, float]:
+    async def _fetch_sector_rs(self):
         def _one(ticker: str):
             try:
                 import yfinance as yf
                 hist = yf.Ticker(ticker).history(period="30d", interval="1d", auto_adjust=False)
                 if hist.empty or len(hist) < 5:
-                    return ticker, None
+                    return ticker, None, None
                 close = hist["Close"]
                 last = float(close.iloc[-1])
                 if len(close) >= 20:
                     base = float(close.iloc[-20])
+                    base_idx = -20
                 else:
                     base = float(close.iloc[0])
+                    base_idx = 0
                 rs = (last - base) / base * 100 if base > 0 else 0.0
-                return ticker, round(rs, 2)
+                return ticker, round(rs, 2), {
+                    "as_of": _bar_date(close.index[-1]),
+                    "source": f"yfinance:{ticker}",
+                    "start": _bar_date(close.index[base_idx]),
+                    "session_count": min(19, len(close) - 1),
+                }
             except Exception:
-                return ticker, None
+                return ticker, None, None
 
         results = await asyncio.gather(
             *[asyncio.to_thread(_one, t) for t in _SECTOR_TICKERS],
             return_exceptions=True,
         )
         out: Dict[str, float] = {}
+        periods: Dict[str, Dict[str, Any]] = {}
         for r in results:
-            if isinstance(r, tuple) and len(r) == 2 and r[1] is not None:
+            if isinstance(r, tuple) and len(r) == 3 and r[1] is not None:
                 out[r[0]] = r[1]
-        return out
+                periods[r[0]] = r[2]
+        return out, periods
 
     # ─────────────────────────────────────────
     # 반도체 단기 추세 (2026-06-07 추가, 월요일 KR 갭 risk 캡처)
@@ -261,10 +302,14 @@ class USMarketExpert(ExpertAgent):
                 close = hist["Close"]
                 last = float(close.iloc[-1])
                 prev = float(close.iloc[-2])
-                base_5d = float(close.iloc[-6]) if len(close) >= 6 else float(close.iloc[0])
+                base_5d = float(close.iloc[-6]) if len(close) >= 6 else None
                 d1 = (last - prev) / prev * 100 if prev > 0 else 0.0
-                d5 = (last - base_5d) / base_5d * 100 if base_5d > 0 else 0.0
-                return {"d1": round(d1, 2), "d5": round(d5, 2), "last": round(last, 2)}
+                d5 = (last - base_5d) / base_5d * 100 if base_5d and base_5d > 0 else None
+                return {
+                    "d1": round(d1, 2),
+                    "d5": round(d5, 2) if d5 is not None else None,
+                    "last": round(last, 2),
+                }
             except Exception:
                 return {}
 
