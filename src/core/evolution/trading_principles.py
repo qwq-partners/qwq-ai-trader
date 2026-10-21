@@ -12,6 +12,7 @@ PRISM-INSIGHT Insights 페이지에서 영감을 받아 구현.
 매주 토요일 주간 원칙 리포트 생성 → 텔레그램 전송.
 """
 
+import html
 import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
@@ -384,7 +385,7 @@ class TradingPrinciplesManager:
             "total": len(CORE_PRINCIPLES) + len(learned),
         }
 
-    async def generate_weekly_report(self) -> str:
+    async def generate_weekly_report(self, as_of: Optional[datetime] = None) -> str:
         """
         매주 토요일 주간 원칙 리포트 생성
 
@@ -396,9 +397,28 @@ class TradingPrinciplesManager:
         Returns:
             텔레그램 전송용 HTML 메시지
         """
+        as_of = as_of or datetime.now()
+        as_of_date = as_of.date()
+        iso_year, iso_week, _ = as_of_date.isocalendar()
+        week_start = as_of_date - timedelta(days=as_of_date.weekday())
+        if not isinstance(getattr(self._trade_memory, "_layer1", None), (list, tuple)):
+            return (
+                "📊 <b>주간 거래 원칙 리포트</b>\n"
+                f"📅 {iso_year}-W{iso_week:02d} · 기준 {as_of_date.isoformat()}\n"
+                "거래 메모리 미확인 — 이번 주 관측·분석 표본 미산출\n"
+                "다음 확인: 원장 연결과 청산일 기록을 확인한 뒤 주차별 자료를 집계"
+            )
+        weekly_records, missing_exit_dates = self._records_with_valid_exit_dates(
+            week_start, as_of_date
+        )
+        llm_sample_count = min(len(weekly_records), 15)
+
         lines = [
             "📊 <b>주간 거래 원칙 리포트</b>",
-            f"📅 {date.today().isoformat()}",
+            f"📅 {iso_year}-W{iso_week:02d} · 기준 {as_of_date.isoformat()}",
+            f"이번 주 관측: {len(weekly_records)}건 ({week_start.isoformat()}~{as_of_date.isoformat()})",
+            f"분석 후보: {llm_sample_count}/{len(weekly_records)}건 (상한 15건 · 3건 이상일 때 분석)",
+            f"전체 L1 중 청산일 미기록/무효: {missing_exit_dates}건 (주차 집계 제외)",
             "",
         ]
 
@@ -417,59 +437,102 @@ class TradingPrinciplesManager:
                 lines.append("<b>■ 활성 경험 원칙</b>")
                 for p in principles[:5]:
                     delta = p.get("delta", 0)
-                    conf = p.get("confidence", 0)
                     sign = "📈" if delta > 0 else "📉" if delta < 0 else "➡️"
-                    lines.append(f"  {sign} {p.get('rule', '')[:50]}")
-                    lines.append(f"     신뢰도={conf:.0%}, 보정={delta:+d}점")
+                    rule = html.escape(str(p.get("rule", ""))[:50])
+                    source_count = p.get("source_count")
+                    evidence = (
+                        f", 근거 표본={int(source_count)}건"
+                        if isinstance(source_count, (int, float))
+                        else ""
+                    )
+                    lines.append(f"  {sign} {rule}")
+                    lines.append(f"     보정={delta:+d}점{evidence}")
                 lines.append("")
 
         # 2. LLM 주간 인사이트 (선택적)
         if self._llm_manager and self._trade_memory:
             try:
-                insight = await self._generate_llm_weekly_insight()
+                insight = await self._generate_llm_weekly_insight(
+                    weekly_records=weekly_records, as_of=as_of
+                )
                 if insight:
-                    lines.append("<b>■ AI 주간 인사이트</b>")
-                    lines.append(f"  {insight}")
+                    lines.append("<b>■ AI 검증 전 가설</b>")
+                    lines.append(f"  {html.escape(insight)}")
+                    lines.append("  <i>관측 요약이며 매매·파라미터 변경 지시가 아닙니다.</i>")
                     lines.append("")
             except Exception as e:
                 logger.debug(f"[원칙] LLM 주간 인사이트 실패: {e}")
-
-        # 3. 핵심 원칙 리마인더 (2개 랜덤)
-        import random
-        reminders = random.sample(CORE_PRINCIPLES, min(2, len(CORE_PRINCIPLES)))
-        lines.append("<b>■ 이번 주 핵심 원칙 리마인더</b>")
-        for r in reminders:
-            lines.append(f"  💡 {r['rule']}")
-        lines.append("")
 
         lines.append(f"<i>핵심 원칙 {len(CORE_PRINCIPLES)}개 + 경험 원칙 {summary.get('layer3_active', 0) if self._trade_memory else 0}개 운영 중</i>")
 
         return "\n".join(lines)
 
-    async def _generate_llm_weekly_insight(self) -> str:
+    def _records_between(self, start: date, end: date) -> List[Any]:
+        """Layer 1에서 명시된 날짜 구간의 청산 관측만 반환한다."""
+        return self._records_with_valid_exit_dates(start, end)[0]
+
+    def _records_with_valid_exit_dates(
+        self, start: date, end: date
+    ) -> tuple[List[Any], int]:
+        """유효한 exit_date 기준 관측과 날짜 결측 건수를 함께 반환한다."""
+        if not self._trade_memory or not hasattr(self._trade_memory, "_layer1"):
+            return [], 0
+
+        records = []
+        missing_exit_dates = 0
+        for observation in self._trade_memory._layer1:
+            raw_date = getattr(observation, "exit_date", None)
+            if not raw_date:
+                missing_exit_dates += 1
+                continue
+            try:
+                observed_date = datetime.fromisoformat(str(raw_date)).date()
+            except (TypeError, ValueError):
+                try:
+                    observed_date = date.fromisoformat(str(raw_date)[:10])
+                except (TypeError, ValueError):
+                    missing_exit_dates += 1
+                    continue
+            if start <= observed_date <= end:
+                records.append(observation)
+        return records, missing_exit_dates
+
+    async def _generate_llm_weekly_insight(
+        self,
+        weekly_records: Optional[List[Any]] = None,
+        as_of: Optional[datetime] = None,
+    ) -> str:
         """LLM으로 주간 인사이트 생성"""
         if not self._llm_manager or not self._trade_memory:
             return ""
 
         from ...utils.llm import LLMTask
 
-        # Layer 1 + Layer 2에서 최근 데이터 수집
+        if weekly_records is None:
+            report_time = as_of or datetime.now()
+            report_date = report_time.date()
+            week_start = report_date - timedelta(days=report_date.weekday())
+            weekly_records = self._records_with_valid_exit_dates(
+                week_start, report_date
+            )[0]
+
+        # 현재 ISO 주차 관측만 사용하며 비용을 늘리지 않도록 최대 15건으로 제한한다.
         recent = []
-        if hasattr(self._trade_memory, '_layer1'):
-            for o in self._trade_memory._layer1[-15:]:
-                emoji = "✅" if o.pnl_pct > 0 else "❌"
-                recent.append(
-                    f"{emoji} {o.symbol} {o.strategy} {o.pnl_pct:+.1f}% "
-                    f"({o.exit_type}, {o.holding_days}일, {o.market_regime})"
-                )
+        for o in weekly_records[-15:]:
+            outcome = "양수" if o.pnl_pct > 0 else "비양수"
+            recent.append(
+                f"{outcome} {o.symbol} {o.strategy} {o.pnl_pct:+.1f}% "
+                f"({o.exit_type}, {o.holding_days}일, {o.market_regime})"
+            )
 
         if len(recent) < 3:
             return ""
 
         prompt = (
-            f"이번 주 거래 {len(recent)}건을 분석하세요:\n"
+            f"현재 ISO 주차 청산 관측 {len(recent)}건을 요약하세요:\n"
             + "\n".join(recent)
-            + "\n\n다음 주에 집중해야 할 핵심 인사이트를 2줄로 작성하세요."
+            + "\n\n표본에서 직접 관측되는 연관성과 다음에 확인할 반증 조건을 2줄로 "
+              "작성하세요. 원인, 정확도, 수익 보장, 매매나 파라미터 변경을 단정하지 마세요."
         )
 
         resp = await self._llm_manager.complete(

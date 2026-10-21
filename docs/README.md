@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [거래 보고서 본문·근거·다음 확인 계약](agents/reporting.md) · [10월22일 전체 보고 개선 및 배포 상태](superpowers/plans/2026-10-22-report-content.md). 기존 관측 예약과 실제 배포 상태를 구분한다.
+
 > **10월21일 전문가 브리핑 개선:** [Plan → Do → See·근거·검증](superpowers/plans/2026-10-21-briefing-reliability.md) · [전문가 시스템 계약](agents/expert-system.md). 시장 입력과 참고 의견, 당일 등락과 누적 추세를 구분한다. 운영 미배포이며10월22일 고정 예약은 유지한다.
 
 > **10월21일 기존 자료 기반 개선:** [종목 선정 입력 오류 수정·API 집계·검증·다음 순서](reviews/selection-input-followthrough-2026-10-21.md). 모의투자·가상자금은 사용자 결정으로 진행하지 않는다. ATR 자료 길이와 배치 판단 지표 전달을 정비하며 운영·10월22일 고정 예약은 유지한다. 개발 완료와 실거래 순수익 검증을 구분한다.

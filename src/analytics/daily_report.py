@@ -8,14 +8,17 @@ AI Trading Bot v2 - 일일 투자 레포트 시스템
 import asyncio
 import dataclasses
 import hashlib
+import html
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
+from zoneinfo import ZoneInfo
 from loguru import logger
 
 # 추천 종목 캐시 경로
@@ -24,6 +27,7 @@ _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 # 모닝브리프 캐시·평가 원장 경로 (2026-09-14 T9 요청 3·5)
 MORNING_BRIEF_PATH = _REC_CACHE_DIR / "llm_morning_brief.json"
 MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
+_DISPATCH_BRIEF_UNSET = object()
 # 날짜·버전별 원문/발송문 아카이브 (2026-09-15 T10 F22) — 최신 캐시(위 두 경로)는
 # 조회 편의용이고, 이 아카이브가 감사 가능한 원본이다. <kr_date>.json 1개 파일에
 # generated[](07:00 생성본, 재생성해도 누적) / dispatch[](07:30 발송 attempt, 누적).
@@ -31,6 +35,108 @@ MORNING_BRIEF_LEDGER_PATH = _REC_CACHE_DIR / "morning_brief_eval.jsonl"
 def _today() -> date:
     """테스트 주입용 단일 시계 진입점 — 브리프 kr_date·평가 기준일·과거 일자 가드가 같은 날짜를 본다"""
     return date.today()
+
+
+def _now() -> datetime:
+    """테스트 주입용 보고서 시계."""
+    return datetime.now()
+
+
+def _finite_float(value: Any, *, positive: bool = False) -> Optional[float]:
+    """표시·계산 가능한 유한 실수만 반환한다 (NaN/inf/불리언 제외)."""
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number) or (positive and number <= 0):
+        return None
+    return number
+
+
+def _html_text(value: Any, limit: int = 160) -> str:
+    """외부 문자열을 먼저 자른 뒤 Telegram HTML 텍스트로 이스케이프한다."""
+    text = str(value or "").replace("\x00", "").strip()[:limit]
+    return html.escape(text, quote=False)
+
+
+def _bounded_html(lines: List[str], limit: int = 3900) -> str:
+    """완성된 행 단위로만 잘라 태그·엔티티 중간 절단을 피한다."""
+    kept: List[str] = []
+    used = 0
+    for line in lines:
+        extra = len(line) + (1 if kept else 0)
+        if used + extra > limit:
+            break
+        kept.append(line)
+        used += extra
+    return "\n".join(kept)
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _comparable_datetime(value: datetime, reference: datetime) -> datetime:
+    """aware/naive 혼합 입력을 같은 축으로 맞춘다."""
+    if value.tzinfo is None and reference.tzinfo is None:
+        return value
+    if value.tzinfo is None:
+        return value.replace(tzinfo=reference.tzinfo)
+    if reference.tzinfo is None:
+        # 이 모듈의 naive 운영 시계는 한국 장 기준이다. UTC 등 offset 입력은
+        # 먼저 한국 시각으로 바꿔 날짜·신선도를 비교해야 한다.
+        return value.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+    return value.astimezone(reference.tzinfo)
+
+
+def resolve_us_quote_basis(quotes: Dict[str, Dict]) -> Dict[str, Any]:
+    """Yahoo 실제 시장 시각에서 보고서 기준일을 만든다.
+
+    조회일-1 같은 달력 추정은 미국 휴장일에 틀릴 수 있으므로 사용하지 않는다.
+    서로 다른 시장일이 섞였으면 최신일을 단일 마감일로 가장하지 않고 모두 남긴다.
+    """
+    dates: Dict[str, int] = {}
+    total = sum(1 for quote in (quotes or {}).values() if isinstance(quote, dict))
+    now = _now()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+    now_epoch = now.timestamp()
+    for quote in (quotes or {}).values():
+        if not isinstance(quote, dict):
+            continue
+        stamp = _finite_float(quote.get("market_time"), positive=True)
+        if stamp is None or stamp > now_epoch:
+            continue
+        try:
+            day = datetime.fromtimestamp(
+                stamp, tz=timezone.utc,
+            ).astimezone(ZoneInfo("America/New_York")).strftime("%Y.%m.%d")
+        except (OSError, OverflowError, ValueError):
+            continue
+        dates[day] = dates.get(day, 0) + 1
+    if not dates:
+        return {
+            "as_of": None, "source": "시장 시각 미제공", "coverage": f"0/{total}종",
+            "mixed": False, "dates": [],
+        }
+    ordered = sorted(dates)
+    as_of = ordered[0] if len(ordered) == 1 else " / ".join(ordered)
+    return {
+        "as_of": as_of,
+        "source": "Yahoo regularMarketTime",
+        "coverage": f"{sum(dates.values())}/{total}종",
+        "mixed": len(ordered) > 1,
+        "dates": ordered,
+    }
 
 # 브리프 주장 범위 (T9 요청 3)
 SCOPE_US_ONLY = "us_close_only"
@@ -78,6 +184,18 @@ _BEAR_TONE_TOKENS = ("약세", "하락", "부진", "조정", "급락", "위축",
 # 브리프 톤 판정 임계 (강세/약세 토큰 수 차이) — 한쪽으로 2회 이상 기울 때만 방향으로 본다
 _TONE_MARGIN = 2
 
+# 가격 자료만 받는 모닝브리프가 원인을 지어내거나 매매 가격을 제시하지 못하게 한다.
+_UNSUPPORTED_CAUSE_TOKENS = (
+    "때문", "덕분", "기대", "우려", "힘입", "영향으로", "반영", "호재", "악재",
+    "실적", "금리", "뉴스", "공시", "발표", "정책", "수급", "매수세", "매도세",
+    "기관 매수", "외국인 매수", "원인",
+)
+_PRICE_CLAIM_RE = re.compile(
+    r"(?:[$₩]\s*[+-]?(?:\d[\d,]*)(?:\.\d+)?|"
+    r"(?<![\w.])[+-]?(?:\d[\d,]*)(?:\.\d+)?\s*(?:원|달러|USD|포인트))"
+)
+_PERCENT_CLAIM_RE = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*%")
+
 # 마침표 뒤에 공백·문장끝이 와야 문장 경계로 본다 — "+0.97%", "S&P500 +0.8%" 가 쪼개지면
 # KR 주어와 단정이 서로 다른 조각으로 갈려 검사·본문이 모두 훼손된다 (2026-09-14 리뷰)
 _SENTENCE_SPLIT_RE = re.compile(r"([.!?]+(?:\s+|$|(?=<))|\n)")   # 마침표 직후 태그(.<b>)도 경계 (2026-09-14 재리뷰)
@@ -122,9 +240,21 @@ class RecommendedStock:
     related_theme: str = ""      # 관련 테마
     key_news: str = ""           # 핵심 뉴스 요약
 
+    # 보고서 근거. 기존 가격 필드는 저장 호환을 위해 유지하되 사용자에게는
+    # 관찰/reference 또는 실제 시그널 계획으로만 표시한다.
+    reference_price: float = 0
+    reference_as_of: str = ""
+    reference_source: str = ""
+    max_entry_price: float = 0
+    trigger_price: float = 0
+    expires_at: str = ""
+    entry_mode: str = ""
+
     # 결과 (오후 리포트용)
     result_price: Optional[float] = None
     result_pct: Optional[float] = None
+    result_as_of: str = ""
+    result_source: str = ""
 
 
 def _split_sentences(text: str) -> List[Tuple[str, str]]:
@@ -183,6 +313,43 @@ def sanitize_brief_claims(text: str, scope: str) -> Tuple[str, List[str]]:
         note_emitted_for_run = False
         out.append(body + sep)
     # 문장을 지우며 남은 줄 끝 공백 정리
+    return re.sub(r"[ \t]+\n", "\n", "".join(out)), removed
+
+
+def sanitize_brief_interpretation(
+    text: str, *, allowed_percentages: Optional[List[float]] = None,
+) -> Tuple[str, List[str]]:
+    """가격 입력만 받은 LLM 해석에서 원인·매매가격·새 퍼센트를 제거한다.
+
+    정확한 가격 수준은 결정론적 사실 블록이 담당한다. LLM은 관찰된 등락을 다시
+    서술하고 확인할 조건만 제시할 수 있다. 허용 퍼센트는 입력값의 표시 정밀도
+    (소수 둘째 자리)로 비교한다.
+    """
+    if not text:
+        return text, []
+    allowed = {round(float(v), 2) for v in (allowed_percentages or []) if _finite_float(v) is not None}
+    out: List[str] = []
+    removed: List[str] = []
+    note_added = False
+    for body, sep in _split_sentences(text):
+        sentence = (body + sep).strip()
+        unsupported = False
+        if body.strip():
+            unsupported = any(token in sentence for token in _UNSUPPORTED_CAUSE_TOKENS)
+            unsupported = unsupported or bool(_PRICE_CLAIM_RE.search(sentence))
+            for raw in _PERCENT_CLAIM_RE.findall(sentence):
+                value = _finite_float(raw)
+                if value is not None and round(value, 2) not in allowed:
+                    unsupported = True
+                    break
+        if unsupported:
+            removed.append(sentence)
+            if not note_added:
+                out.append("원인 자료 없음 — 가격 움직임의 원인은 판단 보류.")
+                note_added = True
+            out.append(_SEP_WHITESPACE_RE.sub("", sep))
+            continue
+        out.append(body + sep)
     return re.sub(r"[ \t]+\n", "\n", "".join(out)), removed
 
 
@@ -393,6 +560,7 @@ def record_morning_brief_dispatch(
     expert_consensus: Optional[Dict],
     status: str,
     conflict_note: Optional[str] = None,
+    dispatched_brief_text: Any = _DISPATCH_BRIEF_UNSET,
     archive_dir=None,
 ) -> Path:
     """07:30 발송 결과를 날짜별 아카이브에 기록한다 (2026-09-15 T10 F19 C→A 배선 계약).
@@ -405,6 +573,8 @@ def record_morning_brief_dispatch(
     Args:
         status: "sent" 또는 "failed"만 허용.
         conflict_note: build_expert_conflict_note() 결과(있으면).
+        dispatched_brief_text: 실제 표시한 캐시 본문. None은 브리프 없이 발송,
+            생략은 구버전 호출 호환을 위해 최신 생성본을 가리킨다.
     """
     if status not in ("sent", "failed"):
         raise ValueError(f"[모닝브리프] 알 수 없는 발송 status: {status!r} (sent/failed만 허용)")
@@ -412,13 +582,27 @@ def record_morning_brief_dispatch(
     archive = _load_brief_archive(kr_date, archive_dir)
     generated = archive.get("generated") or []
     brief_ref = None
-    if generated:
-        last = generated[-1]
+    brief_match = "legacy_latest"
+    matched = None
+    if dispatched_brief_text is _DISPATCH_BRIEF_UNSET:
+        matched = generated[-1] if generated else None
+    elif dispatched_brief_text is None:
+        brief_match = "none"
+    elif isinstance(dispatched_brief_text, str):
+        digest = hashlib.sha256(dispatched_brief_text.encode("utf-8")).hexdigest()
+        matched = next(
+            (g for g in reversed(generated) if g.get("text_sha256") == digest), None,
+        )
+        brief_match = "exact_text" if matched is not None else "not_found"
+    else:
+        brief_match = "invalid"
+
+    if matched is not None:
         brief_ref = {
-            "version": last.get("version"),
-            "text_sha256": last.get("text_sha256"),
-            "generated_at": last.get("generated_at"),
-            "model": last.get("model"),
+            "version": matched.get("version"),
+            "text_sha256": matched.get("text_sha256"),
+            "generated_at": matched.get("generated_at"),
+            "model": matched.get("model"),
             # archive_dir 를 운영 기본값 밖으로 주입해도 원장 레코드만으로 원본
             # 아카이브 파일을 특정할 수 있게 경로를 남긴다 (advisory F22)
             "archive_path": str(_brief_archive_path(kr_date, archive_dir)),
@@ -432,6 +616,7 @@ def record_morning_brief_dispatch(
         "status": status,
         "conflict_note": conflict_note,
         "brief_ref": brief_ref,
+        "brief_match": brief_match,
     }
     archive.setdefault("dispatch", []).append(dispatch_entry)
     return _save_brief_archive(kr_date, archive, archive_dir)
@@ -441,11 +626,11 @@ class DailyReportGenerator:
     """
     일일 투자 레포트 생성기
 
-    투자자 관점에서 실제로 도움이 되는 레포트를 생성합니다.
+    투자자 관점에서 근거와 조건을 확인할 수 있는 레포트를 생성합니다.
 
     핵심 원칙:
     1. 간결하고 명확하게 - 한눈에 파악 가능
-    2. 액션 가이드 제공 - 무엇을 언제 얼마에 살지
+    2. 조건 명시 - 관찰 시각·가격·유효 조건을 구분
     3. 리스크 경고 - 어떤 위험이 있는지
     4. 근거 제시 - 왜 이 종목인지
     """
@@ -457,6 +642,9 @@ class DailyReportGenerator:
         self.news_collector = NewsCollector()
         self._kis_market_data = kis_market_data
         self._us_market_data = None
+        # 호출자가 제공하면 현재 매수 중지/현금/보유 상태 같은 안전 문구를 붙인다.
+        # 보고서 모듈은 운영 객체를 직접 추측하지 않는다.
+        self.runtime_context_provider = None
 
         # NewsStorage 추가 (종목별 뉴스 조회용)
         self._news_storage = None
@@ -477,7 +665,7 @@ class DailyReportGenerator:
 
         Args:
             llm_manager: LLM 매니저 (뉴스 분석용)
-            max_stocks: 추천 종목 수 (최소 10개)
+            max_stocks: 관찰 후보 최대 수
             send_telegram: 텔레그램 발송 여부
 
         Returns:
@@ -486,7 +674,7 @@ class DailyReportGenerator:
         logger.info("[레포트] 아침 추천 종목 레포트 생성 시작")
 
         today = date.today()
-        max_stocks = max(max_stocks, 10)  # 최소 10개 보장
+        max_stocks = max(0, int(max_stocks))
 
         # LLM 매니저 자동 연결 (미전달 시)
         if llm_manager is None:
@@ -636,8 +824,8 @@ class DailyReportGenerator:
                 ])
                 if best and worst and total_trades >= 2:
                     lines.append(
-                        f"• 최고: {best['name']} {best['pnl_pct']:+.1f}% / "
-                        f"최저: {worst['name']} {worst['pnl_pct']:+.1f}%"
+                        f"• 최고: {_html_text(best.get('name'), 50)} {best['pnl_pct']:+.1f}% / "
+                        f"최저: {_html_text(worst.get('name'), 50)} {worst['pnl_pct']:+.1f}%"
                     )
 
             if open_positions:
@@ -663,25 +851,34 @@ class DailyReportGenerator:
             for symbol in getattr(theme, 'related_stocks', []):
                 theme_map[symbol] = theme.name
 
-        recommendations = []
+        recommendations: List[RecommendedStock] = []
+        now = _now()
 
-        for i, stock in enumerate(screened[:max_stocks * 3]):  # 후보군 넉넉하게
+        # 입력 순서는 점수 순서라는 보장이 없다. 전체 유효 후보를 계산한 뒤 실제
+        # 표시 점수로 정렬한다.
+        for stock in screened:
             # ETF/ETN 방어적 필터 (스크리너 미경유 시 대비)
             if self.screener._is_etf_etn(stock.name):
                 continue
 
+            reference = _finite_float(stock.price, positive=True)
+            raw_score = _finite_float(stock.score)
+            screened_at = _parse_datetime(getattr(stock, "screened_at", None))
+            if reference is None or raw_score is None or screened_at is None:
+                continue
+            comparable = _comparable_datetime(screened_at, now)
+            age_seconds = (now - comparable).total_seconds()
+            if comparable.date() != now.date() or age_seconds < 0 or age_seconds > 6 * 3600:
+                logger.debug(f"[레포트] 오래되거나 미래인 스크리너 후보 제외: {stock.symbol}")
+                continue
+
             # 기본 점수
-            news_score = min(stock.score, 100)
+            news_score = min(raw_score, 100)
             tech_score = self._calculate_tech_score(stock)
             theme_score = 80 if stock.symbol in theme_map else 0
 
             # 종합 점수
             total = (news_score * 0.4) + (tech_score * 0.3) + (theme_score * 0.3)
-
-            # 가격 계산
-            entry = stock.price
-            target = entry * 1.03  # +3% 익절
-            stop = entry * 0.98   # -2% 손절
 
             # 리스크 평가
             risk_level, risk_factors = self._assess_risk(stock)
@@ -691,15 +888,15 @@ class DailyReportGenerator:
             catalyst = self._generate_catalyst(stock, theme_map.get(stock.symbol, ""))
 
             rec = RecommendedStock(
-                rank=len(recommendations) + 1,
+                rank=0,
                 symbol=stock.symbol,
                 name=stock.name,
                 investment_thesis=thesis,
                 catalyst=catalyst,
-                prev_close=stock.price,
-                target_entry=entry,
-                target_exit=target,
-                stop_loss=stop,
+                prev_close=reference,
+                target_entry=0,
+                target_exit=0,
+                stop_loss=0,
                 news_score=news_score,
                 tech_score=tech_score,
                 theme_score=theme_score,
@@ -708,48 +905,16 @@ class DailyReportGenerator:
                 risk_factors=risk_factors,
                 related_theme=theme_map.get(stock.symbol, ""),
                 key_news="",  # 이후 종목별 뉴스에서 채움
+                reference_price=reference,
+                reference_as_of=screened_at.isoformat(),
+                reference_source="KR 스크리너 관측",
             )
             recommendations.append(rec)
 
-            if len(recommendations) >= max_stocks:
-                break
-
-        # 최소 10개가 안 되면 점수 낮은 것도 포함
-        if len(recommendations) < 10 and len(screened) > len(recommendations):
-            for stock in screened[len(recommendations):]:
-                if len(recommendations) >= max_stocks:
-                    break
-                if stock.symbol in [r.symbol for r in recommendations]:
-                    continue
-                if self.screener._is_etf_etn(stock.name):
-                    continue
-
-                entry = stock.price
-                thesis = self._generate_detailed_thesis(stock, theme_map.get(stock.symbol, ""))
-                catalyst = self._generate_catalyst(stock, theme_map.get(stock.symbol, ""))
-                risk_level, risk_factors = self._assess_risk(stock)
-
-                rec = RecommendedStock(
-                    rank=len(recommendations) + 1,
-                    symbol=stock.symbol,
-                    name=stock.name,
-                    investment_thesis=thesis,
-                    catalyst=catalyst,
-                    prev_close=entry,
-                    target_entry=entry,
-                    target_exit=entry * 1.03,
-                    stop_loss=entry * 0.98,
-                    news_score=min(stock.score, 100),
-                    tech_score=self._calculate_tech_score(stock),
-                    theme_score=80 if stock.symbol in theme_map else 0,
-                    total_score=stock.score,
-                    risk_level=risk_level,
-                    risk_factors=risk_factors,
-                    related_theme=theme_map.get(stock.symbol, ""),
-                    key_news="",
-                )
-                recommendations.append(rec)
-
+        recommendations.sort(key=lambda rec: (-rec.total_score, rec.symbol))
+        recommendations = recommendations[:max_stocks]
+        for rank, rec in enumerate(recommendations, 1):
+            rec.rank = rank
         return recommendations
 
     def _calculate_tech_score(self, stock: ScreenedStock) -> float:
@@ -850,7 +1015,7 @@ class DailyReportGenerator:
             if abs(stock.change_pct) > 0.5:
                 parts.append(f"전일 {stock.change_pct:+.1f}%")
             else:
-                parts.append("기술적 돌파 신호")
+                parts.append("선정 근거 미기록")
 
         return " / ".join(parts[:4])
 
@@ -871,9 +1036,6 @@ class DailyReportGenerator:
 
         if stock.change_pct > 5:
             catalysts.append(f"전일 {stock.change_pct:+.1f}% 급등")
-
-        if not catalysts:
-            catalysts.append("기술적 반등 신호")
 
         return ", ".join(catalysts[:2])
 
@@ -926,18 +1088,34 @@ class DailyReportGenerator:
                 return []
 
             import json as _json
-            from datetime import datetime as _dt
             data = _json.loads(signals_path.read_text(encoding="utf-8"))
             if not data:
                 return []
 
-            # 오늘 날짜 시그널만 (만료된 것 제외)
-            now_str = _dt.now().isoformat()
-            valid = [
-                d for d in data
-                if d.get("date", d.get("created_at", ""))[:10] == today.isoformat()
-                and d.get("expires_at", "9999") >= now_str
-            ]
+            # 실제 생성·만료 시각을 파싱해 오늘 유효한 계획만 사용한다. 문자열 비교는
+            # timezone/malformed 값과 NaN 가격을 정상 계획처럼 통과시킬 수 있다.
+            now = _now()
+            valid = []
+            for d in data if isinstance(data, list) else []:
+                if not isinstance(d, dict):
+                    continue
+                symbol = d.get("symbol")
+                name = d.get("name")
+                if not isinstance(symbol, str) or not symbol.strip():
+                    continue
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                created = _parse_datetime(d.get("decided_at") or d.get("created_at") or d.get("date"))
+                expires = _parse_datetime(d.get("expires_at"))
+                entry = _finite_float(d.get("entry_price"), positive=True)
+                score = _finite_float(d.get("score"))
+                if created is None or expires is None or entry is None or score is None:
+                    continue
+                created_cmp = _comparable_datetime(created, now)
+                expires_cmp = _comparable_datetime(expires, now)
+                if created_cmp.date() != today or created_cmp > now or expires_cmp <= now:
+                    continue
+                valid.append(d)
             if not valid:
                 return []
 
@@ -953,13 +1131,25 @@ class DailyReportGenerator:
                 "rsi2_reversal": "RSI2 단기반등",
                 "strategic_swing": "전략적 스윙",
             }
-            for i, d in enumerate(sorted(valid, key=lambda x: x.get("score", 0), reverse=True)[:max_stocks], 1):
+            for i, d in enumerate(sorted(
+                valid, key=lambda x: _finite_float(x.get("score")) or 0, reverse=True,
+            )[:max_stocks], 1):
                 strategy = d.get("strategy", "")
                 reason = d.get("reason", "")
-                entry = float(d.get("entry_price", 0))
-                stop = float(d.get("stop_price", 0))
-                target = float(d.get("target_price", 0))
-                score = float(d.get("score", 0))
+                entry = _finite_float(d.get("entry_price"), positive=True)
+                score = _finite_float(d.get("score"))
+                if entry is None or score is None:
+                    continue
+                stop = _finite_float(d.get("stop_price"), positive=True) or 0
+                target = _finite_float(d.get("target_price"), positive=True) or 0
+                max_entry = _finite_float(d.get("max_entry_price"), positive=True) or 0
+                trigger = d.get("trigger") if isinstance(d.get("trigger"), dict) else {}
+                trigger_price = (
+                    _finite_float(trigger.get("level"), positive=True)
+                    or _finite_float(d.get("breakout_trigger"), positive=True)
+                    or 0
+                )
+                as_of = d.get("decided_at") or d.get("created_at") or ""
 
                 rec = RecommendedStock(
                     rank=i,
@@ -975,6 +1165,13 @@ class DailyReportGenerator:
                     total_score=score,
                     related_theme=strategy_label.get(strategy, strategy),
                     risk_level="중",
+                    reference_price=entry,
+                    reference_as_of=as_of,
+                    reference_source="pending_signals 진입계획",
+                    max_entry_price=max_entry,
+                    trigger_price=trigger_price,
+                    expires_at=str(d.get("expires_at") or ""),
+                    entry_mode=str(d.get("entry_mode") or ""),
                 )
                 results.append(rec)
 
@@ -1027,13 +1224,22 @@ class DailyReportGenerator:
         for rec in self._today_recommendations:
             try:
                 price = None
+                result_source = ""
+                result_as_of = ""
+                rec.result_price = None
+                rec.result_pct = None
+                rec.result_source = ""
+                rec.result_as_of = ""
 
                 # 1차: KIS API (실시간, 정확)
                 if hasattr(self, '_bot') and hasattr(self._bot, 'broker') and self._bot.broker:
                     try:
                         quote = await self._bot.broker.get_quote(rec.symbol)
-                        if quote and quote.get("price", 0) > 0:
-                            price = quote["price"]
+                        quote_price = _finite_float(quote.get("price") if quote else None, positive=True)
+                        if quote_price is not None:
+                            price = quote_price
+                            result_source = "KIS 현재가"
+                            result_as_of = str(quote.get("as_of") or _now().isoformat())
                     except Exception:
                         pass
 
@@ -1048,7 +1254,9 @@ class DailyReportGenerator:
                             return None
 
                         price = await asyncio.to_thread(_fetch_pykrx, rec.symbol, today_str)
-                        if price:
+                        if _finite_float(price, positive=True) is not None:
+                            result_source = "pykrx 종가"
+                            result_as_of = date.today().isoformat()
                             logger.debug(f"[결과] {rec.symbol} pykrx 종가: {price:,.0f}원")
                     except Exception as e:
                         logger.debug(f"[결과] {rec.symbol} pykrx 조회 실패: {e}")
@@ -1066,16 +1274,22 @@ class DailyReportGenerator:
                                         price_match = re.search(r'class="no_today"[^>]*>.*?<span[^>]*>([0-9,]+)', html, re.DOTALL)
                                     if price_match:
                                         price = float(price_match.group(1).replace(",", ""))
+                                        result_source = "네이버 금융 현재가"
+                                        result_as_of = _now().isoformat()
                     except Exception as e:
                         logger.debug(f"[결과] {rec.symbol} 네이버 조회 실패: {e}")
 
-                if price is not None and price > 0:
-                    rec.result_price = price
-                    if rec.prev_close > 0:
-                        rec.result_pct = (rec.result_price - rec.prev_close) / rec.prev_close * 100
+                valid_price = _finite_float(price, positive=True)
+                reference = _finite_float(rec.reference_price or rec.prev_close, positive=True)
+                if valid_price is not None:
+                    rec.result_price = valid_price
+                    rec.result_source = result_source
+                    rec.result_as_of = result_as_of
+                    if reference is not None:
+                        rec.result_pct = (rec.result_price - reference) / reference * 100
+                        logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
                     else:
-                        rec.result_pct = 0.0
-                    logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
+                        logger.warning(f"[결과] {rec.symbol}: 기준 참고가 없음 — 변화율 미계산")
                 else:
                     logger.warning(f"[결과] {rec.symbol}: 종가 조회 실패 (3개 소스 모두 실패)")
 
@@ -1103,9 +1317,9 @@ class DailyReportGenerator:
             parsed = []
             for s in sectors:
                 name = s.get("name", "")
-                change_pct = s.get("change_pct", 0.0)
-                if name:
-                    parsed.append((name, change_pct))
+                change_pct = _finite_float(s.get("change_pct"))
+                if name and change_pct is not None:
+                    parsed.append((_html_text(name, 50), change_pct))
 
             if not parsed:
                 return []
@@ -1164,9 +1378,11 @@ class DailyReportGenerator:
             # 지수 등락률
             idx_parts = []
             for name, info in indices.items():
-                pct = info["change_pct"]
+                pct = _finite_float(info.get("change_pct")) if isinstance(info, dict) else None
+                if pct is None:
+                    continue
                 arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "─")
-                idx_parts.append(f"{name} {arrow}{abs(pct):.1f}%")
+                idx_parts.append(f"{_html_text(name, 40)} {arrow}{abs(pct):.1f}%")
             if idx_parts:
                 lines.append(f"  {' / '.join(idx_parts)}")
 
@@ -1174,11 +1390,13 @@ class DailyReportGenerator:
             if sector_signals:
                 boost_parts = []
                 for theme, sig in sector_signals.items():
-                    boost = sig["boost"]
+                    boost = _finite_float(sig.get("boost")) if isinstance(sig, dict) else None
+                    if boost is None:
+                        continue
                     if boost > 0:
-                        boost_parts.append(f"{theme}(+{boost})")
+                        boost_parts.append(f"{_html_text(theme, 40)}(+{boost:.0f})")
                     elif boost < 0:
-                        boost_parts.append(f"{theme}({boost})")
+                        boost_parts.append(f"{_html_text(theme, 40)}({boost:.0f})")
                 if boost_parts:
                     lines.append(f"  → 한국 테마 영향: {', '.join(boost_parts)}")
 
@@ -1218,16 +1436,11 @@ class DailyReportGenerator:
                 await self.telegram.send_report(msg)
             return msg
 
-        now = datetime.now()
+        now = _now()
 
-        # US 마감일 계산: KST 전날 기준, 주말이면 금요일로 조정
-        # (US 공휴일은 별도 처리 생략 — 해당일 Yahoo Finance가 직전 영업일 반환)
-        us_close_date = (now - timedelta(days=1)).date()
-        if us_close_date.weekday() == 5:   # 토 → 금
-            us_close_date -= timedelta(days=1)
-        elif us_close_date.weekday() == 6:  # 일 → 금
-            us_close_date -= timedelta(days=2)
-        us_date_str = us_close_date.strftime("%Y.%m.%d")   # US 마감일 (현지)
+        # 미국 휴장일을 달력으로 추정하지 않고 Yahoo가 제공한 실제 시장 시각만 쓴다.
+        quote_basis = resolve_us_quote_basis(quotes)
+        us_date_str = quote_basis.get("as_of") or "시장 시각 미제공"
         kst_date_str = now.strftime("%m/%d")                # KST 오늘 날짜 (보고서 발송일)
 
         # ── 지수 ──
@@ -1238,8 +1451,10 @@ class DailyReportGenerator:
             if not q:
                 continue
             name = INDEX_NAMES.get(sym, sym)
-            pct = q["change_pct"]
-            price = q["price"]
+            pct = _finite_float(q.get("change_pct"))
+            price = _finite_float(q.get("price"), positive=True)
+            if pct is None or price is None:
+                continue
             idx_pcts.append(pct)
             if pct > 0:
                 idx_lines.append(f"  🔼 {name}  <b>+{pct:.2f}%</b>  ({price:,.1f})")
@@ -1275,10 +1490,13 @@ class DailyReportGenerator:
 
         lines = [
             f"🇺🇸 <b>미국증시 마감 리포트</b>",
-            f"<i>{us_date_str} NY 마감 (KST {kst_date_str} 07:00 수신)</i>",
+            f"<i>{us_date_str} 시장 자료 · {quote_basis['source']} "
+            f"({quote_basis['coverage']}, KST {kst_date_str} {now:%H:%M} 수신)</i>",
             "",
             f"<b>■ 주요 지수  {mood}</b>",
         ]
+        if quote_basis.get("mixed"):
+            lines.append("  ⚠️ 종목별 시장일이 섞여 있어 단일 마감일로 해석하지 않음")
         lines.extend(idx_lines)
         lines.append("")
 
@@ -1289,11 +1507,9 @@ class DailyReportGenerator:
             q = quotes.get(sym)
             if not q:
                 continue
-            pct = q["change_pct"]
-            name = q.get("name", sym)
-            # 이름이 너무 길면 축약
-            if len(name) > 12:
-                name = name[:12]
+            pct = _finite_float(q.get("change_pct"))
+            if pct is None:
+                continue
             if pct > 0:
                 bt_lines.append(f"{sym} <b>+{pct:.1f}%</b>")
             elif pct < 0:
@@ -1321,9 +1537,9 @@ class DailyReportGenerator:
                 avg = sig["us_avg_pct"]
                 movers = sig.get("top_movers", [])
                 icon = "🔺" if boost > 0 else "🔻"
-                movers_str = ", ".join(movers[:3])
+                movers_str = _html_text(", ".join(map(str, movers[:3])), 100)
                 lines.append(
-                    f"  {icon} <b>{theme}</b> (부스트 {boost:+d}점)"
+                    f"  {icon} <b>{_html_text(theme, 50)}</b> (부스트 {boost:+d}점)"
                 )
                 lines.append(f"      평균 {avg:+.1f}%  {movers_str}")
             lines.append("")
@@ -1433,9 +1649,9 @@ class DailyReportGenerator:
                         avg_s = sig["us_avg_pct"]
                         movers = sig.get("top_movers", [])
                         icon = "🔺" if boost > 0 else "🔻"
-                        movers_str = ", ".join(movers[:3])
+                        movers_str = _html_text(", ".join(map(str, movers[:3])), 100)
                         detail_lines.append(
-                            f"  {icon} <b>{theme}</b> (부스트 {boost:+d}점)"
+                            f"  {icon} <b>{_html_text(theme, 50)}</b> (부스트 {boost:+d}점)"
                         )
                         detail_lines.append(
                             f"      평균 {avg_s:+.1f}%  {movers_str}"
@@ -1453,7 +1669,7 @@ class DailyReportGenerator:
                 else:
                     logger.error("[레포트] 미국증시 레포트 발송 실패")
 
-            # ── 3) LLM 증권사 모닝브리프 (2026-05-13 추가, 2026-06-05 캐시화) ─
+            # ── 3) 근거 기반 모닝브리프 캐시 ─────────────────────────────
             # 2026-06-05: 별도 발송 중단 → 캐시 파일에 저장.
             # 07:30 전문가 브리핑(_send_expert_briefing_telegram)이 캐시를 읽어
             # 하나의 통합 메시지로 발송한다.
@@ -1469,12 +1685,12 @@ class DailyReportGenerator:
                 if brief_record:
                     cache_path = save_morning_brief(brief_record)
                     logger.info(
-                        f"[레포트] LLM 모닝브리프 캐시 저장 → {cache_path} "
+                        f"[레포트] 데이터 모닝브리프 캐시 저장 → {cache_path} "
                         f"(scope={brief_record['scope']}, "
                         f"제거된 단정 {len(brief_record['removed_claims'])}건)"
                     )
             except Exception as brief_err:
-                logger.error(f"[레포트] LLM 모닝브리프 생성/캐시 실패: {brief_err}", exc_info=True)
+                logger.error(f"[레포트] 데이터 모닝브리프 생성/캐시 실패: {brief_err}", exc_info=True)
 
         return report
 
@@ -1489,24 +1705,15 @@ class DailyReportGenerator:
         kr_inputs: Optional[List[Dict]] = None,
         expert_consensus: Optional[Dict] = None,
     ) -> Optional[Dict]:
-        """LLM 모닝브리프 생성 (2026-05-13 신규, 2026-09-14 주장 범위 제한)
+        """수집된 시세와 기준시각만으로 결정론적 모닝 요약을 만든다.
 
-        입력이 미국 마감 자료뿐이면 제목·본문을 "미국시장 마감 요약"으로 제한하고
-        한국장 개장 방향·갭·대응 전략 단정을 금지한다 (프롬프트 규칙 + 응답 후 검사).
-        기준시각(as_of)이 있는 국내 자료가 주어질 때만 "개장 관찰 포인트"를 허용하되
-        반대 근거를 함께 요구한다.
+        외부 모델을 호출하지 않는다. 국내 자료가 없으면 개장 방향을 판단하지 않고,
+        국내 자료가 있더라도 사실과 추가 확인 조건만 표시한다.
 
         Returns:
-            고정 스키마 레코드 (us_date/text/generated_at/model/scope/inputs/claims/…)
-            또는 실패 시 None
+            고정 스키마 레코드(us_date/text/generated_at/model/scope/inputs/claims/…).
+            데이터가 일부 없더라도 결측을 명시해 반환한다.
         """
-        try:
-            from ..utils.llm import get_llm_manager
-            from ..utils.llm_roles import LLMRole
-        except Exception as e:
-            logger.warning(f"[모닝브리프] LLM 모듈 로드 실패: {e}")
-            return None
-
         # ── 입력 정리 (사용 자료와 기준시각을 레코드에 고정 저장) ──
         index_list = ["^GSPC", "^IXIC", "^DJI", "^SOX", "^VIX"]
         index_names_map = {
@@ -1516,32 +1723,42 @@ class DailyReportGenerator:
         idx_lines = []
         for sym in index_list:
             q = quotes.get(sym)
-            if not q:
+            if not isinstance(q, dict):
                 continue
             name = index_names_map.get(sym, sym)
-            pct = q.get("change_pct", 0.0)
-            price = q.get("price", 0.0)
+            pct = _finite_float(q.get("change_pct"))
+            price = _finite_float(q.get("price"), positive=True)
+            if pct is None or price is None:
+                continue
             idx_lines.append(f"  - {name}: {pct:+.2f}% ({price:,.1f})")
 
         bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
         bt_lines = []
         for sym in bigtech:
             q = quotes.get(sym)
-            if q:
-                bt_lines.append(f"{sym} {q.get('change_pct', 0):+.1f}%")
+            pct = _finite_float(q.get("change_pct")) if isinstance(q, dict) else None
+            if pct is not None:
+                bt_lines.append(f"{sym} {pct:+.1f}%")
 
         sector_lines = []
         if sector_signals:
-            for theme, sig in sorted(
-                sector_signals.items(),
-                key=lambda x: abs(x[1].get("boost", 0)),
-                reverse=True,
+            valid_sectors = []
+            for theme, sig in sector_signals.items():
+                if not isinstance(sig, dict):
+                    continue
+                boost = _finite_float(sig.get("boost"))
+                avg_s = _finite_float(sig.get("us_avg_pct"))
+                if boost is None or avg_s is None:
+                    continue
+                valid_sectors.append((theme, sig, boost, avg_s))
+            for theme, sig, boost, avg_s in sorted(
+                valid_sectors, key=lambda x: abs(x[2]), reverse=True,
             )[:5]:
-                boost = sig.get("boost", 0)
-                avg_s = sig.get("us_avg_pct", 0)
-                movers = sig.get("top_movers", [])[:3]
+                movers = sig.get("top_movers", [])
+                movers = movers[:3] if isinstance(movers, list) else []
                 sector_lines.append(
-                    f"  - {theme}: 부스트 {boost:+d}점, 평균 {avg_s:+.1f}%, {', '.join(movers)}"
+                    f"  - {_html_text(theme, 50)}: 부스트 {boost:+.0f}점, "
+                    f"평균 {avg_s:+.1f}%, {_html_text(', '.join(map(str, movers)), 100)}"
                 )
 
         inputs: List[Dict] = [
@@ -1559,6 +1776,8 @@ class DailyReportGenerator:
         # 국내 자료는 as_of 가 있을 때만 유효로 인정한다 (기준시각 없는 값은 신선도 미상)
         valid_kr: List[Dict] = []
         for item in (kr_inputs or []):
+            if not isinstance(item, dict):
+                continue
             entry = {
                 "name": item.get("name"), "kind": "kr",
                 "as_of": item.get("as_of"), "source": item.get("source"),
@@ -1574,137 +1793,64 @@ class DailyReportGenerator:
         # brief_scope() 와 같은 as_of 판정을 쓴다 (F21 — 고정 문구와 단일 지점 공유)
         scope = brief_scope(kr_inputs)
 
-        if scope == SCOPE_WITH_KR:
-            kr_block = "\n".join(
-                f"  - {i['name']}: {i.get('value')} (기준시각 {i['as_of']}, 출처 {i.get('source')})"
-                for i in valid_kr
-            )
-            scope_rules = (
-                "5. <b>■ 개장 관찰 포인트</b>: 위 국내 자료(기준시각 명시)로만 관찰 포인트 2건.\n"
-                "   각 포인트마다 <b>반대 근거</b>를 반드시 함께 쓸 것. 단정 대신 조건부로 서술."
-            )
-            title = "🧠 <b>LLM 모닝브리프</b> — 미국시장 마감 + 국내 장전 자료"
-        else:
-            kr_block = ""
-            scope_rules = (
-                "5. <b>■ 판단 보류</b>: 국내 수급·선물·환율·장전 뉴스가 입력에 없다.\n"
-                "   따라서 한국장 <b>개장 방향·갭·시가 대응 전략을 쓰지 말 것</b>.\n"
-                f"   대신 '{NO_KR_INPUT_NOTE}' 라고만 쓸 것."
-            )
-            title = "🧠 <b>LLM 모닝브리프</b> — 미국시장 마감 요약"
-
-        prompt = f"""{'한국 장전 자료를 포함한 미국증시 마감 브리프' if scope == SCOPE_WITH_KR else '미국시장 마감 요약'} 작성.
-
-[기준일] {us_date_str} 미국시장 마감
-
-[주요 지수]
-{chr(10).join(idx_lines) if idx_lines else '  (데이터 없음)'}
-지수 평균 등락: {avg_pct:+.2f}%
-시장 분위기: {mood}
-
-[빅테크]
-  {' / '.join(bt_lines) if bt_lines else '(데이터 없음)'}
-
-[US 섹터 → KR 테마 매핑]
-{chr(10).join(sector_lines) if sector_lines else '  (영향 미미)'}
-{f'{chr(10)}[국내 장전 자료]{chr(10)}{kr_block}' if kr_block else ''}
-
-★ 자료 범위 규칙 (반드시 준수):
-- 위에 주어진 자료로 확인되는 것만 쓴다. 없는 자료를 추정해 단정하지 않는다.
-- 국내 수급·공매도·최신 선물·환율·장전 뉴스는 {'일부만 주어졌다' if scope == SCOPE_WITH_KR else '주어지지 않았다'}.
-- 근거가 없으면 "추가 확인 필요"라고 쓴다. 중립·확신으로 포장하지 않는다.
-
-출력 형식 (이 순서):
-1. <b>■ 미국시장 종합 평가</b>: 2~3문장 (분위기, 변동성, 동력)
-2. <b>■ 핵심 이슈 분석</b>: 자료에서 추론 가능한 이슈 2~3건 (단서 없으면 "추가 확인 필요")
-3. <b>■ 미국 섹터 흐름</b>: 강세 2~3개 + 약세 2~3개 (이유 포함)
-4. <b>■ 한국 테마 연결</b>: 위 매핑에 나온 테마만 언급. {'개장 방향은 단정하지 않는다.' if scope == SCOPE_US_ONLY else '조건부로만 서술한다.'}
-{scope_rules}
-
-500~800자 권장. 마지막에 "<i>※ 본 분석은 LLM 자동 생성. 투자 판단 본인 책임.</i>" 추가.
-"""
-
-        llm = get_llm_manager()
-        try:
-            result = await asyncio.wait_for(
-                llm.complete_role(
-                    prompt=prompt,
-                    system=(
-                        "당신은 한국 증권사 리서치센터 미국시장 담당 애널리스트. "
-                        "주어진 자료 범위 밖을 단정하지 않는다."
-                    ),
-                    role=LLMRole.MORNING_BRIEF,
-                ),
-                timeout=45.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning("[모닝브리프] LLM 타임아웃 (45s)")
-            return None
-        except Exception as e:
-            logger.warning(f"[모닝브리프] LLM 호출 실패: {e}")
-            return None
-
-        if not result:
-            return None
-
-        # 성공 여부 확인 (LLMResponse 우선)
-        if hasattr(result, "success") and not result.success:
-            err = getattr(result, "error", "unknown")
-            logger.warning(f"[모닝브리프] LLM 호출 실패: {err}")
-            return None
-
-        text = getattr(result, "content", None)
-        if text is None:
-            if isinstance(result, dict):
-                text = result.get("content") or result.get("text") or ""
-            else:
-                text = str(result)
-        raw_text = (text or "").strip()
-        if not raw_text:
-            logger.warning("[모닝브리프] LLM 응답 빈값")
-            return None
-
-        # ── 응답 후 검사: 국내 자료 없이 나온 개장 방향 단정 제거 ──
-        body, removed = sanitize_brief_claims(raw_text, scope)
-        if removed:
-            logger.warning(
-                f"[모닝브리프] 국내 자료 없는 개장 단정 {len(removed)}건 제거: "
-                f"{removed[0][:60]}"
-            )
-
-        tone = brief_tone(raw_text)
-        conflict = build_expert_conflict_note(tone, expert_consensus)
-        if conflict:
-            body = body.rstrip() + "\n\n" + conflict
-
-        claims = extract_brief_claims(
-            body, sector_signals, scope,
-            basis=[i["name"] for i in inputs if i.get("valid")],
+        title = (
+            "📋 <b>데이터 모닝브리프</b> — 미국시장 마감 + 국내 장전 자료"
+            if scope == SCOPE_WITH_KR
+            else "📋 <b>데이터 모닝브리프</b> — 미국시장 마감 요약"
         )
 
-        header = f"{title}\n<i>{us_date_str} 미국 마감 기반</i>\n\n"
-        # Telegram 메시지 길이 제한 (~4096자) 안전 마진 — 발송/캐시용 "text" 는
-        # 잘라내되(save_morning_brief 가 최신 캐시엔 이 절단본만 쓴다), 원문·
-        # 정제 전체 본문은 raw_text/body_full 에 그대로 담아 아카이브에서
-        # 사후 검증할 수 있게 한다 (2026-09-15 T10 F22 blocking — 절단 이상으로
-        # sanitize 가 무엇을 지웠는지도 원문 대조 없이는 알 수 없었다).
+        fact_lines = ["<b>■ 확인된 가격 사실</b>"]
+        fact_lines.extend(idx_lines or ["  - 미국 지수 가격·등락 미수집"])
+        if bt_lines:
+            fact_lines.append("  - 빅테크: " + " / ".join(bt_lines))
+        if sector_lines:
+            fact_lines.append("  - 섹터 매핑:")
+            fact_lines.extend(sector_lines)
+        fact_lines.append(f"<i>출처: Yahoo Finance · 시장 기준 {_html_text(us_date_str, 40)}</i>")
+        condition_lines = ["", "<b>■ 추가 확인 조건</b>"]
+        if valid_kr:
+            for item in valid_kr[:5]:
+                condition_lines.append(
+                    f"  - {_html_text(item.get('name') or '국내 자료', 40)} · "
+                    f"{_html_text(item.get('source') or '출처 미기록', 50)} · "
+                    f"{_html_text(item.get('as_of') or '시각 미기록', 50)} 재확인"
+                )
+            condition_lines.append("  - 가격·거래량·수급이 함께 확인될 때만 관찰 판단 갱신")
+        else:
+            condition_lines.extend([
+                f"  - {NO_KR_INPUT_NOTE}",
+                "  - 국내 수급·선물·환율·장전 뉴스와 변동성 자료 추가 확인",
+            ])
+        display_lines = [title, f"<i>{_html_text(us_date_str, 40)} 미국 시장 자료</i>", ""]
+        display_lines.extend(fact_lines + condition_lines)
+        display_text = _bounded_html(display_lines)
+        # 수집된 가격·테마 매핑은 국내 수익률 예측이 아니다.
+        # 구버전 추출기는 과거 기록 해석용으로 보존하되 새 요약은 채점 분모에서 제외한다.
+        claims = {
+            "open_direction": None,
+            "close_direction": None,
+            "sectors": [],
+            "basis": [i["name"] for i in inputs if i.get("valid")],
+        }
+
         return {
             "us_date": us_date_str,
             # 평가 대상 KR 거래일 — 저녁 평가가 전날 브리프를 오늘 실측과 대조하지 않도록
             "kr_date": _today().isoformat(),
             "title": title,
-            "text": header + body[:3800],
-            "raw_text": raw_text,
-            "body_full": body,
+            "text": display_text,
+            "raw_text": "",
+            "body_full": display_text,
             "generated_at": datetime.now().isoformat(),
-            "model": getattr(result, "model", None) or "unknown",
+            "model": "deterministic-source-summary",
             "scope": scope,
             "inputs": inputs,
             "claims": claims,
-            "removed_claims": removed,
-            "tone": tone,
+            "removed_claims": [],
+            "interpretation_removed": [],
+            "tone": "neutral",
             "expert_consensus": expert_consensus,
-            "expert_conflict": conflict,
+            "expert_conflict": None,
         }
 
     def _resolve_brief_for_eval(self, kr_date: str, brief_path: Path, archive_dir=None):
@@ -1732,11 +1878,34 @@ class DailyReportGenerator:
 
         sent = next((d for d in reversed(dispatches) if d.get("status") == "sent"), None)
         if sent is not None:
-            base = _find_generated(sent.get("brief_ref")) or (generated[-1] if generated else {})
+            match = sent.get("brief_match")
+            ref = sent.get("brief_ref")
+            base = _find_generated(ref)
+            # 새 호출자가 발송한 캐시 본문을 명시했으면 정확히 일치한 원본만 쓴다.
+            # None/not_found를 최신 생성본으로 폴백하면 미발송 문장을 평가하게 된다.
+            if match in ("none", "not_found", "invalid") or (match == "exact_text" and base is None):
+                reason = {
+                    "none": "발송문에 LLM 브리프 없음",
+                    "not_found": "발송 브리프 원본 불일치",
+                    "invalid": "발송 브리프 식별값 무효",
+                    "exact_text": "발송 브리프 원본 유실",
+                }[match]
+                brief = {
+                    "kr_date": kr_date,
+                    "text": sent.get("sent_text") or "",
+                    "scope": None,
+                    "claims": {},
+                    "expert_consensus": sent.get("expert_consensus"),
+                    "generated_at": sent.get("sent_at"),
+                }
+                return brief, True, None, reason
+            if base is None:
+                # brief_match 없는 구버전 아카이브만 기존 최신 생성본 폴백을 허용한다.
+                base = generated[-1] if generated else {}
             brief = dict(base)
             brief["kr_date"] = kr_date
             brief["expert_consensus"] = sent.get("expert_consensus")
-            return brief, True, sent.get("brief_ref"), None
+            return brief, True, ref, None
 
         failed = next((d for d in reversed(dispatches) if d.get("status") == "failed"), None)
         dispatch_reason = "07:30 발송 실패 — 전문가 판단 미평가" if failed else "07:30 발송 기록 없음"
@@ -1902,15 +2071,33 @@ class DailyReportGenerator:
 
         date_str = report_date.strftime("%Y년 %m월 %d일")
 
+        generated = _now()
         lines = [
-            f"📊 <b>오늘의 추천 종목 ({len(recommendations)}개)</b>",
-            f"<i>{date_str} 08:00 기준</i>",
+            f"📊 <b>오늘의 관찰 후보 ({len(recommendations)}개)</b>",
+            f"<i>{date_str} 생성 {generated:%H:%M}</i>",
+            "<i>관찰 후보는 주문·체결 가능 종목 목록이 아닙니다.</i>",
             "",
         ]
 
+        provider = getattr(self, "runtime_context_provider", None)
+        if callable(provider):
+            try:
+                runtime_context = provider()
+                lines.append(_html_text(runtime_context, 500) if runtime_context else "운영 상태: 확인 불가")
+            except Exception as e:
+                logger.warning(f"[레포트] 운영 컨텍스트 조회 실패: {e}")
+                lines.append("운영 상태: 확인 불가")
+        else:
+            lines.append("운영 상태: 별도 확인 필요 — 이 목록만으로 주문 준비 여부를 판단하지 않음")
+        lines.append("")
+
         # 핫 테마
         if hot_themes:
-            theme_strs = [f"{t.name}({t.score:.0f})" for t in hot_themes[:5]]
+            theme_strs = []
+            for theme in hot_themes[:5]:
+                score = _finite_float(getattr(theme, "score", None))
+                score_text = f"{score:.0f}" if score is not None else "미확인"
+                theme_strs.append(f"{_html_text(getattr(theme, 'name', ''), 40)}({score_text})")
             lines.append(f"🔥 <b>핫 테마:</b> {' / '.join(theme_strs)}")
             lines.append("")
 
@@ -1925,16 +2112,48 @@ class DailyReportGenerator:
         # 추천 종목
         for rec in recommendations:
             risk_emoji = {"낮음": "🟢", "중": "🟡", "높음": "🔴"}.get(rec.risk_level, "⚪")
+            score = _finite_float(rec.total_score)
+            score_text = f"{score:.0f}점" if score is not None else "점수 미확인"
 
-            lines.append(f"<b>{rec.rank}. {rec.name}</b> <code>{rec.symbol}</code> {risk_emoji}{rec.total_score:.0f}점")
-            lines.append(f"   📌 {rec.investment_thesis}")
+            safe_name = _html_text(rec.name, 50)
+            safe_symbol = _html_text(rec.symbol, 20)
+            lines.append(f"<b>{rec.rank}. {safe_name}</b> <code>{safe_symbol}</code> {risk_emoji}{score_text}")
+            lines.append(f"   📌 {_html_text(rec.investment_thesis, 240)}")
+
+            reference = _finite_float(rec.reference_price or rec.prev_close, positive=True)
+            if reference is not None:
+                as_of = _html_text(rec.reference_as_of or "시각 미기록", 80)
+                source = _html_text(rec.reference_source or "출처 미기록", 80)
+                lines.append(f"   💵 참고가 {reference:,.0f}원 · {source} · {as_of}")
+            else:
+                lines.append("   💵 참고가 미확인 — 가격 조건 판단 불가")
+
+            conditions = []
+            if _finite_float(rec.trigger_price, positive=True) is not None:
+                conditions.append(f"{rec.trigger_price:,.0f}원 돌파 확인")
+            if _finite_float(rec.max_entry_price, positive=True) is not None:
+                conditions.append(f"관찰 범위 최대 {rec.max_entry_price:,.0f}원")
+            if rec.expires_at:
+                conditions.append(f"{_html_text(rec.expires_at, 80)} 만료")
+            if conditions:
+                lines.append(f"   🔎 관찰 조건: {' / '.join(conditions)}")
+            else:
+                lines.append("   🔎 관찰 조건: 미확정 — 현재 가격·거래량·수급을 별도 확인")
+
+            plan_refs = []
+            if _finite_float(rec.stop_loss, positive=True) is not None:
+                plan_refs.append(f"무효화 참고 {rec.stop_loss:,.0f}원")
+            if _finite_float(rec.target_exit, positive=True) is not None:
+                plan_refs.append(f"목표 관찰 {rec.target_exit:,.0f}원")
+            if plan_refs:
+                lines.append(f"   🧭 계획 참고: {' / '.join(plan_refs)} (체결·수익을 의미하지 않음)")
 
             if rec.key_news:
                 news_title = rec.key_news[:55] + "..." if len(rec.key_news) > 55 else rec.key_news
-                lines.append(f"   📰 {news_title}")
+                lines.append(f"   📰 {_html_text(news_title, 58)}")
 
             if rec.risk_factors:
-                lines.append(f"   ⚠️ {', '.join(rec.risk_factors)}")
+                lines.append(f"   ⚠️ {_html_text(', '.join(map(str, rec.risk_factors)), 240)}")
 
             lines.append("")
 
@@ -1957,54 +2176,46 @@ class DailyReportGenerator:
         SEP = "─" * 18
 
         lines = [
-            f"📋 <b>추천종목 결과</b>  <i>{date_str} 장마감</i>",
+            f"📋 <b>관찰 후보 가격 변화</b>  <i>{date_str} 장마감</i>",
             SEP,
+            "<i>실제 체결·실현수익이 아니라 최초 참고가 대비 관측값입니다.</i>",
             "",
         ]
 
-        wins = 0
         total_pct = 0.0
         evaluated = []
+        unavailable = 0
 
         for rec in recommendations:
-            if rec.result_pct is not None:
-                # 등급 판정
-                if rec.result_pct >= 3:
-                    grade = "🎯"
-                    wins += 1
-                elif rec.result_pct >= 0:
-                    grade = "✅"
-                    wins += 1
-                elif rec.result_pct >= -2:
-                    grade = "➖"
-                else:
-                    grade = "❌"
+            result_pct = _finite_float(rec.result_pct)
+            result_price = _finite_float(rec.result_price, positive=True)
+            if result_pct is not None and result_price is not None:
+                grade = "🔼" if result_pct > 0 else ("🔽" if result_pct < 0 else "➖")
 
-                # 목표/손절 도달 태그
-                tag = ""
-                if rec.target_exit > 0 and rec.result_price and rec.result_price >= rec.target_exit:
-                    tag = "  <b>🏆목표</b>"
-                elif rec.stop_loss > 0 and rec.result_price and rec.result_price <= rec.stop_loss:
-                    tag = "  <b>🛑손절</b>"
-
-                total_pct += rec.result_pct
+                total_pct += result_pct
                 evaluated.append(rec)
 
                 # 종목 헤더: 순위 + 이름 + 심볼
                 lines.append(
-                    f"{grade} <b>{rec.rank}. {rec.name}</b> "
-                    f"<code>{rec.symbol}</code>"
+                    f"{grade} <b>{rec.rank}. {_html_text(rec.name, 50)}</b> "
+                    f"<code>{_html_text(rec.symbol, 20)}</code>"
                 )
                 # 결과 수치: 종가 + 등락률 + 태그
                 lines.append(
-                    f"   <code>{rec.result_price:>10,.0f}원</code>  "
-                    f"<b>{rec.result_pct:+.1f}%</b>{tag}"
+                    f"   <code>{result_price:>10,.0f}원</code>  "
+                    f"<b>참고가 대비 {result_pct:+.1f}%</b>"
                 )
+                if rec.result_source or rec.result_as_of:
+                    lines.append(
+                        f"   <i>{_html_text(rec.result_source or '출처 미기록', 80)} · "
+                        f"{_html_text(rec.result_as_of or '시각 미기록', 80)}</i>"
+                    )
                 lines.append("")
             else:
+                unavailable += 1
                 lines.append(
-                    f"⏳ <b>{rec.rank}. {rec.name}</b> "
-                    f"<code>{rec.symbol}</code>"
+                    f"⏳ <b>{rec.rank}. {_html_text(rec.name, 50)}</b> "
+                    f"<code>{_html_text(rec.symbol, 20)}</code>"
                 )
                 lines.append("   <i>종가 데이터 없음</i>")
                 lines.append("")
@@ -2017,21 +2228,24 @@ class DailyReportGenerator:
 
         if n > 0:
             avg_pct = total_pct / n
-            hit_rate = wins / n * 100
-
-            sorted_recs = sorted(evaluated, key=lambda r: r.result_pct or 0, reverse=True)
+            sorted_recs = sorted(
+                evaluated, key=lambda r: _finite_float(r.result_pct) or 0, reverse=True,
+            )
             best  = sorted_recs[0]
             worst = sorted_recs[-1]
 
             lines.extend([
-                f"적중률  <b>{wins} / {n}</b>  ({hit_rate:.0f}%)",
-                f"평균    <b>{avg_pct:+.2f}%</b>",
+                f"관측 가능 {n} / {len(recommendations)} · 가격 미확인 {unavailable}",
+                f"참고가 대비 단순평균 {avg_pct:+.2f}%",
                 "",
-                f"🥇  {best.name}  <b>{best.result_pct:+.1f}%</b>",
-                f"🔻  {worst.name}  <b>{worst.result_pct:+.1f}%</b>",
+                f"상단  {_html_text(best.name, 50)}  <b>{best.result_pct:+.1f}%</b>",
+                f"하단  {_html_text(worst.name, 50)}  <b>{worst.result_pct:+.1f}%</b>",
             ])
         else:
-            lines.append("<i>결과 데이터 없음</i>")
+            lines.append(
+                f"관측 가능 0 / {len(recommendations)} · "
+                f"가격 미확인 {len(recommendations)}"
+            )
 
         return "\n".join(lines)
 

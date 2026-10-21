@@ -743,6 +743,10 @@ def _run_briefing(monkeypatch, tmp_path, *, brief, summary, agg):
 
     monkeypatch.setattr(disc_mod, "fetch_disclosure_summary", _no_disclosure)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # 전체 수집 시 먼저 import된 모듈의 홈 상수와 TTL 캐시도 테스트 전용으로 고정한다.
+    from src.risk import kill_switch
+    monkeypatch.setattr(kill_switch, "CACHE_DIR", tmp_path / ".cache" / "ai_trader")
+    monkeypatch.setattr(kill_switch, "_cache", {})
     cache = tmp_path / ".cache" / "ai_trader"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "llm_morning_brief.json").write_text(

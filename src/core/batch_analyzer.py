@@ -2655,65 +2655,8 @@ class BatchAnalyzer:
         try:
             from ..utils.telegram import send_alert
 
-            if not self._pending:
-                await send_alert(
-                    "\U0001f50d <b>일일 스윙 스캔 완료</b>\n\n"
-                    "후보 종목: <b>0개</b>"
-                )
-                return
-
-            # 전략별 분류
-            strat_names = {
-                "sepa_trend": "SEPA",
-                "rsi2_reversal": "RSI2",
-                "strategic_swing": "전략스윙",
-                "momentum_breakout": "모멘텀",
-            }
-            strat_counts = {}
-            for p in self._pending:
-                sn = strat_names.get(p.strategy, p.strategy)
-                strat_counts[sn] = strat_counts.get(sn, 0) + 1
-
-            strat_summary = " / ".join(f"{k} {v}개" for k, v in strat_counts.items())
-
-            lines = [
-                f"\U0001f50d <b>일일 스윙 스캔 완료</b>",
-                f"",
-                f"후보: <b>{len(self._pending)}개</b> ({strat_summary})",
-                f"",
-            ]
-
-            strat_emoji = {
-                "sepa_trend": "\U0001f7e2",
-                "rsi2_reversal": "\U0001f535",
-                "strategic_swing": "\U0001f7e3",
-                "momentum_breakout": "\U0001f7e0",
-            }
-
-            for i, p in enumerate(self._pending[:10], 1):
-                emoji = strat_emoji.get(p.strategy, "\u26aa")
-                sn = strat_names.get(p.strategy, p.strategy)
-                pnl_target = (p.target_price / p.entry_price - 1) * 100 if p.entry_price > 0 else 0
-                pnl_stop = (p.stop_price / p.entry_price - 1) * 100 if p.entry_price > 0 else 0
-                lines.append(
-                    f"{emoji} <b>{p.name}</b> <code>{p.symbol}</code> "
-                    f"| {sn} {p.score:.0f}점"
-                )
-                lines.append(
-                    f"    진입 {p.entry_price:,.0f} -> "
-                    f"목표 {p.target_price:,.0f}(<b>+{pnl_target:.1f}%</b>) / "
-                    f"손절 {p.stop_price:,.0f}({pnl_stop:.1f}%)"
-                )
-                if p.reason:
-                    # reason이 너무 길면 축약
-                    reason_display = p.reason if len(p.reason) <= 60 else p.reason[:57] + "..."
-                    lines.append(f"    \U0001f4a1 {reason_display}")
-                lines.append("")
-
-            if len(self._pending) > 10:
-                lines.append(f"<i>... 외 {len(self._pending) - 10}개 종목</i>")
-
-            await send_alert("\n".join(lines))
+            from ..analytics.report_context import render_pending_watchlist
+            await send_alert(render_pending_watchlist(self._pending))
 
         except Exception as e:
             logger.warning(f"[배치분석] 텔레그램 알림 실패: {e}")

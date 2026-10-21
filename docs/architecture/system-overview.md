@@ -453,6 +453,13 @@ DashboardDataCollector가 KR 런타임을 API 표현으로 바꾸고 SSEManager�
 
 ## 10.2 모닝브리프의 주장 범위와 사후 평가 (2026-09-14~)
 
+**2026-10-22 갱신:** 현재 계약은 [보고서 본문·근거](../agents/reporting.md)를 따른다.
+새 모닝 요약은 확인된 가격 사실과 조건만 생성하며 중복 LLM 호출을 하지 않는다.
+캐시와 과거 평가 형식은 유지하되 같은 KST 날짜·0~6시간 캐시의 실제 발송 본문만 연결한다.
+아래 LLM 응답 검사·톤은 과거 아카이브 해석 규칙이며 새 보고의 예측 확률이 아니다.
+주간 원칙은 로그 정리와 분리하여 토요일00:05~00:09 ISO주차당 한 번 시도한다.
+
+
 - `DailyReportGenerator.build_morning_brief()`는 입력 자료의 범위를 `scope`로 고정한다. 미국 마감 자료뿐이면 `us_close_only`로 제목을 "미국시장 마감 요약"으로 제한하고, 프롬프트에서 한국장 개장 방향·갭·시가 대응 전략을 금지한 뒤 **응답 후 검사**(`sanitize_brief_claims`)로 남은 단정 문장을 `국내 자료 없음 — 개장 방향 판단 불가`로 대체한다.
 - 기준시각(`as_of`)이 있는 국내 자료를 넘기면 `with_kr_inputs`가 되고 "개장 관찰 포인트"가 허용되지만 반대 근거를 함께 요구한다. `as_of` 없는 국내 자료는 유효 자료로 인정하지 않는다.
 - 07:30 전문가 브리핑(`kr_scheduler._send_expert_briefing_telegram`)이 모닝브리프 캐시를 결합할 때 `build_expert_conflict_note(tone|text, {"score": agg})`를 호출해 상충 문구를 브리프 끝에 붙이고, `orchestrator.data_status_summary()`의 `자료 부족 N명`·커버리지 부족(`체제 점수 무보정`)을 전문가 종합 줄에 표시한다.

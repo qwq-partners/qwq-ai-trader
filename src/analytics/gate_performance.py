@@ -355,23 +355,18 @@ class GatePerformanceAnalyzer:
             return f"[게이트 성능 분석] {result['error']}"
 
         lines = [
-            "📊 게이트 성능 분석",
+            "📊 게이트 이후 가격 관측",
+            "체결·비용 미반영 · 실제 기회비용/수익률 판정 아님",
             f"기간: 최근 {result['lookback_days']}일 / 추적 {result['horizon_days']}영업일",
             f"분석 신호: {result['total_analyzed']}건",
             "",
         ]
-        for v in result.get("verdicts", []):
-            lines.append(v)
-
-        lines.append("")
-        lines.append("— 게이트별 상세 —")
+        lines.append("— 게이트별 가격 분포 —")
         for gate, g in sorted(result["gates"].items(), key=lambda kv: -kv[1]["samples"]):
-            if gate.startswith(ADJUSTED_PASS_PREFIXES):   # 통과 신호 — 기회손실/회피성공은 차단 게이트 용어
-                _bands = (f"+{OPPORTUNITY_THRESHOLD:.0f}% 이상 {g['opportunity_loss_pct']:.0f}% | "
-                          f"{AVOIDANCE_THRESHOLD:.0f}% 이하 {g['avoided_pct']:.0f}%")
-            else:
-                _bands = f"기회손실 {g['opportunity_loss_pct']:.0f}% | 회피성공 {g['avoided_pct']:.0f}%"
+            _bands = (f"+{OPPORTUNITY_THRESHOLD:.0f}% 이상 {g['opportunity_loss_pct']:.0f}% | "
+                      f"{AVOIDANCE_THRESHOLD:.0f}% 이하 {g['avoided_pct']:.0f}%")
             lines.append(f"{gate}: {g['samples']}건 | 평균 {g['avg_return']:+.2f}% | {_bands}")
+        lines.append("다음 확인: 동일 신호의 진입 가능 가격·청산·거래 비용을 함께 비교한 뒤 규칙 변경 검토")
         return "\n".join(lines)
 
 

@@ -173,11 +173,21 @@ def _stub_dr_collaborators(monkeypatch, notifier=None):
 def _patch_common_paths(monkeypatch, tmp_path):
     """전 슬롯 공용 — Path.home()/tmp 고정 + 모듈 상수 정합화"""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    # 전체 수집 시 먼저 import된 모듈의 홈 상수와 TTL 캐시도 테스트 전용으로 고정한다.
+    from src.risk import kill_switch
+    monkeypatch.setattr(kill_switch, "CACHE_DIR", tmp_path / ".cache" / "ai_trader")
+    monkeypatch.setattr(kill_switch, "_cache", {})
     brief_path = tmp_path / ".cache" / "ai_trader" / "llm_morning_brief.json"
     ledger_path = tmp_path / ".cache" / "ai_trader" / "morning_brief_eval.jsonl"
     monkeypatch.setattr(dr_mod, "MORNING_BRIEF_PATH", brief_path)
     monkeypatch.setattr(dr_mod, "MORNING_BRIEF_LEDGER_PATH", ledger_path)
     monkeypatch.setattr(dr_mod, "_today", lambda: _KR_DATE)
+    class MorningClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = cls(2026, 9, 14, 7, 0)
+            return value if tz is None else value.replace(tzinfo=tz)
+    monkeypatch.setattr(dr_mod, "datetime", MorningClock)
     return brief_path, ledger_path
 
 
@@ -422,14 +432,9 @@ def test_full_day_flow_07_00_to_20_30(monkeypatch, tmp_path):
     assert "체제 보정" in rec["expert_direction"]["reason"]
 
 
-    # 섹터 축 — 매핑된 테마(AI/반도체→전기전자) 는 outperformed 판정, 미매핑(2차전지) 은 사유
-    sectors_by_name = {s["name"]: s for s in rec["sectors"]}
-    assert sectors_by_name["AI/반도체"]["outperformed"] is not None, (
-        f"F20: 생산자 섹터명(AI/반도체)과 실측 업종명(전기전자) 매핑이 평가에 반영되지 않았다: "
-        f"{sectors_by_name['AI/반도체']}"
-    )
-    assert sectors_by_name["2차전지"]["outperformed"] is None
-    assert sectors_by_name["2차전지"]["reason"] == "평가 대상 미합의"
+    # 사실 요약에는 업종 예측이 없다. 실제 발송된 자료를 예측 적중률 분모로 만들지 않는다.
+    assert rec["sectors"] == []
+
 
     # 재실행 방지 — 같은 훅을 다시 불러도(리부트 없이) 원장 중복 없음
     record2 = asyncio.run(

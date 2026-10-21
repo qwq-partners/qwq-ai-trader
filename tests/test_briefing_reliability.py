@@ -211,3 +211,20 @@ def test_representative_news_source_and_collection_time_are_displayed():
     text = render_expert_briefing("장후", {"news_curator": news}, 0, "neutral", False, {})
     assert "예시신문" in text and "수집 10-21 09:30" in text
     assert "https://news.example/driver" in text and "발행시각 미확인" in text
+
+
+def test_briefing_leads_with_rebound_vs_trend_and_a_check_not_buy_advice():
+    from src.experts.briefing import render_expert_briefing
+    orch = ExpertOrchestrator(ExpertConfig())
+    ops = market_snapshot()
+    sector = opinion('sector_council')
+    sector.raw_evidence = {'sector_scores': {'반도체': {
+        'r1': 3.34, 'r5': -10.36, 'r20': -10.46, 'r5_sessions': 5,
+        'as_of': '2026-10-21', 'score': -80, 'quant_only': True,
+    }}}
+    ops['sector_council'] = sector
+    text = render_expert_briefing('장후', ops, 0, 'neutral', False,
+                                 orch.data_status_summary(ops), now=datetime(2026, 10, 21, 16, 30))
+    assert text.index('먼저 볼 판단') < text.index('시장 입력과 참고 자료')
+    assert '반등과 누적 약세가 공존' in text
+    assert '거래대금·개별 수급' in text and '추세 전환 확정' not in text
