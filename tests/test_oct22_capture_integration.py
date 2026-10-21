@@ -1,5 +1,6 @@
 """Exact Oct. 22 high-volume study; runs the parser, writer, strict reader and observed flow."""
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
 from pathlib import Path
 from time import monotonic
@@ -33,7 +34,7 @@ def plan_factory(tmp_path):
 
 @pytest.mark.asyncio
 async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_observed_flow(tmp_path, monkeypatch):
-    # The generic fixture uses an Oct. 21/1263-second study. Bind its raw frame
+    # The generic fixture uses an earlier-date/1263-second study. Bind its raw frame
     # date and its parser clock to the new, exact 09:30--09:51 contract.
     monkeypatch.setattr(volume, 'NOW', NOW)
     original_fields = market_frames.fields
@@ -58,10 +59,35 @@ async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_obser
                              timeout_seconds=timeout_seconds,
                              pending_after=journal._queue.qsize(),
                              persisted_after=journal._persisted)
+        print('OCT22_CLOSE_RECEIPT=' + json.dumps(close_receipt, sort_keys=True))
         return result
     monkeypatch.setattr(entry_observation_runtime.ObservationJournal, 'close', measured_close)
+    # This is a volume/contract test, not a wall-clock throughput benchmark.
+    # A 21-minute fake clock must not leave ~64k queued records for the real
+    # 10-second close deadline. Pace only the synthetic producer; keep the real
+    # writer, fsync, raw burst, logical clock and production limits unchanged.
+    pacing = {'checkpoints': 0, 'wait_seconds': 0.0, 'queue_peak': 0}
+    async def producer_checkpoint(runtime, tick):
+        journal = runtime.journal
+        pending = journal._queue.qsize()
+        pacing['queue_peak'] = max(pacing['queue_peak'], pending)
+        if pending < 1000:
+            return
+        pacing['checkpoints'] += 1
+        started = monotonic()
+        while journal._queue.qsize() > 100:
+            assert not journal._failed.is_set(), 'writer failed during synthetic pacing'
+            assert journal._thread.is_alive(), 'writer stopped during synthetic pacing'
+            elapsed = monotonic() - started
+            assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
+            await asyncio.sleep(0.01)
+        elapsed = monotonic() - started
+        assert not journal._failed.is_set() and journal._thread.is_alive(), 'synthetic writer failed'
+        assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
+        pacing['wait_seconds'] += elapsed
     plan, study, observed, retained, counts, buffer, now = await volume.collect_volume(
-        tmp_path, monkeypatch, plan_factory=plan_factory, cycles=1257, high_volume=True)
+        tmp_path, monkeypatch, plan_factory=plan_factory, cycles=1257, high_volume=True,
+        producer_checkpoint=producer_checkpoint)
     expected_states = 1257 * 50 + (458 - 50) + 10
     expected_books = 1257 * 25 + (114 - 25) + 1257
     assert plan.start_at == NOW + timedelta(minutes=5)
@@ -89,5 +115,6 @@ async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_obser
         'journal_bytes': Path(plan.settings['journal_path']).stat().st_size,
         'eligible_pairs': observed_flow['counts']['eligible_pairs'],
         'live_volume_qualified': False,
+        'synthetic_producer_pacing': pacing,
         'close': close_receipt,
     }, sort_keys=True))

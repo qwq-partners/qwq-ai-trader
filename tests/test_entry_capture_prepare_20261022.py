@@ -145,6 +145,19 @@ def test_install_deadline_is_0920_and_prevents_host_access(m, monkeypatch, insta
         m.prepare('a' * 64)
 
 
+@pytest.mark.parametrize('value,accepted', [
+    ('Thu 2026-10-22 09:25:00 KST', True), ('Thu 2026-10-22 00:25:00 UTC', True),
+    ('Wed 2026-10-21 09:25:00 KST', False), ('Thu 2026-10-22 09:27:00 KST', False),
+    ('n/a', False),
+])
+def test_oct22_next_elapse_requires_exact_date_and_time(m, value, accepted):
+    if accepted:
+        m.verify_next_elapse(value)
+    else:
+        with pytest.raises(m.GuardError, match='timer_next_elapse_mismatch'):
+            m.verify_next_elapse(value)
+
+
 @pytest.mark.parametrize('failure', [None, 'check', 'static', 'enable', 'post_enable',
     'backup_write', 'disk_before', 'disk_locked', 'disk_arm', 'disarm', 'partial_disable'])
 def test_apply_preserves_exact_oct21_predecessor_and_disarms_its_partial_timer(m, tmp_path, monkeypatch, failure):
