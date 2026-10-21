@@ -238,7 +238,7 @@ def test_f21_us_report_asserts_kr_direction_from_us_indices_only(monkeypatch, tm
     monkeypatch.setattr(dr_mod, "NewsCollector", lambda: SimpleNamespace())
 
     import src.analytics.us_market_chart as chart_mod
-    monkeypatch.setattr(chart_mod, "generate_combined_chart", lambda **kw: None)
+    monkeypatch.setattr(chart_mod, "generate_mobile_charts", lambda **kw: [], raising=False)
 
     import src.utils.llm as llm_mod
     monkeypatch.setattr(llm_mod, "get_llm_manager", lambda: _FakeLLM("미국 증시 상승 마감"))

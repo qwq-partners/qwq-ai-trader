@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Any, Tuple
 from zoneinfo import ZoneInfo
 from loguru import logger
 
+from .us_report_data import observe_us_quote as _us_quote_observation
+
 # 추천 종목 캐시 경로
 _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
 
@@ -137,6 +139,7 @@ def resolve_us_quote_basis(quotes: Dict[str, Dict]) -> Dict[str, Any]:
         "mixed": len(ordered) > 1,
         "dates": ordered,
     }
+
 
 # 브리프 주장 범위 (T9 요청 3)
 SCOPE_US_ONLY = "us_close_only"
@@ -1417,13 +1420,11 @@ class DailyReportGenerator:
         한눈에 보기 좋게 정리하여 텔레그램 발송.
 
         Args:
-            kr_inputs: 국내 장전 자료(as_of 포함) — build_morning_brief 와 동일한
-                형식. 없으면(현재 기본 경로) 고정 문구(market_msg)도 한국 개장
-                방향을 단정하지 않는다 (2026-09-15 T10 F21 — scope 판정을
-                brief_scope() 한 곳으로 통일, LLM 브리프와 반드시 같은 값을 쓴다).
+            kr_inputs: build_morning_brief 캐시에 남길 국내 장전 자료(as_of 포함).
+                자료 존재만으로 한국 개장 방향을 만들지는 않는다.
         """
         from ..data.providers.us_market_data import (
-            get_us_market_data, US_KOREA_SECTOR_MAP, INDEX_SYMBOLS, INDEX_NAMES,
+            get_us_market_data, INDEX_SYMBOLS, INDEX_NAMES,
         )
 
         umd = self._us_market_data or get_us_market_data()
@@ -1438,236 +1439,214 @@ class DailyReportGenerator:
 
         now = _now()
 
-        # 미국 휴장일을 달력으로 추정하지 않고 Yahoo가 제공한 실제 시장 시각만 쓴다.
+        # 전체 응답의 시각 커버리지는 출처 설명에만 쓴다. 지수 해석 기준일은 아래에서
+        # 지수 행만으로 별도 결정해 ETF 한 건의 날짜를 지수 날짜로 빌리지 않는다.
         quote_basis = resolve_us_quote_basis(quotes)
-        us_date_str = quote_basis.get("as_of") or "시장 시각 미제공"
         kst_date_str = now.strftime("%m/%d")                # KST 오늘 날짜 (보고서 발송일)
 
         # ── 지수 ──
-        idx_lines = []
-        idx_pcts = []
+        index_observations: Dict[str, Dict[str, Any]] = {}
         for sym in INDEX_SYMBOLS:
-            q = quotes.get(sym)
-            if not q:
+            observed = _us_quote_observation(quotes.get(sym), now=now)
+            if observed is None:
+                continue
+            index_observations[sym] = observed
+
+        idx_pcts = [item["pct"] for item in index_observations.values()]
+        avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0.0
+        known_index_dates = {
+            item["date"] for item in index_observations.values() if item["date"]
+        }
+        index_basis_complete = bool(index_observations) and all(
+            item["date"] for item in index_observations.values()
+        ) and len(known_index_dates) == 1
+        index_dates_mixed = len(known_index_dates) > 1
+        if index_basis_complete:
+            us_date_str = next(iter(known_index_dates))
+        elif index_dates_mixed:
+            us_date_str = "시장일 혼재"
+        else:
+            us_date_str = "기준일 미확인"
+
+        up_n = sum(item["pct"] > 0 for item in index_observations.values())
+        down_n = sum(item["pct"] < 0 for item in index_observations.values())
+        flat_n = len(index_observations) - up_n - down_n
+        direction_counts = f"상승 {up_n} · 하락 {down_n} · 보합 {flat_n}"
+        if not index_observations:
+            mood = "⚠️ 지수 시세 미수집"
+        elif index_dates_mixed:
+            mood = "⚠️ 시장일 혼재"
+        elif not index_basis_complete:
+            mood = "⚠️ 기준일 미확인"
+        else:
+            mood = direction_counts
+
+        idx_lines = []
+        for sym in INDEX_SYMBOLS:
+            observed = index_observations.get(sym)
+            if not observed:
                 continue
             name = INDEX_NAMES.get(sym, sym)
-            pct = _finite_float(q.get("change_pct"))
-            price = _finite_float(q.get("price"), positive=True)
-            if pct is None or price is None:
-                continue
-            idx_pcts.append(pct)
-            if pct > 0:
-                idx_lines.append(f"  🔼 {name}  <b>+{pct:.2f}%</b>  ({price:,.1f})")
-            elif pct < 0:
-                idx_lines.append(f"  🔽 {name}  <b>{pct:.2f}%</b>  ({price:,.1f})")
-            else:
-                idx_lines.append(f"  ▪️ {name}  0.00%  ({price:,.1f})")
-
-        # 지수 4종이 전부 결측이면(개별 종목만 살아남는 부분 응답) avg_pct=0 으로 떨어져
-        # "+0.00% 보합권 마감" 이라는 없는 사실이 세 발송 경로로 나갔다 — 결측을 0·보합으로
-        # 포장하지 않는다 (2026-09-15 T10 통합 리뷰 INT-2 blocking). avg_pct 는 하위
-        # 호출부 타입 호환을 위해 0.0 을 유지하되 문구는 idx_missing 으로만 결정한다.
-        idx_missing = not idx_pcts
-        avg_pct = sum(idx_pcts) / len(idx_pcts) if idx_pcts else 0.0
-        if idx_missing:
-            mood = "⚠️ 지수 시세 미수집"
-        elif avg_pct >= 1.0:
-            mood = "📈 강세 마감"
-        elif avg_pct <= -1.0:
-            mood = "📉 약세 마감"
-        else:
-            mood = "➡️ 보합 마감"
-
-        # brief_scope() 와 동일 판정 — market_msg 뿐 아니라 섹터 매핑 헤더도
-        # 이 값을 써야 대상 시장·시간범위 표기가 market_msg 와 어긋나지 않는다
-        # (2026-09-15 T10 F21 advisory — 헤더는 방향 단정은 아니었지만 대상
-        # 시장·시간범위가 없어 F21 이 요구한 문장 단위 명시 기준에서 비어 있었다)
-        scope = brief_scope(kr_inputs)
-        sector_header = (
-            "<b>■ 미국 섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)</b>"
-            if scope == SCOPE_US_ONLY else "<b>■ 한국 시장 영향</b>"
-        )
+            pct = observed["pct"]
+            price = observed["price"]
+            arrow = "🔼" if pct > 0 else ("🔽" if pct < 0 else "▪️")
+            pct_text = f"+{pct:.2f}%" if pct > 0 else f"{pct:.2f}%"
+            date_suffix = (
+                "" if index_basis_complete else f" · {observed['date_label']}"
+            )
+            idx_lines.append(
+                f"  {arrow} {name}  <b>{pct_text}</b>  ({price:,.1f}){date_suffix}"
+            )
 
         lines = [
-            f"🇺🇸 <b>미국증시 마감 리포트</b>",
-            f"<i>{us_date_str} 시장 자료 · {quote_basis['source']} "
-            f"({quote_basis['coverage']}, KST {kst_date_str} {now:%H:%M} 수신)</i>",
+            f"🇺🇸 <b>미국시장 아침 스냅샷</b>",
+            f"<i>{_html_text(us_date_str, 40)} 미국 시장 자료 · Yahoo Finance "
+            f"(시장시각 {quote_basis['coverage']}, KST {kst_date_str} {now:%H:%M} 수신)</i>",
             "",
-            f"<b>■ 주요 지수  {mood}</b>",
+            f"<b>■ 주요 지수 ({len(index_observations)}/{len(INDEX_SYMBOLS)} 확인)  {mood}</b>",
         ]
-        if quote_basis.get("mixed"):
-            lines.append("  ⚠️ 종목별 시장일이 섞여 있어 단일 마감일로 해석하지 않음")
-        lines.extend(idx_lines)
+        if index_dates_mixed:
+            lines.append("  ⚠️ 시장일 혼재 — 종목별 날짜가 달라 수익률 직접 비교·순위 해석 제외")
+        lines.extend(idx_lines or ["  지수 자료 미확인"])
         lines.append("")
 
-        # ── 빅테크 ──
-        bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
-        bt_lines = []
-        for sym in bigtech:
-            q = quotes.get(sym)
-            if not q:
-                continue
-            pct = _finite_float(q.get("change_pct"))
-            if pct is None:
-                continue
-            if pct > 0:
-                bt_lines.append(f"{sym} <b>+{pct:.1f}%</b>")
-            elif pct < 0:
-                bt_lines.append(f"{sym} {pct:.1f}%")
-            else:
-                bt_lines.append(f"{sym} 0.0%")
-
-        if bt_lines:
-            lines.append(f"<b>■ 빅테크</b>")
-            # 4개씩 줄바꿈
-            for i in range(0, len(bt_lines), 4):
-                lines.append("  " + "  ".join(bt_lines[i:i + 4]))
-            lines.append("")
-
-        # ── 섹터 ETF + 개별종목 (테마 매핑) ──
-        sector_signals = await umd.get_sector_signals()
-        if sector_signals:
-            lines.append(sector_header)
-            for theme, sig in sorted(
-                sector_signals.items(),
-                key=lambda x: abs(x[1]["boost"]),
-                reverse=True,
-            ):
-                boost = sig["boost"]
-                avg = sig["us_avg_pct"]
-                movers = sig.get("top_movers", [])
-                icon = "🔺" if boost > 0 else "🔻"
-                movers_str = _html_text(", ".join(map(str, movers[:3])), 100)
-                lines.append(
-                    f"  {icon} <b>{_html_text(theme, 50)}</b> (부스트 {boost:+d}점)"
+        def _observed_change_lines(symbols: List[Tuple[str, str]]) -> List[str]:
+            rendered = []
+            for symbol, label in symbols:
+                observed = _us_quote_observation(quotes.get(symbol), now=now)
+                if observed is None:
+                    continue
+                display_name = symbol if label == symbol else f"{label}({symbol})"
+                rendered.append(
+                    f"  {display_name} {observed['pct']:+.1f}% · {observed['date_label']}"
                 )
-                lines.append(f"      평균 {avg:+.1f}%  {movers_str}")
-            lines.append("")
+            return rendered
 
-        # ── 공포/탐욕 지표 대용: VIX ──
-        # VIX는 US_SYMBOLS에 없으므로 별도 조회 불필요, 지수 평균으로 대체
-        #
-        # 2026-09-15 T10 F21: 이 고정 문구가 미국 지수 평균만으로 "한국 관련
-        # 테마주 갭업 가능성" 같은 국내 개장 방향을 단정해 왔다(정상/차트동반/
-        # 폴백 세 경로 모두 이 market_msg 를 그대로 발송). 국내 자료(kr_inputs)
-        # 없이는 문장 대상을 "미국 세션"으로 한정하고 한국 판단은 보류한다.
-        # brief_scope() 는 build_morning_brief 의 LLM 스코프 판정과 동일한
-        # 함수라 두 판정이 어긋나지 않는다 (scope 는 위에서 sector_header 와
-        # 함께 이미 계산했다).
-        if idx_missing:
-            # 지수 시세가 한 건도 없으면 미국 마감 방향도 단정하지 않는다 (0 포장 금지)
-            market_msg = "⚠️ 미국 지수 시세 미수집 — 마감 방향 판단 불가 (한국 개장 방향 판단 보류)"
-        elif scope == SCOPE_WITH_KR:
-            if avg_pct >= 1.5:
-                market_msg = "💡 강한 상승 — 한국 관련 테마주 갭업 가능성"
-            elif avg_pct >= 0.5:
-                market_msg = "💡 소폭 상승 — 반도체·IT 섹터 긍정적"
-            elif avg_pct <= -1.5:
-                market_msg = "⚠️ 강한 하락 — 한국 시장 하방 압력 주의"
-            elif avg_pct <= -0.5:
-                market_msg = "⚠️ 소폭 하락 — 보수적 접근 권장"
-            else:
-                market_msg = "💡 변동 미미 — 국내 자체 재료에 주목"
+        etf_symbols = [
+            ("SMH", "반도체 ETF"), ("XLK", "기술 ETF"),
+            ("XLV", "헬스케어 ETF"), ("XBI", "바이오 ETF"),
+            ("XLE", "에너지 ETF"), ("URNM", "우라늄 ETF"),
+            ("LIT", "2차전지 ETF"), ("ITA", "방산 ETF"),
+        ]
+        stock_symbols = [
+            ("NVDA", "NVDA"), ("AAPL", "AAPL"), ("MSFT", "MSFT"),
+            ("GOOG", "GOOG"), ("META", "META"), ("AMZN", "AMZN"),
+            ("TSLA", "TSLA"), ("AMD", "AMD"),
+        ]
+        etf_lines = _observed_change_lines(etf_symbols)
+        stock_lines = _observed_change_lines(stock_symbols)
+
+        lines.append(f"<b>■ 주요 ETF ({len(etf_lines)}/{len(etf_symbols)} 확인)</b>")
+        lines.extend(etf_lines or ["  ETF 자료 미확인"])
+        lines.append("")
+        lines.append(f"<b>■ 대표 종목 ({len(stock_lines)}/{len(stock_symbols)} 확인)</b>")
+        lines.extend(stock_lines or ["  대표 종목 자료 미확인"])
+        lines.append("")
+
+        # 내부 캐시용 테마 매핑은 유지하되 사용자 본문에는 예측 점수로 노출하지 않는다.
+        try:
+            sector_signals = await umd.get_sector_signals()
+        except Exception as sector_err:
+            logger.warning(f"[레포트] 선택형 섹터 집계 실패 (가격 본문 유지): {sector_err}")
+            sector_signals = {}
+
+        # ── 핵심 사실 + 다음 확인 ──
+        if not index_observations:
+            market_msg = "미국 주요 지수 0/4 — 마감 방향 판단 불가"
+        elif index_dates_mixed:
+            market_msg = "미국 주요 지수 시장일 혼재 — 평균 방향 계산 제외"
+        elif not index_basis_complete:
+            market_msg = "미국 주요 지수 기준일 미확인 — 개별 수치만 참고"
         else:
-            if avg_pct >= 1.5:
-                mkt_fact = f"💡 미국 지수 평균 {avg_pct:+.2f}% 강한 상승 마감 (전일 미국 세션)"
-            elif avg_pct >= 0.5:
-                mkt_fact = f"💡 미국 지수 평균 {avg_pct:+.2f}% 소폭 상승 마감 (전일 미국 세션)"
-            elif avg_pct <= -1.5:
-                mkt_fact = f"⚠️ 미국 지수 평균 {avg_pct:+.2f}% 강한 하락 마감 (전일 미국 세션)"
-            elif avg_pct <= -0.5:
-                mkt_fact = f"⚠️ 미국 지수 평균 {avg_pct:+.2f}% 소폭 하락 마감 (전일 미국 세션)"
-            else:
-                mkt_fact = f"➡️ 미국 지수 평균 {avg_pct:+.2f}% 보합권 마감 (전일 미국 세션)"
-            market_msg = f"{mkt_fact} — 국내 자료 없음, 한국 개장 방향 판단 보류"
+            market_msg = (
+                f"확인 지수 {len(index_observations)}/4: {direction_counts}"
+            )
 
-        lines.append(f"<b>■ 오늘의 포인트</b>")
-        lines.append(f"  {market_msg}")
+        trio = {
+            symbol: _us_quote_observation(quotes.get(symbol), now=now)
+            for symbol in ("^SOX", "SMH", "NVDA")
+        }
+        trio_valid = [item for item in trio.values() if item is not None]
+        if len(trio_valid) == 3 and all(item["date"] for item in trio_valid) and len(
+            {item["date"] for item in trio_valid}
+        ) == 1:
+            trio_pcts = [item["pct"] for item in trio_valid]
+            if all(pct > 0 for pct in trio_pcts):
+                semiconductor_fact = "SOX·SMH·NVDA 같은 방향 상승 (미국 가격 사실)"
+            elif all(pct < 0 for pct in trio_pcts):
+                semiconductor_fact = "SOX·SMH·NVDA 같은 방향 하락 (미국 가격 사실)"
+            elif all(pct == 0 for pct in trio_pcts):
+                semiconductor_fact = "SOX·SMH·NVDA 모두 보합 (미국 가격 사실)"
+            else:
+                semiconductor_fact = "SOX·SMH·NVDA 방향 엇갈림 (미국 가격 사실)"
+        elif len(trio_valid) < 3:
+            semiconductor_fact = f"SOX·SMH·NVDA 확인 {len(trio_valid)}/3 · 자료 부족"
+        elif not all(item["date"] for item in trio_valid):
+            semiconductor_fact = "SOX·SMH·NVDA 확인 3/3 · 기준일 미확인"
+        else:
+            semiconductor_fact = "SOX·SMH·NVDA 확인 3/3 · 시장일 혼재"
+
+        vix = _us_quote_observation(quotes.get("^VIX"), now=now)
+        vix_fact = (
+            f"VIX {vix['price']:.1f} · {vix['pct']:+.1f}% · {vix['date_label']} "
+            "(변동성 지표, 시장 방향 단정 아님)"
+            if vix else "VIX 자료 미확인"
+        )
+
+        lines[2:3] = [
+            "",
+            "<b>■ 핵심 사실</b>",
+            f"  • {market_msg}",
+            f"  • {semiconductor_fact}",
+            f"  • {vix_fact}",
+            "",
+        ]
+        lines.extend([
+            "<b>■ 다음 확인</b>",
+            "  • 개장 후 관련 업종 거래대금·외국인/기관 수급 확인",
+            "  • 기존 진입 조건 충족 여부 확인 — 한국 개장 방향은 이 자료만으로 판단하지 않음",
+        ])
 
         report = "\n".join(lines)
 
         if send_telegram:
-            # ── 1) 통합 차트 이미지 생성 (섹터 히트맵 + S&P500 맵 합본) ──
-            chart_sent = False
+            # ── 1) 모바일 차트 2장 ──────────────────────────────────────────
             try:
-                from .us_market_chart import generate_combined_chart
+                from .us_market_chart import generate_mobile_charts
                 from ..utils.telegram import send_photo as tg_send_photo
 
-                # S&P500 개별 종목 시세 조회
-                try:
-                    stock_quotes = await umd.fetch_sp500_stocks()
-                except Exception as sp_err:
-                    logger.warning(f"[레포트] S&P500 시세 조회 실패 (빈 맵으로 진행): {sp_err}")
-                    stock_quotes = {}
-
-                # 통합 차트: 지수 카드 + 섹터 ETF 히트맵 + S&P500 맵
-                combined_buf = generate_combined_chart(
+                chart_buffers = generate_mobile_charts(
                     quotes=quotes,
-                    stock_quotes=stock_quotes,
                     date_str=us_date_str,
-                    avg_pct=avg_pct,
+                    avg_pct=avg_pct if index_basis_complete else 0.0,
                 )
-                if combined_buf:
-                    caption_lines = [
-                        f"🇺🇸 <b>미국증시 마감</b>  {us_date_str}  {mood}",
-                        "",
-                    ]
-                    caption_lines.extend(idx_lines)
-                    caption = "\n".join(caption_lines)[:1024]
-
-                    _report_cid = self.telegram.report_chat_id
-                    chart_sent = await tg_send_photo(
-                        combined_buf, caption=caption, parse_mode="HTML",
-                        chat_id=_report_cid,
-                    )
-                    if chart_sent:
-                        logger.info(f"[레포트] 통합 차트 이미지 발송 완료 → {_report_cid}")
-                    else:
-                        logger.warning("[레포트] 통합 차트 이미지 발송 실패")
+                captions = [
+                    "🇺🇸 <b>미국 지수·VIX</b> (1/2) · 가격일은 이미지의 항목별 표시 확인",
+                    "🇺🇸 <b>관찰 ETF·대표 종목</b> (2/2) · 가격일은 이미지의 항목별 표시 확인",
+                ]
+                for index, chart_buffer in enumerate(chart_buffers or []):
+                    caption = captions[index] if index < len(captions) else captions[-1]
+                    try:
+                        sent = await tg_send_photo(
+                            chart_buffer, caption=caption, parse_mode="HTML",
+                            chat_id=self.telegram.report_chat_id,
+                        )
+                        if not sent:
+                            logger.warning(f"[레포트] 모바일 차트 {index + 1} 발송 실패")
+                    except Exception as send_err:
+                        logger.warning(
+                            f"[레포트] 모바일 차트 {index + 1} 전송 오류: {send_err}"
+                        )
 
             except Exception as chart_err:
                 logger.error(f"[레포트] 차트 생성/전송 오류: {chart_err}", exc_info=True)
 
-            # ── 2) 텍스트 리포트 전송 ─────────────────────────────────────
-            # 차트 전송 성공 시 → 섹터 영향 + 포인트만 (중복 지수 생략)
-            # 차트 전송 실패 시 → 전체 report 텍스트 전송
-            if chart_sent:
-                detail_lines = []
-                if bt_lines:
-                    detail_lines.append("<b>■ 빅테크</b>")
-                    for i in range(0, len(bt_lines), 4):
-                        detail_lines.append("  " + "  ".join(bt_lines[i:i + 4]))
-                    detail_lines.append("")
-                if sector_signals:
-                    detail_lines.append(sector_header)
-                    for theme, sig in sorted(
-                        sector_signals.items(),
-                        key=lambda x: abs(x[1]["boost"]),
-                        reverse=True,
-                    ):
-                        boost = sig["boost"]
-                        avg_s = sig["us_avg_pct"]
-                        movers = sig.get("top_movers", [])
-                        icon = "🔺" if boost > 0 else "🔻"
-                        movers_str = _html_text(", ".join(map(str, movers[:3])), 100)
-                        detail_lines.append(
-                            f"  {icon} <b>{_html_text(theme, 50)}</b> (부스트 {boost:+d}점)"
-                        )
-                        detail_lines.append(
-                            f"      평균 {avg_s:+.1f}%  {movers_str}"
-                        )
-                    detail_lines.append("")
-                detail_lines.append("<b>■ 오늘의 포인트</b>")
-                detail_lines.append(f"  {market_msg}")
-                if detail_lines:
-                    await self.telegram.send_report("\n".join(detail_lines))
+            # ── 2) 접근 가능한 전체 텍스트 ──────────────────────────────────
+            success = await self.telegram.send_report(report)
+            if success:
+                logger.info("[레포트] 미국시장 아침 스냅샷 텍스트 발송 완료")
             else:
-                # 차트 없이 텍스트 전체 전송 (fallback)
-                success = await self.telegram.send_report(report)
-                if success:
-                    logger.info("[레포트] 미국증시 텍스트 레포트 발송 완료")
-                else:
-                    logger.error("[레포트] 미국증시 레포트 발송 실패")
+                logger.error("[레포트] 미국시장 아침 스냅샷 텍스트 발송 실패")
 
             # ── 3) 근거 기반 모닝브리프 캐시 ─────────────────────────────
             # 2026-06-05: 별도 발송 중단 → 캐시 파일에 저장.
@@ -1676,7 +1655,7 @@ class DailyReportGenerator:
             try:
                 brief_record = await self.build_morning_brief(
                     quotes=quotes,
-                    sector_signals=sector_signals,
+                    sector_signals=sector_signals if index_basis_complete else {},
                     avg_pct=avg_pct,
                     us_date_str=us_date_str,
                     mood=mood,
@@ -1720,57 +1699,60 @@ class DailyReportGenerator:
             "^GSPC": "S&P500", "^IXIC": "NASDAQ", "^DJI": "DOW",
             "^SOX": "필라델피아 반도체(SOX)", "^VIX": "VIX(공포지수)",
         }
+        brief_now = _now()
         idx_lines = []
+        idx_valid_n = 0
         for sym in index_list:
-            q = quotes.get(sym)
-            if not isinstance(q, dict):
-                continue
+            observed = _us_quote_observation(quotes.get(sym), now=brief_now)
             name = index_names_map.get(sym, sym)
-            pct = _finite_float(q.get("change_pct"))
-            price = _finite_float(q.get("price"), positive=True)
-            if pct is None or price is None:
+            if observed is None:
+                idx_lines.append(f"  - {name}: 가격·등락 미수집")
                 continue
-            idx_lines.append(f"  - {name}: {pct:+.2f}% ({price:,.1f})")
+            idx_valid_n += 1
+            pct = observed["pct"]
+            price = observed["price"]
+            idx_lines.append(
+                f"  - {name}: {pct:+.2f}% ({price:,.1f}) · {observed['date_label']}"
+            )
 
         bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
         bt_lines = []
+        bt_valid_n = 0
         for sym in bigtech:
-            q = quotes.get(sym)
-            pct = _finite_float(q.get("change_pct")) if isinstance(q, dict) else None
-            if pct is not None:
-                bt_lines.append(f"{sym} {pct:+.1f}%")
+            observed = _us_quote_observation(quotes.get(sym), now=brief_now)
+            if observed is None:
+                bt_lines.append(f"  - {sym} 자료 미확인")
+                continue
+            bt_valid_n += 1
+            bt_lines.append(
+                f"  - {sym} {observed['pct']:+.1f}% · {observed['date_label']}"
+            )
 
-        sector_lines = []
-        if sector_signals:
-            valid_sectors = []
-            for theme, sig in sector_signals.items():
-                if not isinstance(sig, dict):
-                    continue
-                boost = _finite_float(sig.get("boost"))
-                avg_s = _finite_float(sig.get("us_avg_pct"))
-                if boost is None or avg_s is None:
-                    continue
-                valid_sectors.append((theme, sig, boost, avg_s))
-            for theme, sig, boost, avg_s in sorted(
-                valid_sectors, key=lambda x: abs(x[2]), reverse=True,
-            )[:5]:
-                movers = sig.get("top_movers", [])
-                movers = movers[:3] if isinstance(movers, list) else []
-                sector_lines.append(
-                    f"  - {_html_text(theme, 50)}: 부스트 {boost:+.0f}점, "
-                    f"평균 {avg_s:+.1f}%, {_html_text(', '.join(map(str, movers)), 100)}"
-                )
+        brief_etfs = [
+            ("SMH", "반도체 ETF"), ("XLK", "기술 ETF"),
+            ("XLV", "헬스케어 ETF"), ("XBI", "바이오 ETF"),
+            ("XLE", "에너지 ETF"), ("URNM", "우라늄 ETF"),
+            ("LIT", "2차전지 ETF"), ("ITA", "방산 ETF"),
+        ]
+        etf_lines = []
+        for sym, name in brief_etfs:
+            observed = _us_quote_observation(quotes.get(sym), now=brief_now)
+            if observed is None:
+                continue
+            etf_lines.append(
+                f"  - {name}({sym}) {observed['pct']:+.1f}% · {observed['date_label']}"
+            )
 
         inputs: List[Dict] = [
             {"name": "미국 지수", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(idx_lines),
-             "detail": f"{len(idx_lines)}종"},
+             "source": "us_market_data", "valid": bool(idx_valid_n),
+             "detail": f"{idx_valid_n}/{len(index_list)}종"},
             {"name": "빅테크", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(bt_lines),
-             "detail": f"{len(bt_lines)}종"},
-            {"name": "US섹터→KR테마 매핑", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(sector_lines),
-             "detail": f"{len(sector_lines)}건"},
+             "source": "us_market_data", "valid": bool(bt_valid_n),
+             "detail": f"{bt_valid_n}/{len(bigtech)}종"},
+            {"name": "주요 ETF", "kind": "us", "as_of": us_date_str,
+             "source": "us_market_data", "valid": bool(etf_lines),
+             "detail": f"{len(etf_lines)}/{len(brief_etfs)}종"},
         ]
 
         # 국내 자료는 as_of 가 있을 때만 유효로 인정한다 (기준시각 없는 값은 신선도 미상)
@@ -1800,12 +1782,14 @@ class DailyReportGenerator:
         )
 
         fact_lines = ["<b>■ 확인된 가격 사실</b>"]
-        fact_lines.extend(idx_lines or ["  - 미국 지수 가격·등락 미수집"])
-        if bt_lines:
-            fact_lines.append("  - 빅테크: " + " / ".join(bt_lines))
-        if sector_lines:
-            fact_lines.append("  - 섹터 매핑:")
-            fact_lines.extend(sector_lines)
+        fact_lines.extend(idx_lines)
+        fact_lines.append("  - 빅테크:")
+        fact_lines.extend(bt_lines)
+        if etf_lines:
+            fact_lines.append("  - 관찰 ETF:")
+            fact_lines.extend(etf_lines)
+        else:
+            fact_lines.append("  - 관찰 ETF: 자료 미확인")
         fact_lines.append(f"<i>출처: Yahoo Finance · 시장 기준 {_html_text(us_date_str, 40)}</i>")
         condition_lines = ["", "<b>■ 추가 확인 조건</b>"]
         if valid_kr:

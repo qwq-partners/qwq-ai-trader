@@ -402,14 +402,15 @@ def test_sent_dispatch_without_brief_does_not_fall_back_to_generated(tmp_path):
     assert brief["text"] == "expert only"
 
 
-def test_source_only_sector_mapping_is_not_a_prediction_or_accuracy_sample():
+def test_unverified_sector_aggregate_is_not_a_prediction_or_accuracy_sample():
     from src.analytics import morning_brief_eval
     record = asyncio.run(_generator().build_morning_brief(
         quotes={'^GSPC': {'price': 6000, 'change_pct': -1}},
         sector_signals={'AI/반도체': {'boost': -5, 'us_avg_pct': -3, 'top_movers': []}},
         avg_pct=-1, us_date_str='2026.10.21', mood='약세',
     ))
-    assert 'AI/반도체' in record['text']
+    assert 'AI/반도체' not in record['text']
+    assert '부스트' not in record['text']
     assert record['claims']['sectors'] == []
     evaluated = morning_brief_eval.evaluate(record, {
         'date': record['kr_date'], 'kospi': {'close_change_pct': 0},

@@ -332,8 +332,8 @@ def test_f21_strong_us_up_without_kr_inputs_defers_kr_direction(monkeypatch):
 
     for banned in ("갭업 가능성", "갭상승", "갭 상승", "하방 압력"):
         assert banned not in report, banned
-    assert "미국 지수 평균" in report and "국내 자료 없음" in report
-    assert "판단 보류" in report
+    assert "기준일 미확인" in report and "개별 수치만 참고" in report
+    assert "한국 개장 방향은 이 자료만으로 판단하지 않음" in report
 
 
 def test_f21_all_index_quotes_missing_does_not_fabricate_flat_close(monkeypatch):
@@ -357,11 +357,8 @@ def test_f21_all_index_quotes_missing_does_not_fabricate_flat_close(monkeypatch)
     assert "판단 보류" in report or "판단 불가" in report
 
 
-def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
-    """리뷰 advisory(F21): '■ 한국 시장 영향' 섹터 매핑 블록은 방향을 단정하진
-    않지만 대상 시장·시간범위 표기가 없었다 — kr_inputs 없이는 헤더가 '미국
-    섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)'으로
-    바뀌어야 한다(정상 경로·차트동반 경로 모두 같은 sector_header 를 쓴다)."""
+def test_f21_internal_sector_boost_is_not_user_facing_direction(monkeypatch):
+    """테마 부스트는 캐시 입력으로만 유지하고 사용자 본문에서는 방향처럼 보이지 않는다."""
     monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
@@ -373,14 +370,12 @@ def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
     )
 
     report = asyncio.run(gen.generate_us_market_report(send_telegram=False))
-    assert "미국 섹터 → 국내 테마 매핑" in report
-    assert "국내 개장 반영 아님" in report
-    assert "<b>■ 한국 시장 영향</b>" not in report
+    assert "부스트" not in report
+    assert "한국 시장 영향" not in report
 
 
-def test_f21_strong_us_up_with_kr_inputs_keeps_existing_wording(monkeypatch):
-    """kr_inputs(as_of 포함)가 있으면 기존 관찰 포인트 문구를 허용한다 — 근거가
-    있는 주장은 막지 않는다."""
+def test_f21_kr_input_presence_alone_does_not_predict_open(monkeypatch):
+    """국내 자료가 있다는 사실만으로 한국 개장 방향을 만들지 않는다."""
     monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
@@ -393,7 +388,8 @@ def test_f21_strong_us_up_with_kr_inputs_keeps_existing_wording(monkeypatch):
     report = asyncio.run(gen.generate_us_market_report(
         send_telegram=False, kr_inputs=kr_inputs,
     ))
-    assert "갭업 가능성" in report
+    assert "갭업 가능성" not in report
+    assert "한국 개장 방향은 이 자료만으로 판단하지 않음" in report
 
 
 # ── F22: 날짜별 원문·발송문 보존, 과거 재평가는 실측 재라벨링 금지 ────────────

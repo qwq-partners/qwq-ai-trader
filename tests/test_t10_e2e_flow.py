@@ -233,7 +233,7 @@ def _run_morning_to_noon(monkeypatch, tmp_path):
     monkeypatch.setattr(llm_mod, "get_llm_manager", lambda: llm_0700)
 
     import src.analytics.us_market_chart as chart_mod
-    monkeypatch.setattr(chart_mod, "generate_combined_chart", lambda **kw: None)
+    monkeypatch.setattr(chart_mod, "generate_mobile_charts", lambda **kw: [], raising=False)
 
     kmd = _FakeKMD(
         kospi={"price": 2400.0, "change": -80.0, "open": 2450.0, "change_pct": -3.26},
