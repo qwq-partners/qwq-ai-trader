@@ -17,6 +17,7 @@ AI Trading Bot v2 - 배치 분석 엔진
 import asyncio
 import json
 import uuid
+from copy import deepcopy
 from dataclasses import field, dataclass, asdict
 from datetime import datetime, timedelta, time, date
 from decimal import Decimal
@@ -91,7 +92,7 @@ class PendingSignal:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "PendingSignal":
         # 이전 JSON 호환: 없는 필드는 기본값으로
-        data = d.copy()
+        data = deepcopy(d)
         data.setdefault("atr_pct", 0.0)
         data.setdefault("ovtm_price_chg_pct", 0.0)
         data.setdefault("ovtm_vol_ratio", 0.0)
@@ -596,6 +597,13 @@ class BatchAnalyzer:
                 "indicator_keys": sorted(indicators.keys()) if isinstance(indicators, dict) else [],
                 # 지표의 실제 관측 시각을 모르면 None — now 로 채우면 신선도 세탁이 된다
                 "indicators_as_of": _ind_as_of,
+                # 후보별 MRS·수급 근거는 공용 캐시에 없을 수 있다. 원래 값과 시각을
+                # 함께 고정하고 재시작 뒤에도 현재 캐시로 대체하지 않는다.
+                "indicator_snapshot": {
+                    "version": 1,
+                    "values": deepcopy(indicators) if isinstance(indicators, dict) else {},
+                    "as_of": _ind_as_of,
+                },
                 "score": sig.score,
             },
             trigger=trigger,
@@ -1417,6 +1425,7 @@ class BatchAnalyzer:
                     _stop = Decimal(str(max(float(_stop), _tight_stop)))
                     _strength = SignalStrength.NORMAL
 
+                _indicators, _ind_source, _ind_as_of = self._execution_indicators(sig)
                 signal = Signal(
                     symbol=sig.symbol,
                     side=OrderSide.BUY,
@@ -1444,8 +1453,10 @@ class BatchAnalyzer:
                         "intraday_kospi_pct": round(self._intraday_kospi_pct, 2),
                         "sector": _sector,
                         "gap_pct": round(gap_pct, 2),
-                        # LLM 이중검증용 지표 주입 (스크리너 캐시)
-                        "indicators": self._screener._indicators._cache.get(sig.symbol, {}),
+                        # 선정 당시 근거를 보존하며 구 JSON의 캐시 폴백은 출처로 구분한다.
+                        "indicators": _indicators,
+                        "indicators_source": _ind_source,
+                        "indicators_as_of": _ind_as_of,
                         # 현재가 조회 시각 (T11) — shadow 검증기가 호가 신선도를 판정한다
                         "quote_as_of": _quote_at.isoformat(),
                         # 조건부 진입계획 원본 (T11) — 주문 직전 shadow 검증기가 읽는다.
@@ -1498,6 +1509,37 @@ class BatchAnalyzer:
                 f"[배치분석] 다음 윈도우 이월 {len(self._pending)}개 ({_stat})"
             )
         self._save_json()
+
+    def _execution_indicators(self, sig: PendingSignal):
+        """선정 스냅샷 복원. 새 근거 손상은 옛 JSON의 캐시 폴백과 구분한다."""
+        refs = sig.inputs_ref
+        if not isinstance(refs, dict):
+            return {}, "invalid_snapshot", None
+        if "indicator_snapshot" in refs:
+            snapshot = refs["indicator_snapshot"]
+            if (not isinstance(snapshot, dict)
+                    or type(snapshot.get("version")) is not int
+                    or snapshot["version"] != 1
+                    or not isinstance(snapshot.get("values"), dict)):
+                logger.warning(f"[배치분석] {sig.symbol} 지표 스냅샷 손상/미지원 — 결측 유지")
+                return {}, "invalid_snapshot", None
+            as_of = snapshot.get("as_of")
+            if as_of is not None:
+                try:
+                    datetime.fromisoformat(as_of)
+                except (TypeError, ValueError):
+                    logger.warning(f"[배치분석] {sig.symbol} 지표 스냅샷 시각 손상 — 결측 유지")
+                    return {}, "invalid_snapshot", None
+            return deepcopy(snapshot["values"]), "pending_snapshot", as_of
+
+        # 옛 JSON에만 기존 캐시 동작을 유지한다. 옛 계획 시각을 현재 캐시의
+        # 관측 시각으로 붙이지 않고, 캐시 시각 자체도 없으면 None으로 남긴다.
+        provider = self._screener._indicators
+        values = provider._cache.get(sig.symbol, {})
+        timestamps = getattr(provider, "_cache_ts", {})
+        stamp = timestamps.get(sig.symbol) if isinstance(timestamps, dict) else None
+        as_of = stamp.isoformat() if isinstance(stamp, datetime) else None
+        return deepcopy(values), "legacy_cache", as_of
 
     async def _refresh_composite_cache(self):
         """복합 트레일링용 MA5/전일저가 캐시 갱신 (일 1회)"""
@@ -2346,6 +2388,9 @@ class BatchAnalyzer:
                 reason=f"VCP 돌파: {', '.join(c.reasons[:3])}",
                 metadata={
                     "candidate_name": c.name,
+                    # SEPA/RSI2와 동일하게 후보 원본을 전달해야 대기 스냅샷과
+                    # 실행 교차검증에서 등락률·ATR 등 선정 근거가 유지된다.
+                    "indicators": deepcopy(c.indicators),
                     "atr_pct": atr_check,
                     "vcp_score": c.indicators.get("vcp_score", 0),
                     "entry_mode": "breakout",
