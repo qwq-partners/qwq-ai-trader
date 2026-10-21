@@ -46,7 +46,7 @@ _CAPTURE_FIELDS = frozenset((
     "journal_path", *_RESOURCE_FIELDS, "open_timeout_seconds", "close_timeout_seconds",
     "channels", "selection_basis", "entry_gate_trace", "frame_diagnostics",
 ))
-_OPTIONAL_CAPTURE_FIELDS = frozenset(("record_allocations", "record_max_bytes"))
+_OPTIONAL_CAPTURE_FIELDS = frozenset(("record_allocations", "record_max_bytes", "journal_budget_version"))
 _MARKOUT_FIELDS = frozenset(("version", "policy_ref", "fixed_at", "horizon_seconds",
                              "max_delay_seconds", "anchor"))
 

@@ -1,7 +1,8 @@
 """명시한 첫 스캔 관측의 레코드 예산. 파일·운영 상태 접근 없음."""
 from __future__ import annotations
 
-from .entry_observation_journal import MAX_LINE_BYTES
+from .entry_observation_journal import (MAX_LINE_BYTES, BOUNDED_ENVELOPE_VERSION,
+                                       CONTROL_ROW_MAX_BYTES, journal_record_envelope_bytes)
 from .entry_gate_trace import validate_settings as validate_gate
 from .selection_basis import validate_settings as validate_selection
 
@@ -11,6 +12,11 @@ FIRST_SCAN_RETAINED_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 
 def first_scan_record_byte_limits(settings):
     """명시 종류별 직렬화 상한. 선정 근거는 전체 레코드 상한을 유지한다."""
+    if 'journal_budget_version' in settings and (
+            settings['journal_budget_version'] != BOUNDED_ENVELOPE_VERSION
+            or settings.get('version') != FIRST_SCAN_VERSION
+            or 'record_allocations' not in settings or 'record_max_bytes' not in settings):
+        raise ValueError('명시 journal budget에는 첫 스캔 종류별 개수/바이트 계약 필요')
     if 'record_max_bytes' not in settings:
         return None
     if settings.get('version') != FIRST_SCAN_VERSION or 'record_allocations' not in settings:
@@ -28,6 +34,9 @@ def first_scan_record_byte_limits(settings):
 def first_scan_journal_bound(settings, limits):
     """종류별 개수·바이트를 함께 강제할 때만 가중 저장 예산을 사용한다."""
     byte_limits = first_scan_record_byte_limits(settings)
+    if 'journal_budget_version' in settings:
+        envelope = journal_record_envelope_bytes(settings['buffer_capacity'])
+        return sum(limits[k] * (byte_limits[k] + envelope) for k in limits) + 2 * CONTROL_ROW_MAX_BYTES
     if byte_limits is None:
         return settings['buffer_capacity'] * (settings['max_record_bytes'] + 2048) + 2048
     return sum(limits[k] * (byte_limits[k] + 2048) for k in limits) + 2048

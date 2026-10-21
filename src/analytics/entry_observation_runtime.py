@@ -412,6 +412,8 @@ class CapturePlan:
             expected.add('record_allocations')
             if 'record_max_bytes' in s:
                 expected.add('record_max_bytes')
+            if 'journal_budget_version' in s:
+                expected.add('journal_budget_version')
         if type(s) is dict and s.get('version') == LLM_VERSION:
             expected.add('record_allocations')
             if 'rest_market_state_evidence' in s:
@@ -714,6 +716,7 @@ class ObservationRuntime:
         s = plan.settings
         self.journal = await ObservationJournal.open(self.buffer, s['journal_path'],
             study_ref=s['study_ref'], study_sha256=plan.study_sha256,
+            budget_version=s.get('journal_budget_version'),
             **{k:s[k] for k in ('queue_capacity', 'batch_size', 'max_bytes', 'max_record_bytes', 'open_timeout_seconds')})
         sentinel = object()
         names = ('_quote_subscription_owner', '_quote_lifecycle_lock', '_quote_maintenance_task',
@@ -862,6 +865,7 @@ class ObservationRuntime:
                 and connected and snapshot['operational_missing'] == 0),
             record_allocations=dict(b._record_limits),
             record_max_bytes=(dict(b._record_byte_limits) if b._record_byte_limits is not None else None),
+            **({'journal_budget_version': j._budget_version} if j._budget_version is not None else {}),
             record_counts={key: b._record_counts.get(key, 0) for key in b._record_limits},
             buffer_capacity=b.capacity, queue_capacity=j._queue.maxsize, batch_size=j._batch_size,
             max_record_bytes=j._max_record_bytes, max_bytes=j._max_bytes,
