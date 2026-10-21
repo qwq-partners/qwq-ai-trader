@@ -1263,7 +1263,7 @@ class StockScreener:
         daily_cache: Optional[Dict] = None,
     ) -> None:
         """
-        거래량 비율 보완 (일봉 캐시 재사용, 추가 API 호출 없음)
+        거래량 비율 보완 (스캔 내 일봉 캐시 재사용, 미조회 종목만 조회)
 
         기관/외국인 순매수 스크리너는 vol_inrt 필드가 없어 volume_ratio=1.0(기본값)으로
         들어온다. _apply_momentum_filter 가 채운 daily_cache 에서 전일 거래량을 꺼내
@@ -1288,9 +1288,10 @@ class StockScreener:
 
             daily_prices = daily_cache.get(symbol)
             if not daily_prices:
-                # 캐시 미스: broker 에서 직접 조회 (최대 5일치만)
+                # 뒤 섹터 보정으로 ATR 상위 20위에 새로 들어올 수 있으므로,
+                # 변동성 필터와 같은 30일을 보존한다. 5일 캐시는 ATR을 건너뛰게 한다.
                 try:
-                    daily_prices = await self._broker.get_daily_prices(symbol, days=5)
+                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
                     daily_cache[symbol] = daily_prices
                 except Exception:
                     continue
@@ -2183,7 +2184,7 @@ class StockScreener:
         _observe_modifier("end", "rs_ranking", all_stocks)
 
         # ============================================================
-        # 5-2. 거래량 비율 보완 — 일봉 캐시 재사용 (추가 API 호출 없음)
+        # 5-2. 거래량 비율 보완 — 일봉 캐시 재사용 (미조회 종목은 30일 조회)
         #      기관/외국인 스크리너는 vol_inrt 없이 기본값 1.0 으로 들어오므로
         #      전일 거래량 대비 오늘 누적 거래량 배율로 정확히 채운다.
         # ============================================================
