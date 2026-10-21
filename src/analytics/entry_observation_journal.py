@@ -31,6 +31,8 @@ from .kis_rest_market_state import SNAPSHOT_FIELDS
 
 MAX_LINE_BYTES = 1024 * 1024
 ZERO_HASH = "0" * 64
+BOUNDED_ENVELOPE_VERSION = 'bounded-envelope-v1'
+CONTROL_ROW_MAX_BYTES = 16384
 FIELDS = {
     "scan": "scan_id observed_at session route_origin population_scope candidates scan_admission_ref selection_basis_expected selection_basis_max_candidates selection_basis_max_terms",
     "rest_quote": "candidate_id observed_at requested_at source source_as_of quote market_state_snapshot rest_market_state_status",
@@ -77,6 +79,19 @@ def _json(value):
 
 def _digest(value):
     return hashlib.sha256(_json(value)).hexdigest()
+
+
+def journal_record_envelope_bytes(capacity):
+    """UTF-8 payload 바깥의 최대 행 비용: 고정 키/해시·최대 순번·개행.
+
+    payload는 재인코딩된 문자열이 아니라 JSON 객체로 들어가므로 중괄호 두
+    바이트를 뺀 나머지가 부가 비용 상한이다. 봉인 순번까지 포함하므로 자릿수가
+    바뀌는 경계에서는 마지막 record보다1B 여유가 있다. writer도 같은 상한을 강제한다.
+    """
+    _positive(capacity, 'capacity')
+    row = {'row': capacity + 2, 'previous_hash': ZERO_HASH, 'kind': 'record',
+           'payload': {}, 'hash': ZERO_HASH}
+    return len(_json(row)) + 1 - 2
 
 
 def _timestamp():
@@ -183,7 +198,8 @@ class ObservationJournal:
 
     @classmethod
     async def open(cls, buffer, path, *, study_ref, study_sha256, queue_capacity,
-                   batch_size, max_bytes, max_record_bytes, open_timeout_seconds=5.0):
+                   batch_size, max_bytes, max_record_bytes, open_timeout_seconds=5.0,
+                   budget_version=None):
         _timeout(open_timeout_seconds)
         if (not isinstance(buffer, EntryObservationBuffer) or buffer._records
                 or buffer._journal_sink is not None or buffer._capture_closed):
@@ -199,8 +215,13 @@ class ObservationJournal:
             _positive(value, name)
         if batch_size > queue_capacity or max_record_bytes > MAX_LINE_BYTES - 2048:
             raise ValueError("batch/레코드 크기 한도 위반")
+        if budget_version not in (None, BOUNDED_ENVELOPE_VERSION):
+            raise ValueError('지원하지 않는 journal budget version')
         self = cls()
         self.buffer, self.path = buffer, path
+        self._budget_version = budget_version
+        self._envelope_bytes = (journal_record_envelope_bytes(buffer.capacity)
+                                if budget_version is not None else None)
         self._queue = queue.Queue(maxsize=queue_capacity)
         self._batch_size, self._max_bytes, self._max_record_bytes = batch_size, max_bytes, max_record_bytes
         self._ready, self._closing, self._abort = threading.Event(), threading.Event(), threading.Event()
@@ -220,6 +241,9 @@ class ObservationJournal:
         if buffer.frame_diagnostics_settings is not None:
             self._header.update(format="entry-observation-journal-v2",
                                 frame_diagnostics=dict(buffer.frame_diagnostics_settings))
+        if (budget_version is not None
+                and len(_json(self._header)) + self._envelope_bytes > CONTROL_ROW_MAX_BYTES):
+            raise ValueError('명시 원장 시작 행 예산 초과')
         self._thread = threading.Thread(target=self._run, name="entry-observation-journal", daemon=True)
         self._thread.start()
         try:
@@ -294,6 +318,14 @@ class ObservationJournal:
                "kind": kind, "payload": payload}
         checksum = _digest(row)
         line = _json({**row, "hash": checksum}) + b"\n"
+        if self._budget_version is not None:
+            if kind == 'record':
+                if (self._row_count > self.buffer.capacity
+                        or len(line) - len(_json(payload)) > self._envelope_bytes):
+                    raise ValueError('명시 원장 순번/envelope 예산 초과')
+            elif len(line) > CONTROL_ROW_MAX_BYTES:
+                # 시작/봉인에 각각 별도 공간을 보장한다. 잘라서 정상 봉인하지 않는다.
+                raise ValueError('명시 원장 제어 행 예산 초과')
         if len(line) > MAX_LINE_BYTES or self._bytes + len(line) > self._max_bytes:
             raise ValueError("원장 파일/행 크기 한도 초과")
         self._file.write(line)
