@@ -117,3 +117,74 @@ HEAD/active/복구/미체결/운영 overrides·매수중지 지문을 확인한�
 본문/캐시의 두 자리 표시로 통일했다. 별도 회귀1개로 실패 재현 후 수정하고
 관련190검사·격리0을 확인했다. 독립 재리뷰는 직접82검사·격리0으로 승인했다.
 이는 최초189검사와 구분되는 후속이다.
+
+
+## 10월22일 리뷰 대체 승인과 단발 배포
+
+### PLAN
+
+사용자가 이 대화에서 **“독립 Codex 리뷰 대체 승인”**을 명시했다. 이전 Claude
+인증 실패와 같은 공급자 독립 리뷰라는 제한은 보존하며 전역 정책 자체는 바꾸지 않는다.
+PR #240의 최종 `48aceea6b77bdc8bb7c4cc088530e38d37cbf47f`는 전체CI
+8,652 passed /2 skipped /2 xfailed, 운영 상태·외부 네트워크 접근 시도0,
+문법·비밀정보 검사 통과다. 병합 `072f4c9efa5c86da2fe8d5ca1a8cadc88d7dcbe7`와
+트리 차이0을 확인했다. [main CI](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/39679347297)도 **8,652 passed /2 skipped /2 xfailed·격리0·문법/비밀정보 검사 통과**를 확인했다.
+
+배포는 **2026-10-22 15:35 KST에 한 번**, 위 병합 SHA로만 실행한다.
+뒤에 들어오는 문서 커밋은 배포하지 않는다. 운영 `84fc2b3a`와 오전09:25–09:51
+고정 관측의 소스/설정/예약을 변경하지 않는다. 봉인은 수집 종료 근거이며
+자료 완전성·연구 성공·순수익 검증을 뜻하지 않는다.
+
+### DO — 예약 실행 계약
+
+앱의 `automation_update` 도구는 현재 세션에 제공되지 않아 호스트 cron을 사용한다.
+서버 시간대Asia/Seoul·cron active를 확인했다. 저장소 밖 실행 파일은
+`~/.local/share/qwq-deploy/report-deploy-20261022.py`, 결과 디렉터리는
+`~/.local/state/qwq-deploy/report-20261022/`이다. 해당 날짜15:35 전에는 거부하며,
+실행 시도는 성공/실패 모두 한 번 소비한다. 실행 후 자기 cron 항목만 제거한다.
+
+공용 배포 잠금을 **검사 전부터 최종 사후 검사까지** 보유한다. 자식의 기존
+`local_deploy.sh`에는 이번 시도의 내부 잠금 파일을 전달하고 공용 잠금FD를 상속해
+부모 종료 때도 자식 작업이 남아 있는 동안 정상적인 다른 배포를 막는다.
+운영 HEAD·봇 active·관측 서비스 종료·미체결0·복구ready·매수중지 파일·해당 원장
+마지막seal을 확인한다. 기존 배포 도구의 전체verify→재시작→초기헬스체크와
+실패 시 롤백을 그대로 사용한다.
+
+150초 대기 뒤 HEAD를 새로 읽고 active/복구/미체결/overrides·매수중지 지문을 확인한다.
+그 시점의 단일 스냅샷이며 연속 정상 가동을 증명하지 않는다. 1시간 시간초과에는
+같은 실행 그룹에SIGTERM 후 부모 종료 여부와 무관하게 남은 그룹을SIGKILL로 정리한다.
+시간초과나 사후 검사 실패는 수동 점검 상태로 기록하고 자동 재시도하지 않는다.
+`local_deploy`의 초기 실패 롤백과150초 후 점검 실패를 구분한다.
+
+### SEE — 설치와 실행 구분
+
+실행기 최종 SHA256은 `440e1e97b3b5b8130d9b329405f72a9df4053923c224e548ff07b74af74f841a`다.
+독립 리뷰에서 최종 HEAD, 배포 잠금, 시간초과 하위 그룹, 영수증 저장 실패 처리
+4건을 보완했고 재검토는 미해결 P0/P1/P2 없음으로 승인했다. 독립 직접 검사18건
+(실행기7·기존 배포/롤백9·저장 실패2), 별도 가드10건과 실제 합성 프로세스의
+종료 동작을 확인했다. 코디네이터도 실행기7검사를 직접 통과했다.
+요청 Astra/xhigh, 실제 모델·유효 effort 메타데이터는 미노출이다.
+이 검증은 운영 자료/API·실제 배포·재시작·cron 변경 없이 임시 경로에서 수행했다.
+
+**2026-10-22 06:39:57 KST 단발 예약 설치 완료, 실제 배포 미실행.**
+ubuntu crontab에 아래 한 항목을 등록했고 기존 항목 보존·새 항목1개·cron active·
+서버Asia/Seoul·설치 스크립트 지문/0700 권한을 확인했다.
+
+```cron
+35 15 22 10 * /usr/bin/python3 /home/ubuntu/.local/share/qwq-deploy/report-deploy-20261022.py --target 072f4c9efa5c86da2fe8d5ca1a8cadc88d7dcbe7 >> /home/ubuntu/.local/state/qwq-deploy/report-20261022/runner.log 2>&1 # qwq-report-deploy-20261022
+```
+
+- 설치 영수증: `~/.local/state/qwq-deploy/report-20261022/install.json`.
+- 이전 crontab 백업은 같은 디렉터리 `crontab-before.txt`에 비공개 보존한다.
+- 실제 실행 후 `attempt.json`, `result.json`, `runner.log`, `deploy.log`를 확인한다.
+  설치 확인 시 시도/결과 파일은 존재하지 않았다. 자동 재시도는 없다.
+- 운영 HEAD `84fc2b3a`, PID2700895, active/NRestarts0, 기존 overrides 수정과
+  매수 중지 보존을 확인했다.09:25 관측 타이머 active/동일시각이다.
+- 설치 전 읽기 전용 점검에서 미체결0·복구ready를 확인했으며 실행 직전에 다시 검사한다.
+- 배포 뒤150초 상태 확인에 통과하면 `deployed_healthy`; 가드 미충족은 `blocked`,
+  초기 배포 실패는 `deploy_failed`, 사후 불일치는 `postcheck_failed`, 시간초과 등은
+  `failed_manual_inspection_required`로 남긴다. 종료코드2는 기존 도구의 롤백 실패이며
+  즉시 점검 대상이다. 영수증 저장/cron 정리 오류도 별도 필드와 비정상 종료로 남는다.
+
+이 문서 후속 커밋은 고정 배포 대상에 포함하지 않는다. 예약 성공과 실제 배포 성공을
+구분하며, 운영 적용 완료 여부는 오후 실행 영수증으로만 판단한다.
