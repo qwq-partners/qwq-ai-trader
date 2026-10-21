@@ -95,7 +95,8 @@ def high_volume_settings(study, *, market_state_quota=65000):
 
 
 async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_factory=None,
-                         cycles=1205, high_volume=False, market_state_quota=65000):
+                         cycles=1205, high_volume=False, market_state_quota=65000,
+                         producer_checkpoint=None):
     def change(study):
         if high_volume:
             high_volume_settings(study, market_state_quota=market_state_quota)
@@ -177,6 +178,8 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_facto
             await receive(feed, coordinator, frame(BOOK, '800001'))
             if tick % 20 == 0:
                 await asyncio.sleep(0)
+            if producer_checkpoint is not None:
+                await producer_checkpoint(runtime, tick)
         assert engine_prices == ['800001'] * cycles
         assert not runtime.buffer.llm_admission and not runtime.buffer._llm_symbols
         retained = runtime.buffer.retained_memory_bytes
