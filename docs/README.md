@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10월22일 보고서 배포 예약 설치 완료:** [리뷰 대체 승인·고정 SHA·15:35 단발 예약](superpowers/plans/2026-10-22-report-content.md#10월22일-리뷰-대체-승인과-단발-배포). PR #240 병합/CI 통과, 운영은 오전 관측을 보존하며 실제 배포 전 상태다.
+
 > [거래 보고서 본문·근거·다음 확인 계약](agents/reporting.md) · [10월22일 전체 보고 개선 및 배포 상태](superpowers/plans/2026-10-22-report-content.md). 기존 관측 예약과 실제 배포 상태를 구분한다.
 
 > **10월21일 전문가 브리핑 개선:** [Plan → Do → See·근거·검증](superpowers/plans/2026-10-21-briefing-reliability.md) · [전문가 시스템 계약](agents/expert-system.md). 시장 입력과 참고 의견, 당일 등락과 누적 추세를 구분한다. 운영 미배포이며10월22일 고정 예약은 유지한다.
