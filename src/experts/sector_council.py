@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +44,21 @@ _QUANT_SCALE = 10.0
 # 정량 블렌드 가중 — 5일(단기 반등) 40% + 20일(추세) 60% (2026-08-07)
 _R5_WEIGHT = 0.4
 _R20_WEIGHT = 0.6
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    """Return usable numeric evidence, rejecting bool, NaN, and infinity."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
+
+
+def _evidence_date(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
+def _evidence_sessions(value: Any) -> Optional[int]:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 class SectorCouncilExpert(ExpertAgent):
@@ -70,8 +86,9 @@ class SectorCouncilExpert(ExpertAgent):
         scores: Dict[str, Dict[str, Any]] = {}
         for sector in SECTOR_ETF_MAP:
             rets = momentum.get(sector) or {}
-            r20 = rets.get("r20")
-            r5 = rets.get("r5")
+            r1 = _finite_number(rets.get("r1"))
+            r20 = _finite_number(rets.get("r20"))
+            r5 = _finite_number(rets.get("r5"))
             # 블렌드: 5일 40% + 20일 60% (r5 없는 구버전 캐시면 20일 단독)
             if isinstance(r20, (int, float)):
                 if isinstance(r5, (int, float)):
@@ -85,9 +102,7 @@ class SectorCouncilExpert(ExpertAgent):
                 if mom is not None else None
             )
             q_entry = qual.get(sector) or {}
-            q_score = q_entry.get("score")
-            if not isinstance(q_score, (int, float)):
-                q_score = None
+            q_score = _finite_number(q_entry.get("score"))
 
             if quant is None and q_score is None:
                 continue
@@ -98,15 +113,27 @@ class SectorCouncilExpert(ExpertAgent):
             else:
                 final = quant * 0.6 + q_score * 0.4
 
+            raw_quant = mom * _QUANT_SCALE if mom is not None else None
             scores[sector] = {
                 "score": int(max(-100, min(100, final))),
                 "momentum": round(mom, 2) if mom is not None else None,  # 블렌드값
-                "r5": round(r5, 2) if isinstance(r5, (int, float)) else None,
-                "r20": round(r20, 2) if isinstance(r20, (int, float)) else None,
+                "r1": round(r1, 2) if r1 is not None else None,
+                "r5": round(r5, 2) if r5 is not None else None,
+                "r20": round(r20, 2) if r20 is not None else None,
+                "as_of": _evidence_date(rets.get("as_of")),
+                "source": rets.get("source") if isinstance(rets.get("source"), str) and rets.get("source") else "unknown",
+                "r5_sessions": _evidence_sessions(rets.get("r5_sessions")),
+                "r20_sessions": _evidence_sessions(rets.get("r20_sessions")),
+                "r5_start": _evidence_date(rets.get("r5_start")),
+                "r20_start": _evidence_date(rets.get("r20_start")),
                 "reason": str(q_entry.get("reason", ""))[:80],
                 # 정량 축 부재 = 뉴스 단독 점수 — 소비처에서 낮게 신뢰해야 함
                 # (2026-08-07 반도체 +49 사례: ETF 캐시 부재로 뉴스 반등론만 반영)
                 "qual_only": quant is None,
+                # 정성 재료가 없어 ETF 수익률만으로 계산된 점수다.
+                "quant_only": quant is not None and q_score is None,
+                # 최종 가중 점수와 별개로, 정량 원점수는 ±100에서 잘렸음을 밝힌다.
+                "score_saturated": raw_quant is not None and abs(raw_quant) >= 100.0,
             }
 
         if not scores:
@@ -115,6 +142,8 @@ class SectorCouncilExpert(ExpertAgent):
                 findings=["섹터 데이터 수집 실패 (ETF 캐시·Perplexity 모두 부재)"],
                 sectors=[], raw={"sector_scores": {}, "qual_ok": bool(qual)},
                 valid_hours=1,
+                data_status="insufficient",
+                missing_inputs=["섹터 ETF 가격 모멘텀", "섹터 뉴스 재료"],
             )
 
         # 전문가 레벨 점수 = 섹터 평균 (breadth) — 체제 집계에는 안 쓰이고 표시용
@@ -129,6 +158,18 @@ class SectorCouncilExpert(ExpertAgent):
         quant_n = sum(1 for v in scores.values() if v["momentum"] is not None)
         if quant_n == 0:
             confidence = min(confidence, 0.5)
+
+        qual_n = sum(1 for sector in SECTOR_ETF_MAP if _finite_number((qual.get(sector) or {}).get("score")) is not None)
+        missing_inputs: List[str] = []
+        if quant_n == 0:
+            missing_inputs.append("섹터 ETF 가격 모멘텀")
+        elif quant_n < len(SECTOR_ETF_MAP):
+            missing_inputs.append(f"섹터 ETF 가격 모멘텀 ({quant_n}/{len(SECTOR_ETF_MAP)})")
+        if qual_n == 0:
+            missing_inputs.append("섹터 뉴스 재료")
+        elif qual_n < len(SECTOR_ETF_MAP):
+            missing_inputs.append(f"섹터 뉴스 재료 ({qual_n}/{len(SECTOR_ETF_MAP)})")
+        data_status = "partial" if missing_inputs else "ok"
 
         ranked = sorted(scores.items(), key=lambda x: -x[1]["score"])
         findings: List[str] = []
@@ -149,6 +190,8 @@ class SectorCouncilExpert(ExpertAgent):
             sectors=[s for s, v in scores.items() if abs(v["score"]) >= 30],
             raw={"sector_scores": scores, "qual_ok": bool(qual)},
             valid_hours=3,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
 
     @staticmethod

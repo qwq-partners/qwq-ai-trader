@@ -259,13 +259,8 @@ def test_news_curator_symbol_sentiment_dedups_same_url_article():
     assert data["item_ids"] == ["https://n.news/1"]
 
 
-def test_news_curator_market_analyze_does_not_share_symbol_url_dedup():
-    """R-A r3 blocking #1 (2026-09-15) 수정 확인: URL 선행 dedup을 종목별 경로
-    (get_symbol_sentiment) 전용으로 옮겼으므로, 시장 뉴스 경로(_analyze)는
-    046277f(도입 전) 그대로 Jaccard만 적용한다 — 같은 URL이라도 헤드라인 토큰
-    교집합이 낮으면(Jaccard < 0.6) 1건으로 뭉개지지 않고 2건 그대로 집계돼야 한다.
-    이전 버전(95afccc)은 공유 _deduplicate에 URL dedup이 섞여 있어 1건으로
-    잘못 집계됐다(그 값을 '특성화'로 잘못 고정한 것이 이 테스트가 대체하는 이전 버전)."""
+def test_news_curator_market_analyze_dedups_same_url():
+    """2026-10-21 approved repair: one article must not gain duplicate market votes."""
     from src.experts.news_curator import NewsCurator, NewsItem
 
     curator = NewsCurator(ExpertConfig())
@@ -286,7 +281,7 @@ def test_news_curator_market_analyze_does_not_share_symbol_url_dedup():
     curator._fetch_global_speculative = _global
 
     opinion = asyncio.run(curator._analyze())
-    assert opinion.raw_evidence["item_count"] == 2
+    assert opinion.raw_evidence["item_count"] == 1
 
 
 def test_news_analyst_evidence_and_limitations_reflect_dedup():

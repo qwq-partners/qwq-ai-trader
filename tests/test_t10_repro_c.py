@@ -165,10 +165,10 @@ def test_f19_expert_direction_axis_never_recorded(monkeypatch, tmp_path):
         ledger_path=tmp_path / "morning_brief_eval.jsonl",
     ))
     assert record is not None
-    assert record["expert_direction"]["hit"] is not None, (
-        f"07:30 이 실제로 계산·발송한 전문가 종합판단(+2)이 브리프 캐시로 되돌아가지 "
-        f"않아 저녁 평가가 '미기록(hit=None)'으로 고정됐다: {record['expert_direction']}"
-    )
+    assert record["expert_direction"]["hit"] is None
+    assert "체제 보정" in record["expert_direction"]["reason"]
+    assert "미기록" not in record["expert_direction"]["reason"]
+
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -37,7 +37,7 @@ class KREconomyExpert(ExpertAgent):
         # 2) yfinance KRW + KOSPI 보조
         krw_state = await self._fetch_krw_state()
 
-        # 3) 점수 계산 (룰 + LLM 종합)
+        # 3) 확인된 숫자 입력의 규칙 점수 (검색 문장 방향 가산 없음)
         score = 0
         findings: List[str] = []
 
@@ -51,25 +51,10 @@ class KREconomyExpert(ExpertAgent):
             elif krw < 1300:
                 score += 5
 
-        # macro_text에 단서 추출
+        # Search snippets are not verified directional evidence. In particular
+        # "수출 증가 없음" or "금리 인하 불가" cannot generate a positive score.
         if macro_text:
-            findings.append(f"한국 거시: {macro_text[:200]}")
-            # 수출 증가 단서
-            t = macro_text.lower()
-            if "수출" in macro_text and ("증가" in macro_text or "yoy +" in t or "회복" in macro_text):
-                score += 8
-                findings.append("수출 모멘텀 회복 시그널")
-            if "금리 인하" in macro_text or "rate cut" in t:
-                score += 6
-                findings.append("금리 인하 기대")
-            if "부동산" in macro_text and ("위험" in macro_text or "부실" in macro_text):
-                score -= 10
-                findings.append("부동산 PF 리스크 부각")
-
-        # 4) LLM 종합 한 줄
-        llm_summary = await self._llm_synthesize(macro_text, krw_state)
-        if llm_summary:
-            findings.insert(0, llm_summary)
+            findings.append("한국 거시 검색 자료 수집됨 — 방향 검증 전, 점수 미반영")
 
         bias = (
             RegimeBias.BULL if score > 10
@@ -78,15 +63,14 @@ class KREconomyExpert(ExpertAgent):
         )
         confidence = min(0.7, 0.3 + len(findings) * 0.08)
 
-        # 2026-09-15 (T10 F16): score가 실제로 참조하는 두 입력(원/달러, 한국 거시
-        # 컨텍스트)이 둘 다 결측이면 "모른다"는 뜻 — insufficient로 표시한다.
+        # 환율 숫자가 없으면 검색 문장만으로 평가 가능한 입력을 대체하지 않는다.
         missing_inputs: List[str] = []
         if not isinstance(krw, (int, float)):
             missing_inputs.append("원/달러 환율")
         if not macro_text:
             missing_inputs.append("한국 거시 컨텍스트(검색)")
 
-        if len(missing_inputs) == 2:
+        if not isinstance(krw, (int, float)):
             data_status = "insufficient"
         elif missing_inputs:
             data_status = "partial"

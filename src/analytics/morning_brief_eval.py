@@ -59,6 +59,8 @@ def _expert_abstain_reason(expert: Optional[Dict]) -> str:
     """집계의 무보정(0)은 보합 예측이 아니다. 생산자와 같은 커버리지 기준 사용."""
     if not expert:
         return "전문가 종합판단 미기록"
+    if expert.get("interpretation") == "regime_adjustment_not_forecast":
+        return "체제 보정 점수 — 당일 방향 예측으로 평가하지 않음"
     from ..experts.orchestrator import ExpertOrchestrator
 
     valid_n = expert.get("valid_n")

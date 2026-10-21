@@ -72,14 +72,14 @@ class GlobalMicroExpert(ExpertAgent):
                 sectors.append("반도체")
             elif smh < -3.0:
                 score -= 10
-                findings.append(f"반도체 ETF(SMH) {smh:.1f}%")
+                findings.append(f"반도체 ETF(SMH) {smh:.1f}% (5일)")
 
         # 배터리
         lit = sector_returns.get("battery")
         if isinstance(lit, (int, float)):
             if lit > 4.0:
                 score += 8
-                findings.append(f"리튬·배터리 ETF +{lit:.1f}%")
+                findings.append(f"리튬·배터리 ETF +{lit:.1f}% (5일)")
                 sectors.append("2차전지")
             elif lit < -5.0:
                 score -= 5
@@ -96,33 +96,18 @@ class GlobalMicroExpert(ExpertAgent):
         if isinstance(copper, (int, float)):
             if copper > 4.5:
                 score += 5
-                findings.append(f"구리 ${copper:.2f} (경기 확장)")
+                findings.append(f"구리 ${copper:.2f} (현재 수준)")
                 sectors.append("산업금속")
         wti = sector_returns.get("wti")
         if isinstance(wti, (int, float)):
             if wti > 90:
                 score -= 5
-                findings.append(f"WTI ${wti:.1f} (인플레 압박)")
+                findings.append(f"WTI ${wti:.1f} (현재 수준)")
 
-        # 산업 텍스트 단서
+        # Unstructured search prose is context, not directional evidence.
+        # Mentioning demand/orders (including cancellations) cannot earn points.
         if industry_text:
-            t = industry_text.lower()
-            if "hbm" in t and ("강세" in industry_text or "수주" in industry_text or "demand" in t):
-                score += 8
-                findings.append("HBM 수요 견조 — SK하이닉스/삼성 수혜")
-                if "반도체" not in sectors:
-                    sectors.append("반도체")
-            if "lng" in t or "shipbuild" in t or "조선" in industry_text:
-                if "수주" in industry_text or "order" in t:
-                    score += 5
-                    findings.append("조선 LNG/방산 수주 모멘텀")
-                    sectors.append("조선")
-            findings.append(f"산업: {industry_text[:150]}")
-
-        # LLM 종합 한 줄
-        llm_finding = await self._llm_synthesize(industry_text, sector_returns)
-        if llm_finding:
-            findings.insert(0, llm_finding)
+            findings.append("산업 검색 자료 수집됨 — 방향 검증 전, 점수 미반영")
 
         bias = (
             RegimeBias.BULL if score > 10
@@ -134,8 +119,8 @@ class GlobalMicroExpert(ExpertAgent):
         # 2026-09-15 (T10 F16, 리뷰 advisory 재수정): "sector_returns 딕셔너리가
         # 비었는가" 한 단계뿐이면 5개 필드 중 1개만 있어도 ok가 돼버린다(partial을
         # 건너뜀) — score가 실제로 참조하는 필드별로 결측을 판정한다(macro_economist
-        # 와 동일 원칙). industry_text는 "산업 텍스트 단서" 절에서 score에 직접
-        # 기여하므로(macro_context와 달리) 판정 대상에 포함한다.
+        # 와 동일 원칙). 산업 검색 문장은 참고 자료의 결측만 표시하며 방향 점수나
+        # 숫자 입력의 대용으로 사용하지 않는다.
         missing_inputs: List[str] = [
             label
             for key, label in self._SECTOR_FIELD_LABELS.items()
@@ -144,7 +129,7 @@ class GlobalMicroExpert(ExpertAgent):
         if not industry_text:
             missing_inputs.append("글로벌 산업 컨텍스트(검색)")
 
-        if len(missing_inputs) == len(self._SECTOR_FIELD_LABELS) + 1:
+        if not any(isinstance(sector_returns.get(k), (int, float)) for k in self._SECTOR_FIELD_LABELS):
             data_status = "insufficient"
         elif missing_inputs:
             data_status = "partial"
@@ -177,6 +162,8 @@ class GlobalMicroExpert(ExpertAgent):
                 close = hist["Close"]
                 last = float(close.iloc[-1])
                 # 5일 변화 또는 가능한 최대
+                if ticker not in ("CL=F", "HG=F", "GC=F") and len(close) < 6:
+                    return ticker, None
                 idx = max(0, len(close) - 6)
                 base = float(close.iloc[idx])
                 if ticker in ("CL=F", "HG=F", "GC=F"):

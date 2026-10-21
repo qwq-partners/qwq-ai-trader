@@ -261,7 +261,11 @@ def test_partial_bear_expert_still_reaches_bear_consensus(monkeypatch):
         expert="macro_economist", score=-40,
         regime_bias=RegimeBias.BEAR, confidence=0.75, data_status="ok",
     )
-    assert orch.bear_consensus(opinions={expert.name: op, "macro_economist": second_bear}) is True
+    assert orch.bear_consensus(opinions={
+        expert.name: op, "macro_economist": second_bear,
+        "us_market_expert": _opinion("us_market_expert", 0, .8),
+        "kr_economy_expert": _opinion("kr_economy_expert", 0, .8),
+    }) is True
 
 
 # ─────────────────────────────────────────

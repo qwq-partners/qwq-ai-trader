@@ -640,7 +640,10 @@ def test_dispatch_is_recorded_with_expert_consensus(monkeypatch, tmp_path):
     kw = calls[0]
     assert kw["kr_date"] == "2026-09-14"
     assert kw["sent_text"] == notifier.sent[0]
-    assert kw["expert_consensus"] == {"score": 7, "bias": "neutral", "valid_n": 0}
+    assert kw["expert_consensus"] == {
+        "score": 7, "bias": "neutral", "valid_n": None,
+        "interpretation": "regime_adjustment_not_forecast",
+    }
     assert kw["status"] == "sent"
     assert "conflict_note" in kw
 

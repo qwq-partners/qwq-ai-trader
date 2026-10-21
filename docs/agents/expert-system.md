@@ -6,8 +6,23 @@
 
 ## 개요
 
-8명의 도메인 전문가가 거시·뉴스·섹터·실적·갭risk를 분석하여 엔진 의사결정에 기여한다.
+9개 전문가가 거시·뉴스·섹터·실적·야간 지표를 분석한다. 시장 종합에는 6개만 반영하고 뉴스·실적·섹터는 별도 참고로 제공한다.
 기존 6명 운영/분석 에이전트(trade-analyst 등)는 가격·수급·체결 위주였던 약점을 보완한다.
+
+## 2026-10-21 브리핑 정합화 (개발 변경·운영 미배포)
+
+[Plan → Do → See·검증 영수증](../superpowers/plans/2026-10-21-briefing-reliability.md).
+운영 `84fc2b3a`와 10월22일 고정 수집 예약은 변경하지 않는다. 아래 계약은 이번 변경을 배포한 뒤 적용된다.
+
+- 점수·방향·약세 합의·교차검증 #11의 자료 수는 동일한 시장 전문가 6개의 유효 집합을 사용한다. 원래 전문가명과 일치하고, 의견 유효기간 내이며 `ok/partial`·양의 가중치·유한한 점수인 의견만 반영한다. 뉴스·실적·섹터 BEAR는 시장 합의에 들어가지 않는다. 약세 합의에도 시장 입력 최소 4개가 필요하다.
+- `confidence`는 내부 규칙 가중치다. 예측 확률이나 전문가 사이에 보정된 자료 충실도 퍼센트로 표시하지 않는다. 브리핑에는 확보/부분 결측/자료 부족/미확인과 결측 항목, 시장 반영 여부를 표시한다. `ok`도 가격의 실시간성이나 예측 정확도를 보증하지 않는다.
+- `src/experts/briefing.py`가 출력만 담당한다. 분석 시각과 원자료 기준 시각, 한국·미국 범위, 계산 기간을 구분한다. 시각이 없는 자료는 미확인으로 남기고, 약세 합의 미충족을 ‘정상매매’로 표현하지 않는다. 원천 문자열은 HTML escape하고 기존 Telegram 분할 경로를 사용한다.
+- US10Y는 수준과 직전 관측 대비 bp를 분리한다. 거시·글로벌·한국경제의 별도 한 줄 LLM 종합 호출을 제거해 입력에 없는 급등·미래 방향 문장을 만들지 않는다. 검색 문장의 ‘demand/orders/수출 증가/금리 인하’ 단어와 DART 공시 건수만으로 방향 점수를 더하지 않는다. 검색 수집 자체는 유지된다.
+- 뉴스 시장 집계는 분류된 중립 0을 평균 분모에 포함하고 미분류는 제외한다. 수집/분류/중립/미분류 건수, 최대 50개 기사 근거(제목·출처·URL·수집 시각·분류 상태)를 보존한다. 동일 URL은 중복 제외하며 대표 근거는 절댓값 기여도 순이다. 그 대표 기사 객체를 별도 보존해 발송물에 같은 출처·수집시각·URL을 표시하며 발행시각은 미확인으로 둔다. 분류 성공은 뉴스 사실 확인이나 가격 영향 입증이 아니다. 종목별 sentiment는 대상 종목의 회사 위험/가치 영향을 별도 프롬프트로 분류하며 시장 전체 방향 프롬프트를 공유하지 않는다. 기존 종목별 집계 계약은 유지한다.
+- 섹터는 ETF의 최근 1세션 수익률, 실제 5/20세션 구간 수익률과 가격일·원천을 함께 표시한다. 가격일이 오늘일 때만 ‘당일’로 표시하며 장중 봉은 잠정값일 수 있다. 상위 일간 등락과 하위 누적 추세를 함께 보여준다. 예를 들어 당일 +3.34%와 5세션 -10.36%는 동시에 성립하며 -80은 당일 하락률이 아니다. 가격만/뉴스만/혼합 점수와 정량 원점수 한도 도달을 구분한다. 뉴스 단독 점수에는 가격 추세 미확인을 명시한다.
+- 기존 5/20일 블렌드·정량/정성 가중치·점수 한도는 유지한다. 구 캐시의 가격일을 파일 수정 시각으로 만들어내지 않는다. 만료 뒤 갱신 실패한 메모리 값도 재사용하지 않아 스크리너/SEPA에 오래된 값이 새 값처럼 전달되지 않게 한다. 날짜·기간 없는 구 캐시는 미확인으로 표시한다.
+- 미국 ETF는 실제 선택한 관측 구간(20봉이면 19세션)을 기록하고, 기간 메타데이터가 섞이거나 빠지면 공통 기간을 미확인으로 표시한다. SOX 5일은 6봉 미만이면 결측이다. 실제 KIS 야간선물과 NKD 대체지표를 구분한다. 시간대가 있는 해외 봉의 원문 ISO를 보존하고 같은 시간대의 현재 시각으로 신선도를 비교한다.
+- 새 발송 기록은 `expert_consensus.interpretation=regime_adjustment_not_forecast`를 저장한다. 체제 보정을 당일 수익률 예측으로 채점하지 않으며 `claimed/hit=null`과 사유를 남긴다. 이 표식이 없는 과거 기록은 과거 평가 계약을 보존한다. 이것은 적중률 개선이나 성과 검증이 아니다.
 
 ## 에이전트 명단
 
@@ -44,7 +59,7 @@ class ExpertOpinion:
     expert: str              # 에이전트 이름
     score: int               # -100 ~ +100
     regime_bias: RegimeBias  # bull / neutral / bear
-    confidence: float        # 0.0 ~ 1.0
+    confidence: float        # 0.0 ~ 1.0 내부 정책 가중치 (확률 아님)
     key_findings: List[str]  # 핵심 발견 3~5개
     affected_sectors: List[str]
     affected_symbols: List[str]
@@ -94,12 +109,11 @@ class ExpertOpinion:
   장후 `morning_brief_eval`도 같은 `MIN_VALID_EXPERTS`를 사용한다(2026-09-15 교차 리뷰 후속).
   발송 스냅샷 `expert_consensus.valid_n`이 4 미만이거나 미기록/무효면
   `claimed=None, hit=None`과 사유를 남겨 방향 적중률 분모에서 제외한다.
-  구버전 커버리지 미기록도 평가 보류하며, 유효 4명 이상인 진짜 중립 예측만 보합으로 센다.
+  구버전 커버리지 미기록도 평가 보류한다. 10월21일 새 해석 표식 이전의 유효 4명 이상 중립 기록만 기존 계약대로 보합으로 센다.
   `data_status_summary(opinions)` → `{"counts": {...}, "insufficient_experts": [...],
   "note": "자료 부족 N명", "valid_n": int, "insufficient_coverage": bool}` —
   `valid_n`/`insufficient_coverage`는 위 커버리지 게이트와 같은 기준(시장체제
-  전문가 범위)이다. 운영 노출(07:30 브리핑 로그·팀 컨텍스트 부착)은 아직 미배선 —
-  소비측이 이 반환 형식을 그대로 쓰면 된다(신규 인터페이스 변경 불필요).
+  전문가 범위)이다. 이번 formatter는 추가된 `market_counts`와 `contributors`를 읽어 같은 모집단을 표시한다.
 - **`macro_economist` 수동 오버라이드** — `~/.cache/ai_trader/manual_macro_overrides.json`
   항목마다 `valid_until`(ISO 날짜) 필수. 신규 스키마 `{"cpi_yoy": {"value": 3.2,
   "valid_until": "2026-09-30"}}`. 날짜만 적은 값("YYYY-MM-DD")은 자정(00:00)이 아니라
@@ -140,15 +154,14 @@ class ExpertOpinion:
 T9(위 절)에서 `kr_market_expert` 한 명뿐이던 `data_status` 판정이 시장체제 집계
 대상 6명 전원(`macro_economist`·`us_market_expert`·`kr_economy_expert`·
 `global_micro_expert`·`weekend_signal_expert`·`kr_market_expert`)으로 확장됐다.
-공통 원칙: **score/confidence 를 실제로 움직이는 입력만** 판정 대상 — 결과에 영향을
-주지 않는 텍스트 컨텍스트(Perplexity 검색 등)는 결측이어도 등급을 낮추지 않는다.
+숫자 입력 결측과 검색 참고자료 결측을 구분한다. 거시의 참고 문장 결측은 점수 입력을 대체하지 않으며, 한국경제·글로벌의 참고 문장 결측은 partial로 남길 수 있지만 문장만으로 insufficient를 해제하지 않는다.
 
 | 전문가 | insufficient(≤0.2) | partial(≤0.7) | ok |
 |---|---|---|---|
 | `macro_economist` | 5개 핵심 지표(`_REQUIRED_SCORE_FIELDS`) 전부 결측 + `cpi_yoy`/`semis_basket_5d_pct` 도 없음 | 핵심 지표 일부만 결측(선택 보너스 필드만 없으면 ok로 승격) | 핵심 5개 전부 확보 |
 | `us_market_expert` | VIX·지수·SOX 5일추세(core 3종) 전부 결측 | core 일부 또는 섹터 RS(bonus) 결측 | core 3종 + 섹터 RS 전부 확보 |
-| `kr_economy_expert` | 원/달러 환율 + 한국 거시 컨텍스트(검색) 둘 다 결측 | 둘 중 하나만 결측 | 둘 다 확보 |
-| `global_micro_expert` | 섹터 수익률 5개 필드 + 글로벌 산업 컨텍스트 전부 결측 | 일부만 결측 | 전부 확보 |
+| `kr_economy_expert` | 원/달러 환율 결측 | 환율 확보·검색 참고 결측 | 둘 다 확보 |
+| `global_micro_expert` | 점수용 숫자 5개 필드 전부 결측 | 숫자 일부 또는 검색 참고 결측 | 전부 확보 |
 | `weekend_signal_expert` | 7개 신호(ES/NQ/KRW/VIX/BTC/ZB+KR야간선물) 전부 결측(유효 0개) | 1~6개만 유효 | 7개 전부 유효(KR야간선물은 세션 as_of 확인 시만 유효로 카운트, F17) |
 | `kr_market_expert` | 수급·공매도 원자료 둘 다 결측(코스피·야간선물은 별도 취급) | 하나만 결측 | 둘 다 확보 |
 
@@ -169,8 +182,7 @@ T9(위 절)에서 `kr_market_expert` 한 명뿐이던 `data_status` 판정이 �
   as_of=직전 완료 세션 종료 시각(06:00, 주말·공휴일은 역산 시 건너뜀). 유효기간은
   다음 거래일 18:00 개장까지. `weekend_signal_expert`/`kr_market_expert`는 이 as_of가
   없거나 세션이 "night"가 아니면(주간 폴백·미상) 값이 있어도 결측으로 처리한다.
-  NKD 프록시 폴백 경로는 as_of 개념이 없어 세션 규칙이 **미적용**(값 존재만으로
-  유효 취급, 잔여).
+  NKD 프록시는 이번 변경에서 실제 yfinance 마지막 봉 시각을 보존한다. KIS 야간 세션과 다른 대체지표이며 같은 시세라고 표시하지 않는다.
 
 ## 호출 흐름
 
@@ -199,13 +211,13 @@ T9(위 절)에서 `kr_market_expert` 한 명뿐이던 `data_status` 판정이 �
 
 ### 1) 시장 체제 보정
 `MarketRegimeAdapter.apply_expert_adjustment(orchestrator)`
-- `bear_consensus(confidence≥0.7, min_count=2)` → bull/sideways/neutral → bear
+- 시장 유효 입력 ≥4개에서 `bear_consensus(confidence≥0.7, min_count=2)` → bull/sideways/neutral → bear
 - `aggregate_regime_score ≥ +20` → sideways/neutral → bull
 - `aggregate_regime_score ≤ -20` → bull/sideways → sideways
 
 ### 2) cross_validator 규칙 #11
 - BUY 신호에 한해 작동
-- `expert_orchestrator.bear_consensus(0.7, 2)` 참이면 **즉시 차단**
+- 같은 시장 유효 입력 ≥4개에서 `expert_orchestrator.bear_consensus(0.7, 2)` 참이면 **즉시 차단**
 - 기존 10개 규칙과 독립
 
 ### 2-1) cross_validator 규칙 #12 (2026-08-07, shadow 전용)
@@ -236,12 +248,8 @@ T9(위 절)에서 `kr_market_expert` 한 명뿐이던 `data_status` 판정이 �
 
 ## 비용 통제
 
-- 모델 라우팅:
-  - 데이터 수집·요약: Gemini Flash Lite
-  - 종합 판단: GPT-5.4
-  - 검색: Perplexity sonar
-- 일 예상 비용: $3~5 (현재 $1~2 → +$3)
-- Perplexity Pro $20/월 한도 내
+- 실제 모델과 월 USD100 정책은 [거래 엔진 모델 배분](../research/engine-model-allocation-2026-10-15.md) 및 실행 설정을 따른다. 과거 일 USD3~5 추정은 현재 예산 근거로 사용하지 않는다.
+- 이번 변경은 거시·한국경제·글로벌의 별도 한 줄 종합 호출 3개 경로를 제거한다. 수집 API와 모델 배분·월 예산 설정을 늘리거나 바꾸지 않는다. 실제 절감액은 호출/사용량 기록으로 확인한다.
 
 ## 영속화
 

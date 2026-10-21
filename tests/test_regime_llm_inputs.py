@@ -772,17 +772,19 @@ def test_briefing_appends_expert_conflict_note(monkeypatch, tmp_path):
 
 
 def test_briefing_shows_data_status_note(monkeypatch, tmp_path):
-    """자료 부족 N명·커버리지 부족이 전문가 종합 줄에 표시된다."""
+    """시장 모집단의 자료 상태별 건수·범위 부족이 종합 줄에 표시된다."""
     brief = {"text": "미국 증시 혼조 마감.", "tone": "neutral",
              "generated_at": datetime.now().isoformat()}
     msg = _run_briefing(monkeypatch, tmp_path, brief=brief,
                         summary={"counts": {"ok": 2, "partial": 1, "insufficient": 3},
+                                 "market_counts": {"ok": 1, "partial": 1, "insufficient": 3,
+                                                   "unknown": 0, "unavailable": 1},
                                  "insufficient_experts": ["macro_economist"],
                                  "note": "자료 부족 3명",
                                  "valid_n": 2, "insufficient_coverage": True},
                         agg=0)
-    assert "자료 부족 3명" in msg, f"자료 부족 표시 누락:\n{msg}"
-    assert "무보정" in msg, f"커버리지 부족 표시 누락:\n{msg}"
+    assert "반영 2/6 · 확보 1 / 부분 1 / 부족 3 / 미확인·만료 1" in msg
+    assert "종합 방향 판단 보류" in msg
 
 
 def test_intraday_recompute_skipped_when_last_bar_date_unknown(monkeypatch, tmp_path):

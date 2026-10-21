@@ -484,6 +484,8 @@ class KRScheduler:
                                 slot_labels[slot_name], ops, agg, bias, bear_consensus,
                                 use_report_channel=use_channel,
                                 record_dispatch=(slot_name == "morning"),
+                                threshold_confidence=0.6 if slot_name in relaxed_slots else 0.7,
+                                min_count=1 if slot_name in relaxed_slots else 2,
                             )
                             # 성공 시에만 완료 처리 (2026-08-08 P1 — 일시 장애를
                             # 영구 완료로 확정하던 fail-closed 위반, 8/5 사고 패턴)
@@ -512,6 +514,8 @@ class KRScheduler:
         self, label: str, ops: dict, agg: int, bias: str, bear_consensus: bool,
         use_report_channel: bool = False,
         record_dispatch: bool = False,
+        threshold_confidence: float = 0.7,
+        min_count: int = 2,
     ):
         """전문가 브리핑 텔레그램 전송
 
@@ -527,129 +531,16 @@ class KRScheduler:
             if not notifier:
                 return
 
-            order = (
-                "weekend_signal_expert",   # 갭 risk 먼저 (가장 시급)
-                "macro_economist", "kr_market_expert", "us_market_expert",
-                "kr_economy_expert", "global_micro_expert",
-                "news_curator", "earnings_expert",
-            )
-            short_name_map = {
-                "macro_economist": "거시",
-                "kr_market_expert": "KR시장",
-                "us_market_expert": "US시장",
-                "kr_economy_expert": "한국경제",
-                "global_micro_expert": "글로벌",
-                "news_curator": "뉴스",
-                "earnings_expert": "실적",
-                "weekend_signal_expert": "갭risk",
-            }
-            # 카테고리별 카운트 — sector_council은 체제 집계 제외라 분포에서도 뺀다
-            _regime_ops = {
-                n: o for n, o in ops.items() if n != "sector_council"
-            }
-            bull_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "bull")
-            neut_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "neutral")
-            bear_n = sum(1 for o in _regime_ops.values() if o.is_valid and o.regime_bias.value == "bear")
-            valid_n = bull_n + neut_n + bear_n
-
-            # 자료 부족 표시 (C: orchestrator.data_status_summary) — 결측을 감추지 않는다
-            _data_status_lines: List[str] = []
-            _coverage_n = valid_n   # 집계 요약이 없으면 편향 분포 합계로 폴백
-            try:
-                _orch = getattr(self.bot, "expert_orchestrator", None)
-                _summary_fn = getattr(_orch, "data_status_summary", None)
-                _ds = _summary_fn(ops) if callable(_summary_fn) else None
-                # 발송 기록용 커버리지 — 편향 분포 합계(valid_n)가 아니라 집계가 실제로
-                # 가중 반영하는 전문가 수 (insufficient/unknown 제외, T10 통합 리뷰 advisory)
-                if isinstance(_ds, dict) and _ds.get("valid_n") is not None:
-                    _coverage_n = int(_ds["valid_n"])
-            except Exception as _ds_e:
-                _ds = None
-                logger.debug(f"[전문가] data_status 집계 실패 (무시): {_ds_e}")
-            if _ds:
-                if _ds.get("note"):
-                    _data_status_lines.append(
-                        f"<b>자료 상태</b>: {_ds['note']} "
-                        f"(유효 {_ds.get('valid_n', 0)}명)"
-                    )
-                if _ds.get("insufficient_coverage"):
-                    _data_status_lines.append(
-                        "<i>※ 커버리지 부족 — 체제 점수 무보정(score=0)</i>"
-                    )
-
-            # 종합 score 해석
-            if agg >= 15:
-                agg_label = "🟢 강세 우위"
-            elif agg >= 5:
-                agg_label = "🟢 약상승"
-            elif agg <= -15:
-                agg_label = "🔴 약세 우위"
-            elif agg <= -5:
-                agg_label = "🔴 약하락"
-            else:
-                agg_label = "⚪ 중립"
-
-            lines = [
-                f"🧠 <b>{label} 전문가 브리핑</b>",
-                f"━━━━━━━━━━━━━━━",
-                f"<b>종합 bias</b>: {bias.upper()} {agg_label}",
-                f"<b>체제 보정</b>: score={agg:+d} (-30~+30 스케일, market_regime 반영)",
-                *_data_status_lines,
-                f"<b>분포</b>: 🟢{bull_n} ⚪{neut_n} 🔴{bear_n} (총 {valid_n}명)",
-                f"<b>BEAR 합의</b>: {'⚠️ YES (BUY 차단)' if bear_consensus else '✓ NO (정상매매)'}",
-                f"<i>※ 합의 기준: 신뢰도 ≥70%인 BEAR 의견 2명 이상</i>",
-                "",
-                f"━━━━━━━━━━━━━━━",
-                f"<b>전문가별 의견</b>",
-                f"<i>※ 신뢰도 = 수집된 데이터 충실도 (LLM 자기평가 아님)</i>",
-                "",
-            ]
-            for name in order:
-                op = ops.get(name)
-                if op is None or not op.is_valid:
-                    continue
-                emoji = "🟢" if op.regime_bias.value == "bull" else ("🔴" if op.regime_bias.value == "bear" else "⚪")
-                short_name = short_name_map.get(name, name)
-                # 시장체제 전문가만 종합 score에 반영되는 점 표시
-                in_aggregate = name in (
-                    "macro_economist", "kr_market_expert", "us_market_expert",
-                    "kr_economy_expert", "global_micro_expert",
-                    "weekend_signal_expert",
-                )
-                tag = "" if in_aggregate else " <i>(종합 미반영)</i>"
-                lines.append(
-                    f"{emoji} <b>{short_name}</b>: {op.score:+d} · 신뢰도 {op.confidence:.0%}{tag}"
-                )
-                # 핵심 발견 1개 (모든 슬롯, 길이 제한)
-                if op.key_findings:
-                    finding = op.key_findings[0]
-                    if len(finding) > 110:
-                        finding = finding[:110] + "..."
-                    lines.append(f"   └ <i>{finding}</i>")
-
-            # 섹터 동향 (sector_council — 체제 집계 미반영, 종목 판단 참고용) 2026-08-07
-            _sc_op = ops.get("sector_council")
-            if _sc_op is not None and _sc_op.is_valid:
-                _sec_scores = (_sc_op.raw_evidence or {}).get("sector_scores") or {}
-                if _sec_scores:
-                    _ranked = sorted(
-                        _sec_scores.items(), key=lambda x: -x[1].get("score", 0)
-                    )
-                    _strong = [(s, v) for s, v in _ranked[:3] if v.get("score", 0) >= 15]
-                    _weak = [(s, v) for s, v in _ranked[::-1][:3] if v.get("score", 0) <= -15]
-                    lines.append("")
-                    lines.append(f"━━━━━━━━━━━━━━━")
-                    lines.append(
-                        f"<b>섹터 동향</b> <i>({len(_sec_scores)}개 분석 · 종목 판단용, 체제 미반영)</i>"
-                    )
-                    for s, v in _strong:
-                        _tag = " (뉴스단독)" if v.get("qual_only") else ""
-                        lines.append(f"🟢 {s} {v.get('score', 0):+d}{_tag}")
-                    for s, v in _weak:
-                        _tag = " (뉴스단독)" if v.get("qual_only") else ""
-                        lines.append(f"🔴 {s} {v.get('score', 0):+d}{_tag}")
-                    if not _strong and not _weak:
-                        lines.append("⚪ 전 섹터 중립")
+            from src.experts.briefing import render_expert_briefing
+            _orch = getattr(self.bot, "expert_orchestrator", None)
+            _summary_fn = getattr(_orch, "data_status_summary", None)
+            _ds = _summary_fn(ops) if callable(_summary_fn) else {}
+            _ds = _ds if isinstance(_ds, dict) else {}
+            _coverage_n = _ds.get("valid_n")
+            lines = render_expert_briefing(
+                label, ops, agg, bias, bear_consensus, _ds, now=_now_kst(),
+                threshold_confidence=threshold_confidence, min_count=min_count,
+            ).splitlines()
 
             # 최근 공시 요약 (2026-08-11 — AIK 공개 JSON, 아침 슬롯만, fail-open)
             if use_report_channel:
@@ -667,20 +558,6 @@ class KRScheduler:
                         lines.append(_disc)
                 except Exception as _disc_e:
                     logger.debug(f"[공시피드] 브리핑 삽입 실패 (무시): {_disc_e}")
-
-            # 아침 슬롯이면 추가 핵심 발견 (2번째 항목, 브리프형)
-            if use_report_channel:
-                lines.append("")
-                lines.append(f"━━━━━━━━━━━━━━━")
-                lines.append(f"<b>추가 인사이트</b>")
-                for name in order:
-                    op = ops.get(name)
-                    if op is None or not op.is_valid or len(op.key_findings) < 2:
-                        continue
-                    finding = op.key_findings[1]
-                    if len(finding) > 110:
-                        finding = finding[:110] + "..."
-                    lines.append(f"• <i>{short_name_map.get(name, name)}</i>: {finding}")
 
             msg = "\n".join(lines)
 
@@ -701,7 +578,7 @@ class KRScheduler:
                         except (ValueError, TypeError):
                             age_h = 999
                         llm_text = data.get("text", "")
-                        if llm_text and age_h < 6:
+                        if llm_text and 0 <= age_h < 6:
                             sep = "\n\n━━━━━━━━━━━━━━━\n\n"
                             # 브리프 톤과 전문가 종합판단이 상충하면 본문 끝에 표시
                             try:
@@ -739,6 +616,7 @@ class KRScheduler:
                             sent_text=msg,
                             expert_consensus={
                                 "score": agg, "bias": bias, "valid_n": _coverage_n,
+                                "interpretation": "regime_adjustment_not_forecast",
                             },
                             status="sent" if ok else "failed",
                             conflict_note=_conflict,

@@ -561,7 +561,7 @@ class CrossStrategyValidator:
         if is_buy_signal and self._expert_orchestrator is not None:
             try:
                 snap = self._expert_orchestrator.snapshot()
-                valid_n = sum(1 for o in snap.values() if o.is_valid)
+                valid_n = self._expert_orchestrator.data_status_summary(snap)["valid_n"]
                 _exp_cfg = getattr(self._expert_orchestrator, "config", None)
                 _shadow = getattr(_exp_cfg, "shadow_mode", True)
 

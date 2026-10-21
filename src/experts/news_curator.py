@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -36,6 +37,10 @@ class NewsItem:
     sentiment: int = 0    # -100 ~ +100
     event_tags: List[str] = field(default_factory=list)
     related_symbols: List[str] = field(default_factory=list)
+    # A valid neutral (0) is evidence; an unclassified item is not.  Keep the
+    # two states separate so aggregate confidence follows completed work.
+    classified: bool = False
+    classification_status: str = "unclassified"
 
     def fingerprint_tokens(self) -> Set[str]:
         text = f"{self.title} {self.summary}".lower()
@@ -91,6 +96,16 @@ class NewsCurator(ExpertAgent):
             return self._build_opinion(
                 score=0, bias=RegimeBias.NEUTRAL, confidence=0.0,
                 findings=["뉴스 수집 실패"], valid_hours=1,
+                raw={
+                    "item_count": 0,
+                    "classified_count": 0,
+                    "unclassified_count": 0,
+                    "neutral_count": 0,
+                    "classification_coverage": 0.0,
+                    "articles": [],
+                },
+                data_status="insufficient",
+                missing_inputs=["뉴스 수집"],
             )
 
         # 중복 제거
@@ -99,8 +114,9 @@ class NewsCurator(ExpertAgent):
         # LLM 일괄 분류 (sentiment + tags)
         await self._classify_batch(items)
 
-        # 집계
-        sentiments = [i.sentiment for i in items if i.sentiment != 0]
+        # 집계: 유효한 중립(0)도 표본에 넣되, 미분류 기본값 0은 넣지 않는다.
+        classified_items = [i for i in items if i.classified]
+        sentiments = [i.sentiment for i in classified_items]
         avg = sum(sentiments) / len(sentiments) if sentiments else 0
         bias = (
             RegimeBias.BULL if avg > 15
@@ -110,26 +126,67 @@ class NewsCurator(ExpertAgent):
 
         # 섹터/이벤트 태그 집계
         event_count: Dict[str, int] = {}
-        for it in items:
+        for it in classified_items:
             for t in it.event_tags:
                 event_count[t] = event_count.get(t, 0) + 1
         top_tags = sorted(event_count.items(), key=lambda x: -x[1])[:5]
 
-        findings = [f"{it.title[:60]} ({it.sentiment:+d})" for it in items[:5]]
-        confidence = min(0.9, 0.3 + len(items) * 0.03)
+        # 대표 기사는 입력 순서가 아니라 시장 방향에 준 절대 기여도로 고른다.
+        representative = sorted(
+            (it for it in classified_items if it.sentiment != 0),
+            key=lambda it: -abs(it.sentiment),
+        )[:5]
+        findings = [f"{it.title[:60]} ({it.sentiment:+d})" for it in representative]
+        if not findings:
+            findings = ["뉴스 시장방향 분류 결과: 유효한 방향성 근거 없음"]
+
+        classified_count = len(classified_items)
+        unclassified_count = len(items) - classified_count
+        neutral_count = sum(1 for it in classified_items if it.sentiment == 0)
+        coverage = classified_count / len(items)
+        missing_inputs = []
+        if unclassified_count:
+            missing_inputs.append(f"뉴스 시장방향 분류 ({classified_count}/{len(items)})")
+        data_status = "ok" if classified_count == len(items) else (
+            "partial" if classified_count else "insufficient"
+        )
 
         return self._build_opinion(
             score=int(avg),
             bias=bias,
-            confidence=confidence,
+            # Full coverage reaches the existing 0.9 ceiling; partial work is
+            # proportional to actual completed classifications (then the base
+            # class applies its global partial-data safety cap).
+            confidence=0.9 * coverage,
             findings=findings,
             raw=dict(
                 item_count=len(items),
+                classified_count=classified_count,
+                unclassified_count=unclassified_count,
+                neutral_count=neutral_count,
+                classification_coverage=coverage,
                 avg_sentiment=avg,
                 top_event_tags=top_tags,
+                articles=[self._article_evidence(it) for it in items[:50]],
+                representative_articles=[self._article_evidence(it) for it in representative],
             ),
             valid_hours=1,
+            data_status=data_status,
+            missing_inputs=missing_inputs,
         )
+
+    @staticmethod
+    def _article_evidence(item: NewsItem) -> Dict[str, Any]:
+        """Bounded source evidence; source APIs did not provide publication time."""
+        return {
+            "title": item.title[:120],
+            "source": item.source[:40],
+            "url": item.url[:1000],
+            "fetched_at": item.fetched_at.isoformat(),
+            "sentiment": item.sentiment if item.classified else None,
+            "classified": item.classified,
+            "status": item.classification_status,
+        }
 
     # ─────────────────────────────────────────
     # 종목별 sentiment (orchestrator.get_news_sentiment → agents.analysts.NewsAnalyst 에서 호출)
@@ -165,14 +222,11 @@ class NewsCurator(ExpertAgent):
                 # T11 (2026-09-15, C6): _analyze()는 시장 뉴스에 _deduplicate를 쓰지만
                 # 이 경로는 빠져 있었다 — 같은 기사가 여러 검색어로 재수집되면
                 # sentiment·tags가 같은 기사 재인용만으로 부풀려진다.
-                # R-A r3 blocking #1 (2026-09-15): URL 선행 dedup은 이전에 공유
-                # _deduplicate 안에 있어 _analyze(시장 뉴스) 결과까지 바꿨다 — 여기
-                # (종목별 경로) 전용으로 한정한다. Jaccard dedup(_deduplicate)은
-                # 그대로 공유해 두 경로 모두 헤드라인 유사 기사는 걸러진다.
+                # URL/Jaccard 중복을 제거하되 종목별 분류 목표는 시장 뉴스와 분리한다.
                 fetched_count = len(items)
                 items = self._url_dedup(items)
                 items = self._deduplicate(items)
-                await self._classify_batch(items)
+                await self._classify_batch(items, symbol=symbol)
                 self._inc_call_count()  # LLM 분류 1회 카운트
                 scores = [i.sentiment for i in items if i.sentiment != 0]
                 avg = int(sum(scores) / len(scores)) if scores else 0
@@ -322,11 +376,7 @@ class NewsCurator(ExpertAgent):
         return items[:5]
 
     # ─────────────────────────────────────────
-    # URL 동일 기사 제거 — get_symbol_sentiment(종목별) 전용
-    # R-A r3 blocking #1 (2026-09-15): _analyze(시장 뉴스)와 공유하지 않는다 —
-    # 검색어별로 같은 기사가 재수집되는 것은 종목별 경로 특유의 패턴이고,
-    # 여기서 URL 선행 제거를 하면 시장 sentiment(item_count/confidence)가
-    # 의도치 않게 바뀐다.
+    # URL 동일 기사 제거 — 종목별 경로의 중복 수를 별도 표시할 때 사용한다.
     # ─────────────────────────────────────────
     def _url_dedup(self, items: List[NewsItem]) -> List[NewsItem]:
         if len(items) <= 1:
@@ -342,14 +392,19 @@ class NewsCurator(ExpertAgent):
         return out
 
     # ─────────────────────────────────────────
-    # 중복 제거 (Jaccard ≥ 0.6) — 시장 뉴스(_analyze)·종목별 뉴스 양쪽이 공유
+    # 중복 제거 (동일 URL 또는 제목/요약 Jaccard ≥ 0.6) — 시장 뉴스·종목별 뉴스 공용
     # ─────────────────────────────────────────
     def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
         if len(items) <= 1:
             return items
         kept: List[NewsItem] = []
         kept_fps: List[Set[str]] = []
+        seen_urls: Set[str] = set()
         for it in items:
+            if it.url:
+                if it.url in seen_urls:
+                    continue
+                seen_urls.add(it.url)
             fp = it.fingerprint_tokens()
             is_dup = False
             for prev_fp in kept_fps:
@@ -368,7 +423,7 @@ class NewsCurator(ExpertAgent):
     # ─────────────────────────────────────────
     # LLM 일괄 분류
     # ─────────────────────────────────────────
-    async def _classify_batch(self, items: List[NewsItem]) -> None:
+    async def _classify_batch(self, items: List[NewsItem], *, symbol: Optional[str] = None) -> None:
         """배치 1회 호출로 모든 아이템 분류 — Gemini Flash Lite 권장"""
         if not items or self.llm_manager is None:
             return
@@ -376,9 +431,25 @@ class NewsCurator(ExpertAgent):
         # 너무 많으면 상위 20개만
         batch = items[:20]
         lines = [f"{i}: {it.title}" for i, it in enumerate(batch)]
+        # 기본 상태를 먼저 선언한다. 0은 LLM 미응답의 대용품이 아니라 명시적 중립만
+        # 뜻하며, 유효한 i/s 조합이 없는 항목은 unclassified로 남는다.
+        for it in batch:
+            it.classified = False
+            it.classification_status = "unclassified"
+            it.event_tags = []
+
+        scope = (
+            f"대상 종목 {symbol}의 기업가치·실적·위험에 대한 기사 영향을 평가하세요. "
+            "리콜·소송 등 개별 회사의 악재를 시장 전체에 영향이 작다는 이유로 중립 처리하지 마세요. "
+            if symbol else
+            "한국/글로벌 주식시장 방향에 주는 사실상 근거를 평가하세요. "
+            "ELW 발행만 있는 공시는 시장 방향 근거가 아니므로 0(중립)으로 분류하세요. "
+        )
         prompt = (
-            "다음 뉴스 헤드라인 각각에 대해 sentiment(-100~+100)와 "
-            "event tag(어닝/M&A/리콜/소송/규제/공시/거시/기타 중 1개)를 JSON으로 분류하세요.\n\n"
+            scope
+            + "다음 뉴스 헤드라인 각각에 대해 score(-100~+100)와 "
+            "event tag(어닝/M&A/리콜/소송/규제/공시/거시/기타 중 1개)를 JSON으로 분류하세요. "
+            "감정적인 어조가 아니라 위 평가 대상에 대한 사실상 근거를 점수화하세요.\n\n"
             + "\n".join(lines)
             + "\n\n응답 예시:\n"
             '{"results": [{"i": 0, "s": 20, "t": "거시"}, {"i": 1, "s": -50, "t": "규제"}]}'
@@ -403,16 +474,37 @@ class NewsCurator(ExpertAgent):
                 f"[뉴스큐레이터] LLM 응답에 'results' 키 누락. keys={list(resp.keys())[:5]}"
             )
             return
-        for r in resp.get("results", []):
-            try:
-                idx = int(r.get("i", -1))
-                if 0 <= idx < len(batch):
-                    batch[idx].sentiment = max(-100, min(100, int(r.get("s", 0))))
-                    tag = str(r.get("t", "")).strip()
-                    if tag:
-                        batch[idx].event_tags = [tag]
-            except (ValueError, TypeError):
+        results = resp.get("results")
+        if not isinstance(results, list):
+            logger.warning("[뉴스큐레이터] LLM results가 list 아님")
+            return
+        for r in results:
+            if not isinstance(r, dict) or "i" not in r or "s" not in r:
                 continue
+            try:
+                raw_idx = r["i"]
+                if isinstance(raw_idx, bool):
+                    continue
+                idx = int(raw_idx)
+                if float(raw_idx) != idx:
+                    continue
+                raw_score = r["s"]
+                if isinstance(raw_score, bool):
+                    continue
+                score = float(raw_score)
+                if not math.isfinite(score):
+                    continue
+            except (ValueError, TypeError, OverflowError):
+                continue
+            if 0 <= idx < len(batch):
+                batch[idx].sentiment = max(-100, min(100, int(score)))
+                batch[idx].classified = True
+                batch[idx].classification_status = (
+                    "neutral" if batch[idx].sentiment == 0 else "classified"
+                )
+                tag = str(r.get("t", "")).strip()
+                if tag:
+                    batch[idx].event_tags = [tag]
 
     async def close(self) -> None:
         if self._session and not self._session.closed:

@@ -290,6 +290,7 @@ def _run_morning_to_noon(monkeypatch, tmp_path):
         # valid_n 은 편향 분포 합계(ops={} → 0)가 아니라 집계 커버리지(data_status_summary
         # valid_n=6) — 2026-09-15 T10 통합 리뷰 advisory 반영
         "score": 2, "bias": "neutral", "valid_n": 6,
+        "interpretation": "regime_adjustment_not_forecast",
     }
 
     # ── 12:00: 장중 재분류 → ExitManager 실적용 ──
@@ -416,11 +417,10 @@ def test_full_day_flow_07_00_to_20_30(monkeypatch, tmp_path):
     assert rec["close_direction"]["reason"]
 
     # 전문가 축 — 07:30 이 실제로 계산·발송한 +2(flat) 가 반영돼야 한다 (F19)
-    assert rec["expert_direction"]["claimed"] == "flat", rec["expert_direction"]
-    assert rec["expert_direction"]["hit"] is False, (
-        "전문가 종합판단(flat)과 KOSPI 종가(-3.26%, down) 가 불일치하는데 "
-        f"hit 이 False 가 아니다(미기록 None 으로 남으면 F19 미해결): {rec['expert_direction']}"
-    )
+    assert rec["expert_direction"]["claimed"] is None
+    assert rec["expert_direction"]["hit"] is None
+    assert "체제 보정" in rec["expert_direction"]["reason"]
+
 
     # 섹터 축 — 매핑된 테마(AI/반도체→전기전자) 는 outperformed 판정, 미매핑(2차전지) 은 사유
     sectors_by_name = {s["name"]: s for s in rec["sectors"]}
