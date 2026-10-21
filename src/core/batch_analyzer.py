@@ -2388,6 +2388,9 @@ class BatchAnalyzer:
                 reason=f"VCP 돌파: {', '.join(c.reasons[:3])}",
                 metadata={
                     "candidate_name": c.name,
+                    # SEPA/RSI2와 동일하게 후보 원본을 전달해야 대기 스냅샷과
+                    # 실행 교차검증에서 등락률·ATR 등 선정 근거가 유지된다.
+                    "indicators": deepcopy(c.indicators),
                     "atr_pct": atr_check,
                     "vcp_score": c.indicators.get("vcp_score", 0),
                     "entry_mode": "breakout",

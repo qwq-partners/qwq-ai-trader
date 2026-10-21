@@ -260,3 +260,54 @@ def test_real_technical_and_swing_producers_serialize(analyzer, monkeypatch, tmp
     assert meta["indicators"]["foreign_net_buy"] == 0
     assert type(meta["indicators"]["volume"]) is int
     assert isinstance(meta["indicators"]["close"], float)
+
+
+@pytest.mark.parametrize("as_of", [None, "2026-09-14T15:30:00"])
+def test_real_vcp_producer_preserves_indicators_and_chase_gate(
+        analyzer, monkeypatch, tmp_path, as_of):
+    from pathlib import Path
+    import src.core.batch_analyzer as bam
+    from src.core.cross_validator import CrossStrategyValidator
+    from src.signals.screener.swing_screener import SwingCandidate
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr("datetime.datetime", bam.datetime)
+    indicators = {"atr_14": 3.0, "change_1d": 7.0,
+                  "breakout_trigger": 10000, "vcp_score": 70}
+    if as_of is not None:
+        indicators["as_of"] = as_of
+    expected = deepcopy(indicators)
+    candidate = SwingCandidate(
+        SYM, "합성VCP", "vcp_breakout", 70,
+        Decimal("10000"), Decimal("9500"), Decimal("11000"), indicators)
+    generated = analyzer._generate_vcp_signals([candidate])
+    assert len(generated) == 1
+    pending = analyzer._to_pending_signal(
+        generated[0], now=NOW, expires=NOW + timedelta(hours=5), slippage_pct=3)
+    analyzer._pending = [pending]
+    # 이후 후보 또는 공용 캐시의 갱신은 대기 근거를 바꾸면 안 된다.
+    candidate.indicators["change_1d"] = 0
+    analyzer._screener._indicators._cache[SYM] = {"atr_14": 3.0, "change_1d": 0}
+    analyzer._screener._indicators._cache_ts[SYM] = bam.datetime.now()
+    analyzer._save_json()
+    analyzer._pending = []
+    meta = _execute(analyzer, monkeypatch)
+    assert meta["indicators"] == expected
+    assert meta["indicators_as_of"] == (CALCULATED if as_of is None else as_of)
+    assert meta["indicators_source"] == "pending_snapshot"
+    assert meta["entry_plan"]["entry_mode"] == "breakout"
+    assert meta["entry_plan"]["breakout_trigger"] == 10000
+    assert meta["atr_pct"] == 3.0
+
+    # 실제 소비자에서 등락/ATR 추격 감점이 유지되어 70→49, 진입 차단된다.
+    validator = CrossStrategyValidator()
+    allowed, adjusted, _ = validator.validate(
+        SYM, "buy", "vcp_breakout", 70, meta, count_stats=False)
+    assert allowed is False
+    assert adjusted == 49
+    missing = deepcopy(meta)
+    missing["indicators"] = {}
+    allowed_without_evidence, adjusted_without_evidence, _ = validator.validate(
+        SYM, "buy", "vcp_breakout", 70, missing, count_stats=False)
+    assert allowed_without_evidence is True
+    assert adjusted_without_evidence == 64
