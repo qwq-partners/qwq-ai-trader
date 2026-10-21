@@ -112,17 +112,18 @@ def test_us_only_scope_strips_korean_open_direction_claims(gen, monkeypatch):
     assert "상승 갭 출발" not in record["text"]
     assert "갭 출발" not in record["text"]
     assert dr.NO_KR_INPUT_NOTE in record["text"]
-    assert record["removed_claims"], "제거된 단정 문장이 기록돼야 한다"
+    assert record["removed_claims"] == []
     # 미국 마감 요약이라는 범위 표시
     assert "미국시장 마감 요약" in record["text"] or "미국시장 마감 요약" in record["title"]
-    # 프롬프트에도 금지 규칙이 들어간다
-    assert "개장 방향" in llm.prompts[0]
+    assert llm.prompts == []
+    assert record["model"] == "deterministic-source-summary"
 
 
 def test_us_only_scope_keeps_us_sentences(gen, monkeypatch):
     record, _ = _brief(gen, monkeypatch, OPTIMISTIC_TEXT)
-    assert "미국 증시는 반도체 주도로 강세 마감했다." in record["text"]
-    assert "반도체 강세, 방어주 약세." in record["text"]
+    assert record["raw_text"] == ""
+    assert record["body_full"] == record["text"]
+    assert "미국 증시는 반도체 주도로 강세 마감했다." not in record["text"]
 
 
 def test_kr_inputs_allow_open_watchpoints_with_counter_evidence(gen, monkeypatch):
@@ -136,8 +137,9 @@ def test_kr_inputs_allow_open_watchpoints_with_counter_evidence(gen, monkeypatch
         kr_inputs=kr_inputs,
     )
     assert record["scope"] == "with_kr_inputs"
-    assert "상승 출발" in record["text"]          # 국내 자료가 있으면 제거하지 않는다
-    assert "반대 근거" in llm.prompts[0]
+    assert "상승 출발" not in record["body_full"]
+    assert "야간선물 · kis · 2026-09-12T05:00:00 재확인" in record["text"]
+    assert llm.prompts == []
     assert [i["name"] for i in record["inputs"] if i.get("kind") == "kr"] == ["야간선물", "원달러"]
     assert all(i["as_of"] for i in record["inputs"] if i.get("kind") == "kr")
 
@@ -152,15 +154,13 @@ def test_kr_inputs_without_as_of_fall_back_to_us_only(gen, monkeypatch):
     assert "갭 출발" not in record["text"]
 
 
-def test_expert_conflict_is_flagged(gen, monkeypatch):
+def test_deterministic_brief_does_not_invent_model_expert_conflict(gen, monkeypatch):
     record, _ = _brief(
         gen, monkeypatch, OPTIMISTIC_TEXT,
         expert_consensus={"score": 2, "bias": "neutral"},
     )
-    assert record["expert_conflict"] is not None
-    assert "+2" in record["expert_conflict"]
-    assert "중립" in record["expert_conflict"]
-    assert record["expert_conflict"] in record["text"]
+    assert record["expert_conflict"] is None
+    assert record["tone"] == "neutral"
 
 
 def test_no_expert_conflict_when_tone_matches(gen, monkeypatch):
@@ -183,16 +183,12 @@ def test_brief_json_schema_is_fixed(gen, monkeypatch, tmp_path):
     assert set(data["claims"]) >= {"open_direction", "close_direction", "sectors", "basis"}
     # 미국 자료만이면 개장 방향 주장은 남지 않는다
     assert data["claims"]["open_direction"] is None
-    assert data["claims"]["sectors"]
-    # 매핑 성공 분기(T10 F20)까지 스키마 테스트가 실제로 통과시킨다 — 매핑
-    # 없는 테마만 있으면 supported=False 항목만으로 공허하게 통과할 수 있다
-    sector = data["claims"]["sectors"][0]
-    assert sector["theme"] == "AI/반도체"
-    assert sector["eval_targets"] == ["전기전자"]
-    assert sector["supported"] is True
+    # 새 데이터 요약의 업종 매핑은 예측 주장이 아니다. 과거 추출기 검사는 별도 유지.
+    assert data["claims"]["sectors"] == []
+    assert data["model"] == "deterministic-source-summary"
 
 
-def test_llm_failure_returns_none(gen, monkeypatch):
+def test_llm_failure_is_irrelevant_to_deterministic_summary(gen, monkeypatch):
     class _Fail(_FakeLLM):
         async def complete_role(self, prompt, **kwargs):
             resp = _FakeResp("")
@@ -205,7 +201,9 @@ def test_llm_failure_returns_none(gen, monkeypatch):
         quotes=US_QUOTES, sector_signals=SECTOR_SIGNALS, avg_pct=1.4,
         us_date_str="2026-09-12", mood="강세",
     ))
-    assert record is None
+    assert record is not None
+    assert record["model"] == "deterministic-source-summary"
+    assert "확인된 가격 사실" in record["text"]
 
 
 # ── 요청 3 보조: 순수 함수 ────────────────────────────────────────────────────

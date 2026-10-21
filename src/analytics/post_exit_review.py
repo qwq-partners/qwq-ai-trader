@@ -4,7 +4,7 @@
 1. 각 종목 현재가를 KIS API로 조회
 2. 매도 후 변동률 계산 (매도 시점 → 현재)
 3. 전략 × exit_type 매트릭스 집계
-4. GPT-5.4(STRATEGY_ANALYSIS)로 인과 추론 + 가설 생성
+4. LLM으로 관측 한계와 후속 검증 가설 생성
 5. Wiki 페이지 + 텔레그램 리포트 생성
 
 Wiki 페이지는 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수됨.
@@ -63,17 +63,32 @@ class PostExitReviewer:
             classified = self._classify(tracked)
             aggregated = self._aggregate(tracked)
 
+            coverage = {
+                "eligible": len(trades),
+                "tracked": len(tracked),
+                "missing": len(trades) - len(tracked),
+                "quote_observed_at": getattr(self, "_last_quote_observed_at", None),
+            }
             llm_insights = ""
             if len(tracked) >= self.MIN_SAMPLE_FOR_LLM and self._llm:
                 llm_insights = await self._generate_llm_insights(
-                    tracked, classified, aggregated
+                    tracked, classified, aggregated, coverage=coverage
                 )
+
+            horizons = [int(t.get("days_since_exit", 0)) for t in tracked]
 
             report = {
                 "status": "ok",
                 "report_date": date.today().isoformat(),
                 "review_window_days": self.REVIEW_DAYS,
                 "samples": len(tracked),
+                "eligible_samples": len(trades),
+                "quote_missing_samples": len(trades) - len(tracked),
+                "quote_observed_at": coverage["quote_observed_at"],
+                "observation_horizon_min_days": min(horizons) if horizons else None,
+                "observation_horizon_max_days": max(horizons) if horizons else None,
+                "measurement_basis": "gross_price_change_from_exit_to_current_quote",
+                "costs_included": False,
                 "missed_count": len(classified["missed"]),
                 "avoided_count": len(classified["avoided"]),
                 "neutral_count": len(classified["neutral"]),
@@ -174,6 +189,7 @@ class PostExitReviewer:
 
         tracked = []
         now = datetime.now()
+        self._last_quote_observed_at = now.isoformat()
         for t in trades:
             cur = symbol_to_price.get(t["symbol"])
             if cur is None or cur <= 0:
@@ -262,14 +278,15 @@ class PostExitReviewer:
         tracked: List[Dict],
         classified: Dict,
         aggregated: Dict,
+        coverage: Dict[str, Any] | None = None,
     ) -> str:
-        prompt = self._build_prompt(tracked, classified, aggregated)
+        prompt = self._build_prompt(tracked, classified, aggregated, coverage=coverage)
         system = (
             "당신은 한국 주식 자동매매 시스템의 수석 전략 분석가입니다. "
-            "매도 후 추세를 비판적으로 분석하되, 항상 "
+            "매도 후 가격 관측을 비판적으로 분석하되, 항상 "
             "1) 표본 크기 한계, 2) 시장 체제(KOSPI/섹터) 영향, "
-            "3) 검증 가능한 가설 형태(예: \"X 변경 시 Y 개선 예상, 5영업일 후 검증\") "
-            "를 명시합니다. 절대 1주 표본만으로 단정 결론을 내리지 않습니다. "
+            "3) 검증 가능한 다음 측정 조건을 명시합니다. 인과·우월성·실현 가능 수익을 "
+            "단정하거나 파라미터 행동 지시를 하지 않습니다. "
             "출력은 한국어 마크다운으로 600단어 이내."
         )
         try:
@@ -291,44 +308,56 @@ class PostExitReviewer:
         tracked: List[Dict],
         classified: Dict,
         aggregated: Dict,
+        coverage: Dict[str, Any] | None = None,
     ) -> str:
+        coverage = coverage or {
+            "eligible": len(tracked), "tracked": len(tracked), "missing": 0,
+            "quote_observed_at": None,
+        }
+        horizons = [int(t.get("days_since_exit", 0)) for t in tracked]
+        horizon_text = f"{min(horizons)}~{max(horizons)}일" if horizons else "산출 불가"
         lines = [
-            "# QWQ AI Trader 주간 매도 후속 복기",
+            "# QWQ AI Trader 주간 매도 후 가격 관측",
             f"\n분석 기간: 최근 {self.REVIEW_DAYS}일 KR 매도 거래",
-            f"표본 크기: {len(tracked)}건 "
-            f"(놓침 {len(classified['missed'])}, 회피 {len(classified['avoided'])}, 타당 {len(classified['neutral'])})",
+            f"커버리지: 관측 {coverage['tracked']}/{coverage['eligible']}건 "
+            f"(미관측 {coverage['missing']}건)",
+            f"관측 시차: {horizon_text}; 조회 시각: {coverage.get('quote_observed_at') or '미기록'}",
+            "측정 한계: 매도 가격→현재 조회 가격의 총 변동률이며 수수료·세금·스프레드·"
+            "체결 가능성·KOSPI/섹터 대조를 반영하지 않음. 서로 다른 관측 시차를 성과처럼 비교하지 않음.",
+            f"관측 구간: +3% 이상 {len(classified['missed'])}, -3% 이하 {len(classified['avoided'])}, "
+            f"그 사이 {len(classified['neutral'])}",
             "",
-            "## 1. 매도 후 상승 (놓친 수익) — 상위 10건",
+            "## 1. 매도 후 +3% 이상 가격 관측 — 상위 10건",
             "| 종목 | 전략 | exit_type | 보유분 | pnl% | 매도후% | 경과일 |",
             "|---|---|---|---|---|---|---|",
         ]
         for t in classified["missed"][:10]:
             lines.append(
                 f"| {t['name']}({t['symbol']}) | {t['strategy']} | {t['exit_type']} "
-                f"| {t['holding_minutes']} | {t['pnl_pct']:+.2f}% "
+                f"| {t.get('holding_minutes', '미기록')} | {t['pnl_pct']:+.2f}% "
                 f"| **+{t['post_exit_pct']:.2f}%** | {t['days_since_exit']}일 |"
             )
         lines.extend([
             "",
-            "## 2. 매도 후 하락 (회피 성공) — 상위 10건",
+            "## 2. 매도 후 -3% 이하 가격 관측 — 상위 10건",
             "| 종목 | 전략 | exit_type | 보유분 | pnl% | 매도후% | 경과일 |",
             "|---|---|---|---|---|---|---|",
         ])
         for t in classified["avoided"][:10]:
             lines.append(
                 f"| {t['name']}({t['symbol']}) | {t['strategy']} | {t['exit_type']} "
-                f"| {t['holding_minutes']} | {t['pnl_pct']:+.2f}% "
+                f"| {t.get('holding_minutes', '미기록')} | {t['pnl_pct']:+.2f}% "
                 f"| **{t['post_exit_pct']:.2f}%** | {t['days_since_exit']}일 |"
             )
 
-        lines.extend(["", "## 3. 전략별 집계", "| 전략 | n | 놓침 | 회피 | 평균 매도후% | 평균 실현 pnl% |", "|---|---|---|---|---|---|"])
+        lines.extend(["", "## 3. 전략별 집계", "| 전략 | n | +3% 이상 | -3% 이하 | 평균 매도후% | 평균 실현 pnl% |", "|---|---|---|---|---|---|"])
         for k, v in sorted(aggregated["by_strategy"].items(), key=lambda x: -x[1]["count"]):
             lines.append(
                 f"| {k} | {v['count']} | {v['missed']} | {v['avoided']} "
                 f"| {v['avg_post_exit']:+.2f}% | {v['avg_pnl_pct']:+.2f}% |"
             )
 
-        lines.extend(["", "## 4. exit_type별 집계", "| exit_type | n | 놓침 | 회피 | 평균 매도후% |", "|---|---|---|---|---|"])
+        lines.extend(["", "## 4. exit_type별 집계", "| exit_type | n | +3% 이상 | -3% 이하 | 평균 매도후% |", "|---|---|---|---|---|"])
         for k, v in sorted(aggregated["by_exit_type"].items(), key=lambda x: -x[1]["count"]):
             lines.append(
                 f"| {k} | {v['count']} | {v['missed']} | {v['avoided']} "
@@ -340,14 +369,13 @@ class PostExitReviewer:
             "## 분석 요청",
             "위 데이터를 바탕으로 다음을 답해 주세요:",
             "",
-            "1. **통계적 신뢰도**: 표본 크기와 시장 체제 영향을 비판적으로 평가 (몇 % 설명력?)",
-            "2. **가장 시급한 P0 파라미터 1건**: 구체 수치 + 근거 + 검증 가능 가설(예: \"5영업일 후 평균 실현 +X%p 개선\"). "
-            "단, max_position_pct 28% × min_stop_pct 4.0% × 4건 = 4.48% < 5% daily_max 제약 유지.",
-            "3. **전략별 분기 권고**: sepa_trend / rsi2_reversal / strategic_swing / theme_chasing 중 어느 전략의 exit 로직이 시장 체제에 둔감한가?",
-            "4. **manual exit 패턴**: theme_chasing의 manual exit가 \"분류되지 않은 잔여\"이므로, 어떤 reason 패턴인지 추측해 차주 수정 우선순위를 매겨 주세요.",
-            "5. **반증 가능성**: 위 결론을 부정할 수 있는 데이터/조건은? (예: \"강세장 종료 시 첫 익절을 늦추면 손실 확대\")",
+            "1. **관측 품질**: 표본 수, 미관측 분모, 가변 시차, 시장 대조 결측을 적으세요.",
+            "2. **가설**: 관측된 연관성만 기술하고 원인·수익·우월한 파라미터로 단정하지 마세요.",
+            "3. **다음 확인**: 매도 후 5영업일 고정 시점, KOSPI/섹터 대비, 비용과 "
+            "체결 가능성을 포함한 동일 코호트 재측정 절차를 한 건 제시하세요.",
+            "4. **반증 조건**: 가설을 기각할 관측 조건을 적으세요.",
             "",
-            "출력은 표 + 짧은 단락. 진화 시스템 1건 변경 원칙 준수.",
+            "출력은 표 + 짧은 단락. 행동 지시가 아니라 검증 전 가설로 표시하세요.",
         ])
         return "\n".join(lines)
 
@@ -364,14 +392,19 @@ class PostExitReviewer:
         wiki_path = WIKI_DIR / f"weekly_post_exit_{iso_year}-W{iso_week:02d}.md"
 
         lines = [
-            f"# 주간 매도 후속 복기 — {report['report_date']} (W{iso_week:02d})",
+            f"# 주간 매도 후 가격 관측 — {report['report_date']} (W{iso_week:02d})",
             "",
             f"- 분석 기간: 최근 {report['review_window_days']}일",
-            f"- 표본: {report['samples']}건 "
-            f"(놓침 {report['missed_count']} / 회피 {report['avoided_count']} / 타당 {report['neutral_count']})",
+            f"- 커버리지: 관측 {report['samples']}/{report.get('eligible_samples', report['samples'])}건 "
+            f"(미관측 {report.get('quote_missing_samples', 0)}건)",
+            f"- 관측 시차: {report.get('observation_horizon_min_days')}~"
+            f"{report.get('observation_horizon_max_days')}일",
+            f"- 조회 시각: {report.get('quote_observed_at') or '미기록'}",
+            "- 한계: 매도 가격→조회 가격의 총 변동률. 비용·세금·스프레드·체결 가능성·시장 대조 미반영.",
+            "- 다음 확인: 같은 코호트를 매도 후 5영업일 고정 시점·KOSPI 대비·비용 포함 기준으로 재측정.",
             "",
             "## 전략별 매도후 추세",
-            "| 전략 | n | 놓침 | 회피 | 평균 매도후% | 평균 실현 pnl% |",
+            "| 전략 | n | +3% 이상 | -3% 이하 | 평균 매도후% | 평균 실현 pnl% |",
             "|---|---|---|---|---|---|",
         ]
         for k, v in sorted(report["by_strategy"].items(), key=lambda x: -x[1]["count"]):
@@ -379,7 +412,7 @@ class PostExitReviewer:
                 f"| {k} | {v['count']} | {v['missed']} | {v['avoided']} "
                 f"| {v['avg_post_exit']:+.2f}% | {v['avg_pnl_pct']:+.2f}% |"
             )
-        lines.extend(["", "## exit_type별 매도후 추세", "| exit_type | n | 놓침 | 회피 | 평균 매도후% |", "|---|---|---|---|---|"])
+        lines.extend(["", "## exit_type별 매도후 추세", "| exit_type | n | +3% 이상 | -3% 이하 | 평균 매도후% |", "|---|---|---|---|---|"])
         for k, v in sorted(report["by_exit_type"].items(), key=lambda x: -x[1]["count"]):
             lines.append(
                 f"| {k} | {v['count']} | {v['missed']} | {v['avoided']} "
@@ -389,14 +422,14 @@ class PostExitReviewer:
         if report.get("llm_insights"):
             lines.extend([
                 "",
-                "## LLM 분석",
+                "## LLM 검증 전 가설",
                 "",
                 report["llm_insights"],
             ])
 
         lines.extend([
             "",
-            "## Top 매도후 상승 (놓침)",
+            "## 매도 후 +3% 이상 가격 관측",
         ])
         for t in report.get("missed", [])[:10]:
             lines.append(
@@ -404,7 +437,7 @@ class PostExitReviewer:
                 f"실현 {t['pnl_pct']:+.2f}% → 매도후 **+{t['post_exit_pct']:.2f}%** "
                 f"({t['days_since_exit']}일 경과)"
             )
-        lines.extend(["", "## Top 매도후 하락 (회피)"])
+        lines.extend(["", "## 매도 후 -3% 이하 가격 관측"])
         for t in report.get("avoided", [])[:10]:
             lines.append(
                 f"- {t['name']}({t['symbol']}) [{t['strategy']}/{t['exit_type']}] "
@@ -418,13 +451,16 @@ class PostExitReviewer:
 
     def _format_telegram(self, report: Dict) -> str:
         lines = [
-            "📋 <b>주간 매도 후속 복기</b>",
+            "📋 <b>주간 매도 후 가격 관측</b>",
             f"<i>{report['report_date']} · 최근 {report['review_window_days']}일</i>",
             "",
-            f"표본 <b>{report['samples']}</b>건 · "
-            f"놓침 <b>{report['missed_count']}</b> / 회피 <b>{report['avoided_count']}</b> / 타당 {report['neutral_count']}",
+            f"관측 {report['samples']}/{report.get('eligible_samples', report['samples'])}건 · "
+            f"미관측 {report.get('quote_missing_samples', 0)}건",
+            f"관측 시차 {report.get('observation_horizon_min_days')}~"
+            f"{report.get('observation_horizon_max_days')}일 · 조회 {report.get('quote_observed_at') or '시각 미기록'}",
+            "※ 매도 가격→조회 가격 총 변동률 · 비용·세금·체결 가능성 미반영",
             "",
-            "<b>📈 매도후 상승 Top 5 (놓친 수익)</b>",
+            "<b>📈 매도 후 +3% 이상 가격 관측</b>",
         ]
         for t in report.get("missed", [])[:5]:
             lines.append(
@@ -435,7 +471,7 @@ class PostExitReviewer:
             lines.append("  (없음)")
 
         lines.append("")
-        lines.append("<b>📉 매도후 하락 Top 5 (회피 성공)</b>")
+        lines.append("<b>📉 매도 후 -3% 이하 가격 관측</b>")
         for t in report.get("avoided", [])[:5]:
             lines.append(
                 f"  · {t['name']} [{_short_strat(t['strategy'])}/{t['exit_type']}] "
@@ -451,20 +487,16 @@ class PostExitReviewer:
         )[:5]:
             lines.append(
                 f"  · {_short_strat(k)} (n={v['count']}): {v['avg_post_exit']:+.1f}% "
-                f"[놓침 {v['missed']}/회피 {v['avoided']}]"
+                f"[+3% 이상 {v['missed']}/-3% 이하 {v['avoided']}]"
             )
 
+        lines.extend([
+            "",
+            "<b>다음 확인</b>: 같은 코호트를 매도 후 5영업일 고정 시점·KOSPI 대비·"
+            "비용 포함 기준으로 재측정",
+        ])
         if report.get("llm_insights"):
-            insight_short = report["llm_insights"][:1200]
-            lines.extend([
-                "",
-                "<b>🤖 LLM 분석</b>",
-                f"<pre>{_escape_html(insight_short)}</pre>",
-            ])
-            if len(report["llm_insights"]) > 1200:
-                lines.append(
-                    f"<i>(전체는 위키: weekly_post_exit_{date.today().isocalendar()[0]}-W{date.today().isocalendar()[1]:02d}.md)</i>"
-                )
+            lines.append("<i>LLM 검증 전 가설은 위키에 저장됨 · 행동 지시로 사용하지 않음</i>")
 
         return "\n".join(lines)
 

@@ -110,6 +110,26 @@ def render_expert_briefing(label, ops, agg, bias, bear_consensus, summary, *,
     ]
     if short:
         lines.append("⚠️ 자료 범위 부족/미확인 — 종합 방향 판단 보류")
+    lines.append("\n<b>먼저 볼 판단</b>")
+    if short:
+        lines.append("• 시장 방향을 정할 자료가 부족합니다. 결측 수급·지수 갱신 후 다시 판단합니다.")
+    elif bear_consensus:
+        lines.append("• 시장 입력의 약세 조건이 모였습니다. 후보 강세가 지수·업종 대비 유지되는지 우선 확인합니다.")
+    else:
+        lines.append("• 시장 합의만으로 종목을 고를 근거는 부족합니다. 후보별 가격·거래대금·수급의 일치를 확인합니다.")
+    sector_op = ops.get("sector_council")
+    if sector_op is not None and sector_op.is_valid:
+        sector_values = (sector_op.raw_evidence or {}).get("sector_scores") or {}
+        for name, values in sector_values.items():
+            r1, r5 = values.get("r1"), values.get("r5")
+            if _number(r1) and _number(r5) and r1 > 0 and r5 < 0:
+                period = "당일" if _date(values.get("as_of")) == today else "최근 1세션"
+                lines.append(f"• {_text(name, 20)}: {period} 반등과 누적 약세가 공존합니다. "
+                             "반등 지속은 거래대금·개별 수급 동반 여부로 확인합니다.")
+                break
+    kr = ops.get("kr_market_expert")
+    if kr is None or not kr.is_valid or kr.data_status in {"insufficient", "unknown"}:
+        lines.append("• 국내 수급 근거 부족: 해외 강약을 한국 종목 진입 신호로 옮기지 않습니다.")
     lines.append("\n<b>시장 입력과 참고 자료</b>")
     for name in ORDER:
         op = ops.get(name)

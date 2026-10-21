@@ -219,7 +219,7 @@ def test_adjusted_pass_buckets_get_neutral_verdict_and_bands():
     detail = {ln.split(":")[0]: ln for ln in report.splitlines() if "건 | 평균" in ln}
     assert "+3% 이상 40%" in detail["PEN_G2_cross"] and "기회손실" not in detail["PEN_G2_cross"]
     assert "-3% 이하 10%" in detail["BOOST_G2_cross|wiki"]
-    assert "기회손실 40%" in detail["G2_cross"]
+    assert "+3% 이상 40%" in detail["G2_cross"] and "기회손실" not in detail["G2_cross"]
 
 
 def test_adjusted_pass_bucket_small_samples():

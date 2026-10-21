@@ -7,8 +7,11 @@ AI Trading Bot v2 - 일일 거래 리뷰어 (Daily Reviewer)
 """
 
 import asyncio
+import html
 import json
+import math
 import os
+from collections import Counter
 from datetime import datetime, date
 from decimal import Decimal
 from pathlib import Path
@@ -93,6 +96,24 @@ def _parse_date_str(date_str: Optional[str]) -> date:
 def _date_to_file_suffix(d: date) -> str:
     """date 객체를 파일명용 YYYYMMDD 문자열로 변환."""
     return d.strftime("%Y%m%d")
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    """유한한 숫자만 반환하고 결측·NaN·무한대는 구분한다."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _nonnegative_count(value: Any) -> Optional[int]:
+    number = _finite_number(value)
+    if number is None or number < 0 or not number.is_integer():
+        return None
+    return int(number)
 
 
 def _format_trade_for_prompt(trade: TradeRecord) -> Dict[str, Any]:
@@ -310,10 +331,11 @@ class DailyReviewer:
 
         return report
 
-    def _get_capital_basis(self) -> float:
-        """자본률 계산용 기준 자본 — INITIAL_CAPITAL 환경변수 우선,
-        없으면 daily_stats.json의 total_equity, 둘 다 없으면 25,000,000원 폴백.
-        2026-05-14: 거래 단위 pnl_pct vs 자본 단위 pnl_pct 구분용.
+    def _get_capital_basis_info(self) -> tuple[float, str]:
+        """자본 기준값과 출처를 함께 반환한다.
+
+        이 값은 계좌 수익률이나 TWR이 아니라 일일 실현 순손익을 나누는 정적
+        참고 분모다. 출처를 함께 보존해 폴백값을 실계좌 잔고로 오해하지 않게 한다.
         """
         # 2026-05-27 폴백 순서 정정: 실제 운용 total_equity 우선, INITIAL_CAPITAL env는 보조
         # 사고: INITIAL_CAPITAL=500000(기본값)으로 자본률 171% 과장 표시
@@ -325,7 +347,7 @@ class DailyReviewer:
                 # peak_equity (실제 운용 자본 추적) 또는 total_equity
                 eq = float(data.get("peak_equity") or data.get("total_equity") or 0)
                 if eq > 1_000_000:
-                    return eq
+                    return eq, "daily_stats_peak_or_total_equity"
         except Exception:
             pass
         # 보조: dashboard API (live engine 값)
@@ -335,22 +357,27 @@ class DailyReviewer:
                 pf = json.loads(resp.read())
                 eq = float(pf.get("initial_capital") or pf.get("total_equity") or 0)
                 if eq > 1_000_000:
-                    return eq
+                    return eq, "local_portfolio_snapshot"
         except Exception:
             pass
         # 보조: env (단 100만원 이상 합리적인 값만 신뢰)
         try:
             cap = float(os.getenv("INITIAL_CAPITAL", "0") or 0)
             if cap > 1_000_000:
-                return cap
+                return cap, "initial_capital_config"
         except (TypeError, ValueError):
             pass
         # 최후 폴백
-        return 25_000_000.0  # 폴백 (KR 기본 자본)
+        return 25_000_000.0, "static_fallback"
+
+    def _get_capital_basis(self) -> float:
+        """기존 호출자 호환용 자본 기준값."""
+        return self._get_capital_basis_info()[0]
 
     def _calculate_summary(self, trades: List[TradeRecord]) -> Dict[str, Any]:
         """청산 거래 목록에서 요약 통계를 계산한다."""
         if not trades:
+            capital_basis, capital_source = self._get_capital_basis_info()
             return {
                 "total_trades": 0,
                 "wins": 0,
@@ -359,7 +386,10 @@ class DailyReviewer:
                 "total_pnl": 0.0,
                 "total_pnl_pct": 0.0,
                 "capital_pnl_pct": 0.0,
-                "capital_basis": self._get_capital_basis(),
+                "capital_basis": capital_basis,
+                "capital_basis_source": capital_source,
+                "pnl_basis": "net_of_commission_and_sell_tax",
+                "return_basis": "sum_of_trade_net_pnl_pct",
                 "profit_factor": 0.0,
                 "best_trade": None,
                 "worst_trade": None,
@@ -383,7 +413,7 @@ class DailyReviewer:
         # 거래 단위 수익률 합 (각 거래의 진입 cost 기준)
         total_pnl_pct = float(sum(float(t.pnl_pct) for t in trades))
         # 2026-05-14 추가: 자본 단위 수익률 (전체 자산 대비)
-        capital_basis = self._get_capital_basis()
+        capital_basis, capital_source = self._get_capital_basis_info()
         capital_pnl_pct = (total_pnl / capital_basis * 100) if capital_basis > 0 else 0.0
 
         best = max(trades, key=lambda t: float(t.pnl_pct))
@@ -398,6 +428,9 @@ class DailyReviewer:
             "total_pnl_pct": round(total_pnl_pct, 2),
             "capital_pnl_pct": round(capital_pnl_pct, 3),
             "capital_basis": round(capital_basis),
+            "capital_basis_source": capital_source,
+            "pnl_basis": "net_of_commission_and_sell_tax",
+            "return_basis": "sum_of_trade_net_pnl_pct",
             "profit_factor": round(profit_factor, 2),
             "best_trade": {
                 "symbol": best.symbol,
@@ -478,19 +511,32 @@ class DailyReviewer:
         if report is None:
             report = await self.generate_trade_report(trade_journal, date_str_formatted)
 
-        trades = report.get("trades", [])
+        raw_trades = report.get("trades")
+        trades = raw_trades if isinstance(raw_trades, list) else None
         summary = report.get("summary", {})
         strategy_performance = report.get("strategy_performance", {})
 
-        # 거래가 없으면 기본 리뷰 반환
-        if summary.get("total_trades", 0) == 0:
+        # 거래가 없거나 건수 자체가 기록되지 않았으면 추측하지 않고 평가를 보류한다.
+        source_total = len(trades) if trades is not None else _nonnegative_count(
+            summary.get("total_trades")
+        )
+        if source_total in (None, 0):
             llm_review = self._create_empty_review(target_date)
+            llm_review["telegram_summary"] = self._build_authoritative_telegram_summary(
+                target_date, summary, trades
+            )
             self._save_llm_review(target_date, llm_review)
-            logger.info("[거래리뷰] 거래 없음 -- 빈 리뷰 저장")
+            try:
+                await send_alert(llm_review["telegram_summary"])
+            except Exception as e:
+                logger.warning(f"[거래리뷰] 거래 없음 알림 발송 실패: {e}")
+            logger.info("[거래리뷰] 청산 거래 없음 -- 평가 보류 리뷰 저장")
             return llm_review
 
         # LLM 프롬프트 구성
-        prompt = self._build_llm_prompt(target_date, trades, summary, strategy_performance)
+        prompt = self._build_llm_prompt(
+            target_date, trades or [], summary, strategy_performance
+        )
 
         # LLM 호출
         try:
@@ -514,7 +560,18 @@ class DailyReviewer:
 
         except Exception as e:
             logger.error(f"[거래리뷰] LLM 평가 실패, 폴백 생성: {e}")
-            llm_review = self._create_fallback_review(target_date, summary, trades)
+            llm_review = self._create_fallback_review(
+                target_date, summary, trades or []
+            )
+
+        # 사용자 알림의 수치와 분모는 결정론적 거래 리포트만 사용한다. 모델이 만든
+        # telegram_summary는 기계 피드백에 쓰이지 않으므로 감사용으로만 별도 보존한다.
+        model_summary = llm_review.get("telegram_summary")
+        if model_summary:
+            llm_review["model_telegram_summary"] = model_summary
+        llm_review["telegram_summary"] = self._build_authoritative_telegram_summary(
+            target_date, summary, trades
+        )
 
         # 파일 저장
         self._save_llm_review(target_date, llm_review)
@@ -535,6 +592,198 @@ class DailyReviewer:
             logger.warning(f"[거래리뷰] daily_bias 저장 실패 (무시): {e}")
 
         return llm_review
+
+    @staticmethod
+    def _build_authoritative_telegram_summary(
+        target_date: date,
+        summary: Dict[str, Any],
+        trades: Optional[List[Dict[str, Any]]],
+    ) -> str:
+        """결정론적 통계만으로 사용자용 일일 복기 본문을 만든다.
+
+        LLM 서술 대신 저장된 거래 원자료와 결정론적 summary 필드만 사용한다.
+        결측값과 비유한 수치는 0으로 바꾸지 않고 미기록/미산출로 표시한다.
+        """
+        total = len(trades) if trades is not None else _nonnegative_count(
+            summary.get("total_trades")
+        )
+        if total is None:
+            return (
+                f"📊 <b>{target_date:%-m/%-d} 거래 복기</b>\n\n"
+                "<b>■ 관측 범위</b>\n"
+                "  거래저널 청산 거래 건수 미기록\n"
+                "  성과 평가 보류 — 거래 건수와 원자료 확인이 필요합니다."
+            )
+        if total == 0:
+            return (
+                f"📊 <b>{target_date:%-m/%-d} 거래 복기</b>\n\n"
+                "<b>■ 관측 범위</b>\n"
+                "  거래저널 기준 청산 거래 0건\n"
+                "  성과 평가 보류 — 비교할 실현 거래가 없습니다."
+            )
+
+        source_trades = trades or []
+        positive = negative = flat = unknown_sign = 0
+        loss_exit_types: Counter[str] = Counter()
+        for trade in source_trades:
+            if not isinstance(trade, dict):
+                unknown_sign += 1
+                continue
+            pnl = _finite_number(trade.get("pnl"))
+            if pnl is None:
+                pnl = _finite_number(trade.get("pnl_pct"))
+            if pnl is None:
+                unknown_sign += 1
+            elif pnl > 0:
+                positive += 1
+            elif pnl < 0:
+                negative += 1
+                exit_type = str(trade.get("exit_type") or "").strip()
+                if exit_type:
+                    loss_exit_types[exit_type] += 1
+            else:
+                flat += 1
+
+        if trades is not None:
+            count_parts = [f"수익 {positive}", f"손실 {negative}"]
+            if flat:
+                count_parts.append(f"보합 {flat}")
+            if unknown_sign:
+                count_parts.append(f"손익 부호 미기록 {unknown_sign}건")
+            count_line = f"  청산 기록 {total}건 · " + " / ".join(count_parts)
+            recorded_loss_count = negative
+        else:
+            wins = _nonnegative_count(summary.get("wins"))
+            losses = _nonnegative_count(summary.get("losses"))
+            recorded_loss_count = losses
+            recorded = []
+            if wins is not None:
+                recorded.append(f"수익 {wins}")
+            if losses is not None:
+                recorded.append(f"손실 {losses}")
+            count_line = f"  청산 기록 {total}건"
+            if recorded:
+                count_line += " · " + " / ".join(recorded)
+            else:
+                count_line += " · 수익/손실 건수 미기록"
+
+        total_pnl = _finite_number(summary.get("total_pnl"))
+        fee_basis_known = summary.get("pnl_basis") == "net_of_commission_and_sell_tax"
+        pnl_label = "순손익" if fee_basis_known else "기록 손익"
+        if total_pnl is None:
+            pnl_line = f"  {pnl_label} 미산출"
+        else:
+            basis = "수수료·매도세 반영" if fee_basis_known else "비용 반영 여부 미기록"
+            pnl_line = f"  {pnl_label} <b>{total_pnl:+,.0f}원</b> ({basis})"
+
+        trade_return_sum = _finite_number(summary.get("total_pnl_pct"))
+        return_label = "순손익률" if fee_basis_known else "수익률"
+        return_line = (
+            f"  개별 거래 {return_label} 합계 {trade_return_sum:+.2f}%"
+            if trade_return_sum is not None
+            else f"  개별 거래 {return_label} 합계 미산출"
+        )
+
+        capital_ratio = _finite_number(summary.get("capital_pnl_pct"))
+        capital_basis = _finite_number(summary.get("capital_basis"))
+        capital_source = summary.get("capital_basis_source")
+        capital_labels = {
+            "daily_stats_peak_or_total_equity": "일일 자산 통계",
+            "local_portfolio_snapshot": "로컬 포트폴리오 스냅샷",
+            "initial_capital_config": "초기자본 설정",
+        }
+        if (
+            capital_source in capital_labels
+            and capital_ratio is not None
+            and capital_basis is not None
+            and capital_basis > 0
+        ):
+            capital_line = (
+                f"  참고 실현손익/기준자본 {capital_ratio:+.3f}% "
+                f"(분모 {capital_basis:,.0f}원 · {capital_labels[capital_source]})\n"
+                "  ※ 계좌수익률/TWR 아님 · 입출금·미실현손익 미반영"
+            )
+        else:
+            capital_line = (
+                "  계좌 기준 수익 미산출 "
+                "(입출금·미실현손익·신뢰 가능한 기준잔고 필요)"
+            )
+
+        pf = _finite_number(summary.get("profit_factor"))
+        if recorded_loss_count is None or (
+            recorded_loss_count == 0 and trades is not None and unknown_sign > 0
+        ):
+            pf_line = "  PF 손실 표본 판정 불가 — 비율 미산출"
+        elif recorded_loss_count == 0:
+            pf_line = "  PF 손실 표본 없음 — 비율 미산출"
+        else:
+            pf_line = f"  PF {pf:.2f}" if pf is not None else "  PF 미산출"
+
+        def _format_summary_trade(label: str, value: Any) -> str:
+            if not isinstance(value, dict):
+                return f"  {label}: 미산출"
+            name = str(value.get("name") or "").strip()
+            symbol = str(value.get("symbol") or "").strip()
+            identity = name or symbol
+            if name and symbol:
+                identity = f"{name}({symbol})"
+            identity = html.escape(identity) if identity else "종목 미기록"
+            pnl = _finite_number(value.get("pnl"))
+            pnl_pct = _finite_number(value.get("pnl_pct"))
+            metrics = []
+            if pnl is not None:
+                metrics.append(f"{pnl:+,.0f}원")
+            if pnl_pct is not None:
+                metrics.append(f"{pnl_pct:+.2f}%")
+            suffix = " · ".join(metrics) if metrics else "손익 미기록"
+            return f"  {label}: {identity} · {suffix}"
+
+        best_line = _format_summary_trade(
+            "개별 수익률 상단", summary.get("best_trade")
+        )
+        worst_line = _format_summary_trade(
+            "개별 수익률 하단", summary.get("worst_trade")
+        )
+
+        if trades is None:
+            next_check = (
+                "  청산유형 원자료 미기록 · 동일 진입 기준 비교 청산을 위해 원자료 확인 필요"
+            )
+        elif negative == 0 and unknown_sign > 0:
+            next_check = (
+                f"  손익 부호 미기록 {unknown_sign}건 · 손실 여부 판정을 보류하고 "
+                "손익·청산유형 원자료를 먼저 확인"
+            )
+        elif negative == 0:
+            next_check = (
+                "  손실 거래 없음 · 다음 거래도 동일 진입 기준 실제 청산과 "
+                "1·3·5영업일 비교 청산을 함께 기록"
+            )
+        elif loss_exit_types:
+            exit_type, exit_count = loss_exit_types.most_common(1)[0]
+            covered = sum(loss_exit_types.values())
+            missing_types = negative - covered
+            next_check = (
+                f"  손실 {negative}건 중 청산유형 기록 {covered}건"
+                f"(미기록 {missing_types}건) · "
+                f"최다 {html.escape(exit_type)} {exit_count}건\n"
+                "  동일 진입 기준 실제 청산과 1·3·5영업일 비교 청산의 비용 반영 손익을 기록"
+            )
+        else:
+            next_check = (
+                f"  손실 {negative}건의 청산유형 미기록 · 유형을 보완한 뒤 동일 진입 기준 "
+                "실제/비교 청산 손익을 기록"
+            )
+
+        return (
+            f"📊 <b>{target_date:%-m/%-d} 거래 복기</b>\n\n"
+            "<b>■ 거래저널 실현 성과</b>\n"
+            f"{count_line}\n{pnl_line}\n{return_line}\n{capital_line}\n{pf_line}\n\n"
+            "<b>■ 개별 거래 수익률 범위</b>\n"
+            f"{best_line}\n{worst_line}\n\n"
+            "<b>■ 다음 확인</b>\n"
+            f"{next_check}"
+        )
 
     def _build_llm_prompt(
         self,

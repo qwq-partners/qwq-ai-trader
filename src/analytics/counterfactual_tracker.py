@@ -1,8 +1,7 @@
 """Counterfactual 추적기 (2026-08-08 — Codex 전략 리뷰 과제①/③)
 
-AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후속 수익률을 추적한다.
-분기 말에 각 규칙/전문가가 실제로 얼마를 지켰는지(피한 손실) 또는 놓쳤는지
-(놓친 수익) 증명하는 기반 데이터.
+AI 게이트가 차단·감지한 후보의 이후 가격 변화를 추적한다.
+체결·진입 시차·청산·비용을 반영하지 않으므로 실제 피한 손실이나 놓친 수익의 증명이 아니다.
 
 소스 (기록만 되고 후속 추적이 없던 shadow 로그):
   ~/.cache/ai_trader/rule11_shadow_log.jsonl  — 전문가 BEAR 합의 감지
@@ -14,9 +13,7 @@ AI 게이트가 차단·감지한 매수 후보의 "만약 거래했다면" 후�
   · fill_evidence_unknown=True 행은 측정값을 보존하되 평가·가격 갱신에서 제외
   · 갱신은 저녁 품질검증 잡에서 1일 1회 (KIS get_daily_prices — 오래된 순 반환)
 
-해석: 차단(rule11/rule12/team_hold) 후보의 rN이 음수(-) = 게이트가 손실을 막았다(정확한 차단).
-반대로 team_buy_unfilled(팀이 승인한 매수, T11 E1 2026-09-15~)는 rN이 음수면 팀 판단이
-틀렸다는 뜻이다 — 같은 부호라도 두 소스의 "적중"은 정반대 의미이므로 요약에서 섞어 읽지 않는다.
+해석: rN 음수는 해당 기준 이후 가격 하락이다. 주문 승인/차단의 정답이나 실현손익이 아니다.
 """
 
 from __future__ import annotations
@@ -287,8 +284,8 @@ class CounterfactualTracker:
 
     # ── 갱신 ───────────────────────────────────────────────
     def summary(self) -> str:
-        """소스별 요약 + KODEX200 대비 초과수익(x5) 한 줄 — 판정은 초과수익 기준으로 읽을 것"""
-        base = self._summary_base()
+        """소스별 요약 + KODEX200 대비 초과수익(x5) 한 줄 — 실제 체결 성과와 구분"""
+        base = self._summary_base() + "\n※ 후행 가격 관측 · 체결·비용 미반영 · 실제 손익/판단 정확도 아님"
         try:
             groups: Dict[str, List[float]] = {}
             for v in self._state.values():
@@ -300,7 +297,7 @@ class CounterfactualTracker:
                 parts = [
                     f"{src} n={len(xs)} x5 {sum(xs) / len(xs):+.2f}% "
                     f"(음수 {sum(1 for x in xs if x < 0) / len(xs) * 100:.0f}%"
-                    f"{'·팀 판단이 틀림' if src.split('|', 1)[0] == 'team_buy_unfilled' else ''})"
+                    f"{'·승인 미체결 이후 관측' if src.split('|', 1)[0] == 'team_buy_unfilled' else ''})"
                     for src, xs in sorted(groups.items())
                 ]
                 base += "\n· KODEX200 대비 초과(r5): " + " | ".join(parts)
@@ -447,12 +444,12 @@ class CounterfactualTracker:
                 wrong = sum(1 for i in items if i["r5"] < 0)
                 line = (
                     f"{source}: 승인 BUY 미체결 {n}건 | 5일 뒤 하락 {wrong}건 "
-                    f"(팀 판단이 틀린 비율 {wrong/n*100:.0f}%) | 평균 r5 {avg_r5:+.1f}%"
+                    f"(하락 관측 비율 {wrong/n*100:.0f}%) | 평균 r5 {avg_r5:+.1f}%"
                 )
             else:
                 avoided = sum(1 for i in items if i["r5"] < 0)
                 line = (
-                    f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 적중) "
+                    f"{source}: {n}건 | 5일 뒤 하락 {avoided}건 ({avoided/n*100:.0f}% 관측) "
                     f"| 평균 r5 {avg_r5:+.1f}%"
                 )
             if avg_r20 is not None:

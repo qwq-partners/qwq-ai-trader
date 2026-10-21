@@ -332,8 +332,8 @@ def test_f21_strong_us_up_without_kr_inputs_defers_kr_direction(monkeypatch):
 
     for banned in ("갭업 가능성", "갭상승", "갭 상승", "하방 압력"):
         assert banned not in report, banned
-    assert "미국 지수 평균" in report and "국내 자료 없음" in report
-    assert "판단 보류" in report
+    assert "기준일 미확인" in report and "개별 수치만 참고" in report
+    assert "한국 개장 방향은 이 자료만으로 판단하지 않음" in report
 
 
 def test_f21_all_index_quotes_missing_does_not_fabricate_flat_close(monkeypatch):
@@ -357,11 +357,8 @@ def test_f21_all_index_quotes_missing_does_not_fabricate_flat_close(monkeypatch)
     assert "판단 보류" in report or "판단 불가" in report
 
 
-def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
-    """리뷰 advisory(F21): '■ 한국 시장 영향' 섹터 매핑 블록은 방향을 단정하진
-    않지만 대상 시장·시간범위 표기가 없었다 — kr_inputs 없이는 헤더가 '미국
-    섹터 → 국내 테마 매핑 (전일 미국 세션 기준, 국내 개장 반영 아님)'으로
-    바뀌어야 한다(정상 경로·차트동반 경로 모두 같은 sector_header 를 쓴다)."""
+def test_f21_internal_sector_boost_is_not_user_facing_direction(monkeypatch):
+    """테마 부스트는 캐시 입력으로만 유지하고 사용자 본문에서는 방향처럼 보이지 않는다."""
     monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
@@ -373,14 +370,12 @@ def test_f21_sector_mapping_header_marks_scope_without_kr_inputs(monkeypatch):
     )
 
     report = asyncio.run(gen.generate_us_market_report(send_telegram=False))
-    assert "미국 섹터 → 국내 테마 매핑" in report
-    assert "국내 개장 반영 아님" in report
-    assert "<b>■ 한국 시장 영향</b>" not in report
+    assert "부스트" not in report
+    assert "한국 시장 영향" not in report
 
 
-def test_f21_strong_us_up_with_kr_inputs_keeps_existing_wording(monkeypatch):
-    """kr_inputs(as_of 포함)가 있으면 기존 관찰 포인트 문구를 허용한다 — 근거가
-    있는 주장은 막지 않는다."""
+def test_f21_kr_input_presence_alone_does_not_predict_open(monkeypatch):
+    """국내 자료가 있다는 사실만으로 한국 개장 방향을 만들지 않는다."""
     monkeypatch.setattr(dr, "get_telegram_notifier", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_screener", lambda: SimpleNamespace())
     monkeypatch.setattr(dr, "get_theme_detector", lambda: SimpleNamespace())
@@ -393,24 +388,23 @@ def test_f21_strong_us_up_with_kr_inputs_keeps_existing_wording(monkeypatch):
     report = asyncio.run(gen.generate_us_market_report(
         send_telegram=False, kr_inputs=kr_inputs,
     ))
-    assert "갭업 가능성" in report
+    assert "갭업 가능성" not in report
+    assert "한국 개장 방향은 이 자료만으로 판단하지 않음" in report
 
 
 # ── F22: 날짜별 원문·발송문 보존, 과거 재평가는 실측 재라벨링 금지 ────────────
 
-def test_f22_two_generations_same_day_both_preserved_latest_cache_is_second(monkeypatch, tmp_path):
+def test_f22_two_deterministic_generations_same_day_both_preserved(monkeypatch, tmp_path):
     gen = _make_gen(monkeypatch)
     brief_path = tmp_path / "llm_morning_brief.json"
     archive_dir = tmp_path / "morning_brief"
 
-    _patch_llm(monkeypatch, _FakeLLM("<b>■ 시장 종합 평가</b>\n첫 번째 생성 버전이다.\n"))
     rec1 = asyncio.run(gen.build_morning_brief(
         quotes=US_QUOTES_FLAT, sector_signals={}, avg_pct=0.2,
         us_date_str=date.today().isoformat(), mood="보합",
     ))
     dr.save_morning_brief(rec1, brief_path, archive_dir=archive_dir)
 
-    _patch_llm(monkeypatch, _FakeLLM("<b>■ 시장 종합 평가</b>\n두 번째(재생성) 버전이다.\n"))
     rec2 = asyncio.run(gen.build_morning_brief(
         quotes=US_QUOTES_FLAT, sector_signals={}, avg_pct=0.2,
         us_date_str=date.today().isoformat(), mood="보합",
@@ -419,31 +413,25 @@ def test_f22_two_generations_same_day_both_preserved_latest_cache_is_second(monk
 
     archive = json.loads((archive_dir / f"{rec2['kr_date']}.json").read_text(encoding="utf-8"))
     assert len(archive["generated"]) == 2
-    assert "첫 번째" in archive["generated"][0]["text"]
-    assert "두 번째" in archive["generated"][1]["text"]
+    assert archive["generated"][0]["raw_text"] == ""
+    assert archive["generated"][1]["raw_text"] == ""
+    assert archive["generated"][0]["model"] == "deterministic-source-summary"
     assert archive["generated"][0]["version"] == 1
     assert archive["generated"][1]["version"] == 2
 
     cache = json.loads(brief_path.read_text(encoding="utf-8"))
-    assert "두 번째" in cache["text"], "최신 캐시는 2번째 생성본이어야 한다"
+    assert "두 번째" not in cache["text"], "표시 캐시는 결정론적 사실 본문이어야 한다"
 
 
-def test_f22_raw_llm_response_and_full_body_preserved_in_archive(monkeypatch, tmp_path):
-    """리뷰 blocking(F22-4/§ acceptance F22-4): archive['generated'] 에 절단 없는
-    원문(raw_text)과 sanitize 후 전체 본문(body_full)이 남아야 sanitize 가 무엇을
-    지웠는지·3800자 초과분이 무엇이었는지 사후 검증할 수 있다. 최신 캐시
-    (llm_morning_brief.json)는 지금처럼 절단본(text)만 유지한다."""
+def test_f22_deterministic_source_body_preserved_in_archive(monkeypatch, tmp_path):
+    """새 결정론적 레코드도 기존 감사 스키마 필드를 유지한다."""
     gen = _make_gen(monkeypatch)
-    long_sentence = "미국 빅테크가 동반 강세를 보이며 지수를 끌어올렸다. " * 200  # 3800자 훌쩍 초과
-    _patch_llm(monkeypatch, _FakeLLM(f"<b>■ 시장 종합 평가</b>\n{long_sentence}\n"))
-
     record = asyncio.run(gen.build_morning_brief(
         quotes=US_QUOTES_FLAT, sector_signals={}, avg_pct=0.2,
         us_date_str=date.today().isoformat(), mood="보합",
     ))
-    assert len(record["text"]) < len(record["raw_text"]), "text 는 절단본이어야 한다"
-    assert long_sentence.strip() in record["raw_text"]
-    assert long_sentence.strip() in record["body_full"]
+    assert record["raw_text"] == ""
+    assert record["body_full"] == record["text"]
 
     brief_path = tmp_path / "llm_morning_brief.json"
     archive_dir = tmp_path / "morning_brief"
@@ -451,8 +439,9 @@ def test_f22_raw_llm_response_and_full_body_preserved_in_archive(monkeypatch, tm
 
     archive = json.loads((archive_dir / f"{record['kr_date']}.json").read_text(encoding="utf-8"))
     entry = archive["generated"][0]
-    assert long_sentence.strip() in entry["raw_text"], "아카이브 원문은 절단되면 안 된다"
-    assert long_sentence.strip() in entry["body_full"]
+    assert entry["raw_text"] == ""
+    assert entry["body_full"] == entry["text"]
+    assert entry["model"] == "deterministic-source-summary"
     assert len(entry["text"]) <= 3800 + 200, "발송용 text 필드 자체는 여전히 절단본"
 
     # 최신 캐시는 raw_text/body_full 을 담지 않는다(조회 편의용, 감사 원본이 아님)

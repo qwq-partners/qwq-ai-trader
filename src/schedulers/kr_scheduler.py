@@ -559,10 +559,13 @@ class KRScheduler:
                 except Exception as _disc_e:
                     logger.debug(f"[공시피드] 브리핑 삽입 실패 (무시): {_disc_e}")
 
+            from ..analytics.report_context import render_runtime_context
+            lines[2:2] = [render_runtime_context(self.bot), ""]
             msg = "\n".join(lines)
 
             # 2026-06-05: morning 슬롯이면 LLM 모닝브리프 캐시를 앞에 결합
             # daily_report.py 07:00이 캐시 저장 → 07:30 여기서 통합 발송
+            _dispatched_brief_text = None
             _conflict = None   # 발송 기록(F19)까지 살려 쓴다 — 캐시 결합 실패 시 None
             if use_report_channel:
                 try:
@@ -571,14 +574,10 @@ class KRScheduler:
                     cache_path = _Path.home() / ".cache" / "ai_trader" / "llm_morning_brief.json"
                     if cache_path.exists():
                         data = _json.loads(cache_path.read_text(encoding="utf-8"))
-                        gen_at = data.get("generated_at", "")
-                        try:
-                            gen_dt = datetime.fromisoformat(gen_at)
-                            age_h = (datetime.now() - gen_dt).total_seconds() / 3600
-                        except (ValueError, TypeError):
-                            age_h = 999
-                        llm_text = data.get("text", "")
-                        if llm_text and 0 <= age_h < 6:
+                        from ..analytics.report_context import current_morning_brief
+                        llm_text = current_morning_brief(data, _now_kst())
+                        if llm_text:
+                            _dispatched_brief_text = llm_text
                             sep = "\n\n━━━━━━━━━━━━━━━\n\n"
                             # 브리프 톤과 전문가 종합판단이 상충하면 본문 끝에 표시
                             try:
@@ -595,12 +594,10 @@ class KRScheduler:
                                 llm_text = f"{llm_text}\n\n{_conflict}"
                             msg = llm_text + sep + msg
                             logger.info(
-                                f"[전문가] LLM 모닝브리프 결합 (cache age={age_h:.1f}h)"
+                                "[전문가] 같은 날짜의 유효 모닝브리프 결합"
                             )
-                        elif llm_text:
-                            logger.warning(
-                                f"[전문가] LLM 모닝브리프 캐시 만료 ({age_h:.1f}h) — 결합 스킵"
-                            )
+                        else:
+                            logger.warning("[전문가] 모닝브리프 날짜·유효시간 불일치 — 결합 스킵")
                 except Exception as cache_err:
                     logger.warning(f"[전문가] LLM 모닝브리프 결합 실패: {cache_err}")
 
@@ -620,6 +617,7 @@ class KRScheduler:
                             },
                             status="sent" if ok else "failed",
                             conflict_note=_conflict,
+                            dispatched_brief_text=_dispatched_brief_text,
                         )
                 except Exception as _rec_e:
                     logger.warning(f"[전문가] 발송 기록 실패 (무시): {_rec_e}")
@@ -2479,30 +2477,30 @@ JSON:
                     f"📊 <b>주간 전문가 패널 분석</b>",
                     f"",
                     f"{regime_emoji} 시장 레짐: <b>{regime_kr}</b>",
-                    f"추천 종목: <b>{len(stocks)}개</b> (고확신 {len(high_conviction)}개)",
+                    f"검토 후보: <b>{len(stocks)}개</b> (내부 선별 {len(high_conviction)}개)",
                     f"",
-                    f"<b>■ 고확신 추천 종목</b>",
+                    f"<b>■ 주간 검토 후보</b> — AI 제안, 사실·가격 검증 전",
                 ]
                 for i, s in enumerate(high_conviction[:7], 1):
-                    conv_bar = "●" * int(s.conviction * 4) + "○" * (4 - int(s.conviction * 4))
                     lines.append(
-                        f"  {i}. <b>{s.name}</b> <code>{s.symbol}</code>"
+                        f"  {i}. <b>{html.escape(str(s.name))}</b> <code>{html.escape(str(s.symbol))}</code>"
                     )
                     horizon_kr = {
                         "1M": "1개월", "3M": "3개월", "6M": "6개월", "1Y": "1년",
                     }.get(s.horizon, s.horizon)
                     lines.append(
-                        f"      {horizon_kr} | 확신 {conv_bar} {s.conviction:.0%}"
+                        f"      검토 기간 {html.escape(str(horizon_kr))} · 선택 가중치 {s.conviction:.2f} (성공 확률 아님)"
                     )
                     if s.reasons:
-                        lines.append(f"      → {s.reasons[0]}")
+                        lines.append(f"      검증할 가설: {html.escape(str(s.reasons[0])[:180])}")
 
                 if outlook.risk_factors:
                     lines.append(f"")
                     lines.append(f"<b>■ 주요 리스크</b>")
                     for rf in outlook.risk_factors[:4]:
-                        lines.append(f"  ⚠️ {rf}")
+                        lines.append(f"  ⚠️ {html.escape(str(rf)[:180])}")
 
+                lines.append("다음 확인: 후보별 공시 원문·현재 가격·수급을 대조하고 진입 조건이 없는 종목은 관찰 유지")
                 msg = "\n".join(lines)
                 await send_alert(msg)
                 logger.info(f"[전문가패널] 완료: {len(stocks)}종목 추천")
@@ -5759,6 +5757,9 @@ JSON:
         if not bot.report_generator:
             bot.report_generator = get_report_generator()
 
+        from ..analytics.report_context import render_runtime_context
+        bot.report_generator.runtime_context_provider = lambda: render_runtime_context(bot)
+
         sched_cfg = bot.config.get("kr", "scheduler") or {}
         morning_time_str = sched_cfg.get("morning_report_time", "08:00")
         evening_time_str = sched_cfg.get("evening_report_time", "17:00")
@@ -7190,6 +7191,22 @@ JSON:
             logger.error(f"매도 후속 복기 스케줄러 오류: {e}")
             raise
 
+    async def _send_weekly_principles_report(self):
+        """주차별 시도 기록 이후에만 호출한다."""
+        bot = self.bot
+        from ..core.evolution.trading_principles import TradingPrinciplesManager
+        _tp_memory = None
+        _tp_llm = None
+        if bot.engine and bot.engine.risk_manager:
+            _tp_memory = getattr(bot.engine.risk_manager, '_trade_memory', None)
+        from ..utils.llm import get_llm_manager
+        _tp_llm = get_llm_manager()
+        _tpm = TradingPrinciplesManager(trade_memory=_tp_memory, llm_manager=_tp_llm)
+        _tp_report = await _tpm.generate_weekly_report()
+        _tpm.save_report(_tp_report)
+        await send_alert(_tp_report)
+        logger.info("[거래원칙] 주간 리포트 생성 + 텔레그램 전송 완료")
+
     async def run_log_cleanup(self):
         """로그/캐시 정리 스케줄러 — 매일 00:05"""
         bot = self.bot
@@ -7198,20 +7215,12 @@ JSON:
                 now = datetime.now()
 
                 if now.hour == 0 and 5 <= now.minute < 10:
-                    # 주간 거래 원칙 리포트 (토요일 00:00, 리밸런싱 후)
+                    # 주간 보고만 토요일·주차당 한 번 시도. 로그 정리는 매일 수행.
                     try:
-                        from ..core.evolution.trading_principles import TradingPrinciplesManager
-                        _tp_memory = None
-                        _tp_llm = None
-                        if bot.engine and bot.engine.risk_manager:
-                            _tp_memory = getattr(bot.engine.risk_manager, '_trade_memory', None)
-                        from ..utils.llm import get_llm_manager
-                        _tp_llm = get_llm_manager()
-                        _tpm = TradingPrinciplesManager(trade_memory=_tp_memory, llm_manager=_tp_llm)
-                        _tp_report = await _tpm.generate_weekly_report()
-                        _tpm.save_report(_tp_report)
-                        await send_alert(_tp_report)
-                        logger.info("[거래원칙] 주간 리포트 생성 + 텔레그램 전송 완료")
+                        from ..analytics.report_context import claim_weekly_report
+                        claimed = claim_weekly_report(now, Path.home() / ".cache" / "ai_trader" / "report_attempts")
+                        if claimed:
+                            await self._send_weekly_principles_report()
                     except Exception as _tp_e:
                         logger.warning(f"[거래원칙] 주간 리포트 실패 (무시): {_tp_e}")
 

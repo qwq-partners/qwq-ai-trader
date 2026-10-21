@@ -109,7 +109,7 @@ def test_unknown_is_excluded_from_all_summary_denominators(tracker):
     }
     summary = tracker.summary()
     assert "승인 BUY 미체결 1건" in summary
-    assert "틀린 비율 0%" in summary
+    assert "하락 관측 비율 0%" in summary
     assert "평균 r5 +4.0%" in summary
     assert "평균 r20 +8.0%" in summary
     assert "team_buy_unfilled n=1 x5 +2.00%" in summary

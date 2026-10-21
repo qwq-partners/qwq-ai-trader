@@ -261,19 +261,20 @@ async def test_post_exit_role_reaches_actual_transport_with_research_priority(tm
 
 
 @pytest.mark.asyncio
-async def test_morning_brief_role_keeps_claim_filtering(tmp_path, monkeypatch):
+async def test_morning_brief_uses_no_llm_role_or_transport(tmp_path, monkeypatch):
     from src.analytics.daily_report import DailyReportGenerator
-    from tests.test_morning_brief import US_QUOTES, SECTOR_SIGNALS, OPTIMISTIC_TEXT
-    m = manager(tmp_path)
-    m.gemini._session = Session(gemini_reply(OPTIMISTIC_TEXT))
-    monkeypatch.setattr('src.utils.llm.get_llm_manager', lambda: m)
+    from tests.test_morning_brief import US_QUOTES, SECTOR_SIGNALS
+    monkeypatch.setattr(
+        'src.utils.llm.get_llm_manager',
+        lambda: (_ for _ in ()).throw(AssertionError('morning summary must not load LLM manager')),
+    )
     record = await object.__new__(DailyReportGenerator).build_morning_brief(
         quotes=US_QUOTES, sector_signals=SECTOR_SIGNALS, avg_pct=1.4,
         us_date_str='2026-09-12', mood='강세')
-    assert record['scope'] == 'us_close_only' and record['model'] == 'gemini-3.1-flash-lite'
-    assert '상승 갭 출발' not in record['text'] and record['removed_claims']
-    assert m.gemini._session.payloads[0]['generationConfig']['maxOutputTokens'] == 1600
-    assert m.openai._session.payloads == []
+    assert record['scope'] == 'us_close_only'
+    assert record['model'] == 'deterministic-source-summary'
+    assert record['raw_text'] == '' and record['body_full'] == record['text']
+    assert record['claims']['open_direction'] is None
 
 
 @pytest.mark.asyncio
