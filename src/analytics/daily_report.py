@@ -1518,7 +1518,7 @@ class DailyReportGenerator:
                     continue
                 display_name = symbol if label == symbol else f"{label}({symbol})"
                 rendered.append(
-                    f"  {display_name} {observed['pct']:+.1f}% · {observed['date_label']}"
+                    f"  {display_name} {observed['pct']:+.2f}% · {observed['date_label']}"
                 )
             return rendered
 
@@ -1588,7 +1588,7 @@ class DailyReportGenerator:
 
         vix = _us_quote_observation(quotes.get("^VIX"), now=now)
         vix_fact = (
-            f"VIX {vix['price']:.1f} · {vix['pct']:+.1f}% · {vix['date_label']} "
+            f"VIX {vix['price']:.1f} · {vix['pct']:+.2f}% · {vix['date_label']} "
             "(변동성 지표, 시장 방향 단정 아님)"
             if vix else "VIX 자료 미확인"
         )
@@ -1725,7 +1725,7 @@ class DailyReportGenerator:
                 continue
             bt_valid_n += 1
             bt_lines.append(
-                f"  - {sym} {observed['pct']:+.1f}% · {observed['date_label']}"
+                f"  - {sym} {observed['pct']:+.2f}% · {observed['date_label']}"
             )
 
         brief_etfs = [
@@ -1740,7 +1740,7 @@ class DailyReportGenerator:
             if observed is None:
                 continue
             etf_lines.append(
-                f"  - {name}({sym}) {observed['pct']:+.1f}% · {observed['date_label']}"
+                f"  - {name}({sym}) {observed['pct']:+.2f}% · {observed['date_label']}"
             )
 
         inputs: List[Dict] = [

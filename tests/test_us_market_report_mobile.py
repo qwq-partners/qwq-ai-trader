@@ -104,13 +104,13 @@ def test_mobile_report_sends_two_snapshot_images_then_full_accessible_text(monke
     assert notifier.sent == [report]
     assert "■ 주요 ETF" in report and "SMH" in report and "XLK" in report
     assert "■ 대표 종목" in report and "NVDA" in report and "AAPL" in report
-    assert "반도체 ETF(SMH) +1.8% · 10/21" in report
-    assert "기술 ETF(XLK) +0.8% · 10/21" in report
+    assert "반도체 ETF(SMH) +1.80% · 10/21" in report
+    assert "기술 ETF(XLK) +0.80% · 10/21" in report
     assert "주요 ETF (2/8 확인)" in report
     assert "대표 종목 (2/8 확인)" in report
     assert "NVDA(NVDA)" not in report
     assert "SOX·SMH·NVDA 같은 방향 상승" in report
-    assert "VIX 18.4 · -2.1%" in report
+    assert "VIX 18.4 · -2.10%" in report
     assert "확인 지수 4/4: 상승 4 · 하락 0 · 보합 0" in report
     assert "미국 지수 평균" not in report
     assert report.index("■ 핵심 사실") < report.index("■ 주요 지수")
@@ -194,6 +194,31 @@ def test_semiconductor_trio_all_zero_is_flat_not_divergent(monkeypatch):
 
     assert "SOX·SMH·NVDA 모두 보합" in report
     assert "SOX·SMH·NVDA 방향 엇갈림" not in report
+
+
+def test_small_changes_keep_two_decimal_precision_in_report_and_cached_brief(monkeypatch):
+    close = datetime(2026, 10, 21, 20, 0, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(
+        dr, "_now", lambda: datetime(2026, 10, 22, 8, 0, tzinfo=timezone.utc),
+    )
+    quotes = {
+        "^GSPC": _quote(6888.0, -0.02, close),
+        "^VIX": _quote(18.4, -0.02, close),
+        "SMH": _quote(350.0, -0.02, close),
+        "NVDA": _quote(205.0, 0.02, close),
+    }
+    generator = _generator(monkeypatch, _Notifier(), quotes)
+    report = asyncio.run(generator.generate_us_market_report(send_telegram=False))
+    record = asyncio.run(generator.build_morning_brief(
+        quotes=quotes, sector_signals={}, avg_pct=-0.02,
+        us_date_str="2026.10.21", mood="보합",
+    ))
+
+    assert "VIX 18.4 · -0.02%" in report
+    for text in (report, record["text"]):
+        assert "반도체 ETF(SMH) -0.02%" in text
+        assert "NVDA +0.02%" in text
+        assert "-0.0%" not in text
 
 
 def test_report_discloses_mixed_market_days_and_never_predicts_korean_open(monkeypatch):
@@ -319,9 +344,9 @@ def test_brief_uses_dated_raw_rows_not_sector_boost_with_valid_looking_date(monk
     assert "AI/반도체" not in record["text"] and "부스트" not in record["text"]
     assert "S&P500: +0.55% (6,888.0) · 10/21" in record["text"]
     assert "NASDAQ: 가격·등락 미수집" in record["text"]
-    assert "NVDA +2.0% · 10/21" in record["text"]
+    assert "NVDA +2.00% · 10/21" in record["text"]
     assert "AAPL 자료 미확인" in record["text"]
-    assert "반도체 ETF(SMH) +1.8% · 기준일 미확인" in record["text"]
+    assert "반도체 ETF(SMH) +1.80% · 기준일 미확인" in record["text"]
 
 
 def test_optional_sector_signal_failure_does_not_block_report(monkeypatch):
