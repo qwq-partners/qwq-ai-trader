@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from datetime import datetime, timedelta
+from numbers import Real
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -22,6 +24,36 @@ from .types import ExpertOpinion, RegimeBias
 
 _INDEX_TICKERS = ["SPY", "QQQ", "IWM", "DIA"]
 _SECTOR_TICKERS = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC"]
+
+
+def _finite_number(value: Any, *, positive: bool = False) -> Optional[float]:
+    """불리언·비유한 수치는 결측, 가격은 양수만 인정한다."""
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if not math.isfinite(number) or (positive and number <= 0):
+        return None
+    return number
+
+
+def _price_return(last: Any, base: Any) -> Optional[float]:
+    """정해진 두 가격이 유효할 때만 수익률을 계산한다."""
+    last = _finite_number(last, positive=True)
+    base = _finite_number(base, positive=True)
+    if last is None or base is None:
+        return None
+    result = _finite_number((last - base) / base * 100)
+    return round(result, 2) if result is not None else None
+
+
+def _price_mean(window: Any) -> Optional[float]:
+    """고정 구간의 결측 봉을 생략해 다른 평균을 만들지 않는다."""
+    if any(_finite_number(value, positive=True) is None for value in window):
+        return None
+    return _finite_number(window.mean(skipna=False), positive=True)
 
 
 def _bar_date(value: Any) -> Optional[str]:
@@ -55,7 +87,15 @@ class USMarketExpert(ExpertAgent):
             return_exceptions=True,
         )
 
-        indices = indices if isinstance(indices, dict) else {}
+        indices = {
+            ticker: {
+                **state,
+                **{key: _finite_number(state[key], positive=key == "last")
+                   for key in ("last", "vs_ma50_pct", "vs_ma200_pct") if key in state},
+            }
+            for ticker, state in (indices.items() if isinstance(indices, dict) else [])
+            if isinstance(state, dict)
+        }
         # The fetcher returns numeric values plus their independently observed
         # daily-bar period.  Older test doubles/private callers may still
         # return only the numeric map; never describe those as 20 days.
@@ -68,9 +108,20 @@ class USMarketExpert(ExpertAgent):
             sector_periods = {
                 ticker: {"label": "구간 미확인"} for ticker in sectors
             }
-        vix = vix if isinstance(vix, (int, float)) else None
+        # 수집기 외부에서 들어온 값도 순위·점수·결측 판정 전에 검증한다.
+        sectors = {ticker: number for ticker, value in sectors.items()
+                   if (number := _finite_number(value)) is not None}
+        sector_periods = {ticker: period for ticker, period in sector_periods.items()
+                          if ticker in sectors}
+        vix = _finite_number(vix, positive=True)
         earnings = earnings if isinstance(earnings, dict) else {}
         semis = semis if isinstance(semis, dict) else {}
+        semis = {
+            **semis,
+            **{key: _finite_number(semis[key], positive=key == "sox_last")
+               for key in ("sox_1d_pct", "sox_5d_pct", "sox_last", "smh_5d_pct")
+               if key in semis},
+        }
 
         score = 0
         findings: List[str] = []
@@ -122,7 +173,7 @@ class USMarketExpert(ExpertAgent):
                 score += 5
 
         # 어닝시즌 평균 surprise
-        surprise = earnings.get("avg_surprise")
+        surprise = _finite_number(earnings.get("avg_surprise"))
         if isinstance(surprise, (int, float)):
             if surprise > 0.05:
                 score += 10
@@ -223,13 +274,15 @@ class USMarketExpert(ExpertAgent):
                 if hist.empty or len(hist) < 50:
                     return ticker, {}
                 close = hist["Close"]
-                last = float(close.iloc[-1])
-                ma50 = float(close.tail(50).mean())
-                ma200 = float(close.tail(200).mean()) if len(close) >= 200 else float(close.mean())
+                last = _finite_number(close.iloc[-1], positive=True)
+                if last is None:
+                    return ticker, {}
+                ma50 = _price_mean(close.tail(50))
+                ma200 = _price_mean(close.tail(200))
                 return ticker, {
                     "last": round(last, 2),
-                    "vs_ma50_pct": round((last - ma50) / ma50 * 100, 2) if ma50 > 0 else 0.0,
-                    "vs_ma200_pct": round((last - ma200) / ma200 * 100, 2) if ma200 > 0 else 0.0,
+                    "vs_ma50_pct": _price_return(last, ma50),
+                    "vs_ma200_pct": _price_return(last, ma200),
                     "as_of": _bar_date(close.index[-1]),
                     "source": f"yfinance:{ticker}",
                 }
@@ -259,15 +312,11 @@ class USMarketExpert(ExpertAgent):
                 if hist.empty or len(hist) < 5:
                     return ticker, None, None
                 close = hist["Close"]
-                last = float(close.iloc[-1])
-                if len(close) >= 20:
-                    base = float(close.iloc[-20])
-                    base_idx = -20
-                else:
-                    base = float(close.iloc[0])
-                    base_idx = 0
-                rs = (last - base) / base * 100 if base > 0 else 0.0
-                return ticker, round(rs, 2), {
+                base_idx = -20 if len(close) >= 20 else 0
+                rs = _price_return(close.iloc[-1], close.iloc[base_idx])
+                if rs is None:
+                    return ticker, None, None
+                return ticker, rs, {
                     "as_of": _bar_date(close.index[-1]),
                     "source": f"yfinance:{ticker}",
                     "start": _bar_date(close.index[base_idx]),
@@ -300,14 +349,14 @@ class USMarketExpert(ExpertAgent):
                 if hist.empty or len(hist) < 2:
                     return {}
                 close = hist["Close"]
-                last = float(close.iloc[-1])
-                prev = float(close.iloc[-2])
-                base_5d = float(close.iloc[-6]) if len(close) >= 6 else None
-                d1 = (last - prev) / prev * 100 if prev > 0 else 0.0
-                d5 = (last - base_5d) / base_5d * 100 if base_5d and base_5d > 0 else None
+                last = _finite_number(close.iloc[-1], positive=True)
+                if last is None:
+                    return {}
+                d1 = _price_return(last, close.iloc[-2])
+                d5 = _price_return(last, close.iloc[-6]) if len(close) >= 6 else None
                 return {
-                    "d1": round(d1, 2),
-                    "d5": round(d5, 2) if d5 is not None else None,
+                    "d1": d1,
+                    "d5": d5,
                     "last": round(last, 2),
                 }
             except Exception:
@@ -321,7 +370,7 @@ class USMarketExpert(ExpertAgent):
         sox = results[0] if isinstance(results[0], dict) else {}
         smh = results[1] if isinstance(results[1], dict) else {}
         out: Dict[str, Any] = {}
-        if sox.get("d1") is not None:
+        if sox:
             out["sox_1d_pct"] = sox["d1"]
             out["sox_5d_pct"] = sox["d5"]
             out["sox_last"] = sox["last"]
@@ -339,7 +388,8 @@ class USMarketExpert(ExpertAgent):
                 hist = yf.Ticker("^VIX").history(period="2d", interval="1d", auto_adjust=False)
                 if hist.empty:
                     return None
-                return round(float(hist["Close"].iloc[-1]), 2)
+                last = _finite_number(hist["Close"].iloc[-1], positive=True)
+                return round(last, 2) if last is not None else None
             except Exception:
                 return None
         return await asyncio.to_thread(_sync)
@@ -374,14 +424,20 @@ class USMarketExpert(ExpertAgent):
                 if actual is None or est is None:
                     continue
                 try:
-                    est_f = float(est)
+                    # 기존 숫자 문자열 입력은 유지하되 bool/NaN/inf는 제외한다.
+                    est_f = _finite_number(float(est) if isinstance(est, str) else est)
+                    actual_f = _finite_number(float(actual) if isinstance(actual, str) else actual)
+                    if est_f is None or actual_f is None:
+                        continue
                     # 0에 가까운 EPS estimate는 outlier 유발 → 제외
                     if abs(est_f) < 0.1:
                         continue
-                    surprise = (float(actual) - est_f) / abs(est_f)
+                    surprise = _finite_number((actual_f - est_f) / abs(est_f))
+                    if surprise is None:
+                        continue
                     # ±50% 클램프 (단일 outlier가 평균 왜곡 방지)
                     surprises.append(max(-0.5, min(0.5, surprise)))
-                except (ValueError, ZeroDivisionError):
+                except (ValueError, TypeError, OverflowError, ZeroDivisionError):
                     continue
             if not surprises:
                 return {"count": 0}
