@@ -1831,6 +1831,33 @@ class UnifiedTradingBot:
             else:
                 ev.set()
 
+    async def _close_report_resources(self) -> None:
+        """태스크/LLM 정리 후 남은 보고·시장자료 소유자의 HTTP 연결을 닫는다."""
+        from src.data.providers.us_market_data import close_us_market_data
+        from src.utils.telegram import close_telegram_notifier
+
+        closers = []
+        for name, method in (
+            ("expert_orchestrator", "close_all"),
+            ("theme_detector", "close"),
+            ("screener", "close"),
+            ("kis_market_data", "close"),
+        ):
+            owner = getattr(self, name, None)
+            if owner is not None:
+                closers.append((name, getattr(owner, method)))
+        # getter를 호출하면 미사용 경로의 객체가 생성되므로 기존 singleton만 정리한다.
+        closers.extend((
+            ("us_market_data", close_us_market_data),
+            ("telegram", close_telegram_notifier),
+        ))
+        for name, close in closers:
+            try:
+                await asyncio.wait_for(close(), timeout=2.0)
+            except Exception as e:
+                # 하나의 실패/취소에 응답하는 시간 초과가 이후 자원 정리를 건너뛰지 않는다.
+                logger.warning(f"[종료] {name} HTTP 정리 실패: {type(e).__name__}")
+
     async def shutdown(self):
         """종료 처리"""
         try:
@@ -1891,6 +1918,9 @@ class UnifiedTradingBot:
                     logger.warning("[판단기록] 종료 저장 미완료: 시간 초과 또는 기록 실패/파일 상한")
             except Exception as e:
                 logger.error(f"[판단기록] 종료 실패: {type(e).__name__}")
+
+            # 마지막 LLM/판단 기록 이후 보고 세션을 닫고, 공유 토큰은 마지막에 정리한다.
+            await self._close_report_resources()
 
             # 토큰 매니저 정리
             if self._token_manager:

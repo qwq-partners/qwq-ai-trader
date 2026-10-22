@@ -1205,6 +1205,10 @@ class ThemeDetector:
             "stock_impacts": result.get("stock_impacts", []),
         }
 
+    async def close(self) -> None:
+        """직접 소유한 뉴스 HTTP 연결만 정리한다. 공유 LLM/시세는 러너가 닫는다."""
+        await self.news_collector.close()
+
     async def get_theme_stocks(self, theme_name: str) -> List[str]:
         """테마 관련 종목 조회"""
         theme = self._themes.get(theme_name)
