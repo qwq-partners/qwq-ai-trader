@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+from numbers import Real
 from typing import Dict, List
 
 from loguru import logger
@@ -27,6 +29,14 @@ _SECTOR_TICKERS = {
     "copper": "HG=F",
     "gold": "GC=F",
 }
+
+
+def _finite_number(value) -> bool:
+    """불리언·NaN·무한대는 유효 수치로 세지 않는다."""
+    try:
+        return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
 
 
 class GlobalMicroExpert(ExpertAgent):
@@ -57,6 +67,11 @@ class GlobalMicroExpert(ExpertAgent):
 
         # 2) 원자재·섹터 ETF
         sector_returns = await self._fetch_sector_etf_returns()
+        sector_returns = {
+            key: float(value) for key, value in sector_returns.items()
+            if _finite_number(value)
+            and (key not in ("wti", "copper", "gold") or value > 0)
+        }
 
         # 3) 점수 계산
         score = 0
@@ -160,16 +175,21 @@ class GlobalMicroExpert(ExpertAgent):
                 if hist.empty or len(hist) < 3:
                     return ticker, None
                 close = hist["Close"]
-                last = float(close.iloc[-1])
+                last = close.iloc[-1]
+                if not _finite_number(last) or last <= 0:
+                    return ticker, None
+                last = float(last)
                 # 5일 변화 또는 가능한 최대
                 if ticker not in ("CL=F", "HG=F", "GC=F") and len(close) < 6:
                     return ticker, None
                 idx = max(0, len(close) - 6)
-                base = float(close.iloc[idx])
                 if ticker in ("CL=F", "HG=F", "GC=F"):
                     return ticker, last  # 원자재는 현재가
-                ret = (last - base) / base * 100 if base > 0 else 0.0
-                return ticker, round(ret, 2)
+                base = close.iloc[idx]
+                if not _finite_number(base) or base <= 0:
+                    return ticker, None
+                ret = (last - float(base)) / float(base) * 100
+                return ticker, round(ret, 2) if _finite_number(ret) else None
             except Exception:
                 return ticker, None
 
@@ -183,7 +203,7 @@ class GlobalMicroExpert(ExpertAgent):
         results = await asyncio.gather(*tasks, return_exceptions=True)
         out: Dict[str, float] = {}
         for k, r in zip(keys, results):
-            if isinstance(r, tuple) and r[1] is not None:
+            if isinstance(r, tuple) and _finite_number(r[1]):
                 out[k] = r[1]
         return out
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import json
 import hashlib
+import math
+from numbers import Real
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -47,6 +49,14 @@ _THRESHOLDS = {
 }
 
 
+def _finite_number(value: Any) -> bool:
+    """불리언은 관측 수치가 아니며 NaN/무한대는 근거에서 제외한다."""
+    try:
+        return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
 class MacroEconomist(ExpertAgent):
     name = "macro_economist"
     refresh_minutes = 240
@@ -65,7 +75,8 @@ class MacroEconomist(ExpertAgent):
             semis_avg = {}
 
         # 2) 수동 오버라이드 머지
-        overrides = self._load_manual_overrides()
+        prices = self._valid_prices(prices)
+        overrides = self._valid_prices(self._load_manual_overrides())
         prices.update(overrides)
 
         # 3) Perplexity 매크로 컨텍스트
@@ -77,7 +88,7 @@ class MacroEconomist(ExpertAgent):
         # 4-2) 반도체 바스켓 5일 평균 (2026-06-07 추가, 약한 가중)
         # us_market_expert와 중복 방지 위해 약한 가중치(-8/+5)
         basket_avg = semis_avg.get("avg_5d_pct")
-        if isinstance(basket_avg, (int, float)):
+        if _finite_number(basket_avg):
             if basket_avg <= -3.0:
                 score -= 8
                 findings.append(f"반도체 바스켓 5일 평균 {basket_avg:+.1f}% — 그룹 단기 약세")
@@ -91,13 +102,18 @@ class MacroEconomist(ExpertAgent):
             else RegimeBias.NEUTRAL
         )
 
-        indicator_evidence = dict(getattr(self, "_indicator_evidence", {}))
+        indicator_evidence = {
+            key: {field: value for field, value in evidence.items()
+                  if field != "change_bp" or _finite_number(value)}
+            for key, evidence in getattr(self, "_indicator_evidence", {}).items()
+            if key in prices and isinstance(evidence, dict)
+        }
         for key in overrides:
             indicator_evidence[key] = {"source": "manual_override", "as_of": None}
         rate_evidence = indicator_evidence.get("us10y", {})
         rate_delta = rate_evidence.get("change_bp")
         if isinstance(prices.get("us10y"), (int, float)):
-            change = f"직전 관측 대비 {rate_delta:+.1f}bp" if isinstance(rate_delta, (int, float)) else "전일 변화 미확인"
+            change = f"직전 관측 대비 {rate_delta:+.1f}bp" if _finite_number(rate_delta) else "전일 변화 미확인"
             findings.insert(0, f"US10Y {prices['us10y']:.2f}% · {change}")
 
         # Numeric evidence is the report: a current level cannot substantiate a
@@ -192,6 +208,19 @@ class MacroEconomist(ExpertAgent):
         "vix": (8.0, 80.0),
     }
 
+    @classmethod
+    def _valid_prices(cls, prices: Dict[str, Any]) -> Dict[str, float]:
+        valid = {}
+        for key, value in prices.items():
+            if not _finite_number(value):
+                continue
+            if key in cls._OPTIONAL_BONUS_FIELDS:
+                valid[key] = float(value)  # 변동률은 음수와 실제 0도 유효하다.
+            elif key in cls._VALID_RANGES:
+                if value > 0 or (key == "us_short_yield" and value == 0):
+                    valid[key] = float(value)
+        return valid
+
     # ─────────────────────────────────────────
     # 반도체 바스켓 5일 평균 (2026-06-07 추가)
     # SOX + SMH + NVDA + AMD + TSM 5일 변동률 평균
@@ -204,11 +233,11 @@ class MacroEconomist(ExpertAgent):
                 if hist.empty or len(hist) < 6:
                     return None
                 close = hist["Close"]
-                last = float(close.iloc[-1])
-                base = float(close.iloc[-6])
-                if base <= 0:
+                last, base = close.iloc[-1], close.iloc[-6]
+                if not all(_finite_number(v) and v > 0 for v in (last, base)):
                     return None
-                return round((last - base) / base * 100, 2)
+                change = (float(last) - float(base)) / float(base) * 100
+                return round(change, 2) if _finite_number(change) else None
             except Exception:
                 return None
 
@@ -217,11 +246,14 @@ class MacroEconomist(ExpertAgent):
             *[asyncio.to_thread(_one, t) for t in tickers],
             return_exceptions=True,
         )
-        vals = [r for r in results if isinstance(r, (int, float))]
+        vals = [r for r in results if _finite_number(r)]
         if not vals:
             return {}
+        average = sum(vals) / len(vals)
+        if not _finite_number(average):
+            return {}
         return {
-            "avg_5d_pct": round(sum(vals) / len(vals), 2),
+            "avg_5d_pct": round(average, 2),
             "n_samples": len(vals),
             "tickers": tickers,
         }
@@ -240,10 +272,14 @@ class MacroEconomist(ExpertAgent):
                 if hist.empty:
                     return None
                 close = hist["Close"]
-                value = float(close.iloc[-1])
+                value = close.iloc[-1]
+                if not _finite_number(value):
+                    return None
+                value = float(value)
                 stamp = close.index[-1]
                 as_of = stamp.isoformat() if hasattr(stamp, "isoformat") else None
-                prev = float(close.iloc[-2]) if len(close) >= 2 else None
+                prev = close.iloc[-2] if len(close) >= 2 else None
+                prev = float(prev) if _finite_number(prev) else None
                 return {"value": value, "as_of": as_of, "previous": prev}
             except Exception:
                 return None
@@ -377,6 +413,7 @@ class MacroEconomist(ExpertAgent):
         prices: Dict[str, Any],
         macro_context: str,
     ) -> tuple[int, List[str]]:
+        prices = self._valid_prices(prices)
         score = 0
         findings: List[str] = []
 
@@ -442,6 +479,7 @@ class MacroEconomist(ExpertAgent):
     # 영향 섹터 매핑
     # ─────────────────────────────────────────
     def _affected_sectors(self, prices: Dict[str, Any]) -> List[str]:
+        prices = self._valid_prices(prices)
         sectors: List[str] = []
         if isinstance(prices.get("us10y"), (int, float)) and prices["us10y"] > 4.5:
             sectors.extend(["성장주", "리츠", "유틸리티"])
