@@ -260,6 +260,24 @@ class RecommendedStock:
     result_source: str = ""
 
 
+def _reference_price_line(rec: RecommendedStock) -> str:
+    """아침 계획/관측의 원래 가격과 시각을 장후 비교에도 함께 표시한다."""
+    reference = _finite_float(rec.reference_price or rec.prev_close, positive=True)
+    if reference is None:
+        return "   💵 참고가 미확인 — 가격 조건 판단 불가"
+    source = rec.reference_source or "출처 미기록"
+    if source == "pending_signals 진입계획":
+        source, time_label = "배치 진입계획", "계획 기준"
+    elif source == "KR 스크리너 관측":
+        time_label = "관측 기준"
+    else:
+        time_label = "기준 시각"
+    return (
+        f"   💵 참고가 {reference:,.0f}원 · {_html_text(source, 80)} · "
+        f"{time_label} {_html_text(rec.reference_as_of or '미기록', 80)}"
+    )
+
+
 def _split_sentences(text: str) -> List[Tuple[str, str]]:
     """(문장, 구분자) 목록 — 그대로 이어붙이면 원문이 복원된다"""
     tokens = _SENTENCE_SPLIT_RE.split(text)
@@ -1620,6 +1638,7 @@ class DailyReportGenerator:
                     date_str=us_date_str,
                     avg_pct=avg_pct if index_basis_complete else 0.0,
                 )
+                logger.info(f"[레포트] 미국시장 모바일 차트 생성 {len(chart_buffers or [])}/2장")
                 captions = [
                     "🇺🇸 <b>미국 지수·VIX</b> (1/2) · 가격일은 이미지의 항목별 표시 확인",
                     "🇺🇸 <b>관찰 ETF·대표 종목</b> (2/2) · 가격일은 이미지의 항목별 표시 확인",
@@ -1631,7 +1650,9 @@ class DailyReportGenerator:
                             chart_buffer, caption=caption, parse_mode="HTML",
                             chat_id=self.telegram.report_chat_id,
                         )
-                        if not sent:
+                        if sent:
+                            logger.info(f"[레포트] 모바일 차트 {index + 1}/2 API 수락")
+                        else:
                             logger.warning(f"[레포트] 모바일 차트 {index + 1} 발송 실패")
                     except Exception as send_err:
                         logger.warning(
@@ -2104,13 +2125,7 @@ class DailyReportGenerator:
             lines.append(f"<b>{rec.rank}. {safe_name}</b> <code>{safe_symbol}</code> {risk_emoji}{score_text}")
             lines.append(f"   📌 {_html_text(rec.investment_thesis, 240)}")
 
-            reference = _finite_float(rec.reference_price or rec.prev_close, positive=True)
-            if reference is not None:
-                as_of = _html_text(rec.reference_as_of or "시각 미기록", 80)
-                source = _html_text(rec.reference_source or "출처 미기록", 80)
-                lines.append(f"   💵 참고가 {reference:,.0f}원 · {source} · {as_of}")
-            else:
-                lines.append("   💵 참고가 미확인 — 가격 조건 판단 불가")
+            lines.append(_reference_price_line(rec))
 
             conditions = []
             if _finite_float(rec.trigger_price, positive=True) is not None:
@@ -2184,6 +2199,7 @@ class DailyReportGenerator:
                     f"{grade} <b>{rec.rank}. {_html_text(rec.name, 50)}</b> "
                     f"<code>{_html_text(rec.symbol, 20)}</code>"
                 )
+                lines.append(_reference_price_line(rec))
                 # 결과 수치: 종가 + 등락률 + 태그
                 lines.append(
                     f"   <code>{result_price:>10,.0f}원</code>  "
@@ -2201,6 +2217,7 @@ class DailyReportGenerator:
                     f"⏳ <b>{rec.rank}. {_html_text(rec.name, 50)}</b> "
                     f"<code>{_html_text(rec.symbol, 20)}</code>"
                 )
+                lines.append(_reference_price_line(rec))
                 lines.append("   <i>종가 데이터 없음</i>")
                 lines.append("")
 

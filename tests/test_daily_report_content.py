@@ -147,7 +147,8 @@ def test_morning_watchlist_labels_reference_conditions_and_runtime_context(monke
 
     assert "오늘의 관찰 후보 (1개)" in text
     assert "생성 08:25" in text
-    assert "참고가 70,000원" in text and "pending_signals 진입계획" in text
+    assert "참고가 70,000원" in text and "배치 진입계획" in text
+    assert "계획 기준 2026-10-22T08:20:00" in text
     assert "70,500원 돌파 확인" in text and "최대 71,000원" in text
     assert "무효화 참고 67,000원" in text and "목표 관찰 76,000원" in text
     assert "체결·수익을 의미하지 않음" in text
@@ -192,6 +193,7 @@ def test_evening_report_is_reference_change_with_coverage_not_hit_rate():
     observed = dr.RecommendedStock(
         1, "005930", "삼성전자", "관측", "", prev_close=70_000,
         reference_price=70_000, reference_source="pending_signals 진입계획",
+        reference_as_of="2026-10-22T08:20:00",
         result_price=71_400, result_pct=2.0,
     )
     missing = dr.RecommendedStock(
@@ -203,6 +205,9 @@ def test_evening_report_is_reference_change_with_coverage_not_hit_rate():
 
     assert "관찰 후보 가격 변화" in text
     assert "참고가 대비 +2.0%" in text
+    assert "참고가 70,000원" in text and "배치 진입계획" in text
+    assert "계획 기준 2026-10-22T08:20:00" in text
+    assert "참고가 100,000원" in text and "기준 시각 미기록" in text
     assert "관측 가능 1 / 2" in text and "가격 미확인 1" in text
     assert "단순평균 +2.00%" in text
     for misleading in ("적중률", "🏆목표", "🛑손절", "추천종목 결과"):
