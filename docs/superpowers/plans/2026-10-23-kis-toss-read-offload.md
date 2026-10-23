@@ -69,7 +69,8 @@ v1/v2와 미설치 deployment는 보고 소비를 활성화하지 않는다.
 ## SEE와 통합
 
 - [x] 독립 Astra/xhigh 중요 리뷰, 관련 시험, 전체 verify, 비밀 검사.
-- [ ] 문서·CHANGELOG·CLAUDE·인덱스 갱신, commit/push/PR와 실제 결과 기록.
+- [x] 문서·CHANGELOG·CLAUDE·인덱스 갱신, 구현 `a75f0529` commit/push 및
+  [PR #250](https://github.com/qwq-partners/qwq-ai-trader/pull/250) 생성.
 - [x] 운영 미적용·새 Toss 설정 미설치·요청 감소 실측 미실행을 구분한다.
 
 ## 운영 적용 전 확인 및 남은 순서
@@ -107,8 +108,13 @@ Astra/xhigh 요청 리뷰어가 단계별 검토했다. 작업 파일은 리뷰�
 
 ## 전체 검증 영수증
 
-통합 작업본에서 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python
-bash scripts/dev/verify.sh`를 실행했다. **8,910 passed / 2 skipped / 2 xfailed**,
+통합 작업본에서 다음 명령을 실행했다.
+
+```bash
+QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh
+```
+
+**8,910 passed / 2 skipped / 2 xfailed**,
 711.95초, 전체 스크립트rc0이다. Python 문법·비밀정보 검사 통과, 운영 상태·외부
 네트워크 접근0을 확인했다. 경고8개(pykrx 등의 기존 의존성과 multiprocessing
 fork 경고)는 실패와 구분한다. 작업본/staged diff 검사와 신규 문서 링크 확인도 통과했다.
@@ -117,3 +123,9 @@ fork 경고)는 실패와 구분한다. 작업본/staged diff 검사와 신규 �
 사용자 dirty `config/evolved_overrides.yml`가 그대로다. 이번 단계에서 운영 서비스,
 API, 자격증명, 재시작, 예약, Toss grant/deployment 설치를 수행하지 않았다.
 운영 상태/PID/복구 지표는 이번에 재조회하지 않았으며 이전 배포 영수증과 구분한다.
+
+구현은 `a75f05291c1fe62bc5713eae5a649319bdabb1a2`로 푸시했다. 이후 변경은
+이 검증 영수증과 PR 연결만 갱신하며 제품 코드/시험은 동일하다. 원격 CI와 최종
+병합 SHA의 정본은 [PR #250](https://github.com/qwq-partners/qwq-ai-trader/pull/250)이다.
+PR 생성과 운영 배포를 혼동하지 않는다. 앱의 PR 첨부 도구는 응답 지연으로 확인
+불가였지만 GitHub PR 생성은 성공했다.

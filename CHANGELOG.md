@@ -14,6 +14,9 @@
   [설계](docs/superpowers/specs/2026-10-23-kis-toss-read-offload-design.md) ·
   [PLAN→DO→SEE 및 검증 상태](docs/superpowers/plans/2026-10-23-kis-toss-read-offload.md).
   개발·병합과 운영 설치/배포·실제 요청 감소는 구분한다.
+- 전체8,910 passed/2 skipped/2 xfailed·격리0·문법/비밀 검사 통과, 독립 중요
+  리뷰 지적 P2 한 건 수정·재승인. [PR #250](https://github.com/qwq-partners/qwq-ai-trader/pull/250)의
+  CI/병합과 운영 적용은 별도이며 운영`4f39c90c`·기존 설정/예약을 유지했다.
 
 ## 2026-10-23 — 보고 수신 근거와 주간 결측 후속
 
