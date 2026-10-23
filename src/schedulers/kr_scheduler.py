@@ -5759,6 +5759,11 @@ JSON:
 
         from ..analytics.report_context import render_runtime_context
         bot.report_generator.runtime_context_provider = lambda: render_runtime_context(bot)
+        # 관측 준비가 보고 생성기보다 늦어도 현재 승인된 읽기 공급자만 찾는다.
+        bot.report_generator.toss_quote_provider = lambda symbol: getattr(
+            getattr(bot, "_toss_shadow_supervisor", None),
+            "get_report_quote", lambda _symbol: None,
+        )(symbol)
 
         sched_cfg = bot.config.get("kr", "scheduler") or {}
         morning_time_str = sched_cfg.get("morning_report_time", "08:00")

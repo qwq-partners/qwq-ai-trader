@@ -32,6 +32,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from src.data.providers.analysis_daily_cache import get_analysis_daily_prices
+
 
 # ── KODEX 섹터 ETF 매핑 (섹터명 → ETF 코드) ─────────────────────────────────
 SECTOR_ETF_MAP: Dict[str, str] = {
@@ -501,7 +503,7 @@ class SectorMomentumProvider:
         (반도체 실측 -23.4%가 +40.5%로 산출되던 결함 — 브리핑 제보로 발견).
         """
         try:
-            prices = await self._broker.get_daily_prices(etf_ticker, days=25)
+            prices = await get_analysis_daily_prices(self._broker, etf_ticker, days=25)
             if not prices or len(prices) < 2:
                 return None
 

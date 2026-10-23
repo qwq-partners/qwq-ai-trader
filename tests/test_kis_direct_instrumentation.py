@@ -1,5 +1,6 @@
 """실제 공급자 조회의 요청 경계에서 직접 KIS 집계와 기존 동작을 대조한다."""
 import asyncio
+import json
 from types import SimpleNamespace
 
 import aiohttp
@@ -16,6 +17,17 @@ class _Response:
     def __init__(self, status=200, body=None, error=None, exit_error=None):
         self.status, self.body, self.error, self.exit_error = status, body, error, exit_error
         self.json_calls = 0
+        self._raw = json.dumps(body).encode()
+        self._offset = 0
+        self.content = self
+
+    async def read(self, size):
+        chunk = self._raw[self._offset:self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+    def at_eof(self):
+        return self._offset == len(self._raw)
 
     async def __aenter__(self):
         return self
@@ -71,6 +83,8 @@ class _SyncGetError:
 @pytest.fixture(autouse=True)
 def isolated_metrics(monkeypatch):
     monkeypatch.setattr(metrics, "_recorder", metrics.DirectKISMetrics())
+    monkeypatch.setattr(market_module.kis_rate_limit, "_state",
+                        dict.fromkeys(market_module.kis_rate_limit._state, 0))
 
     async def no_limit():
         return None
@@ -132,7 +146,7 @@ def _row(operation):
         (_screener, lambda s: s.screen_new_highs(), "new_highs", "FHPST01720000", 1),
     ],
 )
-def test_each_direct_kis_get_counts_non_200_without_reading_its_body(
+def test_each_direct_kis_get_reads_non_200_and_feeds_confirmed_rejection_once(
     factory, method, operation, tr_id, expected_attempts
 ):
     responses = [_Response(status=503, body={"msg_cd": "EGW00201"}) for _ in range(expected_attempts)]
@@ -144,6 +158,9 @@ def test_each_direct_kis_get_counts_non_200_without_reading_its_body(
         "market_data" if factory is _market else "kr_screener", tr_id, expected_attempts, expected_attempts, 0
     )
     assert [response.json_calls for response in responses] == [0] * expected_attempts
+    assert all(response.at_eof() for response in responses)
+    assert row["egw00201"] == expected_attempts
+    assert market_module.kis_rate_limit._state["rejections"] == expected_attempts
     assert len(session.calls) == expected_attempts
 
 

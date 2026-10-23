@@ -3,10 +3,16 @@
 직접 공급자 호출은 브로커 요청 출처를 갖지 않으므로 기존 브로커 관측과 분리한다.
 """
 import asyncio
+import json
 from typing import Any
 
 import aiohttp
 
+from src.utils import kis_rate_limit
+
+
+_ERROR_BODY_LIMIT = 16 * 1024
+_ERROR_BODY_TIMEOUT = 0.25
 
 COMPONENTS = frozenset({"market_data", "kr_screener", "other"})
 OPERATIONS = frozenset({
@@ -101,18 +107,60 @@ class _Observation:
             return
         self.finished = True
         _increment(self.key, outcome if outcome in OUTCOMES else "other")
-        if outcome == "api_error" and isinstance(envelope, dict):
+        if outcome in {"api_error", "http_error"} and isinstance(envelope, dict):
             for field in ("egw00201", "egw00215"):
                 code = field.upper()
                 if envelope.get("msg_cd") == code or envelope.get("rt_cd") == code:
                     _increment(self.key, field)
+            # 제어 실패를 계측 실패처럼 숨기지 않는다. 호출자의 기존 오류 처리가
+            # 기록/반환을 맡으며, 계측 저장 실패와 무관하게 공유 hold를 적용한다.
+            if envelope.get("msg_cd") == "EGW00201":
+                kis_rate_limit.note_rejection(self.key[2])
 
     def observe_response(self, response: Any) -> bool:
-        """non-200 응답 본문을 읽지 않고 시도를 닫는다."""
+        """본문이 없는 동기 관측 호환용. 실제 직접 GET은 inspect_response 사용."""
         if response.status != 200:
             self._finish("http_error")
             return False
         return True
+
+    async def inspect_response(self, response: Any) -> bool:
+        """non-200의 작은 JSON만 제한 시간 내 읽고 확인된 코드로 제어한다.
+
+        200 본문은 기존 json()이 한 번만 소비한다. 읽기 실패/크기 초과/HTML은
+        코드 미확인 HTTP 오류이며, 요청 추가나 자체 재시도는 하지 않는다.
+        """
+        if response.status == 200:
+            return True
+        if self.finished:
+            return False
+        envelope = None
+        try:
+            async with asyncio.timeout(_ERROR_BODY_TIMEOUT):
+                content = getattr(response, "content", None)
+                if content is not None:
+                    body = bytearray()
+                    while len(body) < _ERROR_BODY_LIMIT:
+                        chunk = await content.read(_ERROR_BODY_LIMIT - len(body))
+                        if not chunk:
+                            break
+                        body.extend(chunk)
+                    # 상한만큼 읽은 경우 EOF가 확인되어야 완전한 봉투로 인정한다.
+                    if len(body) < _ERROR_BODY_LIMIT or content.at_eof():
+                        decoded = json.loads(body)
+                        if isinstance(decoded, dict):
+                            code = decoded.get("msg_cd")
+                            if code in ("EGW00201", "EGW00215"):
+                                envelope = {"msg_cd": code}
+        except asyncio.CancelledError:
+            self._finish("cancelled")
+            raise
+        except (aiohttp.ClientError, OSError, asyncio.TimeoutError,
+                ValueError, RecursionError):
+            # 원문/예외 문자열은 남기지 않는다. HTTP 실패 반환은 보존한다.
+            pass
+        self._finish("http_error", envelope)
+        return False
 
     async def json(self, response: Any) -> Any:
         """기존 본문을 한 번만 읽고 응답 봉투의 결과만 분류한다."""

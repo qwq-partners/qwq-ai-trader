@@ -146,11 +146,17 @@ class ObservationPlan:
         if type(p) is not dict:
             _reject()
         version = p.get('schema_version')
-        _keys(p, "schema_version plan_id dataset_kind origin spec_version spec_sha256 dates sessions calendar_time selection limits comparison acceptance" + (" websocket" if version == 2 else ""))
-        if type(version) is not int or version not in (1, 2) or p["dataset_kind"] != "live" or p["origin"] != ORIGIN or p["spec_version"] != SPEC_VERSION or p["spec_sha256"] != SPEC_SHA256:
+        _keys(p, "schema_version plan_id dataset_kind origin spec_version spec_sha256 dates sessions calendar_time selection limits comparison acceptance" + (" websocket" if version == 2 else " report_display" if version == 3 else ""))
+        if type(version) is not int or version not in (1, 2, 3) or p["dataset_kind"] != "live" or p["origin"] != ORIGIN or p["spec_version"] != SPEC_VERSION or p["spec_sha256"] != SPEC_SHA256:
             _reject()
         if version == 2:
             _websocket_plan(p['websocket'])
+        if version == 3:
+            display = p['report_display']
+            _keys(display, 'purpose max_age_seconds')
+            if display['purpose'] != 'daily_report_current_price':
+                _reject()
+            _number(display['max_age_seconds'], 1, 300, integer=True)
         _string(p["plan_id"])
         dates = p["dates"]
         if type(dates) is not list or not 1 <= len(dates) <= 366:
@@ -268,7 +274,7 @@ class LiveObservationGrant:
     @classmethod
     def from_document(cls, g):
         _keys(g, "schema_version grant_id approval_reference terms_reference storage_reference issuance_ownership_reference not_before expires_at client_identity host_identity service_uid role token_directory sender_lock_path ledger_path release_id config_hash plan_raw_hash plan_canonical_hash origin spec_version spec_sha256 capabilities")
-        if type(g["schema_version"]) is not int or g["schema_version"] not in (1, 2) or g["origin"] != ORIGIN or g["spec_version"] != SPEC_VERSION or g["spec_sha256"] != SPEC_SHA256:
+        if type(g["schema_version"]) is not int or g["schema_version"] not in (1, 2, 3) or g["origin"] != ORIGIN or g["spec_version"] != SPEC_VERSION or g["spec_sha256"] != SPEC_SHA256:
             _reject()
         for key in ("grant_id", "approval_reference", "terms_reference", "storage_reference", "issuance_ownership_reference", "client_identity", "host_identity", "release_id"):
             _string(g[key])
@@ -284,7 +290,7 @@ class LiveObservationGrant:
         start, end = _timestamp(g["not_before"]), _timestamp(g["expires_at"])
         if not 0 < (end - start).total_seconds() <= 366 * 86400:
             _reject()
-        _keys(g["capabilities"], "query renewal bootstrap" + (" websocket" if g['schema_version'] == 2 else ""))
+        _keys(g["capabilities"], "query renewal bootstrap" + (" websocket" if g['schema_version'] == 2 else " report_display" if g['schema_version'] == 3 else ""))
         if any(type(v) is not bool for v in g["capabilities"].values()):
             _reject()
         if g["role"] == "reader" and (g["capabilities"]["renewal"] or g["capabilities"]["bootstrap"]):
@@ -339,7 +345,7 @@ class ApprovedAuthority:
     def require(self, operation, *, deadline):
         if self._provenance is not _LOADER_PROVENANCE:
             raise ApprovalError("approval_untrusted")
-        if (self._stopped.is_set() or operation not in ("query", "renewal", "bootstrap", "websocket")
+        if (self._stopped.is_set() or operation not in ("query", "renewal", "bootstrap", "websocket", "report_display")
                 or not self.grant.capabilities.get(operation, False)
                 or (operation in ('renewal', 'bootstrap') and self.grant.role != "issuer")):
             raise ApprovalError("approval_denied")

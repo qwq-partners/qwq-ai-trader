@@ -258,6 +258,8 @@ class RecommendedStock:
     result_pct: Optional[float] = None
     result_as_of: str = ""
     result_source: str = ""
+    result_fetched_at: str = ""
+    result_market_basis: str = ""
 
 
 def _reference_price_line(rec: RecommendedStock) -> str:
@@ -656,12 +658,13 @@ class DailyReportGenerator:
     4. 근거 제시 - 왜 이 종목인지
     """
 
-    def __init__(self, kis_market_data=None):
+    def __init__(self, kis_market_data=None, toss_quote_provider=None):
         self.telegram = get_telegram_notifier()
         self.screener = get_screener()
         self.theme_detector = get_theme_detector()
         self.news_collector = NewsCollector()
         self._kis_market_data = kis_market_data
+        self.toss_quote_provider = toss_quote_provider
         self._us_market_data = None
         # 호출자가 제공하면 현재 매수 중지/현금/보유 상태 같은 안전 문구를 붙인다.
         # 보고서 모듈은 운영 객체를 직접 추측하지 않는다.
@@ -1237,7 +1240,7 @@ class DailyReportGenerator:
             return []
 
     async def _update_results(self):
-        """추천 종목 결과 업데이트 (KIS API → pykrx 종가 → 네이버 금융 순)"""
+        """승인된 Toss 표시가가 없으면 기존 KIS → pykrx → 네이버 순서를 따른다."""
         import aiohttp
 
         today_str = date.today().strftime("%Y%m%d")
@@ -1251,9 +1254,29 @@ class DailyReportGenerator:
                 rec.result_pct = None
                 rec.result_source = ""
                 rec.result_as_of = ""
+                rec.result_fetched_at = ""
+                rec.result_market_basis = ""
+                toss_used = False
+                provider = getattr(self, 'toss_quote_provider', None)
+                if callable(provider):
+                    try:
+                        quote = provider(rec.symbol)
+                        if quote is not None:
+                            price = _finite_float(quote.price, positive=True)
+                            if price is not None:
+                                toss_used = True
+                                basis = {'krx': 'KRX', 'krx_nxt': 'KRX+NXT'}.get(
+                                    quote.market_basis, '시장 기준 미확인')
+                                result_source = f'Toss 현재가 ({basis})'
+                                result_as_of = quote.observed_at.isoformat()
+                                rec.result_fetched_at = quote.fetched_at.isoformat()
+                                rec.result_market_basis = quote.market_basis
+                    except Exception:
+                        price = None
+                        toss_used = False
 
                 # 1차: KIS API (실시간, 정확)
-                if hasattr(self, '_bot') and hasattr(self._bot, 'broker') and self._bot.broker:
+                if price is None and hasattr(self, '_bot') and hasattr(self._bot, 'broker') and self._bot.broker:
                     try:
                         quote = await self._bot.broker.get_quote(rec.symbol)
                         quote_price = _finite_float(quote.get("price") if quote else None, positive=True)
@@ -1306,11 +1329,11 @@ class DailyReportGenerator:
                     rec.result_price = valid_price
                     rec.result_source = result_source
                     rec.result_as_of = result_as_of
-                    if reference is not None:
+                    if reference is not None and not toss_used:
                         rec.result_pct = (rec.result_price - reference) / reference * 100
                         logger.debug(f"[결과] {rec.symbol}: {rec.result_price:,.0f}원 ({rec.result_pct:+.1f}%)")
                     else:
-                        logger.warning(f"[결과] {rec.symbol}: 기준 참고가 없음 — 변화율 미계산")
+                        logger.debug(f"[결과] {rec.symbol}: 비교 기준 미확인 — 변화율 미계산")
                 else:
                     logger.warning(f"[결과] {rec.symbol}: 종가 조회 실패 (3개 소스 모두 실패)")
 
@@ -2184,6 +2207,7 @@ class DailyReportGenerator:
         total_pct = 0.0
         evaluated = []
         unavailable = 0
+        incomparable = 0
 
         for rec in recommendations:
             result_pct = _finite_float(rec.result_pct)
@@ -2211,6 +2235,17 @@ class DailyReportGenerator:
                         f"{_html_text(rec.result_as_of or '시각 미기록', 80)}</i>"
                     )
                 lines.append("")
+            elif result_price is not None and rec.result_market_basis:
+                incomparable += 1
+                lines.append(f"📍 <b>{rec.rank}. {_html_text(rec.name, 50)}</b> "
+                             f"<code>{_html_text(rec.symbol, 20)}</code>")
+                lines.append(_reference_price_line(rec))
+                lines.append(f"   <code>{result_price:,.0f}원</code> · 참고가와 시장 기준 비교 불가")
+                lines.append(f"   <i>{_html_text(rec.result_source, 80)} · "
+                             f"{_html_text(rec.result_as_of, 80)}</i>")
+                if rec.result_fetched_at:
+                    lines.append(f"   <i>수신 {_html_text(rec.result_fetched_at, 80)}</i>")
+                lines.append("")
             else:
                 unavailable += 1
                 lines.append(
@@ -2237,6 +2272,7 @@ class DailyReportGenerator:
 
             lines.extend([
                 f"관측 가능 {n} / {len(recommendations)} · 가격 미확인 {unavailable}",
+                *([f"가격만 관측 {incomparable} · 시장 기준 비교 불가"] if incomparable else []),
                 f"참고가 대비 단순평균 {avg_pct:+.2f}%",
                 "",
                 f"상단  {_html_text(best.name, 50)}  <b>{best.result_pct:+.1f}%</b>",
@@ -2245,8 +2281,11 @@ class DailyReportGenerator:
         else:
             lines.append(
                 f"관측 가능 0 / {len(recommendations)} · "
-                f"가격 미확인 {len(recommendations)}"
+                f"가격 미확인 {unavailable}"
             )
+
+        if n == 0 and incomparable:
+            lines.append(f"가격만 관측 {incomparable} · 시장 기준 비교 불가")
 
         return "\n".join(lines)
 

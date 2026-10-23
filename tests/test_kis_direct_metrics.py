@@ -23,6 +23,8 @@ def metrics(monkeypatch):
     module = importlib.import_module("src.utils.kis_direct_metrics")
     recorder = module.DirectKISMetrics()
     monkeypatch.setattr(module, "_recorder", recorder)
+    limiter = importlib.import_module("src.utils.kis_rate_limit")
+    monkeypatch.setattr(limiter, "_state", dict.fromkeys(limiter._state, 0))
     return module
 
 

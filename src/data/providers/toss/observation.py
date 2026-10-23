@@ -12,6 +12,7 @@ from hashlib import sha256
 from typing import Mapping
 
 from .market_data import parse_prices
+from .market_types import Quote
 from .observation_ledger import LedgerError, _canonical, comparison_summary, quote_evidence, ratio
 from .rate_limit import RequestBudget
 from .transport import TossRequestError
@@ -34,6 +35,7 @@ class ObservationResult:
     production_eligible: bool = False
     provider_failures: int = 0
     budget_skips: int = 0
+    quotes: tuple[Quote, ...] = ()
 
 
 def _aware(value):
@@ -145,6 +147,7 @@ class ObservationRunner:
         snapshot["cohort"] = _cohort(self.policy, self.now())
         attempts, finished, comparisons = (), set(), []
         observed = failed = skipped = 0
+        completed_quotes = []
 
         def close_pending(reason):
             nonlocal failed, skipped
@@ -193,6 +196,8 @@ class ObservationRunner:
                         self.ledger.finish(attempts[index], reason="success" if ok else "excluded", observation=evidence)
                         finished.add(attempts[index])
                         observed += int(ok)
+                        if ok:
+                            completed_quotes.append(toss)
                         comparisons.append(comparison)
                 except LedgerError:
                     raise
@@ -218,7 +223,8 @@ class ObservationRunner:
         return ObservationResult(outcome, bool(failed or skipped or excluded or snapshot["selection_partial"]), observed, valid,
             complete, reason, excluded_pairs=excluded,
             comparison=comparison_summary(comparisons, minimum=self.policy["comparison"]["min_valid_pairs"]),
-            provider_failures=failed, budget_skips=skipped)
+            provider_failures=failed, budget_skips=skipped,
+            quotes=tuple(completed_quotes) if complete and not failed and not skipped else ())
 
     async def calendar(self, *, slot_id: str, requested_date: str) -> ObservationResult:
         from .calendar_observation import CalendarObservationRunner
