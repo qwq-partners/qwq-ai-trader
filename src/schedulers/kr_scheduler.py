@@ -6861,7 +6861,7 @@ JSON:
             logger.warning(f"[팀심의] 알림 실패: {e}")
 
     async def run_post_exit_review_scheduler(self):
-        """매주 토요일 09:00 KST 매도 후속 복기
+        """매주 토요일 09:30~09:44 KST 매도 후속 복기
 
         최근 30일 매도 거래의 매도 후 추세를 추적해 전략 개선 인사이트 추출.
         - 표본별 현재가 조회 → 매도후 변동률 계산
@@ -7110,12 +7110,26 @@ JSON:
                             except Exception as _hs_err:
                                 logger.warning(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
 
-                            if report.get("status") == "ok":
+                            if report.get("status") in {"ok", "no_quotes"}:
                                 msg = report.get("telegram_message", "")
                                 if msg:
-                                    await send_alert(msg)
+                                    sent = await send_alert(msg)
+                                    if sent:
+                                        logger.info(
+                                            f"[후속복기] 보고 API 발송 완료: "
+                                            f"상태={report.get('status')}, 표본={report.get('samples')}"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"[후속복기] 보고 API 발송 실패: "
+                                            f"상태={report.get('status')}, 표본={report.get('samples')}"
+                                        )
+                                else:
+                                    logger.warning(
+                                        f"[후속복기] 발송할 보고 본문 없음: {report.get('status')}"
+                                    )
                                 logger.info(
-                                    f"[후속복기] 완료: 표본={report.get('samples')}, "
+                                    f"[후속복기] 완료: 상태={report.get('status')}, 표본={report.get('samples')}, "
                                     f"저장={report.get('saved_path')}"
                                 )
                             else:
