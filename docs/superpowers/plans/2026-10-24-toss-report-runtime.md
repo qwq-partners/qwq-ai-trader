@@ -170,3 +170,14 @@ release ID `toss-report-preflight-20261024`. system Python `-I -S -B`에서 inve
 worker의 중복 전체 실행은 root 검증과 자원을 나눠 쓰므로 coordinator가 중단했다.
 중단 시6,060passed/2skipped/2xfailed,868.92초·격리0·rc2이며 전체 통과 근거가 아니다. 위 시험 성공만으로
 Toss 운영 활성화, KIS WebSocket 용량 확장 또는 순수익 개선을 주장하지 않는다.
+
+
+### 첫 CI의 UTC 테스트 시계 보완
+
+PR #252 / run39983168339는1failed/9,026passed/2skipped/2xfailed,482.07초였다.
+마지막 cohort 테스트의 추천일은2026-10-24로 고정했지만 `date.today()`는 실행 환경을
+따라 UTC2026-10-23이 되어 파일 복원을 시도했다. 로컬 `TZ=UTC`에서 동일 실패와
+운영 캐시 stat 차단1회를 재현했다(실제 파일 접근은 격리 가드가 막음).
+제품 코드는 바꾸지 않고 테스트 날짜·보고 시계·임시 캐시 경로를 명시했다.
+UTC/KST 양쪽에서 해당 cohort·scheduler·초과수익 scheduler 검사를 재실행해
+각25passed(4.58초/4.69초)·rc0·격리0을 확인했다. 고정 커밋의 전체 결과는 후속 PR verify가 정본이다. 첫 CI 실패를 성공으로 덮어쓰지 않는다.

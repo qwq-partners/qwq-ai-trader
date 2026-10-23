@@ -152,14 +152,16 @@ async def test_evening_falls_back_after_prepare_error_but_propagates_cancellatio
 
 
 @pytest.mark.asyncio
-async def test_evening_uses_actual_helper_quote_only_after_prepare_completes(monkeypatch):
+async def test_evening_uses_actual_helper_quote_only_after_prepare_completes(monkeypatch, tmp_path):
     from src.analytics import daily_report as dr
     from src.data.providers.toss import report_helper
     from src.data.providers.toss.market_types import Quote
     from src.data.providers.toss.report_protocol import ReportCohort, make_result
 
-    today = date.today()
+    today = date(2026, 10, 24)
     now = datetime(today.year, today.month, today.day, 16, 1, tzinfo=KST)
+    monkeypatch.setattr(dr, "date", type("FixedDate", (), {"today": staticmethod(lambda: today)}))
+    monkeypatch.setattr(dr, "_REC_CACHE_DIR", tmp_path)
     monkeypatch.setattr(report_helper, "_now", lambda: now)
     monkeypatch.setenv("TOSS_REPORT_API", "1")
     helper = report_helper.ReportHelperClient(enabled=lambda: True)

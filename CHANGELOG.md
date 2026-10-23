@@ -10,6 +10,8 @@
 - 실제 subprocess stdout 포화 종료·시계 역행 TTL·scheduler 재진입·잘못된 cohort
   재사용·장후 종료 경계 OAuth를 재현/수정했다. 실제 sealed helper→부모→보고
   통합을 포함한 검증/리뷰/PR 영수증은 [정본](docs/superpowers/plans/2026-10-24-toss-report-runtime.md) 참조.
+- 첫 CI에서 발견한 UTC/KST 테스트 날짜 불일치를 재현하고 테스트 시계와 임시 캐시를
+  고정했다. 제품 코드는 유지하며 최종 전체 CI 결과를 병합 조건으로 둔다.
 - 운영 코드·설정·기존 observer·주문/매수 중지·월USD100 변경 없음. 신규 helper 설치/
   활성화·실제 공급자 요청 감소는 아직이며 현재 보고의 직접 절감 대상은 pykrx/Naver다.
 
