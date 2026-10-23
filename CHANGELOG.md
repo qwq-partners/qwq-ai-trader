@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — Toss 보고 설치·활성화·운영 반영
+
+- PR #252 고정 `44483017` 배포rc0·운영9,027검사 통과,01:46:06 PID3125313 기동 후 복구ready·미체결0·NRestarts0 확인.
+- 전용 root artifact/v3 승인 설치와 실제 봇 계정의 무접속 기동 검사 완료. 기존 Toss 자격을 사용하고 환경에는 `TOSS_REPORT_API=1`만 추가했다. 보호6파일·기존 비용2,757행·매수 중지·월USD100·cron 보존.
+- 10월26~30일16:00–16:05 당일 아침 후보 보고에만 허용한다. 시작 영수증/토큰0으로 실제 API 첫 실행은 아직이며, 다음 거래일 cohort·KIS 같은 PID 스캔 계측·보고 출처 대조를 남겼다. [정본](docs/superpowers/plans/2026-10-24-toss-report-runtime.md#운영-적용-완료). 문서만 갱신하며 재배포하지 않는다.
+
 ## 2026-10-24 — Toss 보고 가격의 실제 실행 경로 연결
 
 - root 보호 artifact를 검증하는 별도 report helper, v3/report_display 전용 조립기,
