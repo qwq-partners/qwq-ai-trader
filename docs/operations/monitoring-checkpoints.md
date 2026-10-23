@@ -1,5 +1,19 @@
 # 모니터링 체크포인트
 
+## 10월24일 Toss 보고 helper — 구현과 운영 적용 구분
+
+[설계·검증·설치 순서 정본](../superpowers/plans/2026-10-24-toss-report-runtime.md).
+
+- [x] 실제 부모→sealed child→worker/원장→보고 생성기 저장/복원·가격 소비 통합 검증.
+- [x] stdout 포화 후 종료·시계 역행 TTL·중복 시작/cohort·세션 종료/EOF 실패 경계 검증.
+- [ ] 고정 artifact·실제 UID/그룹·명시 날짜와 새 승인 문서 준비, dry-run 대조.
+- [ ] 전용 namespace 설치 및 실제 UID/그룹·`TOSS_API=1`의 `--check`, 부모 Toss 자격 존재 확인, 코드 배포/플래그 활성화 영수증.
+- [ ] 실제16:00 아침 목록·원장 완료·출처·원시각·폴백 건수 확인.
+- [ ] KIS 실제 스캔에서 같은 PID의 요청/캐시/제한 오류 차이 확인.
+
+새 helper는 기본 OFF다. 기존 observer·매수 중지·월USD100을 보존하고, 설치 성공과
+실제 가격 표시·조회 절감·순수익 검증을 구분한다.
+
 ## 10월23일 KIS 조회 보완 — 배포 확인과 남은 실측
 
 [배포·Toss 기동 점검 정본](../superpowers/plans/2026-10-23-kis-toss-read-offload.md#10월23일-후속--운영-배포와-toss-실제-기동-경로-점검).

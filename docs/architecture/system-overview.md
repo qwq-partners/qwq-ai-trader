@@ -1,5 +1,7 @@
 # 시스템 아키텍처
 
+> **2026-10-24 보고 가격 연결:** [Toss 별도 helper·cohort·검증/설치 상태](../superpowers/plans/2026-10-24-toss-report-runtime.md). 부모 봇의 아침 목록 → bounded JSONL → 고정 launcher/검증 artifact → v3 승인/worker/원장 → 같은 cohort의 표시 가격 순서다. 기본 OFF·운영 미활성화이며 주문/KIS WS/LLM 경로는 유지한다.
+
 > **2026-10-18 주문 귀속 후속·운영 미배포:** [후보·판단→주문 의도→증분 체결](../reviews/order-attribution-2026-10-18.md). Order에 고정한 네 ID를 기존 실행 원장에 보존하며, 각 execution_id의 상위 주문을 통해 오프라인 거래 행과 대조한다. 새 원장 행 작성 이후 구버전 reader로의 단순 롤백은 지원하지 않는다.
 
 > **2026-10-18 운영 갱신:** [직접 KIS 계측 배포·v4 예약/판독](../operations/selection-capture-2026-10-19.md#10월18일-직접-kis-계측-배포와-v4-교체). 고정 `a0bc9c94`·PID2208722·NRestarts0·복구ready·미체결0. 운영 전체7290검사와 독립 중요 리뷰 통과, 매수 중지·월100·unknown1/normal·기존 설정/자료 보존.10월19일09:25 v4 예약과10:05~10:20 판독 입력 사전검사 완료. 실수집·판독은 아직이며 자동 판독은 미예약이다. 후속 문서 커밋은 재배포하지 않는다. 아래 미배포/v3 표시는 당시 이력이다.
