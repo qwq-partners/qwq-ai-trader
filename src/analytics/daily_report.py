@@ -677,6 +677,10 @@ class DailyReportGenerator:
         self._today_recommendations: List[RecommendedStock] = []
         self._recommendation_date: Optional[date] = None
         self._today_news: List[Dict] = []  # 당일 핵심 뉴스
+        # 아침에 확정한 보고 대상만 장 마감 Toss 표시가 요청에 쓴다. 재시작 때는
+        # 저장 파일의 strict metadata가 현재 추천 목록과 정확히 맞을 때만 복원한다.
+        self._report_cohort = None
+        self.toss_report_prepare = None
 
     async def generate_morning_report(
         self,
@@ -740,6 +744,7 @@ class DailyReportGenerator:
         # 5. 추천 종목 저장 (오후 리포트용) + 파일 영속화
         self._today_recommendations = recommendations
         self._recommendation_date = today
+        self._set_report_cohort(today, _now())
         self._save_recommendations(today)
 
         # 5-1. 업종 동향 데이터 조회
@@ -784,6 +789,18 @@ class DailyReportGenerator:
             else:
                 logger.warning("[레포트] 오늘 추천 종목이 없습니다 (메모리 + 파일 모두 없음)")
                 return ""
+
+        # 새 helper는 아침에 확정·저장한 목록만 요청하고 성공한 가격만 공급한다.
+        # 준비 실패는 기존 조회 폴백을 막지 않지만 취소는 호출자에게 그대로 전달한다.
+        cohort = self._valid_report_cohort(today)
+        prepare = getattr(self, "toss_report_prepare", None)
+        if cohort is not None and callable(prepare):
+            try:
+                await prepare(cohort)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"[레포트] Toss 보고 가격 준비 실패: {e}")
 
         # 현재가 조회 및 결과 계산
         await self._update_results()
@@ -1215,6 +1232,9 @@ class DailyReportGenerator:
                 "date": report_date.isoformat(),
                 "stocks": [dataclasses.asdict(r) for r in self._today_recommendations],
             }
+            cohort = self._valid_report_cohort(report_date)
+            if cohort is not None:
+                data["report_cohort"] = cohort.to_document()
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             logger.debug(f"[레포트] 추천 종목 저장: {path} ({len(self._today_recommendations)}종목)")
         except Exception as e:
@@ -1222,6 +1242,7 @@ class DailyReportGenerator:
 
     def _load_recommendations(self, report_date: date) -> List["RecommendedStock"]:
         """파일에서 추천 종목 복원"""
+        self._report_cohort = None
         try:
             path = _REC_CACHE_DIR / f"morning_recs_{report_date.isoformat()}.json"
             if not path.exists():
@@ -1234,10 +1255,49 @@ class DailyReportGenerator:
                 # risk_factors 필드 타입 보정
                 d["risk_factors"] = d.get("risk_factors") or []
                 stocks.append(RecommendedStock(**d))
+            try:
+                from ..data.providers.toss.report_protocol import ReportCohort
+                cohort = ReportCohort.from_document(raw.get("report_cohort"))
+                members = tuple((stock.rank, stock.symbol) for stock in stocks)
+                if cohort.report_date == report_date and cohort.members == members:
+                    self._report_cohort = cohort
+                elif raw.get("report_cohort") is not None:
+                    logger.warning("[레포트] 저장된 Toss 보고 대상이 추천 목록과 달라 무시합니다")
+            except Exception:
+                # 구형 파일과 파손된 metadata는 기존 저녁 보고를 계속 만들되 Toss에는 쓰지 않는다.
+                if raw.get("report_cohort") is not None:
+                    logger.warning("[레포트] 저장된 Toss 보고 대상 검증 실패 — 기존 가격 폴백 사용")
             return stocks
         except Exception as e:
             logger.warning(f"[레포트] 추천 종목 로드 실패: {e}")
             return []
+
+    def _set_report_cohort(self, report_date: date, generated_at: datetime) -> None:
+        """현재 추천 목록을 아침 생성 시각 그대로 묶어 둔다."""
+        self._report_cohort = None
+        try:
+            from ..data.providers.toss.report_protocol import ReportCohort
+            if generated_at.tzinfo is None:
+                generated_at = generated_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+            else:
+                generated_at = generated_at.astimezone(ZoneInfo("Asia/Seoul"))
+            members = tuple((stock.rank, stock.symbol) for stock in self._today_recommendations)
+            self._report_cohort = ReportCohort.create(report_date, generated_at, members)
+        except Exception as e:
+            logger.warning(f"[레포트] Toss 보고 대상 생성 실패: {e}")
+
+    def _valid_report_cohort(self, report_date: date):
+        """현재 표시할 추천 목록과 정확히 같은 strict cohort만 반환한다."""
+        cohort = getattr(self, "_report_cohort", None)
+        if cohort is None:
+            return None
+        try:
+            members = tuple((stock.rank, stock.symbol) for stock in self._today_recommendations)
+            if cohort.report_date != report_date or cohort.members != members:
+                return None
+            return cohort
+        except Exception:
+            return None
 
     async def _update_results(self):
         """승인된 Toss 표시가가 없으면 기존 KIS → pykrx → 네이버 순서를 따른다."""

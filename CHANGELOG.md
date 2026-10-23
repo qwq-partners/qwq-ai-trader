@@ -1,5 +1,18 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — Toss 보고 가격의 실제 실행 경로 연결
+
+- root 보호 artifact를 검증하는 별도 report helper, v3/report_display 전용 조립기,
+  고정 실행 argv·최소 환경·유한 JSONL 부모 client와 기본 dry-run 설치기를 추가했다.
+- 아침 후보의 날짜·원생성 시각·순위/종목·해시를 저장/복원하고, 장후 조회 완료 뒤
+  같은 cohort의 가격만 사용한다. 실패·구형 metadata는 기존 조회를 유지한다.
+  시장 기준 unknown 가격은 참고가 대비 수익률을 계산하지 않는다.
+- 실제 subprocess stdout 포화 종료·시계 역행 TTL·scheduler 재진입·잘못된 cohort
+  재사용·장후 종료 경계 OAuth를 재현/수정했다. 실제 sealed helper→부모→보고
+  통합을 포함한 검증/리뷰/PR 영수증은 [정본](docs/superpowers/plans/2026-10-24-toss-report-runtime.md) 참조.
+- 운영 코드·설정·기존 observer·주문/매수 중지·월USD100 변경 없음. 신규 helper 설치/
+  활성화·실제 공급자 요청 감소는 아직이며 현재 보고의 직접 절감 대상은 pykrx/Naver다.
+
 ## 2026-10-23 — KIS 조회 보완 배포와 Toss 기동 경로 정정
 
 - PR #250 고정 `a512268e`를22:49:57 KST 배포,22:54:03 사후 확인에서

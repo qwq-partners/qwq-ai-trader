@@ -5759,11 +5759,43 @@ JSON:
 
         from ..analytics.report_context import render_runtime_context
         bot.report_generator.runtime_context_provider = lambda: render_runtime_context(bot)
-        # 관측 준비가 보고 생성기보다 늦어도 현재 승인된 읽기 공급자만 찾는다.
-        bot.report_generator.toss_quote_provider = lambda symbol: getattr(
-            getattr(bot, "_toss_shadow_supervisor", None),
-            "get_report_quote", lambda _symbol: None,
-        )(symbol)
+        report_helper = None
+        if os.environ.get("TOSS_REPORT_API") == "1":
+            # _supervised may enter this coroutine again after an error. A helper owns
+            # one child/receipt attempt for the bot lifetime, so a closed instance is
+            # deliberately rebound rather than silently replaced.
+            if not hasattr(bot, "_toss_report_helper_client"):
+                from ..data.providers.toss.report_helper import ReportHelperClient
+                report_helper = ReportHelperClient(
+                    enabled=lambda: bool(getattr(bot, "running", False))
+                    and os.environ.get("TOSS_REPORT_API") == "1",
+                )
+                bot._toss_report_helper_client = report_helper
+            else:
+                report_helper = bot._toss_report_helper_client
+            bot.report_generator.toss_report_prepare = report_helper.prepare_report
+
+            def _report_quote(symbol):
+                current = bot.report_generator._valid_report_cohort(date.today())
+                if current is None:
+                    return None
+                return report_helper.get_report_quote(symbol, cohort=current)
+
+            bot.report_generator.toss_quote_provider = _report_quote
+        else:
+            if hasattr(bot, "_toss_report_helper_client"):
+                # 한 번이라도 helper 경로를 선택했다면 OFF 뒤에도 과거 supervisor
+                # 주기 가격으로 되돌아가면 안 된다. close는 idempotent이며 실패해도
+                # 아래 finally가 경계를 유지한다.
+                report_helper = bot._toss_report_helper_client
+                bot.report_generator.toss_report_prepare = None
+                bot.report_generator.toss_quote_provider = lambda _symbol: None
+            else:
+                # helper를 한 번도 요청하지 않은 기존 설치만 supervisor를 호환용으로 쓴다.
+                bot.report_generator.toss_quote_provider = lambda symbol: getattr(
+                    getattr(bot, "_toss_shadow_supervisor", None),
+                    "get_report_quote", lambda _symbol: None,
+                )(symbol)
 
         sched_cfg = bot.config.get("kr", "scheduler") or {}
         morning_time_str = sched_cfg.get("morning_report_time", "08:00")
@@ -6116,6 +6148,14 @@ JSON:
             # 삼키면 _supervised가 "정상 종료"로 간주해 재기동 불능 (2026-08-05 P1)
             logger.error(f"레포트 스케줄러 오류: {e}")
             raise
+        finally:
+            if report_helper is not None:
+                try:
+                    await report_helper.close()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"[레포트] Toss helper 종료 실패: {e}")
 
     async def run_evolution_scheduler(self):
         """LLM 거래 리뷰 스케줄러 — 매일 20:30 LLM 종합평가 생성"""
