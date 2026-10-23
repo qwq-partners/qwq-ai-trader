@@ -543,6 +543,12 @@ def get_telegram_notifier() -> TelegramNotifier:
     return _notifier
 
 
+async def close_telegram_notifier() -> None:
+    """종료 시 이미 생성된 알림기만 정리한다. 설정/세션을 새로 만들지 않는다."""
+    if _notifier is not None:
+        await _notifier.close()
+
+
 async def send_telegram(text: str, **kwargs) -> bool:
     """텔레그램 메시지 발송 (편의 함수)"""
     return await get_telegram_notifier().send_message(text, **kwargs)

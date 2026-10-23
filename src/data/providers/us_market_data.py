@@ -804,3 +804,9 @@ def get_us_market_data() -> USMarketData:
     if _us_market_data is None:
         _us_market_data = USMarketData()
     return _us_market_data
+
+
+async def close_us_market_data() -> None:
+    """KR 보고에도 쓰는 기존 공급자만 정리하고 새 인스턴스는 만들지 않는다."""
+    if _us_market_data is not None:
+        await _us_market_data.close()

@@ -528,9 +528,10 @@ async def test_runner_llm_shutdown_timeout_still_closes_token_manager(monkeypatc
             events.append('llm_cancelled')
     real_wait_for=asyncio.wait_for
     async def short_wait_for(coro,timeout):
-        assert timeout==10.0
-        events.append('bounded')
-        return await real_wait_for(coro,timeout=0.01)
+        if timeout == 10.0:
+            events.append('bounded')
+            return await real_wait_for(coro,timeout=0.01)
+        return await real_wait_for(coro,timeout=timeout)
     async def close_token():events.append('token_closed')
     monkeypatch.setattr(llm,'close_llm_manager',close)
     monkeypatch.setattr(runner().asyncio,'wait_for',short_wait_for)
