@@ -1570,8 +1570,10 @@ class DashboardDataCollector:
                 "pending_orders": len(getattr(bot.broker, '_pending_orders', {})),
             }
             if is_kr_broker:
+                from src.data.providers.analysis_daily_cache import analysis_daily_snapshot
                 broker_stats["kis_requests"] = kis_request_metrics.snapshot()
                 broker_stats["kis_direct_requests"] = kis_direct_metrics.snapshot()
+                broker_stats["analysis_daily_requests"] = analysis_daily_snapshot(bot.broker)
 
         # 엔진 리스크 매니저
         risk_stats = {}

@@ -55,6 +55,7 @@ class Deployment:
     preflight_timeout_seconds: float
     startup_attestation: StartupAttestation | None = None
     expected_artifact_sha256: str | None = None
+    report_display: bool = False
 
     def load(self):
         validate_attestation(self.startup_attestation, self.identity,
@@ -62,6 +63,12 @@ class Deployment:
         from .approval import load_authority, ApprovalError
         authority = load_authority(registry_path=self.registry_path, plan_path=self.plan_path,
                                    grant_id=self.grant_id, trust=self.trust, identity=self.identity)
+        if type(self.report_display) is not bool:
+            raise ApprovalError()
+        if self.report_display:
+            if authority.plan.document['schema_version'] != 3:
+                raise ApprovalError()
+            authority.require('report_display', deadline=authority.clock() + 1)
         if self.preflight_timeout_seconds > authority.plan.document['limits']['preflight_timeout_seconds']:
             raise ApprovalError()
         return authority

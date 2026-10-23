@@ -145,7 +145,7 @@ class KISMarketData:
                 async with kis_direct_metrics.observe_get(
                     "market_data", "holidays", "CTCA0903R"
                 ) as observed, session.get(url, headers=headers, params=params) as resp:
-                    observed.observe_response(resp)
+                    await observed.inspect_response(resp)
                     if resp.status != 200:
                         # 뒤 조회 실패는 앞에서 모은 휴장일을 유지한다 (캐시하지 않음)
                         (logger.error if calls == 1 else logger.warning)(
@@ -229,7 +229,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "sector_indices", "FHPUP02140000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     logger.error(f"업종지수 조회 실패: HTTP {resp.status}")
                     return result
@@ -310,7 +310,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "fluctuation_rank", "FHPST01700000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"등락률 순위 조회 실패: HTTP {resp.status}")
@@ -404,7 +404,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "foreign_institution", "FHPTJ04400000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"{investor_name} 매매동향 조회 실패: HTTP {resp.status}")
@@ -521,7 +521,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "frgnmem_trade_estimate", "FHKST644100C0"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS] 외국계가집계 HTTP {resp.status}")
                     return result
@@ -602,7 +602,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "stock_investor_daily", "FHKST01010900"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     return result
                 data = await observed.json(resp)
@@ -728,7 +728,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "investor_trend_estimate", "HHPTJ04160200"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS] 추정가집계({symbol}) HTTP {resp.status}")
                     return None
@@ -837,7 +837,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "stock_valuation", "FHKST01010100"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     return None
 
@@ -1030,7 +1030,7 @@ class KISMarketData:
                 async with kis_direct_metrics.observe_get(
                     "market_data", "night_futures_quote", "FHMIF10000000"
                 ) as observed, session.get(url, headers=headers, params=params) as resp:
-                    observed.observe_response(resp)
+                    await observed.inspect_response(resp)
                     if resp.status != 200:
                         logger.warning(
                             f"[KIS] 야간선물 시세 조회 실패: HTTP {resp.status} "
@@ -1172,7 +1172,7 @@ class KISMarketData:
             async with kis_direct_metrics.observe_get(
                 "market_data", "index_price", "FHPUP02100000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     logger.debug(f"[KIS 지수] {label} HTTP {resp.status}")
                     return None

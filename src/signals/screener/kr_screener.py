@@ -33,6 +33,7 @@ from src.utils.token_manager import get_token_manager
 from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터 (2026-09-03)
 from src.utils import kis_direct_metrics  # 직접 KIS GET의 고정 차원 관측
 from src.data.providers.kis_market_data import KISMarketData, get_kis_market_data
+from src.data.providers.analysis_daily_cache import get_analysis_daily_prices
 from src.indicators.atr import calculate_atr
 from src.indicators.technical import TechnicalIndicators
 from src.analytics.selection_basis import SelectionBasisBuilder
@@ -315,7 +316,7 @@ class StockScreener:
             async with kis_direct_metrics.observe_get(
                 "kr_screener", "volume_surge", "FHPST01710000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"거래량 순위 조회 실패: {resp.status}")
@@ -538,7 +539,7 @@ class StockScreener:
             async with kis_direct_metrics.observe_get(
                 "kr_screener", "new_highs", "FHPST01720000"
             ) as observed, session.get(url, headers=headers, params=params) as resp:
-                observed.observe_response(resp)
+                await observed.inspect_response(resp)
                 if resp.status != 200:
                     _mark_selection_source("error", reason="http")
                     logger.error(f"신고가 종목 조회 실패: {resp.status}")
@@ -1035,7 +1036,7 @@ class StockScreener:
                     if symbol in daily_cache:
                         daily_prices = daily_cache[symbol]
                     else:
-                        daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                        daily_prices = await get_analysis_daily_prices(self._broker, symbol, days=30)
                         daily_cache[symbol] = daily_prices
                     if len(daily_prices) < 20:
                         continue
@@ -1291,7 +1292,7 @@ class StockScreener:
                 # 뒤 섹터 보정으로 ATR 상위 20위에 새로 들어올 수 있으므로,
                 # 변동성 필터와 같은 30일을 보존한다. 5일 캐시는 ATR을 건너뛰게 한다.
                 try:
-                    daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                    daily_prices = await get_analysis_daily_prices(self._broker, symbol, days=30)
                     daily_cache[symbol] = daily_prices
                 except Exception:
                     continue
@@ -1350,7 +1351,7 @@ class StockScreener:
                     if symbol in daily_cache:
                         daily_prices = daily_cache[symbol]
                     else:
-                        daily_prices = await self._broker.get_daily_prices(symbol, days=30)
+                        daily_prices = await get_analysis_daily_prices(self._broker, symbol, days=30)
                         daily_cache[symbol] = daily_prices
                     if len(daily_prices) < 20:
                         continue

@@ -177,13 +177,19 @@ class TossShadowSupervisor:
         self.worker = None
         self.state = 'new'
         self._seen = set()
+        self.report_quotes = None
+
+    def get_report_quote(self, symbol):
+        if self.report_quotes is None:
+            return None
+        return self.report_quotes.get_quote(symbol)
 
     def publish_candidates(self, stocks):
         self.candidates = candidate_copy(stocks, now=datetime.now(KST))
 
     async def run(self):
         # Task1/2/3 integration is lazy: OFF imports no auth/HTTP implementation.
-        from src.data.providers.toss.runtime_factory import build_app
+        from src.data.providers.toss.runtime_factory import build_app, command_deadline
         from src.data.providers.toss.observation import select_snapshot
         authority = None
         cleanup_timeout = self.deployment.preflight_timeout_seconds
@@ -201,6 +207,11 @@ class TossShadowSupervisor:
                     hb.observer_status(name, state=self.state, production_eligible=False)
                 return
             policy = authority.plan.document
+            if getattr(self.deployment, 'report_display', False):
+                from src.data.providers.toss.report_quotes import ReportQuotes
+                self.report_quotes = ReportQuotes(authority, enabled=lambda: (
+                    self.state == 'observing' and getattr(self.bot, 'running', True)
+                    and os.environ.get('TOSS_API', '0') == '1'))
             cleanup_timeout = policy['limits']['cleanup_timeout_seconds']
             hb.register_observer(NAMES['prices'], dates=policy['dates'],
                                  windows=tuple((s['start'], s['end']) for s in policy['sessions']))
@@ -246,6 +257,9 @@ class TossShadowSupervisor:
                                                    source_success_at=inputs.source_success_at, now=submitted_at,
                                                    policy=policy, kis_quotes=inputs.kis_quotes)
                         command = WorkerCommand('prices', slot.slot_id, snapshot)
+                    # 반환 후에도 최초 작업 기한을 보존하여 늦은 결과를 게시하지 않는다.
+                    deadline = (command_deadline(command, policy, now=authority.now(), clock=authority.clock)
+                                if self.report_quotes is not None and command.kind == 'prices' else None)
                     future = self.worker.submit(command)
                     wrapped = asyncio.wrap_future(future)
                     wrapped.add_done_callback(lambda f: None if f.cancelled() else f.exception())
@@ -253,6 +267,8 @@ class TossShadowSupervisor:
                     # finally; only the worker's confirmed cleanup releases it.
                     outcome = await asyncio.wait_for(asyncio.shield(wrapped),
                                                      policy['limits']['job_timeout_seconds'])
+                    if self.report_quotes is not None and command.kind == 'prices':
+                        self.report_quotes.publish(outcome, command=command, deadline=deadline)
                     self._seen.add(key)
                     if not missed:
                         update_observation_health(slot.kind, outcome, now=datetime.now(KST))
@@ -267,6 +283,8 @@ class TossShadowSupervisor:
             self.state = 'unavailable'
             _unavailable()
         finally:
+            if self.report_quotes is not None:
+                self.report_quotes.clear()
             if authority is not None:
                 authority.stop()
             if self.worker is not None:
