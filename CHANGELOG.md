@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — 개발 Claude 호출을 Opus5.5로 명시
+
+- 사용자 승인에 따라 기존 Max 구독 CLI의 실제 응답 모델 `claude-opus-5-5`를 확인하고 개발·리뷰 모델 선택과 문서를 갱신한다. 요청 effort는high, 실효 effort는미노출이다. 과거 Opus5 결과·Fable 거절 폴백 이력은 보존한다.
+- 첫 정적 검토12.442초·실제 Opus5.5·알려진 결함 발견, 단일 JSON 코드블록 정규화 후 적합. 신규 세션 전달 확인·호스트 정책 적용·독립 검토·CI/통합 상태는 [D01](docs/operations/execution-roadmap.md#d01-opus55)을 따른다. 엔진 API·운영·예약·대화형 CLI 기본값은 변경하지 않는다.
+
 ## 2026-10-24 — Claude 개발 CLI 사용 검증·리뷰 수락 계약
 
 - 로그인/실제 Opus 응답을 확인하고, 과거와 같은 입력에서 가짜 도구 호출/결과 텍스트를 재현했다. 실제 도구 이벤트는 없었으며 coordinator가 부적합 결과를 거부한 기존 판정을 유지한다.

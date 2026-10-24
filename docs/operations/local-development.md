@@ -156,14 +156,26 @@ bash scripts/dev/codex_review.sh --uncommitted  # 커밋 전 변경만
 - 검토는 비공개 작업 디렉터리의 stdin 자료만 사용했고 `--safe-mode`, `--tools ""`, 빈 strict MCP, `--no-session-persistence`, 180초 절대 제한·90초 모델 진행 제한·$1.50 표시 비용 상한을 사용했다. 진행 이벤트는 소비하되 숨은 추론 내용은 저장하지 않았다. safe mode가 지침을 생략하므로 호스트의 승인된 라우팅 정책을 명시적으로 전달했다. 운영 설정·예약·엔진 코드 변경은 없다.
 - 비공개 근거: `~/.local/state/qwq-task-audit/20261024/cli-agents/`의 `claude-review-receipt.json`, `claude-review.md`, `engine-code-audit.md`. 실제 요청 비용·추가 사용료 설정·남은 구독 한도는 이 시험으로 확정하지 않았다.
 
+<a id="claude-opus55"></a>
+### 현재 Claude 선택 — Opus 5.5
+
+2026-10-24 사용자가 개발 Claude 호출의 Opus5.5 우선 확인/적용을 승인했다. 새 개발·리뷰 호출에는 **`--model claude-opus-5-5 --effort high`**를 명시한다. 이동하는 `opus` 별칭이나 이전 `claude-opus-5`로 실제 수행 모델을 추정하지 않는다. 위76.610초 호출과 [앞선 사용 검증](../reviews/claude-cli-usage-audit-2026-10-24.md)은 Opus5의 당시 기록이며 바꾸지 않는다.
+
+- 기존 Max 구독 인증의 CLI2.1.310에서 도구/MCP 없이 알려진 결함의 정적 검토를 실행했다. 실제 assistant/terminal usage 모델은 `claude-opus-5-5`, process rc0·terminal success,12.442초다. 요청 high는 확인됐고 실효 effort는 미노출이다.
+- 하한 누락 결함을 REQUEST_CHANGES/P1로 지적했다. 원래 응답은 단일 JSON 코드블록이라 진단 실행기 rc1이었고, 원본을 보존한 [수락 계약](#claude-result-contract)의 정규화 후 schema 적합을 확인했다. 작은 결함1건의 검토로 일반 정확성/속도·장기 가용성을 보증하지 않는다.
+- 새 세션에 정책을 명시적으로 전달한 두 번째 호출도 실제 Opus5.5·22.259초·APPROVE 내용과 정규화 후 적합을 확인했다. safe mode의 자동 파일 탐색을 검증한 것은 아니다. Claude의 문구 모호성 지적을 반영해 새 기본값은 **Claude 배정에만** 적용한다고 명확히 했으며 Codex 역할표는 유지한다. Fable5.1 추가 시험 제안은 현재 범위에 넣지 않았다.
+- 표시 추정비는 첫 호출$0.0725516 + 전달 확인$0.0881912 = **$0.1607428**, 실제 구독 증분 청구액은null이다. 최종 적용·검증/통합은 [D01 원장](execution-roadmap.md#d01-opus55)을 따른다.
+- 호스트 정본 `/home/ubuntu/.config/ai-agents/model-routing.md`의 개발 모델 선택을 갱신한다. 기존 전역 Codex/Claude 진입 문서는 이 정본을 읽고 일반 `verified Opus` 역할을 사용하므로 모델명을 중복 저장하지 않는다. 사용자 대화형 CLI의 저장된 기본값·인증·도구 권한·엔진 API 설정은 변경하지 않는다.
+- Fable은 과거 `model_refusal_fallback`으로 실제 Opus가 응답했던 근거를 보존하며 자동 배정하지 않는다. 안전 거절을 우회하거나 Opus 결과를 Fable 결과로 세지 않는다. 모델 불일치 때는 해당 검증을 멈추고 원인을 기록한다.
+
 ### 개발·운영 작업의 역할 분담
 
 | 작업 | 기본 역할 | 실행·검증 책임 |
 |---|---|---|
-| 복잡한 설계·재현·통합 | Codex Astra/high 또는 검증된 Claude Opus/high | coordinator가 범위와 근거를 정하고 통합 |
-| 범위가 명확한 구현·테스트 | 기본 Terra/medium~high; 난도가 높은 독립 묶음은 Claude Opus | 병렬 작성자는 같은 base의 별도 worktree와 겹치지 않는 파일 사용 |
+| 복잡한 설계·재현·통합 | Codex Astra/high 또는 검증된 Claude Opus5.5/high | coordinator가 범위와 근거를 정하고 통합 |
+| 범위가 명확한 구현·테스트 | 기본 Terra/medium~high; 난도가 높은 독립 묶음은 Claude Opus5.5 | 병렬 작성자는 같은 base의 별도 worktree와 겹치지 않는 파일 사용 |
 | 일반 분석·문서 검토 | 기본 Sol/high, 기계적 정리는 Luna | 무조건 두 모델에 같은 일을 반복시키지 않음 |
-| 주문·권한·원장·배포 관련 최종 리뷰 | 작성자와 다른 검증된 Claude Opus 또는 Codex Astra, high/xhigh | 실제 모델·폴백·테스트 증거 확인; 사용자 승인된 독립 Codex 대체도 유효 |
+| 주문·권한·원장·배포 관련 최종 리뷰 | 작성자와 다른 검증된 Claude Opus5.5 또는 Codex Astra, high/xhigh | 실제 모델·폴백·테스트 증거 확인; 사용자 승인된 독립 Codex 대체도 유효 |
 | 운영 장애 분석·배포 준비 | 한쪽이 원인/패치를 만들고 다른 쪽이 검토 | 비식별 자료로 분석; 실제 설치·재시작·롤백은 coordinator가 기존 검증 스크립트와 해당 작업의 사용자 권한으로 수행 |
 
 호스트 정본은 `/home/ubuntu/.config/ai-agents/model-routing.md`다. coordinator1명+worker최대3명은 Codex/외부 Claude 합산이며, worker의 추가 fan-out을 허용하지 않는다. 별도 사용자 세션을 중단하거나 재사용하지 않는다. worktree는 보안 격리가 아니므로 Claude의 도구 사용 구현은 개발 샌드박스가 검증된 경우에만 맡긴다. 그렇지 않으면 이번처럼 도구 없이 정제한 소스/자료를 전달해 패치 제안·리뷰를 받는다. 이번 호출 성공은 도구 사용 샌드박스 검증 완료가 아니다.

@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **개발 Claude 모델:** [구독 CLI Opus5.5 검증·현재 선택](operations/local-development.md#claude-opus55) · [D01 적용 상태](operations/execution-roadmap.md#d01-opus55). 새 개발/리뷰 호출은 전체 모델 ID를 명시하며, 엔진 API 모델과 과거 Opus5 기록은 유지한다.
+
 > **Claude 사용 검증 D01:** [실제 재현·결과 수락·한계](reviews/claude-cli-usage-audit-2026-10-24.md). 실행 성공과 리뷰 정확성을 구분하며 도구 없는 호출의 가짜 실행 결과를 거부한다. 개발 협업은 계속하되 운영·엔진 API를 변경하지 않는다.
 
 > **위키 E02-W1:** [실사용·리서치 수집일 검사](reviews/wiki-context-audit-2026-10-24.md). 오래된 연구행의 문맥 재사용을 제한하고 역사적 거래 교훈과 구분한다. 운영 미배포이며 상태는 실행 원장을 따른다.
