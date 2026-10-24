@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10월24일 Claude 사용 검증:** [D01 후속](docs/operations/execution-roadmap.md#d01-사용-검증) · [호출/리뷰 수락 계약](docs/operations/local-development.md#claude-result-contract). 로그인/Opus 응답은 확인됐지만 도구 없는 호출의 가짜 도구 결과를 재현했다. 실행 성공·출력 적합·실제 내용 수락을 분리하며 기존 `success`만으로 승인하지 않는다. 정적 검토 계약과 원본 보존을 적용하고, 엔진 API/운영/예약은 유지한다.
+
 > **10월24일 위키 후속:** [E02-W1 실사용·리서치 시각 감사](docs/reviews/wiki-context-audit-2026-10-24.md). 종목 연구행만 KST 수집일0~30일로 제한하고 과거 거래 교훈·원문은 보존한다. 연구 수집일을 관측일로 표시하지 않는다. 검증·리뷰·통합 상태는 [실행 원장](docs/operations/execution-roadmap.md#e02-w1)을 따른다. 운영 미배포·10/26 고정 실측 보존, 주 순서는 T03/T04→조건부T05→T06→E01이다.
 
 > **10월24일 E02 후속:** [원천 매핑·수급 연속성·비활성 전략 후보 누락](docs/reviews/selection-source-map-2026-10-24.md). F1은 PR #259/main `abd8040c`에 병합했다. F2는 명시 false/true 합성 설정에서 꺼진 RSI2가 활성 SEPA/VCP 후보를 가리는 경로를 재현하고 필터 이전 enabled 검사로 수정했다. 관련250·전체9,093검사와 독립 Claude Opus 중요 리뷰를 통과했다. 검증/리뷰/통합 상태는 [작업 원장](docs/operations/execution-roadmap.md#e02-입력-점검)을 따른다. F1/F2 운영 미배포·10/26 고정 HEAD/예약 유지; 이후 T03/T04→조건부 T05→T06→E01로 복귀한다.
