@@ -790,3 +790,25 @@ Toss 판독은 기존 전체 원장의 해시/스키마 검증 후 정확한 아
 Toss의 `successful_attempts`는 원장의 terminal reason=`success` 건수다. 보고용 조회는
 KIS 비교가격이 없어 `excluded`일 수 있으므로 이것만으로 가격 공급 실패를 판정하지 않는다.
 종목별 `quote.status`·원시각·가격과 실제 수신 본문의 사용 출처를 따로 읽는다.
+
+## 22시 LLM 비교 보고 — O01 보고 전용 전환
+
+정본은 [실행 원장 O01](execution-roadmap.md#o01)이다.
+`llm_migration_monitor.py`는 과거 shadow 자료·상태를 읽고 요약하며 모델/설정/상태 저장과
+봇 재시작 기능을 제거했다. 과거 phase는 현재 모델을 뜻하지 않고 응답 키 일치는 투자 성능이 아니다.
+`--dry-run`은 Telegram 자격을 읽거나 발송하지 않으며 `--state-file`·`--log-dir`로 합성 경로를 지정한다.
+고정 wrapper는 실행 시각과 `llm_report_exit`를 비공개 로그에 남긴다.
+알림 설정은 CLI 실행 때만 `--env-file`의 Telegram 토큰/채팅 키4종을 기존 환경 우선으로 읽는다.
+발송 실패는 exit1, 렌더링/발송 성공은 exit0이며 자료 불충족은 본문에 남긴다.
+
+운영 적용은 봇 배포와 분리한다. 검증된 커밋에서 monitor·analyze_shadow·TelegramNotifier와 빈 package
+init2개(총5파일)를 고정 디렉터리에 복사하고 파일 목록/sha256을 검사한다. source는0444/디렉터리0555,
+상위 비공개 디렉터리는0700, 실행 wrapper는0500이다. wrapper는 manifest 확인 후180초 제한·정리된 환경·
+Python `-I -B`로 고정본을 실행하고 기존 운영 `.env` 경로를 명시한다. 운영 Python 패키지 환경은 공유하며
+완전한 실행 환경 샌드박스로 주장하지 않는다. 새 모델/API 호출은 없고 Telegram만 기존 시각에 발송한다.
+
+설치 전 원 cron을 비공개 백업하고22시 monitor가 정확히1개인지, 나머지9개와10/26 고정 소스/조건이
+같은지 검사한다. 동시에 cron이 바뀌었으면 덮어쓰지 않는다. 동일 시각의 대상 한 줄만 교체하고 읽기 대조한다.
+기존 상태 파일을 phase=completed 등으로 고치지 않는다. 설치기의 assert 가드가 유지되도록 `python3 -I -B`로 실행하며 `-O/-OO`는 쓰지 않는다. 실패 시 새22시 항목만 보류하고 원인을 고치며
+자동 전환을 포함한 옛 명령으로 자동 복구하지 않는다. 봇 HEAD/PID·보호 설정·기존 상태·다른 예약 보존을
+확인한 뒤 원장에 설치 근거를 남긴다. 합성 smoke는 --dry-run으로 수행하고 실제 발송 성공은 다음 자연 실행에서 확인한다. manifest 검사 등 선행 단계가 실패하면 종료 표식이 없을 수 있으므로 표식 부재를 성공으로 세지 않는다.
