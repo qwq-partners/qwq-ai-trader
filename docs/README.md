@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **위키 E02-W1:** [실사용·리서치 수집일 검사](reviews/wiki-context-audit-2026-10-24.md). 오래된 연구행의 문맥 재사용을 제한하고 역사적 거래 교훈과 구분한다. 운영 미배포이며 상태는 실행 원장을 따른다.
+
 > **선정 입력 E02:** [장중/배치 원천 지도·연속 수급 가점·비활성 전략 후보 누락 수정](reviews/selection-source-map-2026-10-24.md). 현재 실측 대기 중 가능한 입력 점검이며, 비용 후 성과 판정과 운영 적용은 별개다.
 
 > **개발 CLI 협업과 엔진 호출 경로:** [D01/L01 상태](operations/execution-roadmap.md#d01l01) · [Claude/Codex 역할·확인 결과·엔진 적용 검토](operations/local-development.md#cli-collaboration). 개발 협업은 적용하고 엔진 API는 유지한다.

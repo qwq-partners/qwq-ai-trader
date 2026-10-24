@@ -12,7 +12,7 @@ QWQ AI Trader - Trade Wiki (Karpathy LLM Wiki 패턴)
 
 import re
 import asyncio
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -30,6 +30,8 @@ MAX_TRADE_TABLE_ROWS = 30
 MAX_RESEARCH_ROWS = 30      # 리서치 노트 롤링 개수
 MAX_SYMBOL_PAGES = 200      # 리서치가 새 페이지를 만들 수 있는 상한 (거래는 무제한)
 MAX_LESSON_ROWS = 20
+RESEARCH_MAX_AGE_DAYS = 30  # 기존 lint 기준; 거래 교훈의 유효기간은 아님
+_KST = timezone(timedelta(hours=9))  # 현재 KST; 시스템 tzdata 의존성 없음
 
 
 def _sanitize_filename(name: str) -> str:
@@ -253,7 +255,8 @@ class TradeWiki:
                     self._research_page_count += 1
 
                 # 연도 포함 — 1년 뒤 같은 날짜 오탐 스킵 방지 (리뷰 P2-5)
-                today = datetime.now().strftime("%Y-%m-%d")
+                recorded_at = datetime.now(_KST)
+                today = recorded_at.strftime("%Y-%m-%d")
                 marker = f"[{today}] [{source}]"
                 if marker in self._extract_section(page, "## 리서치 노트"):
                     return  # 같은 날 같은 출처 중복
@@ -263,7 +266,7 @@ class TradeWiki:
                     MAX_RESEARCH_ROWS,
                 )
                 fm = self._parse_frontmatter(page)
-                fm["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                fm["last_updated"] = recorded_at.strftime("%Y-%m-%d %H:%M")
                 if name:
                     fm["name"] = name
                 page = self._replace_frontmatter(page, fm)
@@ -272,9 +275,10 @@ class TradeWiki:
                 logger.debug(f"[Wiki] 리서치 노트 실패 (ignored): {e}")
 
     def query_symbol(self, symbol: str) -> str:
-        """종목 페이지 컨텍스트 (거래 통계 + 교훈 3개 + 최근 리서치 5개, 최대 600자)
+        """과거 거래 참고 + KST 수집일 0~30일의 연구행, 최대 600자.
 
         cross_validator LLM 2차 검증 프롬프트 주입용 — 파일 읽기만, LLM 불필요.
+        원자료 관측일/수익 효과는 미확인. 전체 3교훈+5연구 전달은 문자 예산에 제한된다.
         """
         try:
             path = self._dir / "symbols" / f"{_sanitize_filename(symbol)}.md"
@@ -285,19 +289,37 @@ class TradeWiki:
             parts = []
             if fm.get("trade_count", 0):
                 parts.append(
-                    f"[이력] {fm.get('trade_count',0)}건 승률{fm.get('win_rate',0):.0f}%"
+                    f"[누적 이력·기간 미상] {fm.get('trade_count',0)}건 "
+                    f"승률{fm.get('win_rate',0):.0f}%"
                 )
             lessons = self._extract_section(content, "## 거래 교훈")
             if lessons:
                 parts += [
-                    l for l in lessons.split("\n") if l.strip().startswith("-")
+                    f"[거래 교훈] {l.strip()}" for l in lessons.split("\n")
+                    if l.strip().startswith("-")
                 ][:3]
             notes = self._extract_section(content, "## 리서치 노트")
+            recent = []
             if notes:
-                parts += [
-                    l for l in notes.split("\n") if l.strip().startswith("-")
-                ][:5]
-            return "\n".join(parts)[:600]
+                today = datetime.now(_KST).date()
+                for line in notes.splitlines():
+                    match = re.match(r"^\s*-\s*\[(\d{4}-\d{2}-\d{2})\]", line)
+                    if not match:
+                        continue  # 연도 없는 옛 노트의 시각을 추정하지 않는다.
+                    try:
+                        collected_on = date.fromisoformat(match.group(1))
+                    except ValueError:
+                        continue
+                    if 0 <= (today - collected_on).days <= RESEARCH_MAX_AGE_DAYS:
+                        recent.append((collected_on, line.strip()))
+                recent.sort(key=lambda item: item[0], reverse=True)
+            research = [f"[리서치] {line}" for _, line in recent[:5]]
+            # 팀은 앞 300자만 읽으므로 최신 연구행을 긴 역사 교훈보다 먼저 전달한다.
+            parts = research[:1] + parts + research[1:]
+            if not parts:
+                return ""
+            header = "[과거 참고·현재 신호 아님; 리서치=수집일, 관측일 미확인]"
+            return "\n".join([header, *parts])[:600]
         except Exception:
             return ""
 
