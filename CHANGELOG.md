@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — 22시 보고 전용 예약의 첫 자연 실행 확인
+
+- 고정 보고가22:00:01 시작해 rc0으로 종료했고22:00:03.209 Telegram HTTP200 성공 로그를 남겼다. 설치 source/wrapper·cron 지문과 운영 HEAD/PID 존재를 읽기 전용으로 대조했다.
+- [R01 원장](docs/operations/execution-roadmap.md#r01-22시)에 실행/API 확인과 미확인 모바일 수신·가독성을 구분했다. 비교 로그 부재는 모델 우위나 순수익 근거가 아니다. 제품 코드·운영·예약 변경 없이10/26 T03/T04→조건부 T05→T06→E01 순서를 유지한다.
+
 ## 2026-10-24 — 개발 Claude 호출을 Opus5.5로 명시
 
 - 사용자 승인에 따라 기존 Max 구독 CLI의 실제 응답 모델 `claude-opus-5-5`를 확인하고 개발·리뷰 모델 선택과 문서를 갱신한다. 요청 effort는high, 실효 effort는미노출이다. 과거 Opus5 결과·Fable 거절 폴백 이력은 보존한다.
