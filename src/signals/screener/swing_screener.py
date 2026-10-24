@@ -60,8 +60,13 @@ class SwingScreener:
         from src.data.providers.supply_score import SupplyScoreProvider
         self._supply5d = SupplyScoreProvider()
 
+        # 비활성 후보는 VCP 제외 집합/종목 중복 제거에도 참여하지 않는다.
+        # 누락 기본값은 BatchAnalyzer의 기존 소비 계약: RSI2 off, SEPA on.
+        _cfg = config if isinstance(config, dict) else {}
+        self._rsi2_enabled = bool(_cfg.get("rsi2_reversal", {}).get("enabled", False))
+        self._sepa_enabled = bool(_cfg.get("sepa_trend", {}).get("enabled", True))
+
         # ── VCP 독립 발굴 라인 설정 (2026-08-03) ──
-        _cfg = config or {}
         _vcp_cfg = _cfg.get("vcp_breakout", {}) if isinstance(_cfg, dict) else {}
         self._vcp_line_enabled = bool(_vcp_cfg.get("enabled", True))
         self._vcp_min_score = float(_vcp_cfg.get("min_score", 60.0))
@@ -100,8 +105,12 @@ class SwingScreener:
         logger.info(f"[스윙스크리너] 지표 계산 완료: {len(candidates_data)}개 종목")
 
         # 3단계: 전략별 필터
-        rsi2_candidates = self._filter_rsi2_reversal(candidates_data)
-        sepa_candidates = self._filter_sepa_trend(candidates_data)
+        rsi2_candidates = (
+            self._filter_rsi2_reversal(candidates_data) if self._rsi2_enabled else []
+        )
+        sepa_candidates = (
+            self._filter_sepa_trend(candidates_data) if self._sepa_enabled else []
+        )
         logger.info(
             f"[스윙스크리너] 필터 결과: RSI2={len(rsi2_candidates)}개, SEPA={len(sepa_candidates)}개"
         )

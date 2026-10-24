@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **10월24일 E02 사전 점검:** [원천 매핑·수급 연속성 수정](docs/reviews/selection-source-map-2026-10-24.md). 수급 확인 공백/후보 이탈 뒤 과거 연속 가점이 남는 E02-F1을 재현해 수정한다. 개발 검증/리뷰/통합 상태는 [작업 원장](docs/operations/execution-roadmap.md#e02-입력-점검)을 따른다. 운영 미배포·10/26 고정 HEAD/예약 유지. 별도 E02-F2는 비활성 전략이 활성 후보를 가리는 조건부 경로의 재현 대상이다.
+> **10월24일 E02 후속:** [원천 매핑·수급 연속성·비활성 전략 후보 누락](docs/reviews/selection-source-map-2026-10-24.md). F1은 PR #259/main `abd8040c`에 병합했다. F2는 명시 false/true 합성 설정에서 꺼진 RSI2가 활성 SEPA/VCP 후보를 가리는 경로를 재현하고 필터 이전 enabled 검사로 수정했다. 관련250·전체9,093검사와 독립 Claude Opus 중요 리뷰를 통과했다. 검증/리뷰/통합 상태는 [작업 원장](docs/operations/execution-roadmap.md#e02-입력-점검)을 따른다. F1/F2 운영 미배포·10/26 고정 HEAD/예약 유지; 이후 T03/T04→조건부 T05→T06→E01로 복귀한다.
 
 > **현재 작업 순서 정본:** [엔진 개선 실행 원장](docs/operations/execution-roadmap.md). 목적은 종목 선정·진입 시점의 비용 후 순수익 개선이며, 현재 주 과제는 Toss/KIS 병행 자료 경로다. **O01 보고 전용 예약 설치·T02 역할 검토 완료. 다음은 T03/T04 10월26일 실측 → 조건부 T05 → T06 통합 리뷰 → E01 선정/진입 평가 복귀**. 현재 추가 대체 후보가 없으며, 효과 없는 확대를 필수 관문으로 삼지 않는다. 작업마다 Plan→Do→See와 NEXT를 갱신한다. 아래 날짜별 머리글은 당시 이력이며 현재 우선순위를 새로 만드는 지시가 아니다. 운영 checkout과 최신 main 문서를 구분한다.
 
