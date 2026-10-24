@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **현재 개발 Claude 모델:** 사용자 승인에 따라 새 개발·리뷰 호출은 `claude-opus-5-5`/high를 명시한다. [구독 CLI 실제 모델 검증·적용 상태](docs/operations/execution-roadmap.md#d01-opus55) · [현재 선택](docs/operations/local-development.md#claude-opus55). 아래 Opus5 기록은 당시 실측이며 유지한다. 실제 응답 모델/폴백·리뷰 내용은 매번 확인하고 엔진 API/운영 설정은 변경하지 않는다.
+
 > **10월24일 Claude 사용 검증:** [D01 후속](docs/operations/execution-roadmap.md#d01-사용-검증) · [호출/리뷰 수락 계약](docs/operations/local-development.md#claude-result-contract). 로그인/Opus 응답은 확인됐지만 도구 없는 호출의 가짜 도구 결과를 재현했다. 실행 성공·출력 적합·실제 내용 수락을 분리하며 기존 `success`만으로 승인하지 않는다. 정적 검토 계약과 원본 보존을 적용하고, 엔진 API/운영/예약은 유지한다.
 
 > **10월24일 위키 후속:** [E02-W1 실사용·리서치 시각 감사](docs/reviews/wiki-context-audit-2026-10-24.md). 종목 연구행만 KST 수집일0~30일로 제한하고 과거 거래 교훈·원문은 보존한다. 연구 수집일을 관측일로 표시하지 않는다. 검증·리뷰·통합 상태는 [실행 원장](docs/operations/execution-roadmap.md#e02-w1)을 따른다. 운영 미배포·10/26 고정 실측 보존, 주 순서는 T03/T04→조건부T05→T06→E01이다.
@@ -366,9 +368,9 @@
 
 ## 하위 에이전트 위임 규칙 (2026-09-14 사용자 지시)
 - Agent/Workflow 로 하위 에이전트를 띄울 때는 기본값을 쓰지 말고 **작업 성격에 맞춰 모델·effort 를 매번 명시**한다.
-  - 모델 역할·기본값은 전역 정책 `/home/ubuntu/.config/ai-agents/model-routing.md` 를 따른다(2026-09-29 정합화). Claude Sonnet/Haiku 는 이 환경에서 **미검증**이라 실제 모델 신원을 확인하기 전에는 운영 작업에 배정하지 않는다 — 기본은 검증된 opus(또는 세션 기본).
+  - 모델 역할·기본값은 전역 정책 `/home/ubuntu/.config/ai-agents/model-routing.md` 를 따른다. Claude 개발·리뷰는 `claude-opus-5-5`를 명시하고 실제 응답 신원을 확인한다. Claude Sonnet/Haiku/Fable은 현재 자동 배정하지 않으며, 이동 별칭 `opus`나 세션 기본값으로 모델을 추정하지 않는다.
   - 기계적·저위험(복사·포맷·grep 요약·단순 테스트 실행) → low~medium, 일반 구현·특성화 테스트·문서 초안 → medium~high
-  - 돈이 걸린 경로(사이징·주문·청산·동기화)·백테스트 판정·보안·독립/적대적 리뷰·최종 통합 판단 → opus/세션 최상위, high~xhigh
+  - 돈이 걸린 경로(사이징·주문·청산·동기화)·백테스트 판정·보안·독립/적대적 리뷰·최종 통합 판단 → 정본의 `claude-opus-5-5` 또는 `gpt-6-astra`, high~xhigh를 명시하고 작성자와 최종 리뷰어를 분리한다.
 - 같은 워크플로 안에서도 단계별로 다르게 지정하고, 선택 근거를 label/프롬프트 첫 줄에 남긴다.
 
 ## 프로젝트 개요
