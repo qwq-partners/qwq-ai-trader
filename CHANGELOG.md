@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — O01 옛 LLM 자동 전환을 보고 전용으로 정비
+
+- `llm_migration_monitor.py`: 설정·상태 쓰기, 자동 모델 승격/재시작 제거. 과거 자료/phase 요약과 Telegram 보고만 유지, dry-run/명시 입력 지원. 과정 품질과 정확도·순수익의 차이를 표시한다.
+- 환경 로딩을 CLI로 옮기고 Telegram 키4개로 제한했다. 테스트는 과거 phase·품질 충족/미충족·상태 보존·발송 실패/세션 정리를 검증한다.
+- 계획·검증·실제 적용과 RED 시험 중 재시작 사고는 [실행 원장 O01](docs/operations/execution-roadmap.md#o01)에 기록한다. 운영 봇 재배포 없이 고정 별도 소스의 예약 교체를 진행한다.
+
 ## 2026-10-24 — 현재 과제·과거 완료 범위·예약의 통합 실행 원장
 
 - [실행 원장](docs/operations/execution-roadmap.md)에 Toss REST 보고 연결과 아직 미완료인 장중/WS 분산을 구분하고, KIS·보고·선정/진입·청산·LLM·계좌 작업을 완료 근거와 다음 ID로 연결했다. 세션 시작/완료 규칙과 기존10월14일 일정의 대체 안내를 함께 반영했다.
