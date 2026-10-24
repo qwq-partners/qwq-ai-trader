@@ -218,3 +218,63 @@ ERROR가 모두0이었다. 이미 장외에 호출 제한이 재현되지 않은
 공급자 호출이 모두0인 것을 확인했다. 새 계측 노출과 실제 절감 입증은 별개다.
 원자료는 비공개 `before.json`, `after.json`, `deploy.log`, `new-process-start.json`에
 보관한다. 이번 문서 후속은 운영 재배포 대상이 아니다.
+
+## T02
+
+KIS·Toss 소비자별 역할 계약 — 2026-10-24
+
+**결정: 현재 코드/자료 의미를 그대로 보존하는 추가 대체 소비자는 아직 없다.** 분석 일봉 캐시는 구조상 가장 가까운 후보지만, 시장·원주가/수정주가·당일 봉의 의미가 같다는 증거가 없어 적용 후보로 승인하지 않는다. 10월26일 실제 부하(T03)·보고 인수(T04) 후 확대 필요성을 판단하고, 증거가 없으면 T05를 DEFERRED로 기록하고 T06→E01 종목 선정/진입 평가로 돌아간다. 데이터를 더 연결하는 것 자체가 순수익 개선은 아니다.
+
+### 확인한 범위와 공식 계약
+
+- 코드 기준은 `603d2ee0`의 KIS/Toss 경로다. 운영 `44483017`에 관련 구현이 배포돼 있으나 현재 보고 연결은 pykrx/Naver 조회를 생략하는 경로이며 KIS 장중 선정/진입 요청을 줄였다는 뜻이 아니다.
+- 10월24일 비인증 공개 명세를 다시 확인했다. [Toss OpenAPI](https://openapi.tossinvest.com/openapi-docs/latest/openapi.json)는1.2.24, 원문 SHA256 `7e753c21dc4b938d8f9610ce3efd6542783018977cb030e39db5a006f5b59d40`다. [AsyncAPI](https://openapi.tossinvest.com/openapi-docs/latest/asyncapi.json)는1.2.2, SHA256 `130251057fd9535a3e276099f9166b445f8c51f505f30540758e4b209231282e`로 기존 WS 근거와 같다. 브라우저의 AsyncAPI 읽기 오류 후 직접 공개 JSON 조회로 확인했다. 시장자료·토큰·계좌 API 호출은0이다.
+- 저장소 fixture의 OpenAPI1.2.17을 자동 갱신하지 않았다. 최신 명세에 수급·랭킹·섹터·시장지표 API가 있어도 현재 실행기의3개 GET 허용 목록/정규화/권한과는 별개다. “Toss가 제공하지 않는다”와 “우리 연결에는 없다”를 구분한다.
+- [KIS 공식 기간별시세 샘플](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/inquire_daily_itemchartprice/inquire_daily_itemchartprice.py)은 `J=KRX`, `fid_org_adj_prc=0` 수정주가, `1` 원주가로 명시한다. 현재 `src/execution/broker/kis_kr.py:get_daily_prices`는1을 보내므로 “수정주가 반영”이라는 주석을 계약 근거로 쓰면 안 된다. 이 불일치는 [9월30일 평가](../../research/current-engine-evaluation-2026-09-30.md)에서도 이미 확인했다. 여기서는 요청값/캐시/전략을 변경하지 않는다.
+
+공개 원문과 읽기 감사는 `~/.local/state/qwq-task-audit/20261024/t02-public-spec/` 및 비공개 T02 검토 기록에 보존한다. 공식 명세 확인은 실제 응답의 정확성·시장 기준·허용 권한·효과를 인증하지 않는다.
+
+### 현재 KIS 소비자와 대체 판단
+
+아래 빈도는 소스/기본 설정 기준이며 실측 횟수가 아니다. 실제 HTTP 시도/거절·캐시 적중은 T03의 같은 실행 구간에서 확인한다.
+
+| 요청/소비자 | 빈도·캐시 / 자료 의미 | Toss 적용 판단 |
+|---|---|---|
+| 계좌·보유·미체결·체결 | 주문 가능 시간 잔고30초/장외300초, 미체결 있으면 체결2초/없으면15초. 실제 KIS 계좌와 주문 귀속 | KIS 유지. 다른 증권사 계좌 응답으로 대체할 대상이 아님 |
+| 현재가 `FHKST01010100` | 배치 갭/진입 재확인·관찰·보고 등 종목별 요청. 주문 가격 판단에 사용, 시장J | Toss `/prices`는 현재 정규화에서 시장 기준unknown이고 기존 필드 다수를 제공하지 않음. 진입·실행 대체 금지 |
+| 호가 `FHKST01010200` / WS | 매도 best bid·실행용 깊이. KIS 주문 가능한 시장과 연결 | Toss 통합 호가를 KIS 체결 가능한 호가로 취급할 수 없음 |
+| KIS 실시간 체결가/호가 피드 | `run_trader.py:964,2160`에서 시장자료를 engine.emit·보유종목 즉시청산 검사에 전달하고 호가는 별도 진입관측으로 전달. 보유 우선/나머지롤링. 미커버 보유종목은REST20초 루프 | 거래 판단과청산에직결되므로 Toss가격을동일이벤트로주입하지않음. 논리감시40종목 상수와채널등록cap≤41은다른단위이며 실제남은구독수로해석하지않음 |
+| 분석 일봉 `FHKST03010100` | 스크리너 상위20의30봉·변동성/거래량·섹터ETF25봉. 공용 분석 캐시60초·64심볼·동일 깊이 동시 요청 합치기. 브로커 최대5페이지/500행 | 구조상 후보이나 **미적격**: KIS는KRX 원주가·오늘 행이 있으면 확정 표식 없이 보존하는 반면, Toss는 시장 기준unknown·adjusted기본true이며 로컬 파서가 오늘 행을미확정으로 분류한다. 날짜/값/확정 여부의 동등성 미입증. 전역 또는 캐시 통째 교체 금지 |
+| 캐시 밖 직접 일봉 `FHKST03010100` | 코어MA200/거래량 상태·core screener250봉, 벤치마크/수확shadow/CF·스케줄러 상태검사 등25/45/60/250봉 요청. 각 배치·코어/종가 작업의 호출 시점에 실행하며 분석 캐시60초/동시합치기는 적용되지 않음 | 이번 캐시 후보의 범위 밖. 페이지별 실패 때 이미 확보한 짧은 시계열이 반환될 수 있어 소비자별 최소 길이/skip 검사를 보존해야 함 |
+| 랭킹/수급 스크리닝 | 기본5분, 스크리너300초·외국인/기관600초 캐시. 다섯 원천을 병합 | 공개 Toss 유사 API는 있으나 현재 허용/정규화 경로에 없음. 모집단·단위·등록 외국인·잠정치 차이부터 확인 필요 |
+| 종목 수급·가치 | 투자자 일별30분/추정10분/가치30분 캐시 | 현재 연결에 등가 계약 없음. 결측을0으로 채우거나 랭킹으로 대체하지 않음 |
+| 지수·업종·야간선물·휴일 | 지수10초/업종10분/야간5분/휴일1일 캐시 등 | 시장 방어의 입력. Toss 캘린더는KRX+NXT 합집합이므로 현재 거래 세션 진실로 교체하지 않음 |
+| 현재 장후 보고 가격 | 당일 아침 cohort·16시 slot | 이미 연결. 이 경로의 실제 사용은 T04에서 검증하며 장중 KIS 부하 절감으로 세지 않음 |
+
+KIS GET은 대상 token/network/429/5xx 실패에 최대3회 시도한다. 일봉 첫 페이지 실패는빈배열, 뒤 페이지 실패는부분반환이 가능하다. 분석 캐시는요청 깊이보다 짧은 결과를 저장하지 않지만 원래 반환은 유지하며, 직접 소비자는각자 검사한다. T03에서 전체daily_prices 요청을 분석 캐시로 귀속하지 않는다. 직접 소비자 근거는`batch_analyzer.py:1982,2157`, `core_screener.py:283`, `shadow_lab.py:33`, `excess_return.py:533`, `counterfactual_tracker.py:361,371`, `kr_scheduler.py:7452`다.
+
+WS 근거: `src/data/feeds/kis_websocket.py:115,550,718`, `src/data/feeds/quote_subscription.py:65`, `scripts/run_trader.py:964,2160`, `src/schedulers/kr_scheduler.py:5421,5447`. 이는현재소스계약이며 이번에 KIS 계정의실제구독여유나공급자현행한도를재조회한것은아니다.
+
+코드 근거: `src/schedulers/kr_scheduler.py`(포트폴리오/체결 루프), `src/execution/broker/kis_kr.py`(각 TR), `src/data/providers/analysis_daily_cache.py`, `src/signals/screener/kr_screener.py`, `src/data/providers/kis_market_data.py`, `src/data/providers/sector_momentum.py`, `config/default.yml`. KIS 공용 리미터는10req/s이고 재시도/페이지는 논리 호출 수와 별도다.
+
+### Toss의 시각·시장·자료 깊이·실패 계약
+
+| 경로 | 필요한 보존 계약 | 현재 사용 범위 / 실패 동작 |
+|---|---|---|
+| REST prices | optional 공급자 timestamp와 로컬 수신시각 분리. timestamp 결측/미래/TTL 초과는 정상 시세로 승격하지 않음. KRW, market_basis unknown | 최대200심볼/요청. 보고 TTL≤60초 및16:05까지. 현재 설치된v3 목적은 `daily_report_current_price`,10/26~30일16:00–16:05·정확한 morning cohort. 실패/만료/늦은 결과는 기존 보고 조회로 폴백 |
+| REST candles | KST 봉 날짜는 관측 신선도가 아님. 최신순 응답을 시간순 정렬, 최대200행/페이지·정확한 날짜/누락/중복·명시adjusted·시장 기준 확인. 오늘 봉은 현재 파서에서partial | 현재 helper는prices만 받음. candles는 코드 allowlist에 있지만 실행 경로·새 목적/기간·비교 계약이 필요. 뒤 페이지 실패를 완전한 시계열로 취급하지 않음 |
+| REST KR calendar | KRX/NXT 합집합. 세션null과 결측 분리 | 현재 보고 helper에서 호출하지 않음. 시장 방어/휴장일 대체 대상에서 제외 |
+| REST orderbook | 공개 `/api/v1/orderbook`의optional timestamp·KRW·정렬된bid/ask 가격/수량. 반환 깊이를 KIS10단계로 단정하지 않으며 KRX/KIS 실행시장 동등성은 미입증 | 공개 명세에는있지만 현재allowlist·정규화·TTL·소비자 폴백·목적/grant가없음. WS 명세는초기상태를 이REST로 조회하도록 안내하나 현observer는미구현. 현재 대체불가 |
+| 공개 WS 체결·주문 이벤트 | AsyncAPI에는체결/호가/본인주문 채널이있음. 현재Toss관측구현은호가만지원 | 체결 이벤트의 엔진어댑터·TTL/장상태·폴백은미구현이며 본인Toss주문은KIS체결대체가아님. 공개채널존재를현재병행연결로표시하지않음 |
+| WS orderbook:kr | KRX+NXT 통합, LOSSY·source sequence 없음, `kis_executable=false`. 공급자/수신시각 분리 | 기존 파일럿 코드는1~3종목·≤1시간·기본10k/최대50k프레임, 호가 상단 수량 저장. 초기 스냅샷/자동 재연결 없음. 종료/실패를 기록하고 완전 스트림을 주장하지 않음. v2 WS 승인과 현재v3 보고 승인은 별개 |
+
+코드 근거: `src/data/providers/toss/{market_data,transport,client,report_protocol,report_quotes,approval,orderbook_stream}.py` 및 `src/observation/toss_report_helper.py`. 현재 설치 승인 문서는 미래 사용자 의도를 제한하는 규칙이 아니라, 현재 실행 가능한 목적·날짜의 증거다. 새 목적의 구현 여부는 구체적인 데이터 의미·부하·효과와 해당 실행 범위를 확인해 결정한다.
+
+### T05 착수/보류 기준과 다음
+
+1. **T03 먼저:** 같은 PID/InvocationID에서 `daily_prices` HTTP 시도/페이지와 분석 요청·적중·동시 합치기를 대조한다. 반복 쿼리가 실제 남아 있을 때만 해당 소비자를 검토한다.
+2. **의미 보존:** 원주가/수정주가와 시장 기준을 일치시켜야 한다. Toss `adjusted=false`가 필요할 수 있지만 그것만으로 KRX/통합시장과 기업행사·거래량 기준의 동등성을 입증하지 못한다. KIS 반환에 오늘 행이 포함될 수 있고 momentum/ATR/섹터 계산은 마지막 행을 사용한다. 완료 표식 없이 보존된 이 행을 무조건 제외하면 전략 입력도 바뀐다. Toss 로컬 정규화의 오늘 행partial과 실제 시장 봉 완료는 구분한다. 전일 거래량만 쓰는 부분도 공유 캐시를 오염시키면 안 된다.
+3. **실패 보존:** 명시 목적·기간·송신 예산 안에서만 조회하고, 불완전/잘못된 시각/권한 만료는 기존 KIS 경로로 돌아가야 한다. 취소를 숨기지 않는다. 공급자 전역 변경·진입/청산 가격 대체는 하지 않는다.
+4. **결정 기한:** T03/T04 이후 후보가 없거나 효과가 작으면 T05 DEFERRED, T06에서 현재 보고 전용 유지 또는 중단을 결정하고 **E01 선정·진입 검증으로 복귀**한다. 늦어도10/30 승인 만료 때 미입증 상태를 기록하며 자동 연장/새20일 수집으로 대체하지 않는다.
+
+이 단계의 완료는 역할 표와 대체 불가 이유의 검토 완료다. KIS 요청 절감·Toss 장중 병행·순수익 개선 완료를 뜻하지 않는다.
