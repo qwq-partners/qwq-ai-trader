@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — KIS 조회량·Toss 보고 후속 판독
+
+- 고정 localhost health의 KIS 계수만 저장하고 동일 서비스 실행의 전후 차이를 원래 차원별로 판독한다. 계수 결측·감소·실행 교체는 비교 불가이며 잔액 등 전체 health는 저장하지 않는다.
+- 기존 Toss 안전 reader에 당일 아침 cohort와 정확한16:00 slot의 terminal 판독을 추가한다. 다른 날짜/slot 혼입·손상·미완료·후보0을 구분하고 실제 보고 사용/전송을 추정하지 않는다.
+- [Plan → Do → See·검사·예약 영수증](docs/superpowers/plans/2026-10-24-live-readout.md). 운영 봇·매수 중지·월USD100을 유지하며 별도 도구는 재배포 대상이 아니다.
+
 ## 2026-10-24 — Toss 보고 설치·활성화·운영 반영
 
 - PR #252 고정 `44483017` 배포rc0·운영9,027검사 통과,01:46:06 PID3125313 기동 후 복구ready·미체결0·NRestarts0 확인.

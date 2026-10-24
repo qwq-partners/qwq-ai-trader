@@ -762,3 +762,31 @@ journalctl -u qwq-ai-trader --since today | grep "다음 윈도우 이월"
 ### 2026-10-17 — 고정 관측 전 사용자 승인 배포
 
 고정 관측 예약이 있는 상태에서 승인된 운영 배포를 진행할 때는 타이머를 방치하지 않는다. [월요일 v3 교체 절차](selection-capture-2026-10-19.md#10월17일-대시보드-배포와-v3-교체)처럼 이전 예약의 미소비·원본·백업을 확인/보존하고 정지한 뒤, 검증된 고정 SHA를 배포하고 새 profile/epoch와 실제 소스/설정/PID로 별도 입력을 만든다. 새 입력의 독립 검토와 설치 사후 검사까지 끝나야 관측 준비 완료다. 과거 once 재사용·manifest 덮어쓰기·타이머만 다시 켜기는 하지 않는다. 후속 문서만을 위해 재배포하지 않는다.
+
+
+## KIS 조회량과 Toss 보고의 읽기 전용 판독 (2026-10-24)
+
+[설계·설치·실측 상태](../superpowers/plans/2026-10-24-live-readout.md)를 따른다.
+고정된 별도 소스에서 실행하므로 이 도구만의 변경에는 봇 배포/재시작이 필요하지 않다.
+
+```bash
+python scripts/ops/kis_health_delta.py snapshot --output <비공개_절대경로_before.json>
+python scripts/ops/kis_health_delta.py snapshot --output <비공개_절대경로_after.json>
+python scripts/ops/kis_health_delta.py diff --before <before.json> --after <after.json>
+python scripts/review_toss_observation.py --ledger <observations.jsonl> --plan-hash <plan_sha256> --max-bytes 8388608 --report-cohort <morning_recs_YYYY-MM-DD.json> --slot-id YYYY-MM-DDT16:00:00+09:00
+```
+
+KIS snapshot은 `/usr/bin/systemctl`과 `/usr/bin/lsof`가 필요하며,8080 listener가 봇 MainPID와
+일치해야 한다. 실행 전후 소유자를 확인할 수 없으면 기록을 거부한다.
+KIS 출력 디렉터리는 실행 계정 소유0700으로 미리 만들며 파일은0600/O_EXCL로 생성한다.
+전후 실행 식별자가 다르거나 누적 계수가 감소하면 차분을 사용하지 않는다. broker/direct는
+별도 집계이며 analysis 공급자 호출을 HTTP 페이지 수로 해석하지 않는다. event-loop 교체를
+증명하는 epoch는 기존 health에 없어 그 한계를 결과와 함께 읽는다.
+
+Toss 판독은 기존 전체 원장의 해시/스키마 검증 후 정확한 아침 대상의 terminal만 선택한다.
+파일 부재는0건 성공이 아니다. 관측 가격은 시장 기준/관찰·수신 시각을 그대로 유지하며
+수익률·체결 가능성·실제 Telegram 표시/수신으로 승격하지 않는다.
+
+Toss의 `successful_attempts`는 원장의 terminal reason=`success` 건수다. 보고용 조회는
+KIS 비교가격이 없어 `excluded`일 수 있으므로 이것만으로 가격 공급 실패를 판정하지 않는다.
+종목별 `quote.status`·원시각·가격과 실제 수신 본문의 사용 출처를 따로 읽는다.

@@ -322,6 +322,89 @@ class ObservationLedger:
             ledger.close()
         return ledger.summary()
 
+    @classmethod
+    def read_only_report_slot(cls, path, *, plan_hash, max_bytes, cohort, slot_id):
+        """Read one completed report-display slot without opening the writer path."""
+        try:
+            from .report_protocol import ReportCohort
+            if type(cohort) is not ReportCohort:
+                raise ValueError("report_cohort")
+            cohort = ReportCohort.from_document(cohort.to_document())
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return cls._report_slot_error(slot_id, cohort, "invalid_report_cohort")
+        try:
+            stamp = _timestamp(slot_id)
+            _require(stamp is not None and stamp.utcoffset() == timedelta(hours=9) and stamp.isoformat() == slot_id)
+            _require(stamp.date() == cohort.report_date and (stamp.hour, stamp.minute, stamp.second, stamp.microsecond) == (16, 0, 0, 0))
+        except (ValueError, TypeError):
+            return cls._report_slot_error(slot_id, cohort, "invalid_report_slot")
+
+        ledger = cls(path, plan_hash=plan_hash, max_bytes=max_bytes)
+        try:
+            ledger._open_descriptors(write=False)
+            ledger._load()
+            ledger._opened = True
+        except FileNotFoundError:
+            ledger._failed, ledger._error_code = True, "ledger_unavailable"
+        except (OSError, ValueError, TypeError, KeyError, ArithmeticError, RecursionError, LedgerError):
+            ledger._failed, ledger._error_code = True, "ledger_corrupt"
+        try:
+            if ledger._failed:
+                return cls._report_slot_error(slot_id, cohort, ledger._error_code)
+            if ledger.summary()["incomplete"]:
+                return cls._report_slot_error(slot_id, cohort, "ledger_incomplete")
+            return ledger._report_slot_summary(cohort, slot_id)
+        finally:
+            ledger.close()
+
+    @staticmethod
+    def _report_slot_error(slot_id, cohort, error_code):
+        cohort_id = getattr(cohort, "cohort_id", None)
+        return {"slot_id": slot_id if isinstance(slot_id, str) else None, "cohort_id": cohort_id,
+                "members": [], "member_count": 0, "terminal_attempts": 0, "successful_attempts": 0,
+                "incomplete": True, "error_code": error_code, "production_eligible": False}
+
+    def _report_slot_summary(self, cohort, slot_id):
+        members = tuple(cohort.members)
+        slot = self._slots.get(("prices", slot_id))
+        if slot is None:
+            return self._report_slot_error(slot_id, cohort, "report_slot_unavailable")
+        snapshot = slot["snapshot"]
+        selected = _timestamp(snapshot["selected_at"])
+        if (snapshot["snapshot_id"] != cohort.cohort_id
+                or snapshot["source_success_at"] != cohort.generated_at.isoformat()
+                or tuple(snapshot["symbols"]) != tuple(symbol for _, symbol in members)
+                or selected is None or selected.utcoffset() != timedelta(hours=9)
+                or selected.isoformat() != snapshot["selected_at"]
+                or not _timestamp(slot_id) <= selected < _timestamp(slot_id) + timedelta(minutes=5)):
+            return self._report_slot_error(slot_id, cohort, "report_slot_mismatch")
+
+        rows, terminal_attempts, successful_attempts = [], 0, 0
+        for attempt_id, (rank, symbol) in zip(self._ids(slot_id, "prices", snapshot), members):
+            terminal = self._terminals.get(attempt_id)
+            if terminal is None:
+                rows.append({"rank": rank, "symbol": symbol, "terminal": False, "reason": None,
+                             "status": None, "evaluated_at": None, "quote": None})
+                continue
+            terminal_attempts += 1
+            successful_attempts += terminal["reason"] == "success"
+            observation = terminal["observation"] or {}
+            quote = observation.get("toss")
+            if quote is not None and quote["symbol"] != symbol:
+                return self._report_slot_error(slot_id, cohort, "report_slot_mismatch")
+            safe_quote = None if quote is None else {key: quote[key] for key in
+                ("price", "observed_at", "fetched_at", "status", "market_basis", "currency")}
+            rows.append({"rank": rank, "symbol": symbol, "terminal": True, "reason": terminal["reason"],
+                         "status": None if quote is None else quote["status"],
+                         "evaluated_at": observation.get("evaluated_at"), "quote": safe_quote})
+        unfinished = terminal_attempts != len(members)
+        return {"slot_id": slot_id, "cohort_id": cohort.cohort_id, "selected_at": snapshot["selected_at"],
+                "source_success_at": snapshot["source_success_at"], "members": rows,
+                "member_count": len(members), "terminal_attempts": terminal_attempts,
+                "successful_attempts": successful_attempts, "incomplete": unfinished,
+                "error_code": "ledger_incomplete" if unfinished else None,
+                "production_eligible": False}
+
     def _ids(self, slot_id, kind, snapshot):
         symbols = snapshot["symbols"] if kind == "prices" else ["calendar"]
         return tuple(sha256(_canonical([self.plan_hash, slot_id, kind, symbol, snapshot["snapshot_id"]])).hexdigest() for symbol in symbols)

@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> [10월24일 후속 실측: KIS 계수·Toss 보고 exact slot](superpowers/plans/2026-10-24-live-readout.md). 동일 실행의 조회량과 당일 아침 대상만 판독하는 별도 도구. 운영 재시작 없이 점검하며 실제 자료 생성과 Telegram 수신 확인은 구분한다.
+
 > **10월24일 Toss 보고 운영 반영 완료:** [설치·활성화·배포 영수증](superpowers/plans/2026-10-24-toss-report-runtime.md#운영-적용-완료) · [다음 실측 순서](operations/monitoring-checkpoints.md#다음-실제-실행의-판독-순서). 운영 `44483017`·9,027검사·복구ready·미체결0, 기존 설정/원장 보존.10월26~30일의 보고 실행을 허용하며 실제 가격 공급·요청 절감은 별도 확인한다. 아래 미설치 상태는 이전 이력이다.
 
 > **10월24일 Toss 보고 연결:** [실행 설계·Plan → Do → See·적용 순서](superpowers/plans/2026-10-24-toss-report-runtime.md). 신뢰된 helper부터 실제 보고 가격 소비까지 합성 통합 검증. 기본 OFF·운영 미설치/미활성화이며 API 절감·순수익 실측과 구분한다.
