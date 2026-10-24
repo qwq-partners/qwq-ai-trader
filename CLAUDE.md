@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10월24일 E02 사전 점검:** [원천 매핑·수급 연속성 수정](docs/reviews/selection-source-map-2026-10-24.md). 수급 확인 공백/후보 이탈 뒤 과거 연속 가점이 남는 E02-F1을 재현해 수정한다. 개발 검증/리뷰/통합 상태는 [작업 원장](docs/operations/execution-roadmap.md#e02-입력-점검)을 따른다. 운영 미배포·10/26 고정 HEAD/예약 유지. 별도 E02-F2는 비활성 전략이 활성 후보를 가리는 조건부 경로의 재현 대상이다.
+
 > **현재 작업 순서 정본:** [엔진 개선 실행 원장](docs/operations/execution-roadmap.md). 목적은 종목 선정·진입 시점의 비용 후 순수익 개선이며, 현재 주 과제는 Toss/KIS 병행 자료 경로다. **O01 보고 전용 예약 설치·T02 역할 검토 완료. 다음은 T03/T04 10월26일 실측 → 조건부 T05 → T06 통합 리뷰 → E01 선정/진입 평가 복귀**. 현재 추가 대체 후보가 없으며, 효과 없는 확대를 필수 관문으로 삼지 않는다. 작업마다 Plan→Do→See와 NEXT를 갱신한다. 아래 날짜별 머리글은 당시 이력이며 현재 우선순위를 새로 만드는 지시가 아니다. 운영 checkout과 최신 main 문서를 구분한다.
 
 > **10월24일 CLI 협업:** 사용자 요청에 따라 로그인된 Claude도 개발·운영 준비·배포 검토·독립 리뷰에 활용한다. [원장 D01/L01](docs/operations/execution-roadmap.md#d01l01) · [실행 범위와 엔진 API 대체 검토](docs/operations/local-development.md#cli-collaboration). 도구 없는 실제 Claude Opus 응답을 확인했으며, 엔진 API 전면 대체는 미적용이다. 기존 주 과제/예산/운영 예약을 유지한다.

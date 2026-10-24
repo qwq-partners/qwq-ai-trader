@@ -1489,12 +1489,22 @@ class StockScreener:
             logger.debug(f"[Screener] 기관 순매도 블랙리스트 오류 (무시): {e}")
 
     def _record_supply_demand(self, all_stocks: Dict[str, "ScreenedStock"]):
-        """수급 데이터 누적 기록 (5분 주기 호출)"""
+        """현재 스캔까지 연속된 수급 참여 표시만 기록한다."""
         from datetime import date as _date
         today_str = _date.today().isoformat()
         if self._sd_history_date != today_str:
             self._sd_history.clear()
             self._sd_history_date = today_str
+
+        # 양성 기록만 쌓으면 중간 결측/후보 이탈도 연속 순매수로 오인한다.
+        # 연속성 미확인은 이력만 끊는다. 순매도 근거나 감점을 만들지 않는다.
+        current_buying = {
+            symbol for symbol, stock in all_stocks.items()
+            if stock.has_foreign_buying or stock.has_inst_buying
+        }
+        for symbol in list(self._sd_history):
+            if symbol not in current_buying:
+                del self._sd_history[symbol]
 
         now = datetime.now()
         for symbol, stock in all_stocks.items():
