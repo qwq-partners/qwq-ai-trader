@@ -606,3 +606,22 @@ fcb05bbe→4f39c90c에서 동일하고 이번 스케줄러 diff도 보고 경로
 대조한 뒤 일봉 재사용을 검토한다. 미상500을 EGW로 단정하거나 NXT 관측을 끄고
 한도를 임의로 바꾸지 않는다. [기존 API 집계와 정책 분리 근거](../../reviews/selection-input-followthrough-2026-10-21.md#기존-api-집계의-의미).
 이 진단에서는 코드 변경·운영 실험을 하지 않았다.
+
+<a id="r01-delivery-status"></a>
+## 10월25일 — shadow 보고의 전송 결과 전달
+
+R01의 자연 실행 사전점검에서 `send_alert()`의 false가 `_send()`에서 버려지고,
+main이 실패/예외 뒤에도 rc0으로 끝나는 경로를 확인했다. 실제 운영 발송 실패 여부는 별개다.
+
+**Plan:** 기존 bool 결과를 `_send()`→main→CLI exit까지 보존한다. 성공만 완료/rc0,
+false·예외는 실패/rc1, 출력 전용은 발송/환경 로딩 없이 rc0이다. 예외 메시지 원문 대신
+클래스명만 기록한다. 출력 문구를 해석하는 새 wrapper는 만들지 않는다.
+
+- [x] 실제 CLI를 합성 빈 자료·가짜 Telegram 경계로 실행해 실패 반환/예외를 재현:3 failed/2 passed, 격리 위반0.
+- [x] 최소 수정 후 신규5건·기존 본문/22시 보고를 포함한 관련56 passed/rc0, 격리 위반0.
+- [x] 독립 Sol/high 리뷰 APPROVE·P0/P1/P2 0(실제 metadata 미노출), 신규5건 독립 실행·링크/비밀 패턴/diff 검사 통과.
+- 전체 verify와 필수 CI가 모두 성공해야 병합한다. 최종 실행/통합 결과는 이 변경 PR 영수증을 따른다.
+
+운영 HEAD/예약은 변경하지 않는다. 기존09시 출력은 성공 증명으로 사용하지 않으며,
+모바일 수신·가독성·경제성은 Telegram API 수락과 구분한다. 통합·적용 상태와 다음 순서는
+[원장 R01](../../operations/execution-roadmap.md#r01-delivery-status)을 따른다.
