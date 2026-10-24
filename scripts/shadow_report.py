@@ -173,12 +173,12 @@ def build_report(days: int = 1) -> str:
     return "\n".join(L)
 
 
-async def _send(text: str) -> None:
+async def _send(text: str) -> bool:
     from src.utils.telegram import send_alert
-    await send_alert(text)
+    return await send_alert(text)
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(description="팀 심의 shadow 관측 리포트")
     ap.add_argument("--days", type=int, default=1, help="집계 일수 (기본 1=오늘)")
     ap.add_argument("--telegram", action="store_true", help="텔레그램 전송")
@@ -191,11 +191,16 @@ def main():
         try:
             from dotenv import load_dotenv
             load_dotenv(str(Path(__file__).resolve().parents[1] / ".env"))
-            asyncio.run(_send(report))
-            print("\n[전송 완료]")
+            sent = asyncio.run(_send(report))
         except Exception as e:
-            print(f"\n[전송 실패] {e}")
+            print(f"\n[전송 실패] {type(e).__name__}")
+            return 1
+        if sent is not True:
+            print("\n[전송 실패] Telegram API 수락 미확인")
+            return 1
+        print("\n[전송 완료] Telegram API 수락")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
