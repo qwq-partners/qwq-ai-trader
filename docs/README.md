@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **E01 기존 자료 분석:** [104후보 연결·진입 준비 지연·다음 단일 개선 후보](research/entry-readiness-offline-2026-10-24.md). ACK 잠금 대기를 실제 클래스로 재현했으며 제품 변경과 순수익 검증은 별개다. [원장 E01](operations/execution-roadmap.md#e01-offline)의10/26 후속 순서를 따른다.
+
 > **개발 Claude 모델:** [구독 CLI Opus5.5 검증·현재 선택](operations/local-development.md#claude-opus55) · [D01 적용 상태](operations/execution-roadmap.md#d01-opus55). 새 개발/리뷰 호출은 전체 모델 ID를 명시하며, 엔진 API 모델과 과거 Opus5 기록은 유지한다.
 
 > **Claude 사용 검증 D01:** [실제 재현·결과 수락·한계](reviews/claude-cli-usage-audit-2026-10-24.md). 실행 성공과 리뷰 정확성을 구분하며 도구 없는 호출의 가짜 실행 결과를 거부한다. 개발 협업은 계속하되 운영·엔진 API를 변경하지 않는다.

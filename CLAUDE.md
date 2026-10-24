@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10월24일 E01 기존 자료 분석:** [104후보 연결·진입 준비 지연](docs/research/entry-readiness-offline-2026-10-24.md) · [실행 원장](docs/operations/execution-roadmap.md#e01-offline). 구독 전송 중 잠금이 ACK 처리를 기다리게 하는 구조를 무접속 재현했다. 기존 strict 장 상태 충족0·보조4쌍/경제성null은 유지한다. 제품 변경 미착수·운영/예약 유지,10/26 T03/T04→조건부T05→T06 뒤 이 단일 개선 후보의 설계를 판단하며 같은 분석을 반복하지 않는다.
+
 > **현재 개발 Claude 모델:** 사용자 승인에 따라 새 개발·리뷰 호출은 `claude-opus-5-5`/high를 명시한다. [구독 CLI 실제 모델 검증·적용 상태](docs/operations/execution-roadmap.md#d01-opus55) · [현재 선택](docs/operations/local-development.md#claude-opus55). 아래 Opus5 기록은 당시 실측이며 유지한다. 실제 응답 모델/폴백·리뷰 내용은 매번 확인하고 엔진 API/운영 설정은 변경하지 않는다.
 
 > **10월24일 Claude 사용 검증:** [D01 후속](docs/operations/execution-roadmap.md#d01-사용-검증) · [호출/리뷰 수락 계약](docs/operations/local-development.md#claude-result-contract). 로그인/Opus 응답은 확인됐지만 도구 없는 호출의 가짜 도구 결과를 재현했다. 실행 성공·출력 적합·실제 내용 수락을 분리하며 기존 `success`만으로 승인하지 않는다. 정적 검토 계약과 원본 보존을 적용하고, 엔진 API/운영/예약은 유지한다.
