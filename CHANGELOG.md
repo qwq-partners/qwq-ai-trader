@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-24 — Claude/Codex 개발 협업·엔진 CLI 타당성 검토
+
+- [D01/L01](docs/operations/execution-roadmap.md#d01l01)에 현재 로그인·실제 Claude Opus 검토 성공과 역할 분담을 기록했다. 개발/운영 준비/리뷰에 두 도구를 활용하며 작성자와 최종 리뷰어를 분리한다.
+- 엔진 API를 즉시 교체하지 않고 장후 연구의 운영 밖 비교를 후속 후보로 정했다. 초 단위 진입·예산·판단 시각 계약, 구독 비용/한도와 API 과금 차이를 [개발 문서](docs/operations/local-development.md#cli-collaboration)에 명시했다.
+- 비용 불명은 기존 사용자 방침대로 null/log_and_continue를 유지한다. 이번 개발 검토를 거래 모델 성능·절감액 증거로 사용하지 않는다. 문서 변경이며 운영 설정·예약·배포 변경은 없다.
+
 ## 2026-10-24 — O01 예약 적용·T02 역할표·O02/A01 후속 대사
 
 - PR #256 `186bc542`·전체/CI 9,075검사 후12:47에22시 cron 한 줄을 고정 보고 전용 실행으로 교체했다. 설치 중 추가 재시작 없이 운영HEAD·PID·보호5파일·다른예약·10/26 고정소스를 보존했다. 앞선 테스트의 재시작 사고와 자연 발송 미확인은 [O01](docs/operations/execution-roadmap.md#o01)에 별도 기록했다.

@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **개발 CLI 협업과 엔진 호출 경로:** [D01/L01 상태](operations/execution-roadmap.md#d01l01) · [Claude/Codex 역할·확인 결과·엔진 적용 검토](operations/local-development.md#cli-collaboration). 개발 협업은 적용하고 엔진 API는 유지한다.
+
 > **10월24일 후속 작업:** [실행 원장](operations/execution-roadmap.md)의 O01 보고 전용 예약 설치·T02 역할표 검토·O02 비삭제 사전점검·A01 기존 자료 대사는 완료했다. 자연 보고와 향후 정리·경제성 결측은 각 ID에 남겼다. 실제 추가 공급자 대체와 계좌 순수익은 미판정이며 다음 입력은10/26 T03/T04다.
 
 > **작업을 이어갈 때 먼저 읽기:** [엔진 개선 실행 원장 — 현재 목표·작업 ID·완료 범위·예약·NEXT](operations/execution-roadmap.md). 아래 날짜별 링크는 근거/이력이며, 남은 작업의 순서는 실행 원장을 따른다. 구현·배포·실측·순수익 검증을 구분한다.
