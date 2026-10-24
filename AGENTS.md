@@ -4,6 +4,8 @@
 
 작업 전에 `CLAUDE.md`, `CHANGELOG.md`, `docs/README.md`와 작업 분야의 문서를 읽는다. `CLAUDE.md`를 프로젝트 상세 규칙의 기준으로 삼고 이 문서는 Codex 전용 안전 경계만 보충한다.
 
+현재 작업 순서는 최신 main의 [`docs/operations/execution-roadmap.md`](docs/operations/execution-roadmap.md)를 정본으로 삼는다. 운영 checkout의 과거 계획/미완료 체크박스를 그대로 재개하지 않는다. 시작 시 작업 ID·완료 조건을 확인하고, 완료 시 Plan→Do→See 근거·독립 리뷰·운영/예약 상태·NEXT ID를 갱신한다. 승인 범위와 의존성을 충족한 다음 작업은 같은 세션에서 이어간다.
+
 ## 로컬 안전 경계
 
 - 사용자가 현재 요청에서 명시하지 않은 실거래 주문을 실행하지 않는다.

@@ -1,5 +1,7 @@
 # 비용 후 순수익 개선 — 우선순위 실행 일정
 
+> **2026-10-24 이후 실행 순서는 [통합 실행 원장](../../operations/execution-roadmap.md)으로 대체한다.** 아래 일정·운영 SHA·자동 재개/인계 프롬프트는10월14~15일의 이력이다. 당시 미완료는 새 원장의 E01~05/A01에 연결했으며, 이미 구현된 도구나 소비된 예약을 다시 실행하지 않는다. 원래 선정·진입·비용 후 순수익 목표는 유지한다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. 코디네이터가 통합하고 각 단계는 PLAN→DO→SEE로 기록한다.
 
 **Goal:** 좋은 종목 선정과 실제 진입 가격의 기여를 분리하여, 비용 후 계좌 순수익을 개선할 변경을 찾는다.
