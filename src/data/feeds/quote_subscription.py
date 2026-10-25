@@ -29,6 +29,7 @@ class Registration:
     acknowledged: bool = False
     observed: bool = False
     operational_observed: bool = False
+    send_completed: asyncio.Event | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,10 @@ class QuoteSubscriptionCoordinator:
         self._states: dict[Channel, Registration] = {}
         self._retired: set[Channel] = set()
         self._tasks: set[asyncio.Task] = set()
+        # ACK follow-up sends share the sender lock, not the enrollment queue budget.
+        self._ack_reconcile_task: asyncio.Task | None = None
+        self._ack_reconcile_dirty = False
+        self._ack_reconcile_enabled = False
         self._last_send = float("-inf")
         self._candidate_status: dict[str, str] = {}
         self._observation_ended = False
@@ -197,11 +202,13 @@ class QuoteSubscriptionCoordinator:
             self._candidate_status.clear()
             self._last_send = float("-inf")
             self._send = send
+            self._ack_reconcile_enabled = True
             self._record("connected")
             await self._reconcile()
             return self.generation
 
     async def stop(self):
+        await self._stop_ack_reconcile()
         async with self._lock:
             if self._send is not None:
                 self._gap("socket_closed")
@@ -209,11 +216,48 @@ class QuoteSubscriptionCoordinator:
             self._states.clear()
 
     async def cancel_pending(self):
+        """Shutdown only: drain owned work before stop(); ACKs resume at next start()."""
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
+        await self._stop_ack_reconcile()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _stop_ack_reconcile(self):
+        self._ack_reconcile_enabled = False
+        self._ack_reconcile_dirty = False
+        task = self._ack_reconcile_task
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            # Never drain a sender while holding the lock it needs.
+            await asyncio.gather(task, return_exceptions=True)
+            if self._ack_reconcile_task is task:
+                self._ack_reconcile_task = None  # Also covers cancellation before first run.
+
+    def _schedule_ack_reconcile(self):
+        if not self._ack_reconcile_enabled or self._send is None:
+            return
+        self._ack_reconcile_dirty = True
+        if self._ack_reconcile_task is None or self._ack_reconcile_task.done():
+            self._ack_reconcile_task = asyncio.create_task(
+                self._reconcile_after_ack(self.generation))
+
+    async def _reconcile_after_ack(self, generation):
+        try:
+            while self._ack_reconcile_dirty and self._ack_reconcile_enabled:
+                async with self._lock:
+                    if generation != self.generation or self._send is None:
+                        return
+                    self._ack_reconcile_dirty = False
+                    await self._reconcile()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._gap("ack_reconcile_failed")
+        finally:
+            if self._ack_reconcile_task is asyncio.current_task():
+                self._ack_reconcile_task = None
 
     def end_observation(self):
         """관측 후보 수요만 종료. 운영 등록·미확인 슬롯은 유지한다."""
@@ -387,6 +431,8 @@ class QuoteSubscriptionCoordinator:
             state.requested_at = self.clock()
             if state.observed and any(v.symbol == key[1] for v in self._leases.values()):
                 self._gap("observed_candidate_channel_withdrawn")
+        # A new event is required even when unsubscribe reuses the Registration.
+        completed = state.send_completed = asyncio.Event()
         try:
             delay = self.interval - (self.clock() - self._last_send)
             if delay > 0:
@@ -409,6 +455,9 @@ class QuoteSubscriptionCoordinator:
             self._gap("send_uncertain")
             if isinstance(exc, asyncio.CancelledError):
                 raise
+        finally:
+            # Preserve requested/unknown-before-ACK journal ordering.
+            completed.set()
 
     async def _reconcile(self):
         self._expire()
@@ -452,39 +501,48 @@ class QuoteSubscriptionCoordinator:
             await self._reconcile()
 
     async def handle_ack(self, message, generation):
-        async with self._lock:
-            if generation != self.generation or self._send is None:
-                return
-            header, body = message.get("header", {}), message.get("body", {})
-            if not isinstance(header, dict) or not isinstance(body, dict):
-                return
-            key = (header.get("tr_id"), header.get("tr_key"))
-            if not all(isinstance(v, str) for v in key):
-                return
-            state = self._states.get(key)
-            if not state or not state.pending:
-                return
-            msg = body.get("msg1", "")
-            if not isinstance(msg, str):
-                return
-            action = ("unsubscribe" if msg in self.unsubscribe_success_messages else
-                      "subscribe" if msg == "SUBSCRIBE SUCCESS" else None)
-            if body.get("rt_cd") == "1":
-                # 명시 거절도 기존 등록 부재를 증명하지 않는다. 슬롯은 재연결까지 유지.
-                state.status, state.pending = "rejected", None
-                self._record("rejected", key)
-                self._gap("registration_rejected")
-                return
-            if body.get("rt_cd") != "0" or action != state.pending:
-                return
-            if action == "unsubscribe":
-                del self._states[key]
-                self._retired.add(key)
-                self._record("released", key)
-            else:
-                state.pending, state.acknowledged, state.status = None, True, "acknowledged"
-                self._record("acknowledged", key)
-            await self._reconcile()
+        if (generation != self.generation or self._send is None
+                or not self._ack_reconcile_enabled):
+            return
+        header, body = message.get("header", {}), message.get("body", {})
+        if not isinstance(header, dict) or not isinstance(body, dict):
+            return
+        key = (header.get("tr_id"), header.get("tr_key"))
+        if not all(isinstance(v, str) for v in key):
+            return
+        state = self._states.get(key)
+        if not state or not state.pending:
+            return
+        msg = body.get("msg1", "")
+        if not isinstance(msg, str):
+            return
+        action = ("unsubscribe" if msg in self.unsubscribe_success_messages else
+                  "subscribe" if msg == "SUBSCRIBE SUCCESS" else None)
+        rejected = body.get("rt_cd") == "1"
+        if not rejected and (body.get("rt_cd") != "0" or action != state.pending):
+            return
+        completed, pending, sender = state.send_completed, state.pending, self._send
+        if completed is not None:
+            await completed.wait()  # Only this send, never unrelated pacing/batch sends.
+        # No awaits below: state transitions are atomic on the receive event loop.
+        if (generation != self.generation or self._send is not sender
+                or not self._ack_reconcile_enabled or self._states.get(key) is not state
+                or state.send_completed is not completed or state.pending != pending):
+            return
+        if rejected:
+            # 명시 거절도 기존 등록 부재를 증명하지 않는다. 슬롯은 재연결까지 유지.
+            state.status, state.pending = "rejected", None
+            self._record("rejected", key)
+            self._gap("registration_rejected")
+            return
+        if action == "unsubscribe":
+            del self._states[key]
+            self._retired.add(key)
+            self._record("released", key)
+        else:
+            state.pending, state.acknowledged, state.status = None, True, "acknowledged"
+            self._record("acknowledged", key)
+        self._schedule_ack_reconcile()
 
     def accepts_frame(self, key, generation):
         """현재 연결에서 실제 요청한 운영/관측 채널. 엔진 가격 전달과 별개다."""

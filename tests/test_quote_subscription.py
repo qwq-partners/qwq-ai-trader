@@ -89,7 +89,12 @@ async def test_unsubscribe_needs_matching_success_before_slot_reuse():
 @pytest.mark.asyncio
 async def test_successful_release_admits_waiting_operational_channel():
     owner, _, _, sent, send = setup_owner(cap=2)
-    gen = await owner.start(send)
+    replacement = asyncio.Event()
+    async def tracked_send(action, key):
+        await send(action, key)
+        if (action, key) == ("subscribe", (PRICE, "035420")):
+            replacement.set()
+    gen = await owner.start(tracked_send)
     await owner.enroll("scan", ["005930", "000660"])
     for symbol in ("005930", "000660"):
         await owner.handle_ack(ack((BOOK, symbol)), gen)
@@ -97,8 +102,10 @@ async def test_successful_release_admits_waiting_operational_channel():
     assert owner.snapshot()["waiting_for_release"]
     assert not owner.operational_coverage()
     await owner.handle_ack(ack((BOOK, "005930"), "unsubscribe"), gen)
+    await asyncio.wait_for(replacement.wait(), 1)
     assert sent[-1] == ("subscribe", (PRICE, "035420"))
     assert owner.snapshot()["occupied"] == 2
+    await owner.stop()
 
 
 @pytest.mark.asyncio
