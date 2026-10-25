@@ -70,6 +70,7 @@ def build_report(days: int = 1) -> str:
     # ── 심의 현황 ──
     stances = Counter()
     approved = 0
+    accepted_stances = Counter()
     blocked_reasons = Counter()
     elapsed = []
     for v in verdicts:
@@ -78,6 +79,7 @@ def build_report(days: int = 1) -> str:
         stances[st] += 1
         if d.get("approved"):
             approved += 1
+            accepted_stances[st] += 1
         else:
             r = (d.get("reason") or "")[:40]
             if r:
@@ -85,15 +87,20 @@ def build_report(days: int = 1) -> str:
         if v.get("elapsed_sec"):
             elapsed.append(float(v["elapsed_sec"]))
 
-    L.append(f"■ 심의 {len(verdicts)}건")
+    L.append(f"■ 일별·종목별 최신 판정 {len(verdicts)}건")
     L.append(f"  판정: " + " / ".join(f"{k} {n}" for k, n in stances.most_common()))
-    L.append(f"  승인 {approved} / 보류·거부 {len(verdicts) - approved}")
+    L.append(f"  의견 수용 {approved} / 미수용 {len(verdicts) - approved}")
+    if accepted_stances:
+        L.append("  수용된 의견: " + " / ".join(
+            f"{str(k).upper()} {n}" for k, n in accepted_stances.most_common()
+        ))
+    L.append("  ※ 의견 수용은 주문·체결을 의미하지 않습니다.")
     if elapsed:
         L.append(f"  소요: 평균 {sum(elapsed)/len(elapsed):.1f}초 (최대 {max(elapsed):.1f}초)")
 
     if blocked_reasons:
         L.append("")
-        L.append("■ 보류·거부 사유 (상위 5)")
+        L.append("■ 의견 미수용 사유 (상위 5)")
         for reason, n in blocked_reasons.most_common(5):
             L.append(f"  {n}건 — {reason}")
 
@@ -110,14 +117,14 @@ def build_report(days: int = 1) -> str:
             rounds.append(deb["rounds_run"])
     if consensus:
         L.append("")
-        L.append("■ 토론 (합의율) — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
+        L.append("■ 최신 판정의 토론 분포 — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
         L.append("  " + " / ".join(f"{k} {n}" for k, n in consensus.most_common()))
         if rounds:
             L.append(f"  평균 {sum(rounds)/len(rounds):.1f}라운드")
 
     # T11 (2026-09-15): 원장(team_ledger) 표본 — 판단 건수(dedup) vs 레코드 수(재시도 포함)
     L.append("")
-    L.append("■ 판단 표본 (team_ledger)")
+    L.append("■ 전체 판단 기록 (team_ledger)")
     try:
         from src.agents.team_ledger import load_day
         raw_total = 0
@@ -127,12 +134,13 @@ def build_report(days: int = 1) -> str:
             raw_total += len(load_day(d, dedup=False))
             dedup_total += len(load_day(d, dedup=True))
         L.append(f"  판단(중복 제거) {dedup_total}건 / 원장 레코드(재시도 포함) {raw_total}건")
+        L.append("  ※ ID 중복 제거 건수이며 독립 평가 표본 수는 아닙니다.")
     except Exception as e:
         L.append(f"  원장 조회 실패 (무시): {e}")
 
-    # ── 재현성 (승격 핵심 지표) — LLM 프로세스 품질일 뿐 투자 성능이 아니다 ──
+    # 동일 prompt_hash의 저장 판정 비교. 모델/파라미터를 고정한 재실행은 아니다.
     L.append("")
-    L.append("■ 재현성 · 합의율 — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
+    L.append("■ 반복 입력 판정 — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
     if ledger:
         groups = {}
         empty = 0
@@ -150,8 +158,8 @@ def build_report(days: int = 1) -> str:
         if repeated:
             consistent = sum(1 for v in repeated.values() if len(set(v)) == 1)
             rate = consistent / len(repeated) * 100
-            mark = "✅" if rate >= MIN_AGREEMENT else "⚠️"
-            L.append(f"  {mark} 일치율 {rate:.1f}% ({consistent}/{len(repeated)}종, 기준 {MIN_AGREEMENT}%)")
+            L.append(f"  반복 prompt_hash의 저장 판정 일치율 {rate:.1f}% ({consistent}/{len(repeated)}그룹, 참고 기준 {MIN_AGREEMENT}%)")
+            L.append("  ※ 응답 내용·모델별 재현성·투자 성과를 검증한 값이 아닙니다.")
         else:
             L.append("  동일 입력 반복 없음 — 측정 불가 (정상: 종목마다 입력이 다름)")
         L.append(f"  LLM 호출 {len(ledger)}건 / 빈 응답 {empty}건")
@@ -159,10 +167,10 @@ def build_report(days: int = 1) -> str:
     else:
         L.append("  원장 기록 없음")
 
-    # ── 승격 기준 달성도 (기준 숫자는 변경하지 않는다 — 라벨만 추가) ──
+    # 최신 요약 및 ID dedup은 독립성/평가 적격성 검증을 대신할 수 없다.
     L.append("")
     L.append("■ 실주문 승격 기준")
-    L.append(f"  {'✅' if len(verdicts) >= MIN_SAMPLES else '⬜'} 표본 {len(verdicts)}/{MIN_SAMPLES}건")
+    L.append(f"  ⬜ 독립 심의 표본: 미검증 (기준 {MIN_SAMPLES}건)")
     L.append("  ⬜ 레짐별 각 30건")
     L.append("  ⬜ 비용 반영 shadow P&L (+)")
     L.append("  ⬜ 기존 경로 대비 증분 효과")
