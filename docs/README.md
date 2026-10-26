@@ -1,14 +1,14 @@
 # QWQ AI Trader — 기술 문서
 
-> **10월26일 오후 판독·현재 단계:** [실행 원장 T06](operations/execution-roadmap.md#t06) · [실측·자료 경로 검토](superpowers/plans/2026-10-24-live-readout.md#afternoon-20261026). 예약7개 판독 완료, 후보0으로 실제 Toss 사용은 미검증이며 추가 소비자는 보류했다. 현재 주 과제는 E01 개선의 통합 적용 검토다. 후보 없음 로그를 보완했고 운영 적용·경제성 증거는 구분한다.
+> **10월26일 운영 적용 완료:** [실행 원장 E01/O02](operations/execution-roadmap.md#e01-application). 선정·위키·보고·관리형 호가 수신 개선을 고정 `804e7b22`로 배포했고 정상 기동/보존 검증을 마쳤다. 소비 cron7개만 제거·반복3개/원본 보존. 다음은 E02 자연 스캔 반영 확인이며 실제 지연·선정·순수익 효과는 미검증이다. T04의 남은 슬롯과 retention 기한은 원장을 따른다.
 
-> **E01 분석·선행 개선:** [104후보 분석·ACK 대기 해소 설계/검증](research/entry-readiness-offline-2026-10-24.md). 사용자 승인으로 관리형 관측 수신 지연 개선을 개발했다. [원장 E01-ACK](operations/execution-roadmap.md#e01-ack)에서 검증·통합·운영 미배포를 구분한다. 10/26 고정 실측과 기존 경제성 판정은 유지한다.
+> **E01 분석·선행 개선:** [104후보 분석·ACK 대기 해소 설계/검증](research/entry-readiness-offline-2026-10-24.md). 사용자 승인으로 관리형 관측 수신 지연 개선을 개발했다. [원장 E01-ACK](operations/execution-roadmap.md#e01-ack)과 [10/26 적용](operations/execution-roadmap.md#e01-application)에서 개발/운영 적용·미검증 경제성을 구분한다. 기존 실측 원본을 보존한다.
 
 > **개발 Claude 모델:** [구독 CLI Opus5.5 검증·현재 선택](operations/local-development.md#claude-opus55) · [D01 적용 상태](operations/execution-roadmap.md#d01-opus55). 새 개발/리뷰 호출은 전체 모델 ID를 명시하며, 엔진 API 모델과 과거 Opus5 기록은 유지한다.
 
 > **Claude 사용 검증 D01:** [실제 재현·결과 수락·한계](reviews/claude-cli-usage-audit-2026-10-24.md). 실행 성공과 리뷰 정확성을 구분하며 도구 없는 호출의 가짜 실행 결과를 거부한다. 개발 협업은 계속하되 운영·엔진 API를 변경하지 않는다.
 
-> **위키 E02-W1:** [실사용·리서치 수집일 검사](reviews/wiki-context-audit-2026-10-24.md). 오래된 연구행의 문맥 재사용을 제한하고 역사적 거래 교훈과 구분한다. 운영 미배포이며 상태는 실행 원장을 따른다.
+> **위키 E02-W1:** [실사용·리서치 수집일 검사](reviews/wiki-context-audit-2026-10-24.md). 오래된 연구행의 문맥 재사용을 제한하고 역사적 거래 교훈과 구분한다. 10/26 운영 적용 완료이며 실제 효과는 실행 원장에서 별도로 추적한다.
 
 > **선정 입력 E02:** [장중/배치 원천 지도·연속 수급 가점·비활성 전략 후보 누락 수정](reviews/selection-source-map-2026-10-24.md). 현재 실측 대기 중 가능한 입력 점검이며, 비용 후 성과 판정과 운영 적용은 별개다.
 
