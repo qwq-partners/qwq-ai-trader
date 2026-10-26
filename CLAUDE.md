@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **E02 다음 확인 경로:** [경로별 인수 기준](docs/operations/execution-roadmap.md#e02-natural-acceptance). F2는 다음 배치/아침 보고, F1은 장중 연속 스캔, W1은 실제 팀 심의/진입 2차 검증에서 확인한다. 아침 보고만으로 위키 검증을 완료하지 않는다. 자연 입력/소비자 미도달은 WAIT이며 매수 중지·예산·운영 설정을 유지한다.
+
 > **10월26일 운영 적용 완료·현재 단계:** [원장 E01/O02](docs/operations/execution-roadmap.md#e01-application). 고정 `804e7b22`를20:55:30 KST 배포·PID3451512로 기동했다. 전체9,134검사·복구ready·pending0·보호 설정/원장 보존 확인. 소비 cron7개 제거·기존 반복3개/원본 보존. 주 작업은 **E02 선정 개선의 다음 자연 스캔 반영 확인**이며 경제성은 미검증이다. T04는 남은 승인 슬롯·10/30 만료, O02 retention은 기존 기한을 따른다. 문서 후속만을 위한 재배포는 하지 않는다.
 
 > **10월25일 E01-ACK 선행 개선:** 사용자 승인으로 [ACK 묶음 대기 해소](docs/research/entry-readiness-offline-2026-10-24.md#10월25일-선행-개선-설계실행-계획)를 개발했다. 송신 직렬화·간격·상한·원장 순서를 보존하고 수신 처리와 후속 송신을 분리했다. [실행 원장 E01-ACK](docs/operations/execution-roadmap.md#e01-ack)에 검증·독립 리뷰·PR 통합 상태를 기록한다. 운영 미배포·10/26 고정 실측 유지, 이후 T03/T04→조건부T05→T06에서 통합 적용 검토. 기존 strict0·보조4쌍/경제성null은 유지하며 기존104후보 분석을 반복하지 않는다.

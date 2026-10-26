@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **E02 인수 경로 구분:** [후보 점유·수급 연속성·위키 날짜의 실제 확인 조건](operations/execution-roadmap.md#e02-natural-acceptance). 배치/아침 보고는 F2, 장중 스캔은 F1, 실제 판단 문맥은 W1의 증거다. 경로 실행·결함 조건 해결·경제성을 각각 판정한다.
+
 > **10월26일 운영 적용 완료:** [실행 원장 E01/O02](operations/execution-roadmap.md#e01-application). 선정·위키·보고·관리형 호가 수신 개선을 고정 `804e7b22`로 배포했고 정상 기동/보존 검증을 마쳤다. 소비 cron7개만 제거·반복3개/원본 보존. 다음은 E02 자연 스캔 반영 확인이며 실제 지연·선정·순수익 효과는 미검증이다. T04의 남은 슬롯과 retention 기한은 원장을 따른다.
 
 > **E01 분석·선행 개선:** [104후보 분석·ACK 대기 해소 설계/검증](research/entry-readiness-offline-2026-10-24.md). 사용자 승인으로 관리형 관측 수신 지연 개선을 개발했다. [원장 E01-ACK](operations/execution-roadmap.md#e01-ack)과 [10/26 적용](operations/execution-roadmap.md#e01-application)에서 개발/운영 적용·미검증 경제성을 구분한다. 기존 실측 원본을 보존한다.
