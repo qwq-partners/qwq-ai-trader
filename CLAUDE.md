@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10월26일 오전 실측:** [원장 T03/T04](docs/operations/execution-roadmap.md#t03-t04-morning) · [계수·판정 한계](docs/superpowers/plans/2026-10-24-live-readout.md#morning-20261026).09:25/09:50 같은 실행의 비교를 완료했다. 분석 일봉199요청·적중0, broker 일봉204시도·EGW00201 5건으로 절감/제한 해결은 미입증이다. 아침 추천0종목은 `no_candidates`이며 Toss 유효 표본이 아니다. 다음은15:59~16:12 예정 결과→조건부T05→T06→E01. E01-ACK #268은 main `de4bf64c` 병합·운영 미배포, 운영 `44483017`과 고정 예약을 유지한다.10/25 22시 보고 rc0·API 성공 로그는 확인했고 모바일 수신은 미확인이다.
+
 > **10월25일 E01-ACK 선행 개선:** 사용자 승인으로 [ACK 묶음 대기 해소](docs/research/entry-readiness-offline-2026-10-24.md#10월25일-선행-개선-설계실행-계획)를 개발했다. 송신 직렬화·간격·상한·원장 순서를 보존하고 수신 처리와 후속 송신을 분리했다. [실행 원장 E01-ACK](docs/operations/execution-roadmap.md#e01-ack)에 검증·독립 리뷰·PR 통합 상태를 기록한다. 운영 미배포·10/26 고정 실측 유지, 이후 T03/T04→조건부T05→T06에서 통합 적용 검토. 기존 strict0·보조4쌍/경제성null은 유지하며 기존104후보 분석을 반복하지 않는다.
 
 > **현재 개발 Claude 모델:** 사용자 승인에 따라 새 개발·리뷰 호출은 `claude-opus-5-5`/high를 명시한다. [구독 CLI 실제 모델 검증·적용 상태](docs/operations/execution-roadmap.md#d01-opus55) · [현재 선택](docs/operations/local-development.md#claude-opus55). 아래 Opus5 기록은 당시 실측이며 유지한다. 실제 응답 모델/폴백·리뷰 내용은 매번 확인하고 엔진 API/운영 설정은 변경하지 않는다.
