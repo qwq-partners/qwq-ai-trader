@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **10월26일 오전 실측:** [원장 T03/T04](docs/operations/execution-roadmap.md#t03-t04-morning) · [계수·판정 한계](docs/superpowers/plans/2026-10-24-live-readout.md#morning-20261026).09:25/09:50 같은 실행의 비교를 완료했다. 분석 일봉199요청·적중0, broker 일봉204시도·EGW00201 5건으로 절감/제한 해결은 미입증이다. 아침 추천0종목은 `no_candidates`이며 Toss 유효 표본이 아니다. 다음은15:59~16:12 예정 결과→조건부T05→T06→E01. E01-ACK #268은 main `de4bf64c` 병합·운영 미배포, 운영 `44483017`과 고정 예약을 유지한다.10/25 22시 보고 rc0·API 성공 로그는 확인했고 모바일 수신은 미확인이다.
+> **10월26일 오후 판독·현재 단계:** [원장 T06](docs/operations/execution-roadmap.md#t06). 예약7개 판독 완료, 추가 Toss 소비자는 적격 근거가 없어 DEFERRED, 기존 승인 기간의 보고 전용 범위를 유지한다. 후보0 판독은 ledger 미접근이며 실제 가격 사용·KIS 절감·순수익은 미입증이다. 주 작업은 **E01 개선의 통합 적용 검토**로 복귀했다. 후보 없음 로그 혼동을 최소 수정했고 운영 `44483017`은 유지한다. 남은 T04 자연 슬롯·O02 정리는 원장의 재개 조건을 따른다.
 
 > **10월25일 E01-ACK 선행 개선:** 사용자 승인으로 [ACK 묶음 대기 해소](docs/research/entry-readiness-offline-2026-10-24.md#10월25일-선행-개선-설계실행-계획)를 개발했다. 송신 직렬화·간격·상한·원장 순서를 보존하고 수신 처리와 후속 송신을 분리했다. [실행 원장 E01-ACK](docs/operations/execution-roadmap.md#e01-ack)에 검증·독립 리뷰·PR 통합 상태를 기록한다. 운영 미배포·10/26 고정 실측 유지, 이후 T03/T04→조건부T05→T06에서 통합 적용 검토. 기존 strict0·보조4쌍/경제성null은 유지하며 기존104후보 분석을 반복하지 않는다.
 
@@ -12,7 +12,7 @@
 
 > **10월24일 E02 후속:** [원천 매핑·수급 연속성·비활성 전략 후보 누락](docs/reviews/selection-source-map-2026-10-24.md). F1은 PR #259/main `abd8040c`에 병합했다. F2는 명시 false/true 합성 설정에서 꺼진 RSI2가 활성 SEPA/VCP 후보를 가리는 경로를 재현하고 필터 이전 enabled 검사로 수정했다. 관련250·전체9,093검사와 독립 Claude Opus 중요 리뷰를 통과했다. 검증/리뷰/통합 상태는 [작업 원장](docs/operations/execution-roadmap.md#e02-입력-점검)을 따른다. F1/F2 운영 미배포·10/26 고정 HEAD/예약 유지; 이후 T03/T04→조건부 T05→T06→E01로 복귀한다.
 
-> **현재 작업 순서 정본:** [엔진 개선 실행 원장](docs/operations/execution-roadmap.md). 목적은 종목 선정·진입 시점의 비용 후 순수익 개선이며, 현재 주 과제는 Toss/KIS 병행 자료 경로다. **O01 보고 전용 예약 설치·T02 역할 검토 완료. 다음은 T03/T04 10월26일 실측 → 조건부 T05 → T06 통합 리뷰 → E01 선정/진입 평가 복귀**. 현재 추가 대체 후보가 없으며, 효과 없는 확대를 필수 관문으로 삼지 않는다. 작업마다 Plan→Do→See와 NEXT를 갱신한다. 아래 날짜별 머리글은 당시 이력이며 현재 우선순위를 새로 만드는 지시가 아니다. 운영 checkout과 최신 main 문서를 구분한다.
+> **현재 작업 순서 정본:** [엔진 개선 실행 원장](docs/operations/execution-roadmap.md). 목적은 종목 선정·진입 시점의 비용 후 순수익 개선이며, 현재 주 과제는 **E01 개선의 통합 적용 검토**다. O01/T02와T03 판독/T06 검토는 완료, T05는DEFERRED다. T04 실사용은 남은 승인 슬롯의 자연 표본으로 확인하며 추가 수집을 복귀의 필수 관문으로 삼지 않는다. 작업마다 Plan→Do→See와 NEXT를 갱신한다. 아래 날짜별 머리글은 당시 이력이며 현재 우선순위를 새로 만드는 지시가 아니다. 운영 checkout과 최신 main 문서를 구분한다.
 
 > **10월24일 CLI 협업:** 사용자 요청에 따라 로그인된 Claude도 개발·운영 준비·배포 검토·독립 리뷰에 활용한다. [원장 D01/L01](docs/operations/execution-roadmap.md#d01l01) · [실행 범위와 엔진 API 대체 검토](docs/operations/local-development.md#cli-collaboration). 도구 없는 실제 Claude Opus 응답을 확인했으며, 엔진 API 전면 대체는 미적용이다. 기존 주 과제/예산/운영 예약을 유지한다.
 
