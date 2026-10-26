@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10월26일 오전 실측:** [T03/T04 원장](operations/execution-roadmap.md#t03-t04-morning) · [오전 계수와 한계](superpowers/plans/2026-10-24-live-readout.md#morning-20261026).09:25/09:50 판독 완료, 분석 일봉 공유 캐시 절감은 미입증이고 아침 후보0으로 Toss 유효 표본이 없다.15:59~16:12 결과 후 조건부T05→T06→E01로 이어간다. E01-ACK #268은 병합·운영 미배포이며 고정 운영/예약을 유지한다.
+
 > **E01 분석·선행 개선:** [104후보 분석·ACK 대기 해소 설계/검증](research/entry-readiness-offline-2026-10-24.md). 사용자 승인으로 관리형 관측 수신 지연 개선을 개발했다. [원장 E01-ACK](operations/execution-roadmap.md#e01-ack)에서 검증·통합·운영 미배포를 구분한다. 10/26 고정 실측과 기존 경제성 판정은 유지한다.
 
 > **개발 Claude 모델:** [구독 CLI Opus5.5 검증·현재 선택](operations/local-development.md#claude-opus55) · [D01 적용 상태](operations/execution-roadmap.md#d01-opus55). 새 개발/리뷰 호출은 전체 모델 ID를 명시하며, 엔진 API 모델과 과거 Opus5 기록은 유지한다.
