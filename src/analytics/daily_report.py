@@ -787,7 +787,7 @@ class DailyReportGenerator:
                 self._recommendation_date = today
                 logger.info(f"[레포트] 추천 종목 파일 복원: {len(loaded)}종목")
             else:
-                logger.warning("[레포트] 오늘 추천 종목이 없습니다 (메모리 + 파일 모두 없음)")
+                logger.info("[레포트] 평가할 당일 추천 종목이 없어 오후 결과 레포트를 생략합니다")
                 return ""
 
         # 새 helper는 아침에 확정·저장한 목록만 요청하고 성공한 가격만 공급한다.
@@ -1275,6 +1275,9 @@ class DailyReportGenerator:
     def _set_report_cohort(self, report_date: date, generated_at: datetime) -> None:
         """현재 추천 목록을 아침 생성 시각 그대로 묶어 둔다."""
         self._report_cohort = None
+        if not self._today_recommendations:
+            logger.info("[레포트] 추천 종목 0개 — Toss 보고 대상 생성을 생략합니다")
+            return
         try:
             from ..data.providers.toss.report_protocol import ReportCohort
             if generated_at.tzinfo is None:
