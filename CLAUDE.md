@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-27 22:47 KST R02 운영 적용 완료:** 고정`c4bc4f0e`·PID3611280·CI/운영 각각9,227검사 통과·복구ready·미체결0. 새 KIS 자격/보호23파일·cron3개·Toss 미소비·매수 중지 유지. [운영 영수증·NEXT](docs/operations/execution-roadmap.md#r02-index-health-20261027). 다음은 E02 미관측 조건/비용 후 효과이며 자연 보고/모바일은 별도 대기다. 문서 후속만을 위한 재배포는 하지 않는다.
+
 > **10월27일 R02 후속:** 장후 지수 같은 행 참고 가격·계좌 동기화 시점·보고 입력 중복 방지를 보완한다. [현재 구현/검증/운영 상태](docs/operations/execution-roadmap.md#r02-index-health-20261027)와 [계획](docs/superpowers/plans/2026-10-27-report-index-health.md)을 따른다.22시 기존 cron의 다음날 요약용1행 저장은 확인했고 실제 다음날 포함은 대기다. 새 KIS 자격과 기존 보호/예약을 보존한다.
 
 > **10월27일21:27 KIS 인증 전환 완료:** 사용자 제공 새 자격을 운영 비공개 설정과 REST/WS 캐시에 반영하고21:25:09 재기동했다. 운영 `6d132809`·PID3587169·계좌 조회/복구 정상·미체결0·자동 재시작0, 보호 설정/예약/매수 중지 유지. [O03 적용·검증](docs/operations/execution-roadmap.md#kis-rotation-20261027). 실제 WS 수신은 다음 자연 연결에서 확인한다. [21시 개인 요약 대조·R02 실제 지수 응답](docs/operations/execution-roadmap.md#r02-evening-20261027)을 완료했고, 다음 개발은 비정상 시각 제외·가격/날짜 결합의 보고 전용 처리다. 인증값은 문서/커밋에 포함하지 않으며 문서 후속은 재배포하지 않는다.
