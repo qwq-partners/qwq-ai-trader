@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **R02 16:10 단발 배포 예약 설치:** [고정SHA·16:10 단발 실행·Toss 조건·복구·결과 확인](operations/execution-roadmap.md#r02-deploy-20261027). 보고7파일 준비/검사와 실제 운영 전환을 구분한다.
+
 > **Telegram 보고 개편 R02:** [구현·검증·운영 인수 계획](superpowers/plans/2026-10-27-telegram-audience.md). 채널 한국시장3슬롯·개인 엔진1회+중요 즉시 알림, 원천 날짜/결측 보존. 현재 운영·고정 cron은 미적용이며 국내 장중 지수의 원천시각 확보가 남아 있다. [상태 정본](operations/execution-roadmap.md#r02-telegram).
 
 > **10월27일 첫 자연 실행 판독:** [E02 배치·장중 수급·보고 결과](operations/execution-roadmap.md#e02-morning-20261027). 후보6→SEPA 점수 통과0의 위치를 확인했고 F1 양성 가점을 실측했다. 스크리너 순위와 진입 점수는 다른 척도이며 선정 조건을 낮추지 않는다. 표시/설명 수정은 후속 PR, 운영은 `804e7b22`다.
