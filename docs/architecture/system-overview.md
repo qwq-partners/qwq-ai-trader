@@ -1,5 +1,24 @@
 # 시스템 아키텍처
 
+## R02 대상별 보고 흐름 (운영 적용은 실행 원장)
+
+기존 수집·전문가·후보·복기는 계산 시각을 유지한다. 정기 개인 자료는 SQLite에 append 보존하고21시 유형별 최근 결과로 묶는다. 시장 보고는 엔진 객체 대신 허용된 시장 DTO만 받는다. 시각 조건을 충족하지 않는 값은 제외하고 추가 API 호출은 하지 않는다.
+
+```mermaid
+flowchart LR
+  A[기존 시세·전문가 캐시] --> B[원천일·시각 검증 / 시장 DTO]
+  B --> C[07:40·13:10·16:40 시장 본문]
+  D[후보·복기·연구 정기 결과] --> E[개인 결과 append 저장]
+  E --> F[21:00 엔진 요약]
+  C --> G[SQLite 슬롯 선점·원문 보존]
+  F --> G
+  G --> H[대상별 Telegram 단일 시도]
+  H --> I[접수·거절·불명 상태 기록]
+  J[주문·체결·중요 장애·대응 경보] --> K[즉시 개인 알림]
+```
+
+슬롯 선점 뒤 중단/timeout도 자동 재시도하지 않는다. 이 구조는 Telegram 서버의 멱등성이나 휴대폰 수신을 보장하지 않는다. 다음 개인 요약에서 최근2일 미완료/실패/자료 보류를 확인한다. [단계별 인수·고정 cron](../superpowers/plans/2026-10-27-telegram-audience.md) · [상태 정본](../operations/execution-roadmap.md#r02-telegram).
+
 > **2026-10-24 보고 가격 연결:** [Toss 별도 helper·cohort·검증/설치 상태](../superpowers/plans/2026-10-24-toss-report-runtime.md). 부모 봇의 아침 목록 → bounded JSONL → 고정 launcher/검증 artifact → v3 승인/worker/원장 → 같은 cohort의 표시 가격 순서다. 기본 OFF·운영 미활성화이며 주문/KIS WS/LLM 경로는 유지한다.
 
 > **2026-10-18 주문 귀속 후속·운영 미배포:** [후보·판단→주문 의도→증분 체결](../reviews/order-attribution-2026-10-18.md). Order에 고정한 네 ID를 기존 실행 원장에 보존하며, 각 execution_id의 상위 주문을 통해 오프라인 거래 행과 대조한다. 새 원장 행 작성 이후 구버전 reader로의 단순 롤백은 지원하지 않는다.

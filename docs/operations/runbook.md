@@ -793,6 +793,8 @@ KIS 비교가격이 없어 `excluded`일 수 있으므로 이것만으로 가격
 
 ## 22시 LLM 비교 보고 — O01 보고 전용 전환
 
+> 아래5파일·단독 Telegram은 기존 O01 설치 계약이다. R02 저장 모드 전환에는 다음 **R02 7파일 계약**을 적용한다. 현재 운영 설치를 바꿨다는 뜻은 아니다.
+
 정본은 [실행 원장 O01](execution-roadmap.md#o01)이다.
 `llm_migration_monitor.py`는 과거 shadow 자료·상태를 읽고 요약하며 모델/설정/상태 저장과
 봇 재시작 기능을 제거했다. 과거 phase는 현재 모델을 뜻하지 않고 응답 키 일치는 투자 성능이 아니다.
@@ -814,3 +816,23 @@ Python `-I -B`로 고정본을 실행하고 기존 운영 `.env` 경로를 명�
 확인한 뒤 원장에 설치 근거를 남긴다. 합성 smoke는 --dry-run으로 수행하고 실제 발송 성공은 다음 자연 실행에서 확인한다. manifest 검사 등 선행 단계가 실패하면 종료 표식이 없을 수 있으므로 표식 부재를 성공으로 세지 않는다.
 
 고정 별도 작업을 적용해도 본체 checkout은 관측을 위해 이전 SHA에 남는다. 다음 본체 배포 전에는 그 안의 옛 `scripts/llm_migration_monitor.py`를 수동 실행하지 않고 설치된 보고 전용 wrapper를 사용한다. 새 예약의 소스 제거/수동 cron 복원도 독립 검토 없이 옛 자동 전환으로 되돌리지 않는다.
+
+
+<a id="r02-fixed-report-artifact"></a>
+### R02: 22시 보고의 엔진 요약 입력 전환 (설치 미실행)
+
+고정 SHA에서 다음7파일을 같은 디렉터리 구조로 추출하고 **전체 목록과 각 sha256**을 manifest로 검증한다. 빈 init도 해당 SHA의 실제 파일을 쓴다.
+
+- `scripts/llm_migration_monitor.py`
+- `scripts/analyze_shadow.py`
+- `src/__init__.py`
+- `src/utils/__init__.py`
+- `src/utils/telegram.py` (명시 수동 `--telegram` 호환)
+- `src/analytics/__init__.py`
+- `src/analytics/report_delivery.py`
+
+새 wrapper는 이 manifest와 고정 SHA를 확인하고 기본 기록 모드로 실행한다. 운영 자격/`--env-file` 없이도 기록할 수 있다. Python/timeout/파일 권한·나머지 예약 불변 검사는 기존 계약대로 유지한다. 설치 전 합성 state/log 경로와 별도 `ReportStore` 경로를 주입한 **실제 기록 모드** smoke에서 `llm_migration` 행이 생기는지 확인한다. `--dry-run`만으로는 새 모듈 import/저장을 검증하지 못한다.
+
+운영 인수에서는 cron과 봇의 실행 사용자·HOME이 같은 비공개 `~/.cache/ai_trader/report_delivery/reports.sqlite3`를 가리키는지 대조한다.22시 기록은 다음날21시 요약 대상이다. shadow 일일/주간 항목은 각각 `--telegram`→`--record`로 바꾸며 시각과 분석 범위는 유지한다. 두 CLI의 기본 모드는 서로 다르다(shadow=출력만, monitor=기록).
+
+원 cron·고정 artifact·manifest를 비공개 백업한다. 기록 실패는 exit1/로그로 식별하고 다음날 자료 부재를 정상 가동으로 해석하지 않는다. 롤백 대상은 직전 **보고 전용 O01** artifact로 한정하고 오래된 모델 자동 전환 코드는 되살리지 않는다. SQLite 발송 영수증은 유지하며 롤백으로 다시 켜지는 단독 Telegram 발송량도 함께 확인한다.

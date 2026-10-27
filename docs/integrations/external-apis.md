@@ -1,5 +1,7 @@
 # 외부 API 연동
 
+> **R02 보고 전용 필드:** Yahoo v7의 원래 `market_time`과 v8의 필드 부재는 거래 소비자 호환을 유지한다. 보고는 가격과 짝인 `report_market_time`/`report_market_time_kind`(regular_market/daily_bar)로 날짜를 검증한다. KIS `report_values`는 결측과0을 분리하지만 원천시각이 없는 응답에 수신시각을 대신 붙이지 않는다. 새 외부 조회는 추가하지 않는다. [보고 계약](../agents/reporting.md) · [구현/운영 상태](../operations/execution-roadmap.md#r02-telegram).
+
 > **2026-10-24 Toss 보고 helper:** [실제 실행 경로·v3 보고 승인·설치/검증 상태](../superpowers/plans/2026-10-24-toss-report-runtime.md). 고정 `-I -S` 자식이 승인/토큰/원장을 소유하고 부모는 같은 아침 cohort의 가격만 소비한다. `TOSS_REPORT_API=1` opt-in·기본 OFF, 기존 observer namespace 불변. 첫 효과는 pykrx/Naver 절감이며 KIS 구독 용량/실측과 구분한다.
 
 > **2026-10-18 개발 후속:** [수급 원문 근거와 캐시 구분](../reviews/supply-evidence-correctness-2026-10-18.md). 기존 KIS 수치 필드는 호환 유지하고 원문 유효성·자료 날짜 메타데이터를 추가한다. 중복 수급을 합산하지 않으며 Swing/5일 누적은 별도 버전 캐시를 쓴다. 기존 캐시와10월19일 고정 관측은 보존한다. 운영 미배포.
