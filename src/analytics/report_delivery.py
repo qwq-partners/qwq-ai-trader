@@ -41,6 +41,8 @@ class ReportStore:
         db.row_factory = sqlite3.Row
         try:
             db.execute("CREATE TABLE IF NOT EXISTS reports (report_date TEXT, kind TEXT, text TEXT, recorded_at TEXT, PRIMARY KEY(report_date,kind))")
+            db.execute("CREATE TABLE IF NOT EXISTS report_events (id INTEGER PRIMARY KEY, report_date TEXT, kind TEXT, text TEXT, recorded_at TEXT)")
+            db.execute("CREATE INDEX IF NOT EXISTS report_events_day ON report_events(report_date)")
             db.execute("CREATE TABLE IF NOT EXISTS slots (audience TEXT, kind TEXT, report_date TEXT, source_snapshot_id TEXT, status TEXT, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
             with db:
@@ -58,13 +60,20 @@ class ReportStore:
         # Fixed 21:00 cutoff: later cron output belongs to tomorrow's digest.
         report_day = (now + timedelta(hours=3)).date().isoformat()
         with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO reports VALUES (?,?,?,?)", (report_day, kind, str(text)[:30000], now.isoformat()))
+            db.execute("INSERT INTO report_events (report_date,kind,text,recorded_at) VALUES (?,?,?,?)", (report_day, kind, str(text)[:30000], now.isoformat()))
         return True  # Stored, not sent.
 
     def records(self, report_date: str) -> list[dict]:
         date.fromisoformat(report_date)
         with self._db() as db:
-            return [dict(r) for r in db.execute("SELECT kind,text,recorded_at FROM reports WHERE report_date=? ORDER BY recorded_at,kind", (report_date,))]
+            # Preserve legacy latest-only records too; all new inputs are append-only.
+            return [dict(r) for r in db.execute("SELECT kind,text,recorded_at FROM (SELECT kind,text,recorded_at,0 AS sequence FROM reports WHERE report_date=? UNION ALL SELECT kind,text,recorded_at,id AS sequence FROM report_events WHERE report_date=?) ORDER BY recorded_at,sequence", (report_date, report_date))]
+
+    def delivery_issues(self, report_date: str) -> list[dict]:
+        """Recent non-success receipts, without exposing stored private bodies."""
+        previous = (date.fromisoformat(report_date)-timedelta(days=1)).isoformat()
+        with self._db() as db:
+            return [dict(r) for r in db.execute("SELECT audience,kind,report_date,status FROM slots WHERE report_date BETWEEN ? AND ? AND status NOT IN ('accepted','skipped_holiday') ORDER BY report_date DESC,kind", (previous, report_date))]
 
     def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None) -> bool:
         validate_slot(audience, kind, report_date)
@@ -78,7 +87,7 @@ class ReportStore:
 
     def finish(self, audience: str, kind: str, report_date: str, status: str) -> None:
         validate_slot(audience, kind, report_date)
-        if status not in {"accepted", "unknown", "failed_configuration", "skipped_holiday", "skipped_missing_current_market_basis", "skipped_missing_market_basis"}:
+        if status not in {"accepted", "rejected", "unknown", "failed_validation", "failed_configuration", "skipped_holiday", "skipped_missing_current_market_basis", "skipped_missing_market_basis"}:
             raise ValueError("invalid terminal status")
         with self._db() as db:
             db.execute("UPDATE slots SET status=? WHERE audience=? AND kind=? AND report_date=? AND status='attempted'", (status, audience, kind, report_date))

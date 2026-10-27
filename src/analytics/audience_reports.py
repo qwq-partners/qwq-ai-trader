@@ -98,7 +98,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         from .us_report_data import observe_us_quote
         for symbol, label in (("^GSPC", "S&P500"), ("^IXIC", "나스닥"), ("^SOX", "미 반도체 SOX")):
             value = observe_us_quote(snapshot.us_quotes.get(symbol), now=now)
-            if value and value.get("date") == snapshot.us_basis_date:
+            if value and (value.get("date") or "").replace(".", "-") == snapshot.us_basis_date:
                 us.append(f"• {label} {value['pct']:+.2f}%")
         if us:
             if not indices and not sectors:
@@ -116,18 +116,31 @@ def _excerpt(text: str, limit: int) -> str:
     return _text(" / ".join(lines), limit)
 
 
-def render_engine_digest(records: list[dict], context: str, now: datetime) -> str:
+def render_engine_digest(records: list[dict], context: str, now: datetime, *, deliveries=()) -> str:
     weekly = now.weekday() == 5
     lines = [f"⚙️ <b>엔진 {'주간·일일' if weekly else '일일'} 요약</b>", f"{now:%m/%d %H:%M} KST", "", "<b>현재 대응</b>"]
-    lines.extend(_text(line, 100) for line in context.splitlines()[:3])
+    lines.extend(_excerpt(line, 100) for line in context.splitlines()[:3])
+    if deliveries:
+        status_labels = {"attempted": "처리 중단·결과 미확인", "unknown": "접수 여부 미확인", "rejected": "발송 거절", "failed_validation": "본문 검증 실패", "failed_configuration": "발송 설정 누락", "skipped_missing_current_market_basis": "장중 원천시각 미확보", "skipped_missing_market_basis": "시장 기준자료 미확보"}
+        slot_labels = {"morning": "장전", "midday": "장중", "after": "장후", "daily": "개인 요약"}
+        lines += ["", "<b>보고 상태 · 최근 2일</b>"]
+        for row in deliveries[:4]:
+            lines.append(f"• {row['report_date'][5:]} {slot_labels[row['kind']]}: {status_labels.get(row['status'], '상태 확인 필요')}")
+        if len(deliveries) > 4:
+            lines.append(f"추가 {len(deliveries)-4}건은 비공개 보고 저장소에 보존")
     priority = {name: n for n, name in enumerate(("report_quality", "position_review", "daily_review", "morning_candidates", "evening_candidates", "batch_watchlist", "expert_quality", "llm_migration"))}
-    records = sorted(records, key=lambda r: priority.get(r["kind"], 99))
-    lines += ["", "<b>집계 · 전일 21시~당일 21시</b>"]
+    grouped = {}
+    for row in records:
+        count, _ = grouped.get(row['kind'], (0, None))
+        grouped[row['kind']] = (count+1, row)
+    groups = sorted(grouped.items(), key=lambda item: priority.get(item[0], 99))
+    lines += ["", "<b>유형별 최근 결과 · 전일 21시~당일 21시</b>"]
     if not records:
         lines.append("정기 결과 기록 없음 — 무거래·정상 가동을 뜻하지 않습니다.")
-    for row in records[:6]:
-        lines.append(f"• {_excerpt(row['text'], 150)}")
-    if len(records) > 6:
-        lines.append(f"상세 {len(records)-6}개는 비공개 보고 저장소에 보존했습니다.")
+    for _, (count, row) in groups[:6]:
+        suffix = f" ({count}건 중 최신)" if count > 1 else ""
+        lines.append(f"• {_excerpt(row['text'], 110)}{suffix}")
+    if len(groups) > 6:
+        lines.append(f"추가 {len(groups)-6}개 유형과 전체 기록은 비공개 보고 저장소에 보존했습니다.")
     lines += ["", "<b>다음 확인</b>", "후보·판단은 주문/체결과 다릅니다. 실제 진입 전 현금·가격·위험 조건을 재확인합니다.", "주문·체결·중요 장애는 이 요약과 별도로 즉시 알립니다."]
     return "\n".join(lines)

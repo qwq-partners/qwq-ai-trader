@@ -41,8 +41,9 @@ class ReportSchedule:
                     status = "skipped_missing_current_market_basis" if kind == "midday" else "skipped_missing_market_basis"
         else:
             records = await asyncio.to_thread(self.store.records, day)
-            text = render_engine_digest(records, engine_context, now)
-            snapshot_id = hashlib.sha256((json.dumps(records, sort_keys=True)+engine_context).encode()).hexdigest()
+            deliveries = await asyncio.to_thread(self.store.delivery_issues, day)
+            text = render_engine_digest(records, engine_context, now, deliveries=deliveries)
+            snapshot_id = hashlib.sha256((json.dumps([records, deliveries], sort_keys=True)+engine_context).encode()).hexdigest()
         if status:
             if not await asyncio.to_thread(self.store.claim, audience, kind, day, snapshot_id):
                 return "already_consumed"
@@ -72,7 +73,7 @@ def _us_session_basis(day):
         return None
 
 
-def market_snapshot(bot, now, is_holiday):
+def market_snapshot(bot, now, is_holiday, *, us_basis_date=None):
     """Allowlisted, defensive cache copies. No provider refresh or bot passed to formatter."""
     from copy import deepcopy
     day = now.date()
@@ -95,7 +96,7 @@ def market_snapshot(bot, now, is_holiday):
         umd = get_us_market_data()
     # Existing US cache only. fetch/get_overnight methods may initiate requests.
     quotes = deepcopy(getattr(umd, "_cache", {}))
-    return MarketSnapshot(tuple(indices), sectors, quotes, basis.isoformat(), _us_session_basis(day))
+    return MarketSnapshot(tuple(indices), sectors, quotes, basis.isoformat(), us_basis_date)
 
 
 async def run_audience_reports(bot):
@@ -103,15 +104,27 @@ async def run_audience_reports(bot):
     from ..utils.telegram import get_telegram_notifier
     from ..analytics.report_context import render_runtime_context
     from ..analytics.daily_report import record_morning_brief_dispatch
+    from ..utils import loop_heartbeat as heartbeat
     schedule = ReportSchedule(ReportStore(), get_telegram_notifier(), record_morning_brief_dispatch)
-    while True:
+    while bot.running:
         try:
             now = datetime.now(KST)
             if any(now.hour == h and m <= now.minute < m+10 for h, m in SLOTS.values()):
-                snapshot = await asyncio.to_thread(market_snapshot, bot, now, is_kr_market_holiday)
+                heartbeat.record_attempt("kr_audience_reports")
+                us_basis = await asyncio.to_thread(_us_session_basis, now.date()) if now.hour < 9 else None
+                # Cache owners run on this event loop. Copy without yielding;
+                # only the calendar calculation runs in a worker thread.
+                snapshot = market_snapshot(bot, now, is_kr_market_holiday, us_basis_date=us_basis)
                 result = await schedule.tick(now, not is_kr_market_holiday(now.date()), snapshot, render_runtime_context(bot))
+                if result in {"unknown", "rejected", "failed_configuration", "failed_validation"}:
+                    heartbeat.record_failure("kr_audience_reports", result)
+                else:
+                    heartbeat.record_idle("kr_audience_reports", result or "보고 창 대기")
                 if result and result != "already_consumed":
                     logger.info("[대상별 보고] {}", result)
-        except Exception:
+            else:
+                heartbeat.record_idle("kr_audience_reports", "보고 창 밖")
+        except Exception as error:
+            heartbeat.record_failure("kr_audience_reports", type(error).__name__)
             logger.exception("[대상별 보고] 생성/기록 실패 — 다음 루프에서 소비 상태 확인")
         await asyncio.sleep(60)

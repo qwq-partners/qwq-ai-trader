@@ -27,46 +27,46 @@ def test_concurrent_process_equivalent_connections_claim_once(tmp_path):
     assert sum(results) == 1
 
 
-def test_digest_records_replace_same_kind_without_sending(tmp_path):
+def test_digest_records_preserve_each_observation_without_sending(tmp_path):
     store = ReportStore(tmp_path / 'reports.sqlite3')
     now = datetime(2026, 10, 27, 13, 30, tzinfo=ZoneInfo('Asia/Seoul'))
     store.record('batch', 'old', now=now)
     store.record('batch', 'new', now=now)
-    assert store.records('2026-10-27') == [{'kind': 'batch', 'text': 'new', 'recorded_at': now.isoformat()}]
+    assert [r['text'] for r in store.records('2026-10-27')] == ['old', 'new']
     store.record('llm_migration', 'late', now=now.replace(hour=22))
-    assert len(store.records('2026-10-27')) == 1
+    assert len(store.records('2026-10-27')) == 2
     assert store.records('2026-10-28')[0]['text'] == 'late'
 
 
 @pytest.mark.asyncio
 async def test_audiences_are_separate_and_regular_reports_once(tmp_path):
     notifier = TelegramNotifier(bot_token='fake', chat_id='dm', alert_chat_id='dm', report_chat_id='channel')
-    notifier._send_to_chat = AsyncMock(return_value=True)
+    notifier._send_report_once = AsyncMock(return_value="accepted")
     store = ReportStore(tmp_path / 'reports.sqlite3')
     args = dict(audience='market', kind='midday', report_date='2026-10-27', source_snapshot_id='s', text='시장', store=store)
     assert await notifier.publish_report(**args) == 'accepted'
     assert await notifier.publish_report(**args) == 'already_consumed'
-    notifier._send_to_chat.assert_awaited_once_with('channel', '시장', 'HTML', False)
+    notifier._send_report_once.assert_awaited_once_with('channel', '시장')
     args.update(audience='engine', kind='daily', text='엔진')
     assert await notifier.publish_report(**args) == 'accepted'
-    assert notifier._send_to_chat.call_args.args[0] == 'dm'
+    assert notifier._send_report_once.call_args.args[0] == 'dm'
 
 
 @pytest.mark.asyncio
 async def test_missing_target_never_falls_back_or_consumes_other_audience(tmp_path):
     notifier = TelegramNotifier(bot_token='fake', chat_id='dm')
     notifier.report_chat_id = None
-    notifier._send_to_chat = AsyncMock()
+    notifier._send_report_once = AsyncMock()
     store = ReportStore(tmp_path / 'reports.sqlite3')
     assert await notifier.publish_report('market', 'morning', '2026-10-27', 's', 'text', store=store) == 'failed_configuration'
-    notifier._send_to_chat.assert_not_awaited()
+    notifier._send_report_once.assert_not_awaited()
     assert store.receipt('market', 'morning', '2026-10-27')['status'] == 'failed_configuration'
 
 
 @pytest.mark.asyncio
 async def test_ambiguous_failure_is_not_retried_and_urgent_is_independent(tmp_path):
     notifier = TelegramNotifier(bot_token='fake', chat_id='dm', alert_chat_id='dm')
-    notifier._send_to_chat = AsyncMock(side_effect=TimeoutError)
+    notifier._send_report_once = AsyncMock(side_effect=TimeoutError)
     store = ReportStore(tmp_path / 'reports.sqlite3')
     assert await notifier.publish_report('engine', 'daily', '2026-10-27', 's', 'text', store=store) == 'unknown'
     assert await notifier.publish_report('engine', 'daily', '2026-10-27', 's', 'text', store=store) == 'already_consumed'
@@ -83,10 +83,9 @@ async def test_ambiguous_failure_is_not_retried_and_urgent_is_independent(tmp_pa
 @pytest.mark.asyncio
 async def test_bad_kind_and_oversize_body_are_rejected_before_transport(tmp_path):
     n = TelegramNotifier(bot_token='fake', chat_id='dm')
-    n._send_to_chat = AsyncMock()
+    n._send_report_once = AsyncMock()
     store = ReportStore(tmp_path / 'r.sqlite3')
     with pytest.raises(ValueError):
         await n.publish_report('market', 'daily', '2026-10-27', 's', 'x', store=store)
-    with pytest.raises(ValueError):
-        await n.publish_report('engine', 'daily', '2026-10-27', 's', 'x' * 1801, store=store)
-    n._send_to_chat.assert_not_awaited()
+    assert await n.publish_report('engine', 'daily', '2026-10-27', 's', 'x' * 1801, store=store) == 'failed_validation'
+    n._send_report_once.assert_not_awaited()

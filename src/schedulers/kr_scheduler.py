@@ -5315,9 +5315,8 @@ JSON:
 
                                                 await record_report("market_diagnosis",
                                                     "\n".join(_tg_lines),
-                                                    parse_mode="HTML",
                                                 )
-                                                logger.info("[시장체제] 텔레그램 장전 진단 전송 완료")
+                                                logger.info("[시장체제] 일일 요약용 장전 진단 기록 요청 완료")
                                             except Exception as _tg_e:
                                                 logger.debug(f"[시장체제] 텔레그램 전송 실패 (무시): {_tg_e}")
 

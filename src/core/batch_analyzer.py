@@ -2263,8 +2263,8 @@ class BatchAnalyzer:
                     f"{business_days}영업일+ / |PnL|={pnl_pct:.2f}% ≤ {stale_band}%"
                 )
                 try:
-                    from ..utils.telegram import send_alert, record_report
-                    await record_report("core_stale_watch",
+                    from ..utils.telegram import send_alert
+                    await send_alert(
                         f"🟡 <b>코어홀딩 횡보 경보 (자동매도 X)</b>\n"
                         f"{getattr(pos, 'name', symbol)}({symbol})\n"
                         f"진입 후 {business_days}영업일+ 동안 |PnL| {pnl_pct:.2f}% ±{stale_band}% 이내\n"
