@@ -41,8 +41,8 @@ def _clean_num(value: Any) -> Optional[float]:
     return value
 
 
-def _clean_market_time(value: Any) -> Optional[float]:
-    """명시된 원천 시각만 보존한다. 미래 여부는 관측 시점의 책임이다."""
+def _clean_report_market_time(value: Any) -> Optional[float]:
+    """보고용 원천 시각만 정리한다. 기존 거래 소비자 필드는 바꾸지 않는다."""
     stamp = _clean_num(value)
     return stamp if stamp is not None and stamp > 0 else None
 
@@ -397,8 +397,11 @@ class USMarketData:
                 volume = q.get("regularMarketVolume", 0)
                 # epoch seconds(UTC) 또는 결측(v7가 안 주면 None) — 그대로 보존,
                 # 시장 시각으로 변환/가공은 소비 지점(get_overnight_signal)에서.
-                market_time = _clean_market_time(q.get("regularMarketTime"))
-                market_time_kind = "regular_market" if market_time is not None else None
+                # 거래 소비자의 market_time은 기존 raw Yahoo 값을 그대로 둔다.
+                # 보고 전용 시각은 별도 필드에서만 유효성 검사를 거친다.
+                market_time = q.get("regularMarketTime")
+                report_market_time = _clean_report_market_time(market_time)
+                report_market_time_kind = "regular_market" if report_market_time is not None else None
                 if price is None or change_pct is None:
                     # 2026-09-15 (T10 F18 2차 blocking 재수정): 완전 결측뿐 아니라
                     # "일부"만 결측이어도(price만 NaN 등) quotes(=self._cache)에는 넣지
@@ -421,7 +424,8 @@ class USMarketData:
                             "name": name,
                             "volume": volume,
                             "market_time": market_time,
-                            "market_time_kind": market_time_kind,
+                            "report_market_time": report_market_time,
+                            "report_market_time_kind": report_market_time_kind,
                         },
                     }
                     continue
@@ -433,7 +437,8 @@ class USMarketData:
                     "name": name,
                     "volume": volume,
                     "market_time": market_time,
-                    "market_time_kind": market_time_kind,
+                    "report_market_time": report_market_time,
+                    "report_market_time_kind": report_market_time_kind,
                 }
             self._seen_missing = seen_missing
             # 2026-09-15 (T10 F18 2차): API 호출 자체는 성공했으면(quotes 비어있지
@@ -513,15 +518,15 @@ class USMarketData:
                     continue
                 change = current - prev_close
                 change_pct = (change / prev_close) * 100
-                market_time = _clean_market_time(meta.get("regularMarketTime"))
+                report_market_time = _clean_report_market_time(meta.get("regularMarketTime"))
                 result[symbol] = {
                     "price": current,
                     "change": change,
                     "change_pct": change_pct,
                     "name": symbol,
                     "volume": meta.get("regularMarketVolume", 0),
-                    "market_time": market_time,
-                    "market_time_kind": "regular_market" if market_time is not None else None,
+                    "report_market_time": report_market_time,
+                    "report_market_time_kind": "regular_market" if report_market_time is not None else None,
                 }
         else:
             # 현행 형식: {symbol: {close: [...], chartPreviousClose: ...}}
@@ -540,22 +545,22 @@ class USMarketData:
                 change_pct = (change / prev_close) * 100
 
                 timestamps = item.get("timestamp")
-                market_time = None
+                report_market_time = None
                 if (
                     isinstance(closes, list)
                     and isinstance(timestamps, list)
                     and len(closes) == len(timestamps)
                     and closes
                 ):
-                    market_time = _clean_market_time(timestamps[-1])
+                    report_market_time = _clean_report_market_time(timestamps[-1])
                 result[symbol] = {
                     "price": current,
                     "change": round(change, 2),
                     "change_pct": round(change_pct, 2),
                     "name": symbol,
                     "volume": 0,
-                    "market_time": market_time,
-                    "market_time_kind": "daily_bar" if market_time is not None else None,
+                    "report_market_time": report_market_time,
+                    "report_market_time_kind": "daily_bar" if report_market_time is not None else None,
                 }
 
     # ──────────────────────────────────────────────────────────────

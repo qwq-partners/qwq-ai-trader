@@ -18,6 +18,13 @@ def _finite_number(value: Any, *, positive: bool = False) -> Optional[float]:
     return number
 
 
+def report_market_time(quote: Any) -> Any:
+    """보고는 정리된 원천 시각을 우선하고, 구형 입력만 raw 필드로 호환한다."""
+    if not isinstance(quote, dict):
+        return None
+    return quote.get("report_market_time") if "report_market_time" in quote else quote.get("market_time")
+
+
 def observe_us_quote(
     quote: Any, *, now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -34,7 +41,7 @@ def observe_us_quote(
     if price is None or pct is None:
         return None
 
-    market_time = quote.get("market_time")
+    market_time = report_market_time(quote)
     if market_time is None:
         return {"price": price, "pct": pct, "date": None, "date_label": "기준일 미확인"}
 

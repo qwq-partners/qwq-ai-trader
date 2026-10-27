@@ -21,7 +21,10 @@ from typing import Dict, List, Optional, Any, Tuple
 from zoneinfo import ZoneInfo
 from loguru import logger
 
-from .us_report_data import observe_us_quote as _us_quote_observation
+from .us_report_data import (
+    observe_us_quote as _us_quote_observation,
+    report_market_time as _report_market_time,
+)
 
 # 추천 종목 캐시 경로
 _REC_CACHE_DIR = Path.home() / ".cache" / "ai_trader"
@@ -115,7 +118,7 @@ def resolve_us_quote_basis(quotes: Dict[str, Dict]) -> Dict[str, Any]:
     for quote in (quotes or {}).values():
         if not isinstance(quote, dict):
             continue
-        stamp = _finite_float(quote.get("market_time"), positive=True)
+        stamp = _finite_float(_report_market_time(quote), positive=True)
         if stamp is None or stamp > now_epoch:
             continue
         try:
