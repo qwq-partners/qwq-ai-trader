@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **R02 운영 적용 완료:** [16:25 배포·보고 예약 전환·사후 검증·자연 보고 인수](operations/execution-roadmap.md#r02-live-20261027). 운영`6d132809`이며 아래 예약/미적용은 당시 상태다. 문서 후속은 재배포하지 않는다.
+
 > **R02 16:10 단발 배포 예약 설치:** [고정SHA·16:10 단발 실행·Toss 조건·복구·결과 확인](operations/execution-roadmap.md#r02-deploy-20261027). 보고7파일 준비/검사와 실제 운영 전환을 구분한다.
 
 > **Telegram 보고 개편 R02:** [구현·검증·운영 인수 계획](superpowers/plans/2026-10-27-telegram-audience.md). 채널 한국시장3슬롯·개인 엔진1회+중요 즉시 알림, 원천 날짜/결측 보존. 현재 운영·고정 cron은 미적용이며 국내 장중 지수의 원천시각 확보가 남아 있다. [상태 정본](operations/execution-roadmap.md#r02-telegram).
