@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **2026-10-27 22:47 KST R02 운영 적용 완료:** 고정`c4bc4f0e`·PID3611280·CI/운영 각각9,227검사 통과·복구ready·미체결0. 새 KIS 자격/보호23파일·cron3개·Toss 미소비·매수 중지 유지. [운영 영수증·NEXT](operations/execution-roadmap.md#r02-index-health-20261027). 다음은 E02 미관측 조건/비용 후 효과이며 자연 보고/모바일은 별도 대기다. 문서 후속만을 위한 재배포는 하지 않는다.
+
 > **10월27일 R02 후속:** 장후 지수 같은 행 참고 가격·계좌 동기화 시점·보고 입력 중복 방지를 보완한다. [현재 구현/검증/운영 상태](operations/execution-roadmap.md#r02-index-health-20261027)와 [계획](superpowers/plans/2026-10-27-report-index-health.md)을 따른다.22시 기존 cron의 다음날 요약용1행 저장은 확인했고 실제 다음날 포함은 대기다. 새 KIS 자격과 기존 보호/예약을 보존한다.
 
 > **10/27 KIS 인증 전환·21시 후속:** [O03 운영 적용](operations/execution-roadmap.md#kis-rotation-20261027) · [R02 개인 요약/지수 실응답](operations/execution-roadmap.md#r02-evening-20261027). 새 자격 검증·같은SHA 재기동·계좌 조회 복구 완료. 개인 요약은 API 수락/원문 대조까지, WS 수신·모바일 확인은 별도다. 지수 비정상 시각/요약-분봉 가격 차이를 다음 보고 설계에 반영하며 문서만 재배포하지 않는다.
