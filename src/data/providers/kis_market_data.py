@@ -24,6 +24,7 @@ from src.utils import kis_rate_limit  # 프로세스 공용 KIS 초당 리미터
 from src.utils import kis_direct_metrics  # 직접 KIS GET의 고정 차원 관측
 from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-15)
 from src.analytics.selection_source_status import mark_source
+from src.analytics.report_index_observations import parse_index_observation
 
 
 def _report_numbers(raw: Dict) -> Dict:
@@ -1233,6 +1234,77 @@ class KISMarketData:
         except Exception as e:
             logger.debug(f"[KIS 지수] {label} 조회 오류: {e}")
             return None
+
+    async def fetch_report_index_observations(self, report_date: date) -> tuple[dict, ...]:
+        """Fetch at most one dated KOSPI and KOSDAQ minute-bar observation.
+
+        This is reporting-only: it neither retries nor populates the shared
+        quote cache, and it propagates cancellation to its caller.
+        """
+        if type(report_date) is not date:
+            return ()
+        url = (f"{self._token_manager.base_url}"
+               "/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice")
+        rows = []
+        session = None
+        try:
+            # aiohttp 3.13 transparently retries a disconnected idempotent GET.
+            # This reporting path has a strict two physical-request budget, so
+            # it must never reuse the provider's shared trading session.
+            session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
+            if not hasattr(session, "_retry_connection"):
+                logger.debug("[KIS 보고지수] retry 제어 미지원 — 요청 생략")
+                return ()
+            session._retry_connection = False
+            if session._retry_connection is not False:
+                logger.debug("[KIS 보고지수] retry 비활성화 확인 실패 — 요청 생략")
+                return ()
+            async with session:
+                for index_code in ("0001", "1001"):
+                    try:
+                        headers = await self._get_headers("FHKUP03500200")
+                        params = {
+                            "FID_COND_MRKT_DIV_CODE": "U",
+                            "FID_ETC_CLS_CODE": "0",
+                            "FID_INPUT_ISCD": index_code,
+                            "FID_INPUT_HOUR_1": "60",
+                            "FID_PW_DATA_INCU_YN": "N",
+                        }
+                        await kis_rate_limit.acquire("FHKUP03500200")
+                        async with kis_direct_metrics.observe_get(
+                            "market_data", "report_index_bar", "FHKUP03500200"
+                        ) as observed, session.get(
+                            url, headers=headers, params=params, allow_redirects=False,
+                        ) as response:
+                            await observed.inspect_response(response)
+                            if response.status != 200:
+                                logger.debug(f"[KIS 보고지수] {index_code} HTTP {response.status}")
+                                continue
+                            payload = await observed.json(response)
+                        if not isinstance(payload, dict) or payload.get("rt_cd") != "0":
+                            logger.debug(f"[KIS 보고지수] {index_code} API 응답 거부")
+                            continue
+                        received_at = datetime.now(timezone.utc)
+                        item = parse_index_observation(
+                            payload, index_code=index_code, report_date=report_date,
+                            received_at=received_at,
+                        )
+                        if item is not None:
+                            rows.append(item)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:
+                        # Do not retain response/request data in logs; the code is a
+                        # fixed public dimension and the second index may still work.
+                        logger.debug(f"[KIS 보고지수] {index_code} 조회 실패: {type(error).__name__}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.debug(f"[KIS 보고지수] 세션 준비 실패: {type(error).__name__}")
+        finally:
+            if session is not None and not session.closed:
+                await session.close()
+        return tuple(rows)
 
     def peek_report_indices(self) -> tuple:
         """Return strict existing cached report rows; never perform a request."""

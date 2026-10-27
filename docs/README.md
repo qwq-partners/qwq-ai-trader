@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10월27일 R02 후속:** 장후 지수 같은 행 참고 가격·계좌 동기화 시점·보고 입력 중복 방지를 보완한다. [현재 구현/검증/운영 상태](operations/execution-roadmap.md#r02-index-health-20261027)와 [계획](superpowers/plans/2026-10-27-report-index-health.md)을 따른다.22시 기존 cron의 다음날 요약용1행 저장은 확인했고 실제 다음날 포함은 대기다. 새 KIS 자격과 기존 보호/예약을 보존한다.
+
 > **10/27 KIS 인증 전환·21시 후속:** [O03 운영 적용](operations/execution-roadmap.md#kis-rotation-20261027) · [R02 개인 요약/지수 실응답](operations/execution-roadmap.md#r02-evening-20261027). 새 자격 검증·같은SHA 재기동·계좌 조회 복구 완료. 개인 요약은 API 수락/원문 대조까지, WS 수신·모바일 확인은 별도다. 지수 비정상 시각/요약-분봉 가격 차이를 다음 보고 설계에 반영하며 문서만 재배포하지 않는다.
 
 > **현재 할 일:** [실행 대기열·우선순위·착수 조건·완료 기준](operations/execution-roadmap.md#next-tasks-20261027). 완료/READY/시각·자료 WAIT를 구분하고, 기한별 실제 점검은 [체크포인트](operations/monitoring-checkpoints.md)에서 인수한다. task의 정본은 하나로 유지한다.

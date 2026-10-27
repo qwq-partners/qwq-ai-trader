@@ -6259,8 +6259,8 @@ JSON:
                                         _msg = (
                                             f"{_emoji} 일일 품질검증 — 전문가 시스템\n"
                                             f"━━━━━━━━━━━━━━━\n"
-                                            f"오늘 발행: {_exp_block.get('today_count')}/7\n"
-                                            f"평균 신뢰도: {_exp_block.get('avg_confidence', 0):.0%}\n"
+                                            f"현재 유효 의견: {_exp_block.get('today_count')}개\n"
+                                            f"의견 평가값 평균: {_exp_block.get('avg_confidence', 0):.0%} (예측 정확도 아님)\n"
                                             f"BULL: {_exp_block.get('bull_count', 0)}명 / "
                                             f"BEAR: {_exp_block.get('bear_count', 0)}명\n"
                                             f"주간 발행: {_exp_block.get('weekly_total', 0)}건"

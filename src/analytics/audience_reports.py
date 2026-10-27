@@ -16,6 +16,7 @@ class MarketSnapshot:
     us_quotes: dict = field(default_factory=dict)
     kr_basis_date: str | None = None
     us_basis_date: str | None = None
+    index_observations: tuple[dict, ...] = ()
 
 
 def number(value):
@@ -62,6 +63,28 @@ def current_indices(snapshot: MarketSnapshot, now: datetime, *, midday: bool):
     return valid
 
 
+def indicative_indices(snapshot: MarketSnapshot, now: datetime):
+    """Same-row prices are references, never substitutes for daily returns/close."""
+    result, seen = [], set()
+    for row in snapshot.index_observations:
+        if not isinstance(row, dict):
+            continue
+        code = row.get("code")
+        price = number(row.get("price"))
+        observed, received = timestamp(row.get("source_observed_at")), timestamp(row.get("received_at"))
+        if (code not in {"0001", "1001"} or code in seen or price is None or price <= 0
+                or row.get("source") != "KIS/FHKUP03500200"
+                or row.get("observation_kind") != "historical_minute" or row.get("finality") != "unverified"
+                or not observed or not received or not observed <= received <= now
+                or observed.date() != now.date() or received.date() != now.date()
+                or observed.date().isoformat() != snapshot.kr_basis_date
+                or (observed.hour, observed.minute) < (15, 30)):
+            continue
+        seen.add(code)
+        result.append(("KOSPI" if code == "0001" else "KOSDAQ", price, observed))
+    return result
+
+
 def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> str | None:
     """No bot/account argument. Missing source time is never filled from receipt."""
     now = now.astimezone(KST)
@@ -79,6 +102,14 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         for row, price, pct, observed in indices[:2]:
             lines.append(f"• {_text(row.get('label'), 20)} {price:,.2f} ({pct:+.2f}%) · {observed:%m/%d %H:%M}")
 
+    observations = indicative_indices(snapshot, now) if kind == "after" and not indices else []
+    if observations:
+        if not indices:
+            lines += ["<b>핵심</b> 시점이 확인된 지수 참고 가격입니다.", "전일 대비 등락·시장 방향 판단자료는 미확보입니다."]
+        lines += ["", "<b>국내 지수 · 분 단위 참고 관측</b>"]
+        lines += [f"• {label} {price:,.2f} · {observed:%m/%d %H:%M} KST" for label, price, observed in observations]
+        lines += ["확정 종가 아님 · 해당 분 관측값이며 봉 완료 여부 미확인"]
+
     sectors = []
     for row in snapshot.sectors:
         pct = number(row.get("r1"))
@@ -90,7 +121,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         selected = sectors[:2] + (sectors[-2:] if len(sectors) > 3 else sectors[2:])
         for row, pct in selected:
             lines.append(f"• {_text(row.get('name'), 24)} {pct:+.2f}%")
-        if not indices:
+        if not indices and not observations:
             lines[3:3] = ["<b>핵심</b> 국내 섹터 ETF의 확인된 최근 움직임부터 살펴봅니다.", "당일 시장 전체 방향은 지수·수급 확인 뒤 판단하세요."]
 
     us = []
@@ -104,7 +135,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
             if not indices and not sectors:
                 lines += ["<b>핵심</b> 밤사이 확인된 미국 지수 변화입니다.", "한국 시가·섹터 강세를 예측하는 수치는 아닙니다."]
             lines += ["", f"<b>국내 개장 전 참고 · 미국 {snapshot.us_basis_date}</b>", *us]
-    if not indices and not sectors and not us:
+    if not indices and not observations and not sectors and not us:
         return None
     lines += ["", "<b>다음 확인</b>", "• 지수 방향이 개별 종목 거래대금·수급과 함께 이어지는지 확인", "• 반도체 대형주와 그 외 업종의 움직임을 나눠 확인", "", "자료 범위: 확인 시점이 있는 값만 표시. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 지수 / 한국 상장 ETF 일봉 / Yahoo 미국 지수 중 표시 자료"]
     return "\n".join(lines)

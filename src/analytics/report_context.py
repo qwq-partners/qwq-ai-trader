@@ -3,9 +3,11 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
+import math
+from zoneinfo import ZoneInfo
 
 
-def render_runtime_context(bot, *, kill_status=None):
+def render_runtime_context(bot, *, kill_status=None, now=None, health=None):
     """현재 메모리의 제약만 요약한다. 금액·종목·주문 권한은 발행하지 않는다."""
     if kill_status is None:
         try:
@@ -23,17 +25,57 @@ def render_runtime_context(bot, *, kill_status=None):
         mode = "매수 중지 플래그 없음 — 주문 전 별도 위험 검사 필요"
     else:
         mode = "매수 중지 상태 미확인"
+    kst = ZoneInfo("Asia/Seoul")
+    now = now or datetime.now(kst)
+    if now.tzinfo is None:
+        raise ValueError("runtime context time must be timezone-aware")
+    now = now.astimezone(kst)
+    if health is None:
+        from ..utils import loop_heartbeat
+        try:
+            session_valid = bot.engine.broker.is_connected
+        except Exception:
+            session_valid = None
+        health = {"session_valid": session_valid,
+                  "account_sync": loop_heartbeat.loop_status(now).get("kr_portfolio_sync", {})}
+    health = health if isinstance(health, dict) else {}
+    session_valid = health.get("session_valid")
+    session_note = ("로컬 유효(통신 확인 아님)" if session_valid is True else
+                    "로컬 무효" if session_valid is False else "미확인")
+    sync = health.get("account_sync")
+    sync = sync if isinstance(sync, dict) else {}
+    success = sync.get("last_success")
+    verified_at = None
+    try:
+        if not isinstance(success, bool) and success is not None and math.isfinite(float(success)):
+            candidate = datetime.fromtimestamp(float(success), kst)
+            if 0 <= now.timestamp()-float(success):
+                verified_at = candidate
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    fresh = verified_at is not None and (now-verified_at).total_seconds() <= 900
+    failed = sync.get("consecutive_failures", 0) != 0
+    idle = bool(sync.get("idle_reason"))
+    sync_note = (f"{verified_at:%m/%d %H:%M} KST 검증" if verified_at else "검증 시각 미확인")
+    if failed:
+        sync_note = "최근 실패 · " + sync_note
+    elif idle:
+        sync_note = "보류 · " + sync_note
+    elif verified_at and not fresh:
+        sync_note = "오래됨 · " + sync_note
     cash_note = "현금 상태 미확인 — 신규 진입 판단 보류"
     try:
-        # 잔고 API를 새로 부르지 않으며, 미검증 메모리 값은 사용하지 않는다.
-        if getattr(getattr(bot, "risk_manager", None), "_cash_verified", None) is True:
+        # Session validity is local only; require a recent actual account-sync success.
+        if (session_valid is True and fresh and not failed and not idle
+                and getattr(getattr(bot, "risk_manager", None), "_cash_verified", None) is True):
             cash = Decimal(str(bot.engine.get_available_cash()))
             if cash.is_finite() and cash >= 0:
                 cash_note = ("가용현금 없음 — 후보는 관찰용" if cash == 0 else
                              "엔진 현금 여유 있음 — 예약·최소 주문 조건은 진입 때 재확인")
     except Exception:
         pass
-    return f"현재 대응: {mode}\n{cash_note}\n보유 판단: 개별 공시·수급 변화와 기존 청산 조건을 확인"
+    return (f"현재 대응: {mode}\nKIS 세션: {session_note} · 계좌: {sync_note}(시세 아님)\n"
+            f"{cash_note}")
 
 
 def claim_weekly_report(now: datetime, directory: Path) -> bool:

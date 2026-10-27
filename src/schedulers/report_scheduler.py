@@ -1,10 +1,11 @@
 """One routine publishing loop; collection and urgent trading loops stay separate."""
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 from functools import lru_cache
 import hashlib
 import json
+import uuid
 from zoneinfo import ZoneInfo
 from loguru import logger
 
@@ -15,10 +16,30 @@ KST = ZoneInfo("Asia/Seoul")
 SLOTS = {"morning": (7, 40), "midday": (13, 10), "after": (16, 40), "daily": (21, 0)}
 
 
+async def _durable_thread(function, *args):
+    """Drain a started SQLite writer before releasing the surrounding file lock."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()  # retrieve any failure; cancellation remains the caller outcome
+        raise
+
+
 class ReportSchedule:
-    def __init__(self, store, notifier, dispatch_recorder=None):
+    def __init__(self, store, notifier, dispatch_recorder=None, *, index_fetcher=None, clock=None):
         self.store, self.notifier = store, notifier
         self.dispatch_recorder = dispatch_recorder
+        self.index_fetcher = index_fetcher
+        self.clock = clock or (lambda: datetime.now(KST))
 
     async def tick(self, now, trading_day, market, engine_context):
         now = now.astimezone(KST)
@@ -29,6 +50,27 @@ class ReportSchedule:
         day = now.date().isoformat()
         if await asyncio.to_thread(self.store.receipt, audience, kind, day):
             return "already_consumed"
+        if kind == "after" and trading_day:
+            with self.store.input_guard(day) as acquired:
+                if not acquired:
+                    return "input_collecting"
+                if await asyncio.to_thread(self.store.receipt, audience, kind, day):
+                    return "already_consumed"
+                owner = uuid.uuid4().hex
+                if self.index_fetcher is not None and await _durable_thread(self.store.claim_inputs, day, owner):
+                    try:
+                        rows = await self.index_fetcher(now.date())
+                    except Exception as error:
+                        logger.warning("[대상별 보고] 지수 참고 관측 미확보: {}", type(error).__name__)
+                        rows = ()
+                    await _durable_thread(self.store.complete_inputs, day, owner, rows)
+                    now = self.clock().astimezone(KST)
+                rows = await asyncio.to_thread(self.store.load_inputs, day)
+                market = replace(market, index_observations=rows)
+                return await self._publish(now, trading_day, market, engine_context, kind, audience, day)
+        return await self._publish(now, trading_day, market, engine_context, kind, audience, day)
+
+    async def _publish(self, now, trading_day, market, engine_context, kind, audience, day):
         snapshot_id = hashlib.sha256(json.dumps(asdict(market), sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
         status = None
         if audience == "market":
@@ -105,7 +147,9 @@ async def run_audience_reports(bot):
     from ..analytics.report_context import render_runtime_context
     from ..analytics.daily_report import record_morning_brief_dispatch
     from ..utils import loop_heartbeat as heartbeat
-    schedule = ReportSchedule(ReportStore(), get_telegram_notifier(), record_morning_brief_dispatch)
+    fetcher = getattr(getattr(bot, "kis_market_data", None), "fetch_report_index_observations", None)
+    schedule = ReportSchedule(ReportStore(), get_telegram_notifier(), record_morning_brief_dispatch,
+                              index_fetcher=fetcher)
     while bot.running:
         try:
             now = datetime.now(KST)
@@ -115,7 +159,7 @@ async def run_audience_reports(bot):
                 # Cache owners run on this event loop. Copy without yielding;
                 # only the calendar calculation runs in a worker thread.
                 snapshot = market_snapshot(bot, now, is_kr_market_holiday, us_basis_date=us_basis)
-                result = await schedule.tick(now, not is_kr_market_holiday(now.date()), snapshot, render_runtime_context(bot))
+                result = await schedule.tick(now, not is_kr_market_holiday(now.date()), snapshot, render_runtime_context(bot, now=now))
                 if result in {"unknown", "rejected", "failed_configuration", "failed_validation"}:
                     heartbeat.record_failure("kr_audience_reports", result)
                 else:

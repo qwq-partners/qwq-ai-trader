@@ -176,7 +176,7 @@ async def test_report_loop_live_iteration_uses_real_heartbeat_api(monkeypatch, h
         def now(cls,tz=None):return datetime(2026,10,27,hour,minute,tzinfo=KST)
     monkeypatch.setattr(module,'datetime',Clock)
     monkeypatch.setattr(module,'market_snapshot',lambda *a,**k:MarketSnapshot())
-    monkeypatch.setattr('src.analytics.report_context.render_runtime_context',lambda _: 'context')
+    monkeypatch.setattr('src.risk.kill_switch.status', lambda _: {})
     tick=AsyncMock(return_value='skipped_missing_current_market_basis')
     monkeypatch.setattr(module.ReportSchedule,'tick',tick)
     monkeypatch.setattr(hb,'_states',{})
@@ -186,3 +186,6 @@ async def test_report_loop_live_iteration_uses_real_heartbeat_api(monkeypatch, h
     await module.run_audience_reports(bot)
     assert 'kr_audience_reports' in hb._states
     assert tick.await_count == (1 if hour==13 else 0)
+    if hour == 13:
+        assert '검증 시각 미확인' in tick.call_args.args[3]
+        assert '현금 상태 미확인' in tick.call_args.args[3]
