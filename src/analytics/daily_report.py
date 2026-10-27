@@ -1809,8 +1809,10 @@ class DailyReportGenerator:
         brief_now = _now()
         idx_lines = []
         idx_valid_n = 0
+        idx_observations = []
         for sym in index_list:
             observed = _us_quote_observation(quotes.get(sym), now=brief_now)
+            idx_observations.append(observed)
             name = index_names_map.get(sym, sym)
             if observed is None:
                 idx_lines.append(f"  - {name}: 가격·등락 미수집")
@@ -1825,8 +1827,10 @@ class DailyReportGenerator:
         bigtech = ["NVDA", "AAPL", "MSFT", "GOOG", "META", "AMZN", "TSLA"]
         bt_lines = []
         bt_valid_n = 0
+        bt_observations = []
         for sym in bigtech:
             observed = _us_quote_observation(quotes.get(sym), now=brief_now)
+            bt_observations.append(observed)
             if observed is None:
                 bt_lines.append(f"  - {sym} 자료 미확인")
                 continue
@@ -1842,24 +1846,39 @@ class DailyReportGenerator:
             ("LIT", "2차전지 ETF"), ("ITA", "방산 ETF"),
         ]
         etf_lines = []
+        etf_observations = []
         for sym, name in brief_etfs:
             observed = _us_quote_observation(quotes.get(sym), now=brief_now)
+            etf_observations.append(observed)
             if observed is None:
                 continue
             etf_lines.append(
                 f"  - {name}({sym}) {observed['pct']:+.2f}% · {observed['date_label']}"
             )
 
+        def _us_group_input(name: str, observations: List[Optional[Dict]], detail: str) -> Dict:
+            """그룹 내 모든 가격이 같은 알려진 시장일일 때만 날짜 근거를 인정한다."""
+            dates = {
+                observed["date"] for observed in observations
+                if observed is not None and observed.get("date")
+            }
+            as_of = (
+                next(iter(dates))
+                if len(dates) == 1 and all(
+                    observed is not None and observed.get("date") for observed in observations
+                )
+                else None
+            )
+            return {
+                "name": name, "kind": "us", "as_of": as_of,
+                "source": "us_market_data", "valid": as_of is not None,
+                "detail": detail,
+            }
+
         inputs: List[Dict] = [
-            {"name": "미국 지수", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(idx_valid_n),
-             "detail": f"{idx_valid_n}/{len(index_list)}종"},
-            {"name": "빅테크", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(bt_valid_n),
-             "detail": f"{bt_valid_n}/{len(bigtech)}종"},
-            {"name": "주요 ETF", "kind": "us", "as_of": us_date_str,
-             "source": "us_market_data", "valid": bool(etf_lines),
-             "detail": f"{len(etf_lines)}/{len(brief_etfs)}종"},
+            _us_group_input("미국 지수", idx_observations, f"{idx_valid_n}/{len(index_list)}종"),
+            _us_group_input("빅테크", bt_observations, f"{bt_valid_n}/{len(bigtech)}종"),
+            _us_group_input("주요 ETF", etf_observations, f"{len(etf_lines)}/{len(brief_etfs)}종"),
         ]
 
         # 국내 자료는 as_of 가 있을 때만 유효로 인정한다 (기준시각 없는 값은 신선도 미상)
