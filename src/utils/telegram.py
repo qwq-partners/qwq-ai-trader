@@ -41,6 +41,42 @@ class TelegramNotifier:
         """텔레그램 설정 완료 여부"""
         return bool(self.bot_token and self.chat_id)
 
+    async def record_report(self, kind: str, text: str) -> bool:
+        """Save routine engine material for the daily digest; never send it."""
+        from ..analytics.report_delivery import ReportStore
+        try:
+            return ReportStore().record(kind, text)
+        except Exception:
+            logger.exception("정기 보고 저장 실패 kind={}", kind)
+            return False
+
+    async def publish_report(
+        self, audience: str, kind: str, report_date: str,
+        source_snapshot_id: str, text: str, *, store=None,
+    ) -> str:
+        """Publish a bounded routine report once; urgent send_alert is separate."""
+        from ..analytics.report_delivery import ReportStore, validate_slot
+        validate_slot(audience, kind, report_date)
+        if not text.strip() or len(text) > 1800 or len(text.splitlines()) > 35:
+            raise ValueError("routine report must fit one mobile message")
+        store = store if store is not None else ReportStore()
+        if not store.claim(audience, kind, report_date, source_snapshot_id):
+            return "already_consumed"
+        target = self.report_chat_id if audience == "market" else self.alert_chat_id
+        if not self.bot_token or not target:
+            status = "failed_configuration"
+        else:
+            try:
+                ok = await self._send_to_chat(target, text, "HTML", False)
+                # Legacy transport returns False both for rejection and ambiguous
+                # network failure. Do not overclaim certainty or retry the slot.
+                status = "accepted" if ok else "unknown"
+            except Exception:
+                status = "unknown"
+        store.finish(audience, kind, report_date, status)
+        logger.info("정기 보고 audience={} kind={} date={} status={}", audience, kind, report_date, status)
+        return status
+
     async def send_message(
         self,
         text: str,
@@ -270,11 +306,11 @@ class TelegramNotifier:
         Returns:
             전송 성공 여부
         """
-        if not self.is_configured:
+        if not self.bot_token:
             logger.warning("텔레그램 설정이 완료되지 않았습니다")
             return False
 
-        target_chat_id = chat_id or self.alert_chat_id or self.chat_id
+        target_chat_id = chat_id if chat_id is not None else self.alert_chat_id
         if not target_chat_id:
             logger.warning("텔레그램 chat_id가 설정되지 않았습니다")
             return False
@@ -374,11 +410,11 @@ class TelegramNotifier:
         Returns:
             전송 성공 여부
         """
-        if not self.is_configured:
+        if not self.bot_token:
             logger.warning("텔레그램 설정이 완료되지 않았습니다")
             return False
 
-        target_chat_id = chat_id or self.alert_chat_id or self.chat_id
+        target_chat_id = chat_id if chat_id is not None else self.alert_chat_id
         if not target_chat_id:
             logger.warning("텔레그램 chat_id가 설정되지 않았습니다")
             return False
@@ -593,3 +629,8 @@ async def send_document(document, caption: str = "", **kwargs) -> bool:
         await send_document("/path/to/data.csv", chat_id=report_chat_id, caption="데이터")
     """
     return await get_telegram_notifier().send_document(document, caption=caption, **kwargs)
+
+
+async def record_report(kind: str, text: str) -> bool:
+    """Store routine material; successful storage does not mean a notification."""
+    return await get_telegram_notifier().record_report(kind, text)
