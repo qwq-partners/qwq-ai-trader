@@ -284,7 +284,8 @@ def summarize(path, last_n: Optional[int] = None) -> Dict:
     """누적 적중률 — 표본 수를 함께 반환한다 (하루 결과로 규칙을 바꾸지 않는다)."""
     records = _read_ledger(path, last_n=last_n)
     prediction_records = [rec for rec in records if rec.get("prediction_eligible", True)]
-    summary: Dict = {"ledger_rows": len(records), "samples": len(prediction_records)}
+    legacy_rows = sum("prediction_eligible" not in rec for rec in records)
+    summary: Dict = {"ledger_rows": len(records), "samples": len(prediction_records), "legacy_rows": legacy_rows}
 
     for axis in _AXES:
         hits = 0
@@ -319,7 +320,7 @@ def summarize(path, last_n: Optional[int] = None) -> Dict:
     }
 
     summary["note"] = (
-        f"예측 표본 {len(prediction_records)}건 · 평가원장 {len(records)}건 — 하루 결과로 임계값·규칙을 바꾸지 않는다 "
+        f"표본 {len(prediction_records)}건 (구형 기록 {legacy_rows}건 포함) · 평가원장 {len(records)}건 — 하루 결과로 임계값·규칙을 바꾸지 않는다 "
         f"(누적 표본으로만 판단)"
     )
     return summary
@@ -330,11 +331,13 @@ def summary_line(path, last_n: Optional[int] = None) -> str:
     s = summarize(path, last_n=last_n)
     if s["samples"] == 0:
         return f"🔎 장전 전망 평가: 예측 표본 0건 · 평가원장 {s['ledger_rows']}건 (누적 중)"
+    sample_label = (f"표본 {s['samples']}건 · 구형 {s['legacy_rows']}건 포함"
+                    if s['legacy_rows'] else f"예측 표본 {s['samples']}건")
     return (
         "🔎 <b>장전 전망 적중</b>: "
         f"개장 {s['open_direction']['hits']}/{s['open_direction']['n']} · "
         f"종가 {s['close_direction']['hits']}/{s['close_direction']['n']} · "
         f"언급업종 초과 {s['sectors']['hits']}/{s['sectors']['n']} · "
         f"전문가 {s['expert_direction']['hits']}/{s['expert_direction']['n']} "
-        f"(예측 표본 {s['samples']}건 · 평가원장 {s['ledger_rows']}건, 하루 결과로 규칙 변경 금지)"
+        f"({sample_label} · 평가원장 {s['ledger_rows']}건, 하루 결과로 규칙 변경 금지)"
     )

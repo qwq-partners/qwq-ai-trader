@@ -141,3 +141,48 @@ with sqlite3.connect(target) as db:
 '''
     result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(artifact), str(tmp_path/'reports.sqlite3')], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_unknown_and_failed_delivery_precede_expected_data_skips(tmp_path):
+    store = ReportStore(tmp_path/'r.sqlite3')
+    for day, audience, kind, status in [('2026-10-27','market','after','unknown'), ('2026-10-27','market','midday','skipped_missing_current_market_basis'), ('2026-10-27','market','morning','skipped_missing_market_basis'), ('2026-10-26','market','after','rejected'), ('2026-10-26','engine','daily','attempted')]:
+        store.claim(audience,kind,day,kind)
+        if status != 'attempted':store.finish(audience,kind,day,status)
+    issues=store.delivery_issues('2026-10-27')
+    assert [r['status'] for r in issues[:3]] == ['unknown','rejected','attempted']
+    text=render_engine_digest([], '', datetime(2026,10,27,21,tzinfo=KST), deliveries=issues)
+    assert '개인 요약: 처리 중단·결과 미확인' in text
+
+
+def test_legacy_skipped_evaluation_rows_are_labelled_without_rewriting_history(tmp_path):
+    import json
+    from src.analytics.morning_brief_eval import summarize, summary_line
+    path=tmp_path/'eval.jsonl'
+    path.write_text(json.dumps({'evaluated':False,'open_direction':{'hit':None}})+'\n')
+    result=summarize(path)
+    assert result['samples']==1 and result['legacy_rows']==1 and result['open_direction']['n']==0
+    assert '구형 1건 포함' in summary_line(path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('hour,minute', [(12,0),(13,12)])
+async def test_report_loop_live_iteration_uses_real_heartbeat_api(monkeypatch, hour, minute):
+    from types import SimpleNamespace
+    from src.schedulers import report_scheduler as module
+    from src.utils import loop_heartbeat as hb
+    bot=SimpleNamespace(running=True)
+    class Clock(datetime):
+        @classmethod
+        def now(cls,tz=None):return datetime(2026,10,27,hour,minute,tzinfo=KST)
+    monkeypatch.setattr(module,'datetime',Clock)
+    monkeypatch.setattr(module,'market_snapshot',lambda *a,**k:MarketSnapshot())
+    monkeypatch.setattr('src.analytics.report_context.render_runtime_context',lambda _: 'context')
+    tick=AsyncMock(return_value='skipped_missing_current_market_basis')
+    monkeypatch.setattr(module.ReportSchedule,'tick',tick)
+    monkeypatch.setattr(hb,'_states',{})
+    monkeypatch.setattr(hb,'_beats',{})
+    async def stop(_):bot.running=False
+    monkeypatch.setattr(module.asyncio,'sleep',stop)
+    await module.run_audience_reports(bot)
+    assert 'kr_audience_reports' in hb._states
+    assert tick.await_count == (1 if hour==13 else 0)

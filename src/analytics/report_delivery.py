@@ -73,7 +73,7 @@ class ReportStore:
         """Recent non-success receipts, without exposing stored private bodies."""
         previous = (date.fromisoformat(report_date)-timedelta(days=1)).isoformat()
         with self._db() as db:
-            return [dict(r) for r in db.execute("SELECT audience,kind,report_date,status FROM slots WHERE report_date BETWEEN ? AND ? AND status NOT IN ('accepted','skipped_holiday') ORDER BY report_date DESC,kind", (previous, report_date))]
+            return [dict(r) for r in db.execute("SELECT audience,kind,report_date,status FROM slots WHERE report_date BETWEEN ? AND ? AND status NOT IN ('accepted','skipped_holiday') ORDER BY CASE WHEN status LIKE 'skipped_%' THEN 1 ELSE 0 END,report_date DESC,kind", (previous, report_date))]
 
     def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None) -> bool:
         validate_slot(audience, kind, report_date)
