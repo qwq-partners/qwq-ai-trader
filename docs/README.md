@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10/27 KIS 인증 전환·21시 후속:** [O03 운영 적용](operations/execution-roadmap.md#kis-rotation-20261027) · [R02 개인 요약/지수 실응답](operations/execution-roadmap.md#r02-evening-20261027). 새 자격 검증·같은SHA 재기동·계좌 조회 복구 완료. 개인 요약은 API 수락/원문 대조까지, WS 수신·모바일 확인은 별도다. 지수 비정상 시각/요약-분봉 가격 차이를 다음 보고 설계에 반영하며 문서만 재배포하지 않는다.
+
 > **현재 할 일:** [실행 대기열·우선순위·착수 조건·완료 기준](operations/execution-roadmap.md#next-tasks-20261027). 완료/READY/시각·자료 WAIT를 구분하고, 기한별 실제 점검은 [체크포인트](operations/monitoring-checkpoints.md)에서 인수한다. task의 정본은 하나로 유지한다.
 
 > **R02 운영 적용 완료:** [16:25 배포·보고 예약 전환·사후 검증·자연 보고 인수](operations/execution-roadmap.md#r02-live-20261027). 운영`6d132809`이며 아래 예약/미적용은 당시 상태다. 문서 후속은 재배포하지 않는다.
