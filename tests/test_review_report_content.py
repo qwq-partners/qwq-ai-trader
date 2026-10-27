@@ -65,7 +65,7 @@ def _daily_report(total_trades: int = 2):
     }
 
 
-def test_daily_review_sends_authoritative_numbers_and_keeps_machine_feedback(monkeypatch, tmp_path):
+def test_daily_review_stores_authoritative_numbers_and_keeps_machine_feedback(monkeypatch, tmp_path):
     model = _ReviewLLM(
         '{"assessment":"good","confidence":1,"daily_return_pct":999,'
         '"insights":["삼성전자 30% 추가매수"],"avoid_patterns":[],'
@@ -86,11 +86,12 @@ def test_daily_review_sends_authoritative_numbers_and_keeps_machine_feedback(mon
 
     sent = []
 
-    async def _send(message):
+    async def _send(kind, message):
+        assert kind == "daily_review"
         sent.append(message)
 
     monkeypatch.setattr(reviewer, "_save_daily_bias", _bias)
-    monkeypatch.setattr("src.core.evolution.daily_reviewer.send_alert", _send)
+    monkeypatch.setattr("src.core.evolution.daily_reviewer.record_report", _send)
 
     result = asyncio.run(reviewer.generate_llm_review(SimpleNamespace(), "2026-10-22"))
 
@@ -117,10 +118,11 @@ def test_zero_trade_review_is_truthful_and_skips_paid_call(monkeypatch, tmp_path
     monkeypatch.setattr(reviewer, "_save_llm_review", lambda *_args: None)
     sent = []
 
-    async def _send(message):
+    async def _send(kind, message):
+        assert kind == "daily_review"
         sent.append(message)
 
-    monkeypatch.setattr("src.core.evolution.daily_reviewer.send_alert", _send)
+    monkeypatch.setattr("src.core.evolution.daily_reviewer.record_report", _send)
     result = asyncio.run(reviewer.generate_llm_review(SimpleNamespace(), "2026-10-22"))
 
     assert model.calls == 0

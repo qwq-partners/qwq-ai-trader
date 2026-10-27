@@ -769,8 +769,8 @@ class BatchAnalyzer:
                 )
 
             try:
-                from ..utils.telegram import send_alert
-                await send_alert("\n".join(lines))
+                from ..utils.telegram import send_alert, record_report
+                await record_report("batch_morning", "\n".join(lines))
             except Exception:
                 pass
 
@@ -903,8 +903,8 @@ class BatchAnalyzer:
             lines.append("-> 내일 09:01 시그널 실행 예정")
 
             try:
-                from ..utils.telegram import send_alert
-                await send_alert("\n".join(lines))
+                from ..utils.telegram import send_alert, record_report
+                await record_report("batch_evening", "\n".join(lines))
             except Exception:
                 pass
 
@@ -2023,7 +2023,7 @@ class BatchAnalyzer:
 
                     # 텔레그램 알림
                     try:
-                        from ..utils.telegram import send_alert
+                        from ..utils.telegram import send_alert, record_report
                         await send_alert(
                             f"🚨 코어홀딩 조기경보\n"
                             f"{getattr(pos, 'name', symbol)}({symbol})\n"
@@ -2196,7 +2196,7 @@ class BatchAnalyzer:
                     )
                     # 텔레그램 알림
                     try:
-                        from ..utils.telegram import send_alert
+                        from ..utils.telegram import send_alert, record_report
                         await send_alert(
                             f"🔴 <b>코어홀딩 stale 자동 청산</b>\n"
                             f"{getattr(pos, 'name', symbol)}({symbol})\n"
@@ -2231,7 +2231,7 @@ class BatchAnalyzer:
                         logger.error(f"[코어stale자동매도] {symbol} 시그널 발행 실패: {_emit_e}")
                         # 발행 실패 시 텔레그램으로 운영자 통지 (위에서 이미 통지했지만 재시도)
                         try:
-                            from ..utils.telegram import send_alert
+                            from ..utils.telegram import send_alert, record_report
                             await send_alert(
                                 f"⚠️ <b>코어 stale 자동매도 시그널 발행 실패</b>\n"
                                 f"{getattr(pos, 'name', symbol)}({symbol})\n"
@@ -2653,10 +2653,10 @@ class BatchAnalyzer:
     async def _send_telegram_report(self):
         """스캔 결과 텔레그램 알림"""
         try:
-            from ..utils.telegram import send_alert
+            from ..utils.telegram import send_alert, record_report
 
             from ..analytics.report_context import render_pending_watchlist
-            await send_alert(render_pending_watchlist(self._pending))
+            await record_report("batch_watchlist", render_pending_watchlist(self._pending))
 
         except Exception as e:
             logger.warning(f"[배치분석] 텔레그램 알림 실패: {e}")

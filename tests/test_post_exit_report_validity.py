@@ -219,7 +219,8 @@ def test_scheduler_sends_no_quotes_report_with_existing_week_consumption(monkeyp
     monkeypatch.setattr(telegram, "get_telegram_notifier", lambda: None)
     sent = []
 
-    async def _send(message):
+    async def _send(kind, message):
+        assert kind == "post_exit_weekly"
         sent.append(message)
         raise asyncio.CancelledError
 
@@ -230,7 +231,7 @@ def test_scheduler_sends_no_quotes_report_with_existing_week_consumption(monkeyp
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(kr_scheduler, "datetime", _SaturdayClock)
     monkeypatch.setattr(post_exit_review, "PostExitReviewer", _NoQuotesReviewer)
-    monkeypatch.setattr(kr_scheduler, "send_alert", _send)
+    monkeypatch.setattr(kr_scheduler, "record_report", _send)
     monkeypatch.setattr(
         kr_scheduler,
         "logger",

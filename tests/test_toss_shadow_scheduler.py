@@ -52,8 +52,15 @@ def test_optional_import_failure_preserves_all_existing_kr_task_handles(monkeypa
     monkeypatch.setattr(builtins, '__import__', fail_optional)
     monkeypatch.setenv('TOSS_API', '0')
     baseline = scheduler.create_tasks()
-    # 2026-09-28 안전자산(kr_safe_asset) 루프 삭제로 12 → 11
-    assert len(baseline) == 11 and "kr_safe_asset" not in baseline and imports == []
+    # 기존 11개에 대상별 정기 보고만 추가된다. 선택적 Toss 실패가
+    # 거래/보고 task를 없애거나 중복 생성하지 않는지 이름으로 확인한다.
+    expected = {
+        'kr_market_trend', 'kr_pending_cleanup', 'kr_supply_demand_cache',
+        'kr_report_scheduler', 'kr_evolution_scheduler', 'kr_audience_reports',
+        'kr_post_exit_review', 'kr_log_cleanup', 'kr_harvest_shadow',
+        'kr_vol_targeting', 'kr_dart_alert', 'kr_heartbeat_monitor',
+    }
+    assert set(baseline) == expected and len(baseline) == len(expected) and imports == []
     monkeypatch.setenv('TOSS_API', '1')
     assert scheduler.create_tasks() == baseline
     assert created == baseline + baseline and imports == ['toss_shadow']

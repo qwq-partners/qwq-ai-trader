@@ -130,6 +130,7 @@ def evaluate(
             "dispatched": dispatched,
             "brief_ref": brief_ref,
             "evaluated_at": datetime.now().isoformat(),
+            "prediction_eligible": False,
             "evaluated": False,
             "reason": reason,
             "open_direction": dict(skipped),
@@ -142,7 +143,19 @@ def evaluate(
     kospi = actual.get("kospi") or {}
     open_pct = kospi.get("open_change_pct")
     close_pct = kospi.get("close_change_pct")
-    evaluated = open_pct is not None or close_pct is not None
+    expert = brief.get("expert_consensus")
+    expert_claim = _expert_claim(expert)
+    prediction_eligible = bool(
+        claims.get("open_direction")
+        or claims.get("close_direction")
+        or claims.get("sectors")
+        or expert_claim
+    )
+    # 구형 생성본 원장은 dispatch 상태를 보존하지 않아 기존 표본 의미를 유지한다.
+    # 새 실제 발송본은 claims가 비어 있으면 감사 기록일 뿐 전망 표본이 아니다.
+    if not prediction_eligible and not dispatched:
+        prediction_eligible = True
+    evaluated = prediction_eligible and (open_pct is not None or close_pct is not None)
 
     open_axis = _axis(
         claims.get("open_direction"), open_pct,
@@ -154,9 +167,8 @@ def evaluate(
         claim_reason="브리프에 종가 방향 주장 없음",
         actual_reason="KOSPI 종가 미수집",
     )
-    expert = brief.get("expert_consensus")
     expert_axis = _axis(
-        _expert_claim(expert), close_pct,
+        expert_claim, close_pct,
         claim_reason=(_expert_abstain_reason(expert) if expert else dispatch_reason)
                      or "전문가 종합판단 미기록",
         actual_reason="KOSPI 종가 미수집",
@@ -213,8 +225,15 @@ def evaluate(
         "dispatched": dispatched,
         "brief_ref": brief_ref,
         "evaluated_at": datetime.now().isoformat(),
+        "prediction_eligible": prediction_eligible,
         "evaluated": evaluated,
-        "reason": "" if evaluated else (actual.get("note") or "당일 KOSPI 시가·종가 실측 없음"),
+        "reason": (
+            "" if evaluated else (
+                actual.get("note")
+                or ("브리프에 평가 가능한 전망 주장 없음" if not prediction_eligible
+                    else "당일 KOSPI 시가·종가 실측 없음")
+            )
+        ),
         "open_direction": open_axis,
         "close_direction": close_axis,
         "expert_direction": expert_axis,
@@ -264,12 +283,14 @@ def _read_ledger(path, last_n: Optional[int] = None) -> List[Dict]:
 def summarize(path, last_n: Optional[int] = None) -> Dict:
     """누적 적중률 — 표본 수를 함께 반환한다 (하루 결과로 규칙을 바꾸지 않는다)."""
     records = _read_ledger(path, last_n=last_n)
-    summary: Dict = {"samples": len(records)}
+    prediction_records = [rec for rec in records if rec.get("prediction_eligible", True)]
+    legacy_rows = sum("prediction_eligible" not in rec for rec in records)
+    summary: Dict = {"ledger_rows": len(records), "samples": len(prediction_records), "legacy_rows": legacy_rows}
 
     for axis in _AXES:
         hits = 0
         n = 0
-        for rec in records:
+        for rec in prediction_records:
             hit = (rec.get(axis) or {}).get("hit")
             if hit is None:
                 continue
@@ -283,7 +304,7 @@ def summarize(path, last_n: Optional[int] = None) -> Dict:
     sector_hits = 0
     sector_n = 0
     sector_excluded: Dict[str, int] = {}
-    for rec in records:
+    for rec in prediction_records:
         for sector in rec.get("sectors") or []:
             if sector.get("outperformed") is None:
                 reason = sector.get("reason") or "미상"
@@ -299,7 +320,7 @@ def summarize(path, last_n: Optional[int] = None) -> Dict:
     }
 
     summary["note"] = (
-        f"표본 {len(records)}건 — 하루 결과로 임계값·규칙을 바꾸지 않는다 "
+        f"표본 {len(prediction_records)}건 (구형 기록 {legacy_rows}건 포함) · 평가원장 {len(records)}건 — 하루 결과로 임계값·규칙을 바꾸지 않는다 "
         f"(누적 표본으로만 판단)"
     )
     return summary
@@ -309,12 +330,14 @@ def summary_line(path, last_n: Optional[int] = None) -> str:
     """저녁 리포트 한 줄 요약"""
     s = summarize(path, last_n=last_n)
     if s["samples"] == 0:
-        return "🔎 장전 전망 평가: 표본 0건 (누적 중)"
+        return f"🔎 장전 전망 평가: 예측 표본 0건 · 평가원장 {s['ledger_rows']}건 (누적 중)"
+    sample_label = (f"표본 {s['samples']}건 · 구형 {s['legacy_rows']}건 포함"
+                    if s['legacy_rows'] else f"예측 표본 {s['samples']}건")
     return (
         "🔎 <b>장전 전망 적중</b>: "
         f"개장 {s['open_direction']['hits']}/{s['open_direction']['n']} · "
         f"종가 {s['close_direction']['hits']}/{s['close_direction']['n']} · "
         f"언급업종 초과 {s['sectors']['hits']}/{s['sectors']['n']} · "
         f"전문가 {s['expert_direction']['hits']}/{s['expert_direction']['n']} "
-        f"(표본 {s['samples']}건, 하루 결과로 규칙 변경 금지)"
+        f"({sample_label} · 평가원장 {s['ledger_rows']}건, 하루 결과로 규칙 변경 금지)"
     )

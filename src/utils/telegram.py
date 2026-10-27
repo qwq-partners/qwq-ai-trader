@@ -10,6 +10,8 @@ from typing import Optional, List
 import aiohttp
 from loguru import logger
 
+_DEFAULT_CHAT = object()
+
 
 class TelegramNotifier:
     """텔레그램 알림 발송기"""
@@ -40,6 +42,56 @@ class TelegramNotifier:
     def is_configured(self) -> bool:
         """텔레그램 설정 완료 여부"""
         return bool(self.bot_token and self.chat_id)
+
+    async def record_report(self, kind: str, text: str) -> bool:
+        """Save routine engine material for the daily digest; never send it."""
+        from ..analytics.report_delivery import ReportStore
+        try:
+            return await asyncio.to_thread(ReportStore().record, kind, text)
+        except Exception:
+            logger.exception("정기 보고 저장 실패 kind={}", kind)
+            return False
+
+    async def publish_report(
+        self, audience: str, kind: str, report_date: str,
+        source_snapshot_id: str, text: str, *, store=None,
+    ) -> str:
+        """Publish a bounded routine report once; urgent send_alert is separate."""
+        from ..analytics.report_delivery import ReportStore, validate_slot
+        validate_slot(audience, kind, report_date)
+        store = store if store is not None else ReportStore()
+        if not await asyncio.to_thread(store.claim, audience, kind, report_date, source_snapshot_id, text[:30000]):
+            return "already_consumed"
+        target = self.report_chat_id if audience == "market" else self.alert_chat_id
+        if not text.strip() or len(text) > 1800 or len(text.splitlines()) > 35:
+            status = "failed_validation"
+        elif not self.bot_token or not target:
+            status = "failed_configuration"
+        else:
+            try:
+                status = await self._send_report_once(target, text)
+            except Exception:
+                status = "unknown"
+        await asyncio.to_thread(store.finish, audience, kind, report_date, status)
+        logger.info("정기 보고 audience={} kind={} date={} status={}", audience, kind, report_date, status)
+        return status
+
+    async def _send_report_once(self, target: str, text: str) -> str:
+        """One HTTP attempt. Acceptance is not proof a reader received it."""
+        if not self._session or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        async with self._session.post(
+            f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+            json={"chat_id": target, "text": text, "parse_mode": "HTML", "disable_notification": False},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as response:
+            data = await response.json()
+            if isinstance(data, dict):
+                if response.status == 200 and data.get("ok") is True:
+                    return "accepted"
+                if data.get("ok") is False:
+                    return "rejected"
+            return "unknown"
 
     async def send_message(
         self,
@@ -251,7 +303,7 @@ class TelegramNotifier:
         photo,
         caption: str = "",
         parse_mode: str = "HTML",
-        chat_id: str = None,
+        chat_id: str = _DEFAULT_CHAT,
         disable_notification: bool = False,
     ) -> bool:
         """
@@ -264,17 +316,17 @@ class TelegramNotifier:
                    - bytes / BytesIO: 메모리 내 이미지 데이터
             caption: 이미지 설명 (최대 1024자)
             parse_mode: 캡션 파싱 모드 ("HTML" 또는 "Markdown")
-            chat_id: 전송 대상 (None이면 alert_chat_id 사용)
+            chat_id: 생략하면 개인 알림 대상. 명시한 None/빈 값은 발송하지 않음.
             disable_notification: 알림 음소거 여부
 
         Returns:
             전송 성공 여부
         """
-        if not self.is_configured:
+        if not self.bot_token:
             logger.warning("텔레그램 설정이 완료되지 않았습니다")
             return False
 
-        target_chat_id = chat_id or self.alert_chat_id or self.chat_id
+        target_chat_id = self.alert_chat_id if chat_id is _DEFAULT_CHAT else chat_id
         if not target_chat_id:
             logger.warning("텔레그램 chat_id가 설정되지 않았습니다")
             return False
@@ -353,7 +405,7 @@ class TelegramNotifier:
         document,
         caption: str = "",
         parse_mode: str = "HTML",
-        chat_id: str = None,
+        chat_id: str = _DEFAULT_CHAT,
         filename: str = None,
         disable_notification: bool = False,
     ) -> bool:
@@ -367,18 +419,18 @@ class TelegramNotifier:
                       - str: Telegram file_id 또는 URL ("https://...")
             caption: 파일 설명 (최대 1024자)
             parse_mode: 캡션 파싱 모드 ("HTML" 또는 "Markdown")
-            chat_id: 전송 대상 (None이면 alert_chat_id 사용)
+            chat_id: 생략하면 개인 알림 대상. 명시한 None/빈 값은 발송하지 않음.
             filename: 업로드 파일명 (None이면 경로에서 자동 추출)
             disable_notification: 알림 음소거 여부
 
         Returns:
             전송 성공 여부
         """
-        if not self.is_configured:
+        if not self.bot_token:
             logger.warning("텔레그램 설정이 완료되지 않았습니다")
             return False
 
-        target_chat_id = chat_id or self.alert_chat_id or self.chat_id
+        target_chat_id = self.alert_chat_id if chat_id is _DEFAULT_CHAT else chat_id
         if not target_chat_id:
             logger.warning("텔레그램 chat_id가 설정되지 않았습니다")
             return False
@@ -593,3 +645,8 @@ async def send_document(document, caption: str = "", **kwargs) -> bool:
         await send_document("/path/to/data.csv", chat_id=report_chat_id, caption="데이터")
     """
     return await get_telegram_notifier().send_document(document, caption=caption, **kwargs)
+
+
+async def record_report(kind: str, text: str) -> bool:
+    """Store routine material; successful storage does not mean a notification."""
+    return await get_telegram_notifier().record_report(kind, text)

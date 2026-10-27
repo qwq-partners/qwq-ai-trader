@@ -2937,10 +2937,9 @@ class USScheduler:
                         if now_et.hour == 16 and now_et.minute >= 10:
                             _daily_report_sent = today
                             try:
-                                from src.analytics.daily_report import get_report_generator
-                                reporter = get_report_generator()
-                                await reporter.generate_evening_report(send_telegram=True)
-                                logger.info("[US EOD] 일일 리포트 발송 완료")
+                                from src.utils.telegram import record_report
+                                await record_report("us_eod", f"미국시장 마감 루프 {today}: 청산·체결 동기화 상태는 실행 원장에서 확인")
+                                logger.info("[US EOD] 엔진 요약 입력 저장 완료")
                             except Exception as e:
                                 logger.error(f"[US EOD] 일일 리포트 실패: {e}")
 

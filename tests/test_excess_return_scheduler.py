@@ -51,7 +51,13 @@ def _isolate(monkeypatch, tmp_path):
     async def _fake_send_error_alert(self, *a, **kw):
         return None
 
+    async def _fake_record_report(kind, text):
+        assert kind == "excess_return_weekly"
+        sent.append(text)  # Captured digest input, not a Telegram delivery.
+        return True
+
     monkeypatch.setattr(kr_scheduler, "send_alert", _fake_send_alert)
+    monkeypatch.setattr(kr_scheduler, "record_report", _fake_record_report)
     monkeypatch.setattr(KRScheduler, "_send_error_alert", _fake_send_error_alert)
     import src.utils.telegram as telegram_mod
     monkeypatch.setattr(telegram_mod, "get_telegram_notifier", lambda: None)
@@ -207,7 +213,7 @@ def test_step_swallows_exporter_load_failure(monkeypatch, tmp_path):
 
 # ── 토요일 한 줄 ──────────────────────────────────────────────────────────────
 
-def test_weekly_line_sent_html_escaped(monkeypatch, tmp_path, _isolate):
+def test_weekly_line_stored_html_escaped(monkeypatch, tmp_path, _isolate):
     out = _out_dir(tmp_path)
     out.mkdir(parents=True)
     (out / "summary.json").write_text(json.dumps({"computed_date": "2026-09-10"}), encoding="utf-8")

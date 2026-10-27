@@ -26,6 +26,14 @@ import os
 import socket
 from pathlib import Path
 from typing import List
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_routine_report_store(monkeypatch, tmp_path):
+    """New routine producers use a per-test database, never the live digest."""
+    from src.analytics import report_delivery
+    monkeypatch.setattr(report_delivery, "default_store_path", lambda: tmp_path / "routine-reports" / "reports.sqlite3")
 
 # ── 차단 대상 (import 시점에 실제 HOME 으로 계산 — 이후 monkeypatch 무관) ──────────
 _HOME = Path.home()

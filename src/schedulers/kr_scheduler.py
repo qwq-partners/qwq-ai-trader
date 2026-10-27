@@ -39,7 +39,7 @@ from ..core.types import Signal, Order, OrderSide, OrderType, SignalStrength, St
 from ..utils.logger import trading_logger, cleanup_old_logs, cleanup_old_cache
 from ..utils.sizing import atr_position_multiplier
 from ..risk.cash_verification import initial_holdings_match_balance
-from ..utils.telegram import send_alert
+from ..utils.telegram import send_alert, record_report
 from ..utils import loop_heartbeat as _hb   # 루프 하트비트 (2026-09-13)
 from ..utils.kis_request_metrics import request_source, with_request_source
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
@@ -301,6 +301,13 @@ class KRScheduler:
                 self._supervised(self.run_weekly_rebalance_scheduler, "kr_weekly_rebalance"), name="kr_weekly_rebalance"
             ))
 
+        from .report_scheduler import run_audience_reports
+        async def _audience_reports():
+            await run_audience_reports(bot)
+        tasks.append(asyncio.create_task(
+            self._supervised(_audience_reports, "kr_audience_reports"), name="kr_audience_reports"
+        ))
+
         # 주간 매도 후속 복기 (토요일 09:00)
         tasks.append(asyncio.create_task(
             self._supervised(self.run_post_exit_review_scheduler, "kr_post_exit_review"), name="kr_post_exit_review"
@@ -475,18 +482,9 @@ class KRScheduler:
                                 f"aggregate={agg:+d}, bear_consensus={bear_consensus}"
                             )
 
-                            # 텔레그램 브리핑 전송
-                            # morning + 주말/월요일 슬롯은 채널, 평일 midday/after는 DM
-                            use_channel = slot_name in (
-                                "morning", "sunday_evening", "monday_premarket"
-                            )
-                            await self._send_expert_briefing_telegram(
-                                slot_labels[slot_name], ops, agg, bias, bear_consensus,
-                                use_report_channel=use_channel,
-                                record_dispatch=(slot_name == "morning"),
-                                threshold_confidence=0.6 if slot_name in relaxed_slots else 0.7,
-                                min_count=1 if slot_name in relaxed_slots else 2,
-                            )
+                            # Calculation still runs at its original times. Publishing
+                            # belongs to the audience scheduler's separate slots.
+                            await self._record_expert_briefing(slot_name, ops, agg)
                             # 성공 시에만 완료 처리 (2026-08-08 P1 — 일시 장애를
                             # 영구 완료로 확정하던 fail-closed 위반, 8/5 사고 패턴)
                             ran_today.add(key)
@@ -509,6 +507,16 @@ class KRScheduler:
             except Exception as e:
                 logger.error(f"[전문가] 스케줄러 오류: {e}")
                 await _aio.sleep(60)
+
+    async def _record_expert_briefing(self, slot_name, ops, agg):
+        from src.utils.telegram import get_telegram_notifier
+        notifier = get_telegram_notifier()
+        missing = sum(getattr(op, "data_status", "unknown") != "ok" for op in ops.values())
+        return await notifier.record_report(
+            "expert_quality",
+            f"시장 분석 자료: {slot_name} {len(ops)}개 입력 / 상태 확인 필요 {missing}개. "
+            "분석 점수는 예측 정확도나 매매 승인이 아닙니다.",
+        )
 
     async def _send_expert_briefing_telegram(
         self, label: str, ops: dict, agg: int, bias: str, bear_consensus: bool,
@@ -560,7 +568,8 @@ class KRScheduler:
                     logger.debug(f"[공시피드] 브리핑 삽입 실패 (무시): {_disc_e}")
 
             from ..analytics.report_context import render_runtime_context
-            lines[2:2] = [render_runtime_context(self.bot), ""]
+            if not use_report_channel:
+                lines[2:2] = [render_runtime_context(self.bot), ""]
             msg = "\n".join(lines)
 
             # 2026-06-05: morning 슬롯이면 LLM 모닝브리프 캐시를 앞에 결합
@@ -2226,6 +2235,7 @@ JSON:
 
             llm_positions = result.get("positions", [])
             actions_taken = []
+            urgent_actions = []
 
             for llm_pos in llm_positions:
                 symbol = llm_pos.get("symbol", "")
@@ -2244,7 +2254,7 @@ JSON:
                     # 안전 검증: 가격 데이터 없으면 스킵
                     if current_price is None or entry_price is None or current_price <= 0:
                         logger.warning(f"[포지션LLM] {symbol} 가격 데이터 없음, exit_today 무시")
-                        actions_taken.append(f"⚠️ {symbol} 가격 미확인으로 청산 스킵")
+                        urgent_actions.append(f"⚠️ {symbol} 가격 미확인으로 청산 스킵")
                         continue
 
                     # 수익 중인 포지션은 LLM 청산 거부 (ExitManager에 위임)
@@ -2271,7 +2281,7 @@ JSON:
                     )
                     event = SignalEvent.from_signal(signal, source="position_eod_llm")
                     await bot.engine.emit(event)
-                    actions_taken.append(f"🔴 {symbol} 청산({pnl_pct:+.1f}%): {reason}")
+                    urgent_actions.append(f"🔴 {symbol} 청산 시그널 발행({pnl_pct:+.1f}%): {html.escape(str(reason))} · 체결 확인 별도")
 
                 elif action == "tighten" and symbol in positions:
                     # 트레일링 스탑 타이트하게
@@ -2281,7 +2291,7 @@ JSON:
                             if state:
                                 old_trail = state.trailing_stop_pct if state.trailing_stop_pct is not None else 3.0
                                 state.trailing_stop_pct = max(1.5, old_trail - 0.5)
-                                actions_taken.append(
+                                urgent_actions.append(
                                     f"🟡 {symbol} 트레일링 타이트: "
                                     f"{old_trail:.1f}%→{state.trailing_stop_pct:.1f}%"
                                 )
@@ -2296,9 +2306,12 @@ JSON:
                 lines = ["🔍 <b>15:00 포지션 LLM 점검</b>", ""]
                 lines.extend(actions_taken)
                 try:
-                    await send_alert("\n".join(lines))
+                    await record_report("position_review", "\n".join(lines))
                 except Exception:
                     pass
+
+            if urgent_actions:
+                await send_alert("🔍 <b>포지션 조치 필요</b>\n" + "\n".join(urgent_actions))
 
             logger.info(f"[포지션LLM] 점검 완료: {len(actions_taken)}건 처리")
 
@@ -2438,7 +2451,7 @@ JSON:
                     ]
                     for p in result.get("patterns", [])[:3]:
                         lines.append(f"  • {p}")
-                    await send_alert("\n".join(lines))
+                    await record_report("false_negative_weekly", "\n".join(lines))
                 except Exception:
                     pass
 
@@ -2502,7 +2515,7 @@ JSON:
 
                 lines.append("다음 확인: 후보별 공시 원문·현재 가격·수급을 대조하고 진입 조건이 없는 종목은 관찰 유지")
                 msg = "\n".join(lines)
-                await send_alert(msg)
+                await record_report("expert_panel", msg)
                 logger.info(f"[전문가패널] 완료: {len(stocks)}종목 추천")
             else:
                 logger.warning("[전문가패널] 결과 없음")
@@ -5300,11 +5313,10 @@ JSON:
                                                     for _nl in _news_headlines.split("\n")[:3]:
                                                         _tg_lines.append(f"  {_nl}")
 
-                                                await bot.telegram.send_message(
+                                                await record_report("market_diagnosis",
                                                     "\n".join(_tg_lines),
-                                                    parse_mode="HTML",
                                                 )
-                                                logger.info("[시장체제] 텔레그램 장전 진단 전송 완료")
+                                                logger.info("[시장체제] 일일 요약용 장전 진단 기록 요청 완료")
                                             except Exception as _tg_e:
                                                 logger.debug(f"[시장체제] 텔레그램 전송 실패 (무시): {_tg_e}")
 
@@ -6007,10 +6019,10 @@ JSON:
                 # 미국증시 마감 레포트 (07:00 ~ 07:15)
                 if now.hour == 7 and 0 <= now.minute < 15:
                     if last_us_market_report != today:
-                        logger.info("[레포트] 미국증시 마감 레포트 발송 시작")
+                        logger.info("[레포트] 미국증시 마감 레포트 자료 준비 시작")
                         try:
                             await bot.report_generator.generate_us_market_report(
-                                send_telegram=True,
+                                send_telegram=False, prepare_brief=True,
                             )
                             last_us_market_report = today
                             _save_report_state({
@@ -6018,7 +6030,7 @@ JSON:
                                 "us_market_report": today.isoformat(),
                             })
                         except Exception as e:
-                            logger.error(f"[레포트] 미국증시 레포트 발송 실패: {e}")
+                            logger.error(f"[레포트] 미국증시 레포트 자료 준비 실패: {e}")
 
                 # 아침 레포트
                 if now.hour == morning_hour and morning_min <= now.minute < morning_min + 15:
@@ -6041,35 +6053,39 @@ JSON:
                         except Exception as e:
                             logger.warning(f"[US 시그널] 오버나이트 조회 실패: {e}")
 
-                        logger.info("[레포트] 아침 추천 종목 레포트 발송 시작")
+                        logger.info("[레포트] 아침 추천 종목 레포트 자료 준비 시작")
                         try:
-                            await bot.report_generator.generate_morning_report(
+                            _routine_text = await bot.report_generator.generate_morning_report(
                                 max_stocks=10,
-                                send_telegram=True,
+                                send_telegram=False,
                             )
+                            if _routine_text:
+                                await record_report("morning_candidates", _routine_text)
                             last_morning_report = today
                             _save_report_state({
                                 **_load_report_state(),
                                 "morning_report": today.isoformat(),
                             })
                         except Exception as e:
-                            logger.error(f"[레포트] 아침 레포트 발송 실패: {e}")
+                            logger.error(f"[레포트] 아침 레포트 자료 준비 실패: {e}")
 
                 # 오후 결과 레포트
                 if now.hour == evening_hour and evening_min <= now.minute < evening_min + 15:
                     if last_evening_report != today:
-                        logger.info("[레포트] 오후 결과 레포트 발송 시작")
+                        logger.info("[레포트] 오후 결과 레포트 자료 준비 시작")
                         try:
-                            await bot.report_generator.generate_evening_report(
-                                send_telegram=True,
+                            _routine_text = await bot.report_generator.generate_evening_report(
+                                send_telegram=False,
                             )
+                            if _routine_text:
+                                await record_report("evening_candidates", _routine_text)
                             last_evening_report = today
                             _save_report_state({
                                 **_load_report_state(),
                                 "evening_report": today.isoformat(),
                             })
                         except Exception as e:
-                            logger.error(f"[레포트] 오후 레포트 발송 실패: {e}")
+                            logger.error(f"[레포트] 오후 레포트 자료 준비 실패: {e}")
 
                         # 자산 스냅샷 저장
                         equity_tracker = bot.equity_tracker
@@ -6249,7 +6265,7 @@ JSON:
                                             f"BEAR: {_exp_block.get('bear_count', 0)}명\n"
                                             f"주간 발행: {_exp_block.get('weekly_total', 0)}건"
                                         )
-                                        await _notifier.send_message(_msg)
+                                        await record_report("expert_quality_daily", _msg)
                             except Exception as _exp_err:
                                 logger.debug(f"[품질검증] 텔레그램 전송 실패: {_exp_err}")
                         except Exception as _qv_err:
@@ -6437,7 +6453,7 @@ JSON:
                 logger.info("[초과수익] 요약 파일 없음 — 주간 한 줄 생략")
                 return
             summary = json.loads(path.read_text(encoding="utf-8"))
-            await send_alert(html.escape(_er.format_weekly_line(summary)))
+            await record_report("excess_return_weekly", html.escape(_er.format_weekly_line(summary)))
         except Exception as e:
             logger.warning(f"[초과수익] 주간 한 줄 실패 (무시): {type(e).__name__}: {e}")
 
@@ -6525,7 +6541,7 @@ JSON:
                                     lines.append(f"")
                                     lines.append(f"💡 <b>사유:</b> {reasoning}")
 
-                                await send_alert("\n".join(lines))
+                                await record_report("weekly_allocation", "\n".join(lines))
                                 logger.info(f"[리밸런싱] 완료: {status}")
                             elif status == "skipped":
                                 reason = result.get("reason", "")
@@ -6901,7 +6917,7 @@ JSON:
                     lines.append(f"  ⛔ {html.escape(r.name or r.symbol)} — {html.escape(r.reason[:50])}")
 
             lines.append("※ shadow 단계 — 주문 미실행, 기록·검증 목적")
-            await send_alert("\n".join(lines))
+            await record_report("team_shadow", "\n".join(lines))
         except Exception as e:
             logger.warning(f"[팀심의] 알림 실패: {e}")
 
@@ -6975,7 +6991,7 @@ JSON:
                                 from src.utils.telegram import get_telegram_notifier
                                 _cf_notifier = get_telegram_notifier()
                                 if _cf_notifier and _cf_summary:
-                                    await _cf_notifier.send_message(
+                                    await record_report("counterfactual_weekly",
                                         "📐 AI 게이트 counterfactual 주간 성적표\n"
                                         "━━━━━━━━━━━━━━━\n"
                                         f"{_cf_summary}\n"
@@ -6992,7 +7008,7 @@ JSON:
                                 from src.utils.telegram import get_telegram_notifier
                                 _tca_notifier = get_telegram_notifier()
                                 if _tca_notifier and _tca_msg:
-                                    await _tca_notifier.send_message(
+                                    await record_report("tca_weekly",
                                         "🧾 주간 TCA 체결 비용 (전략/방향, +bps = 불리)\n"
                                         "━━━━━━━━━━━━━━━\n"
                                         f"{_tca_msg}\n"
@@ -7013,7 +7029,7 @@ JSON:
                                 from src.utils.telegram import get_telegram_notifier
                                 _wm_notifier = get_telegram_notifier()
                                 if _wm_notifier and _wm_msg:
-                                    await _wm_notifier.send_message(
+                                    await record_report("weakness_weekly",
                                         "🔍 주간 약점 마이닝 (원장 검증자 기반)\n"
                                         "━━━━━━━━━━━━━━━\n"
                                         f"{_wm_msg}\n"
@@ -7049,7 +7065,7 @@ JSON:
                                     from src.utils.telegram import get_telegram_notifier
                                     _gr_notifier = get_telegram_notifier()
                                     if _gr_notifier:
-                                        await _gr_notifier.send_message(
+                                        await record_report("gate_replay_weekly",
                                             "🎯 게이트 반사실 재생 (예측력 검증)\n"
                                             "━━━━━━━━━━━━━━━\n"
                                             f"{_gr_msg}"
@@ -7089,25 +7105,25 @@ JSON:
                                         "⚙️ REGIME_EXIT shadow 제안 (적용 없음)\n"
                                         + "\n".join(_re_lines)
                                     )
-                                # 2026-09-05: 발송/미발송/실패를 INFO·WARNING으로 — 승격점검(8/30)과 동일.
+                                # 2026-09-05: 발송/미저장/실패를 INFO·WARNING으로 — 승격점검(8/30)과 동일.
                                 # calibration의 KIS 가격 조회가 거절되면 리포트 전체가 조용히 빠졌다.
                                 if _sl_parts:
                                     from src.utils.telegram import get_telegram_notifier
                                     _sl_notifier = get_telegram_notifier()
                                     if _sl_notifier:
-                                        _sl_sent = await _sl_notifier.send_message(
+                                        _sl_sent = await record_report("shadow_lab_weekly",
                                             "🧪 주간 shadow 리포트 (하네스 Phase 3)\n"
                                             "━━━━━━━━━━━━━━━\n"
                                             + "\n\n".join(_sl_parts)
                                         )
                                         logger.info(
-                                            f"[shadow-lab] 주간 리포트 발송 {'완료' if _sl_sent else '실패'}: "
+                                            f"[shadow-lab] 주간 리포트 저장 {'완료' if _sl_sent else '실패'}: "
                                             f"{len(_sl_parts)}개 섹션 ({', '.join(_p.split(chr(10))[0][:12] for _p in _sl_parts)})"
                                         )
                                     else:
-                                        logger.warning("[shadow-lab] notifier 없음 — 미발송")
+                                        logger.warning("[shadow-lab] notifier 없음 — 미저장")
                                 else:
-                                    logger.info("[shadow-lab] 주간 리포트 표본 없음 — 미발송")
+                                    logger.info("[shadow-lab] 주간 리포트 표본 없음 — 미저장")
                             except Exception as _sl_err:
                                 logger.warning(f"[shadow-lab] 주간 리포트 실패 (무시): {_sl_err}")
 
@@ -7122,17 +7138,17 @@ JSON:
                                     from src.utils.telegram import get_telegram_notifier
                                     _pr_notifier = get_telegram_notifier()
                                     if _pr_notifier:
-                                        _pr_sent = await _pr_notifier.send_message(
+                                        _pr_sent = await record_report("promotion_weekly",
                                             "📋 주간 승격 기준 점검\n"
                                             "━━━━━━━━━━━━━━━\n" + _pr
                                         )
                                         logger.info(
-                                            f"[승격점검] 주간 리포트 발송 "
+                                            f"[승격점검] 주간 리포트 저장 "
                                             f"{'완료' if _pr_sent else '실패'}: "
                                             + _pr.replace("\n", " | ")
                                         )
                                     else:
-                                        logger.warning("[승격점검] notifier 없음 — 미발송")
+                                        logger.warning("[승격점검] notifier 없음 — 미저장")
                             except Exception as _pr_err:
                                 logger.warning(f"[승격점검] 주간 실행 실패 (무시): {_pr_err}")
 
@@ -7145,28 +7161,28 @@ JSON:
                                 _hs_notifier = get_telegram_notifier()
                                 _hs_text = weekly_progress()
                                 if _hs_notifier:
-                                    _hs_sent = await _hs_notifier.send_message(_hs_text)
+                                    _hs_sent = await record_report("harvest_weekly", _hs_text)
                                     logger.info(
-                                        f"[수확shadow] 주간 요약 발송 {'완료' if _hs_sent else '실패'}: "
+                                        f"[수확shadow] 주간 요약 저장 {'완료' if _hs_sent else '실패'}: "
                                         + " | ".join(_hs_text.splitlines()[2:5])
                                     )
                                 else:
-                                    logger.warning("[수확shadow] notifier 없음 — 주간 요약 미발송")
+                                    logger.warning("[수확shadow] notifier 없음 — 주간 요약 미저장")
                             except Exception as _hs_err:
                                 logger.warning(f"[수확shadow] 주간 요약 실패 (무시): {_hs_err}")
 
                             if report.get("status") in {"ok", "no_quotes"}:
                                 msg = report.get("telegram_message", "")
                                 if msg:
-                                    sent = await send_alert(msg)
+                                    sent = await record_report("post_exit_weekly", msg)
                                     if sent:
                                         logger.info(
-                                            f"[후속복기] 보고 API 발송 완료: "
+                                            f"[후속복기] 보고 요약 입력 저장 완료: "
                                             f"상태={report.get('status')}, 표본={report.get('samples')}"
                                         )
                                     else:
                                         logger.warning(
-                                            f"[후속복기] 보고 API 발송 실패: "
+                                            f"[후속복기] 보고 요약 입력 저장 실패: "
                                             f"상태={report.get('status')}, 표본={report.get('samples')}"
                                         )
                                 else:
@@ -7191,7 +7207,7 @@ JSON:
                                 if _mr_result.get("status") == "ok":
                                     _mr_msg = _mr.format_telegram(_mr_result)
                                     if _mr_msg:
-                                        await send_alert(_mr_msg)
+                                        await record_report("monitoring_weekly", _mr_msg)
                                     logger.info(
                                         f"[모니터링] 완료: 체크포인트={_mr_result.get('checkpoints_count')}, "
                                         f"SQL={_mr_result.get('sql_executed')}"
@@ -7220,7 +7236,7 @@ JSON:
                                 if not _ga_result.get("error"):
                                     _ga_msg = GatePerformanceAnalyzer.format_report(_ga_result)
                                     if _ga_msg:
-                                        await send_alert(_ga_msg)
+                                        await record_report("gate_weekly", _ga_msg)
                                     logger.info(
                                         f"[게이트분석] 완료: 분석={_ga_result.get('total_analyzed')}건, "
                                         f"게이트={len(_ga_result.get('gates', {}))}종"
@@ -7263,7 +7279,7 @@ JSON:
         _tpm = TradingPrinciplesManager(trade_memory=_tp_memory, llm_manager=_tp_llm)
         _tp_report = await _tpm.generate_weekly_report()
         _tpm.save_report(_tp_report)
-        await send_alert(_tp_report)
+        await record_report("principles_weekly", _tp_report)
         logger.info("[거래원칙] 주간 리포트 생성 + 텔레그램 전송 완료")
 
     async def run_log_cleanup(self):
@@ -8110,7 +8126,7 @@ JSON:
                 except Exception:
                     pass
                 if summary:
-                    await send_alert(summary)
+                    await record_report("harvest_shadow", summary)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -8437,7 +8453,7 @@ JSON:
                     body = "\n".join(lines)
                 else:
                     body = "최종 후보 없음"
-                await send_alert(
+                await record_report("value_shadow",
                     f"🔍 [밸류코어 shadow] 주간 스캔 완료\n"
                     f"퀀트 통과 {len(passed)} → LLM 통과 {len(final)}\n{body}\n"
                     f"(관측 전용 — 매수 없음)"

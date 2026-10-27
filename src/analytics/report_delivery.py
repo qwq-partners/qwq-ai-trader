@@ -1,0 +1,98 @@
+"""Private routine-report storage and durable, at-most-one-attempt slots.
+
+This is not Telegram server idempotency. An interrupted attempt remains consumed;
+API acceptance is not proof of delivery to the reader. Urgent alerts bypass it.
+"""
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta
+import os
+from pathlib import Path
+import re
+import sqlite3
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
+KINDS = {"market": {"morning", "midday", "after"}, "engine": {"daily"}}
+
+
+def default_store_path() -> Path:
+    return Path.home() / ".cache/ai_trader/report_delivery/reports.sqlite3"
+
+
+def validate_slot(audience: str, kind: str, report_date: str) -> None:
+    if kind not in KINDS.get(audience, set()):
+        raise ValueError("unsupported report audience/kind")
+    if date.fromisoformat(report_date).isoformat() != report_date:
+        raise ValueError("report_date must be ISO date")
+
+
+class ReportStore:
+    def __init__(self, path: Path | None = None):
+        self.path = Path(path) if path is not None else default_store_path()
+
+    @contextmanager
+    def _db(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Create before sqlite connects so private text never has a public mode.
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
+        os.chmod(self.path, 0o600)
+        db = sqlite3.connect(str(self.path), timeout=5)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute("CREATE TABLE IF NOT EXISTS reports (report_date TEXT, kind TEXT, text TEXT, recorded_at TEXT, PRIMARY KEY(report_date,kind))")
+            db.execute("CREATE TABLE IF NOT EXISTS report_events (id INTEGER PRIMARY KEY, report_date TEXT, kind TEXT, text TEXT, recorded_at TEXT)")
+            db.execute("CREATE INDEX IF NOT EXISTS report_events_day ON report_events(report_date)")
+            db.execute("CREATE TABLE IF NOT EXISTS slots (audience TEXT, kind TEXT, report_date TEXT, source_snapshot_id TEXT, status TEXT, PRIMARY KEY(audience,kind,report_date))")
+            db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def record(self, kind: str, text: str, now: datetime | None = None) -> bool:
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", kind):
+            raise ValueError("invalid report kind")
+        now = now or datetime.now(KST)
+        if now.tzinfo is None:
+            raise ValueError("record time must be timezone-aware")
+        now = now.astimezone(KST)
+        # Fixed 21:00 cutoff: later cron output belongs to tomorrow's digest.
+        report_day = (now + timedelta(hours=3)).date().isoformat()
+        with self._db() as db:
+            db.execute("INSERT INTO report_events (report_date,kind,text,recorded_at) VALUES (?,?,?,?)", (report_day, kind, str(text)[:30000], now.isoformat()))
+        return True  # Stored, not sent.
+
+    def records(self, report_date: str) -> list[dict]:
+        date.fromisoformat(report_date)
+        with self._db() as db:
+            # Preserve legacy latest-only records too; all new inputs are append-only.
+            return [dict(r) for r in db.execute("SELECT kind,text,recorded_at FROM (SELECT kind,text,recorded_at,0 AS sequence FROM reports WHERE report_date=? UNION ALL SELECT kind,text,recorded_at,id AS sequence FROM report_events WHERE report_date=?) ORDER BY recorded_at,sequence", (report_date, report_date))]
+
+    def delivery_issues(self, report_date: str) -> list[dict]:
+        """Recent non-success receipts, without exposing stored private bodies."""
+        previous = (date.fromisoformat(report_date)-timedelta(days=1)).isoformat()
+        with self._db() as db:
+            return [dict(r) for r in db.execute("SELECT audience,kind,report_date,status FROM slots WHERE report_date BETWEEN ? AND ? AND status NOT IN ('accepted','skipped_holiday') ORDER BY CASE WHEN status LIKE 'skipped_%' THEN 1 ELSE 0 END,report_date DESC,kind", (previous, report_date))]
+
+    def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None) -> bool:
+        validate_slot(audience, kind, report_date)
+        if not source_snapshot_id:
+            raise ValueError("source_snapshot_id required")
+        with self._db() as db:
+            claimed = db.execute("INSERT OR IGNORE INTO slots VALUES (?,?,?,?,?)", (audience, kind, report_date, source_snapshot_id, "attempted")).rowcount == 1
+            if claimed and text is not None:
+                db.execute("INSERT INTO payloads VALUES (?,?,?,?)", (audience, kind, report_date, text))
+            return claimed
+
+    def finish(self, audience: str, kind: str, report_date: str, status: str) -> None:
+        validate_slot(audience, kind, report_date)
+        if status not in {"accepted", "rejected", "unknown", "failed_validation", "failed_configuration", "skipped_holiday", "skipped_missing_current_market_basis", "skipped_missing_market_basis"}:
+            raise ValueError("invalid terminal status")
+        with self._db() as db:
+            db.execute("UPDATE slots SET status=? WHERE audience=? AND kind=? AND report_date=? AND status='attempted'", (status, audience, kind, report_date))
+
+    def receipt(self, audience: str, kind: str, report_date: str) -> dict | None:
+        with self._db() as db:
+            row = db.execute("SELECT slots.*,payloads.body FROM slots LEFT JOIN payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+            return dict(row) if row else None
