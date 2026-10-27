@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **현재 할 일:** [실행 대기열·우선순위·착수 조건·완료 기준](operations/execution-roadmap.md#next-tasks-20261027). 완료/READY/시각·자료 WAIT를 구분하고, 기한별 실제 점검은 [체크포인트](operations/monitoring-checkpoints.md)에서 인수한다. task의 정본은 하나로 유지한다.
+
 > **R02 운영 적용 완료:** [16:25 배포·보고 예약 전환·사후 검증·자연 보고 인수](operations/execution-roadmap.md#r02-live-20261027). 운영`6d132809`이며 아래 예약/미적용은 당시 상태다. 문서 후속은 재배포하지 않는다.
 
 > **R02 16:10 단발 배포 예약 설치:** [고정SHA·16:10 단발 실행·Toss 조건·복구·결과 확인](operations/execution-roadmap.md#r02-deploy-20261027). 보고7파일 준비/검사와 실제 운영 전환을 구분한다.
