@@ -45,7 +45,7 @@ class TelegramNotifier:
         """Save routine engine material for the daily digest; never send it."""
         from ..analytics.report_delivery import ReportStore
         try:
-            return ReportStore().record(kind, text)
+            return await asyncio.to_thread(ReportStore().record, kind, text)
         except Exception:
             logger.exception("정기 보고 저장 실패 kind={}", kind)
             return False
@@ -60,7 +60,7 @@ class TelegramNotifier:
         if not text.strip() or len(text) > 1800 or len(text.splitlines()) > 35:
             raise ValueError("routine report must fit one mobile message")
         store = store if store is not None else ReportStore()
-        if not store.claim(audience, kind, report_date, source_snapshot_id):
+        if not await asyncio.to_thread(store.claim, audience, kind, report_date, source_snapshot_id, text):
             return "already_consumed"
         target = self.report_chat_id if audience == "market" else self.alert_chat_id
         if not self.bot_token or not target:
@@ -73,7 +73,7 @@ class TelegramNotifier:
                 status = "accepted" if ok else "unknown"
             except Exception:
                 status = "unknown"
-        store.finish(audience, kind, report_date, status)
+        await asyncio.to_thread(store.finish, audience, kind, report_date, status)
         logger.info("정기 보고 audience={} kind={} date={} status={}", audience, kind, report_date, status)
         return status
 

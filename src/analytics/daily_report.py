@@ -758,7 +758,7 @@ class DailyReportGenerator:
 
         # 7. 텔레그램 레포트 채널로 발송
         if send_telegram:
-            success = await self.telegram.send_report(report)
+            success = await self.telegram.send_alert(report)
             if success:
                 logger.info(f"[레포트] 아침 레포트 발송 완료 ({len(recommendations)}종목)")
             else:
@@ -810,7 +810,7 @@ class DailyReportGenerator:
 
         # 텔레그램 레포트 채널로 발송
         if send_telegram:
-            success = await self.telegram.send_report(report)
+            success = await self.telegram.send_alert(report)
             if success:
                 logger.info("[레포트] 오후 결과 레포트 발송 완료")
             else:
@@ -1424,7 +1424,7 @@ class DailyReportGenerator:
             parsed = []
             for s in sectors:
                 name = s.get("name", "")
-                change_pct = _finite_float(s.get("change_pct"))
+                change_pct = _finite_float(s.get("report_values", s).get("change_pct"))
                 if name and change_pct is not None:
                     parsed.append((_html_text(name, 50), change_pct))
 
@@ -1433,7 +1433,7 @@ class DailyReportGenerator:
 
             parsed.sort(key=lambda x: x[1], reverse=True)
 
-            lines = ["📈 <b>업종 동향 (전일 기준)</b>"]
+            lines = ["📈 <b>KOSPI 업종지수 · 공급자 전일대비 값</b>", "관측일·시각 미확인 — 현재 업종 강약 판정에 사용하지 않음"]
 
             # 상승 TOP 5
             top = [f"{n}({p:+.1f}%)" for n, p in parsed[:5] if p > 0]
@@ -1516,6 +1516,7 @@ class DailyReportGenerator:
 
     async def generate_us_market_report(
         self, send_telegram: bool = True, kr_inputs: Optional[List[Dict]] = None,
+        prepare_brief: bool = False,
     ) -> str:
         """
         미국증시 마감 레포트 생성 (매일 07:00)
@@ -1755,6 +1756,7 @@ class DailyReportGenerator:
             else:
                 logger.error("[레포트] 미국시장 아침 스냅샷 텍스트 발송 실패")
 
+        if send_telegram or prepare_brief:
             # ── 3) 근거 기반 모닝브리프 캐시 ─────────────────────────────
             # 2026-06-05: 별도 발송 중단 → 캐시 파일에 저장.
             # 07:30 전문가 브리핑(_send_expert_briefing_telegram)이 캐시를 읽어
@@ -2139,6 +2141,7 @@ class DailyReportGenerator:
                 continue
             if not data:
                 continue
+            data = data.get("report_values", data)
             price = data.get("price")
             change = data.get("change")
             open_price = data.get("open")
@@ -2163,9 +2166,9 @@ class DailyReportGenerator:
             sectors = None
         if sectors:
             out["sectors"] = {
-                s.get("name"): s.get("change_pct")
+                s.get("name"): s.get("report_values", s).get("change_pct")
                 for s in sectors
-                if s.get("name") and s.get("change_pct") is not None
+                if s.get("name") and s.get("report_values", s).get("change_pct") is not None
             }
         return out
 

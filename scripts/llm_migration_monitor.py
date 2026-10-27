@@ -176,7 +176,17 @@ def quality_report(result: dict) -> str:
     ])
 
 
-async def main_async(*, dry_run: bool = False) -> int:
+async def store_report(text: str) -> bool:
+    """Routine cron records without credentials; tomorrow's digest includes 22:00."""
+    from src.analytics.report_delivery import ReportStore
+    try:
+        return await asyncio.to_thread(ReportStore().record, "llm_migration", text)
+    except Exception as exc:
+        print(f"[WARN] 요약 입력 저장 실패: {type(exc).__name__}")
+        return False
+
+
+async def main_async(*, dry_run: bool = False, telegram: bool = False) -> int:
     state = load_state()
     try:
         aggregate = run_shadow_analysis(days=7)
@@ -187,21 +197,24 @@ async def main_async(*, dry_run: bool = False) -> int:
     print(message)
     if dry_run:
         return 0
-    return 0 if await send_telegram(message) else 1
+    ok = await send_telegram(message) if telegram else await store_report(message)
+    print("[전송 결과]" if telegram else "[저장 결과]", "성공" if ok else "실패")
+    return 0 if ok else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     global STATE_PATH, SHADOW_LOG_DIR
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="Render only; no credentials or Telegram")
+    parser.add_argument("--telegram", action="store_true", help="Explicit manual personal notification; default stores digest input")
     parser.add_argument("--env-file", type=Path, default=PROJECT_ROOT / ".env")
     parser.add_argument("--state-file", type=Path, default=STATE_PATH)
     parser.add_argument("--log-dir", type=Path, default=SHADOW_LOG_DIR)
     args = parser.parse_args(argv)
     STATE_PATH, SHADOW_LOG_DIR = args.state_file, args.log_dir
-    if not args.dry_run:
+    if not args.dry_run and args.telegram:
         _load_env(args.env_file)
-    return asyncio.run(main_async(dry_run=args.dry_run))
+    return asyncio.run(main_async(dry_run=args.dry_run, telegram=args.telegram))
 
 
 if __name__ == "__main__":

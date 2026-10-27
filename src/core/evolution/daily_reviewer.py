@@ -21,7 +21,7 @@ from loguru import logger
 
 from .trade_journal import TradeJournal, TradeRecord, get_trade_journal
 from ...utils.llm import LLMManager, LLMTask, get_llm_manager
-from ...utils.telegram import send_alert
+from ...utils.telegram import record_report
 
 
 # LLM 시스템 프롬프트
@@ -527,9 +527,9 @@ class DailyReviewer:
             )
             self._save_llm_review(target_date, llm_review)
             try:
-                await send_alert(llm_review["telegram_summary"])
+                await record_report("daily_review", llm_review["telegram_summary"])
             except Exception as e:
-                logger.warning(f"[거래리뷰] 거래 없음 알림 발송 실패: {e}")
+                logger.warning(f"[거래리뷰] 거래 없음 요약 입력 저장 실패: {e}")
             logger.info("[거래리뷰] 청산 거래 없음 -- 평가 보류 리뷰 저장")
             return llm_review
 
@@ -580,10 +580,10 @@ class DailyReviewer:
         telegram_summary = llm_review.get("telegram_summary", "")
         if telegram_summary:
             try:
-                await send_alert(telegram_summary)
-                logger.info("[거래리뷰] 텔레그램 리뷰 알림 발송 완료")
+                await record_report("daily_review", telegram_summary)
+                logger.info("[거래리뷰] 텔레그램 리뷰 요약 입력 저장 완료")
             except Exception as e:
-                logger.warning(f"[거래리뷰] 텔레그램 발송 실패: {e}")
+                logger.warning(f"[거래리뷰] 보고 입력 저장 실패: {e}")
 
         # daily_bias 피드백 루프: 내일 운영에 반영할 바이어스 저장
         try:

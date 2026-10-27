@@ -4,7 +4,7 @@ This is not Telegram server idempotency. An interrupted attempt remains consumed
 API acceptance is not proof of delivery to the reader. Urgent alerts bypass it.
 """
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import os
 from pathlib import Path
 import re
@@ -42,6 +42,7 @@ class ReportStore:
         try:
             db.execute("CREATE TABLE IF NOT EXISTS reports (report_date TEXT, kind TEXT, text TEXT, recorded_at TEXT, PRIMARY KEY(report_date,kind))")
             db.execute("CREATE TABLE IF NOT EXISTS slots (audience TEXT, kind TEXT, report_date TEXT, source_snapshot_id TEXT, status TEXT, PRIMARY KEY(audience,kind,report_date))")
+            db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
             with db:
                 yield db
         finally:
@@ -54,8 +55,10 @@ class ReportStore:
         if now.tzinfo is None:
             raise ValueError("record time must be timezone-aware")
         now = now.astimezone(KST)
+        # Fixed 21:00 cutoff: later cron output belongs to tomorrow's digest.
+        report_day = (now + timedelta(hours=3)).date().isoformat()
         with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO reports VALUES (?,?,?,?)", (now.date().isoformat(), kind, str(text)[:30000], now.isoformat()))
+            db.execute("INSERT OR REPLACE INTO reports VALUES (?,?,?,?)", (report_day, kind, str(text)[:30000], now.isoformat()))
         return True  # Stored, not sent.
 
     def records(self, report_date: str) -> list[dict]:
@@ -63,12 +66,15 @@ class ReportStore:
         with self._db() as db:
             return [dict(r) for r in db.execute("SELECT kind,text,recorded_at FROM reports WHERE report_date=? ORDER BY recorded_at,kind", (report_date,))]
 
-    def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str) -> bool:
+    def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None) -> bool:
         validate_slot(audience, kind, report_date)
         if not source_snapshot_id:
             raise ValueError("source_snapshot_id required")
         with self._db() as db:
-            return db.execute("INSERT OR IGNORE INTO slots VALUES (?,?,?,?,?)", (audience, kind, report_date, source_snapshot_id, "attempted")).rowcount == 1
+            claimed = db.execute("INSERT OR IGNORE INTO slots VALUES (?,?,?,?,?)", (audience, kind, report_date, source_snapshot_id, "attempted")).rowcount == 1
+            if claimed and text is not None:
+                db.execute("INSERT INTO payloads VALUES (?,?,?,?)", (audience, kind, report_date, text))
+            return claimed
 
     def finish(self, audience: str, kind: str, report_date: str, status: str) -> None:
         validate_slot(audience, kind, report_date)
@@ -79,5 +85,5 @@ class ReportStore:
 
     def receipt(self, audience: str, kind: str, report_date: str) -> dict | None:
         with self._db() as db:
-            row = db.execute("SELECT * FROM slots WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+            row = db.execute("SELECT slots.*,payloads.body FROM slots LEFT JOIN payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
             return dict(row) if row else None

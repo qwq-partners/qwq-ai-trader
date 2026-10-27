@@ -26,6 +26,23 @@ from src.utils.data_freshness import kr_night_futures_as_of  # T10 F17 (2026-09-
 from src.analytics.selection_source_status import mark_source
 
 
+def _report_numbers(raw: Dict) -> Dict:
+    """Strict report view. Preserve legacy trading fields until separate review."""
+    import math
+    fields = {"price": "bstp_nmix_prpr", "change": "bstp_nmix_prdy_vrss",
+              "change_pct": "bstp_nmix_prdy_ctrt", "open": "bstp_nmix_oprc",
+              "high": "bstp_nmix_hgpr", "low": "bstp_nmix_lwpr"}
+    result = {}
+    for name, key in fields.items():
+        value = raw.get(key)
+        try:
+            number = float(value) if not isinstance(value, bool) else float("nan")
+            result[name] = number if math.isfinite(number) else None
+        except (TypeError, ValueError, OverflowError):
+            result[name] = None
+    return result
+
+
 def _mark_selection_source(event: str, **kwargs) -> None:
     """원천 상태 관측은 공급자 반환 계약보다 약하다."""
     try:
@@ -250,6 +267,11 @@ class KISMarketData:
 
                     result.append({
                         "name": sector_name,
+                        "report_values": _report_numbers(item),
+                        "source": "kis",
+                        "market": "KOSPI" if market == "K" else "KOSDAQ",
+                        "received_at": datetime.now(timezone.utc).isoformat(),
+                        "source_observed_at": None,
                         "index": float(item.get("bstp_nmix_prpr", 0) or 0),
                         "change": float(item.get("bstp_nmix_prdy_vrss", 0) or 0),
                         "change_pct": float(item.get("bstp_nmix_prdy_ctrt", 0) or 0),
@@ -1200,12 +1222,30 @@ class KISMarketData:
                     "change": round(change, 2),
                     "change_pct": round(change_pct, 2),
                     "source": "kis",
+                    "report_values": _report_numbers(out),
+                    "received_at": datetime.now(timezone.utc).isoformat(),
+                    # No documented source observation time is exposed by this
+                    # endpoint adapter. Receipt alone cannot prove freshness.
+                    "source_observed_at": None,
                 }
                 self._set_cache(cache_key, result)
                 return result
         except Exception as e:
             logger.debug(f"[KIS 지수] {label} 조회 오류: {e}")
             return None
+
+    def peek_report_indices(self) -> tuple:
+        """Return strict existing cached report rows; never perform a request."""
+        from copy import deepcopy
+        rows = []
+        for code, label in (("0001", "KOSPI"), ("1001", "KOSDAQ")):
+            value = self._cache.get(f"index_price_{code}")
+            if not isinstance(value, dict) or not isinstance(value.get("report_values"), dict):
+                continue
+            rows.append({**deepcopy(value["report_values"]), "label": label,
+                         "source": value.get("source"), "received_at": value.get("received_at"),
+                         "source_observed_at": value.get("source_observed_at")})
+        return tuple(rows)
 
     def clear_cache(self):
         """캐시 초기화"""

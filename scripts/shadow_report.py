@@ -189,11 +189,22 @@ async def _send(text: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="팀 심의 shadow 관측 리포트")
     ap.add_argument("--days", type=int, default=1, help="집계 일수 (기본 1=오늘)")
-    ap.add_argument("--telegram", action="store_true", help="텔레그램 전송")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--telegram", action="store_true", help="수동 요청에 한해 즉시 개인 전송")
+    mode.add_argument("--record", action="store_true", help="정기 엔진 요약 입력 저장 (알림 없음)")
     args = ap.parse_args()
 
     report = build_report(max(1, args.days))
     print(report)
+
+    if args.record:
+        from src.analytics.report_delivery import ReportStore
+        try:
+            ReportStore().record("team_shadow_weekly" if args.days >= 7 else "team_shadow_daily", report)
+        except Exception as exc:
+            print(f"[저장 실패] {type(exc).__name__}")
+            return 1
+        print("[저장 완료] 엔진 요약 입력 · 미발송")
 
     if args.telegram:
         try:

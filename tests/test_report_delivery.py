@@ -1,6 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -33,6 +33,9 @@ def test_digest_records_replace_same_kind_without_sending(tmp_path):
     store.record('batch', 'old', now=now)
     store.record('batch', 'new', now=now)
     assert store.records('2026-10-27') == [{'kind': 'batch', 'text': 'new', 'recorded_at': now.isoformat()}]
+    store.record('llm_migration', 'late', now=now.replace(hour=22))
+    assert len(store.records('2026-10-27')) == 1
+    assert store.records('2026-10-28')[0]['text'] == 'late'
 
 
 @pytest.mark.asyncio
@@ -67,9 +70,14 @@ async def test_ambiguous_failure_is_not_retried_and_urgent_is_independent(tmp_pa
     store = ReportStore(tmp_path / 'reports.sqlite3')
     assert await notifier.publish_report('engine', 'daily', '2026-10-27', 's', 'text', store=store) == 'unknown'
     assert await notifier.publish_report('engine', 'daily', '2026-10-27', 's', 'text', store=store) == 'already_consumed'
-    notifier.send_alert = AsyncMock(return_value=True)
+    response = AsyncMock()
+    response.status = 200
+    response.__aenter__.return_value = response
+    notifier._session = Mock(closed=False)
+    notifier._session.post.return_value = response
     assert await notifier.send_alert('order accepted')
-    notifier.send_alert.assert_awaited_once()
+    assert notifier._session.post.call_args.kwargs['json']['chat_id'] == 'dm'
+    assert notifier._session.post.call_args.kwargs['json']['text'] == 'order accepted'
 
 
 @pytest.mark.asyncio

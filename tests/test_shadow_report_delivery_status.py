@@ -76,3 +76,13 @@ def test_print_only_does_not_load_credentials_or_send(monkeypatch, tmp_path, cap
     assert "아직 심의 기록이 없습니다." in output
     assert "[전송 완료]" not in output
     assert "[전송 실패]" not in output
+
+
+def test_record_mode_does_not_load_credentials_or_send(monkeypatch, tmp_path, capsys):
+    def reject(*args, **kwargs):
+        pytest.fail("record-only mode used credentials or Telegram")
+    monkeypatch.setattr(dotenv, "load_dotenv", reject)
+    monkeypatch.setattr(telegram, "send_alert", reject)
+    assert run_cli(monkeypatch, tmp_path, "--record") == 0
+    output = capsys.readouterr().out
+    assert "[저장 완료]" in output and "[전송 완료]" not in output

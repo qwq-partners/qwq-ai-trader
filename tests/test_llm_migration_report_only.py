@@ -50,7 +50,7 @@ async def test_all_legacy_phases_are_read_only(monitor, monkeypatch, phase, pass
     aggregate = passing_aggregate() if passing else {"error": "shadow 로그 없음", "pairs": 0}
     monkeypatch.setattr(monitor, "run_shadow_analysis", lambda **_: aggregate)
     sent = AsyncMock(return_value=True)
-    monkeypatch.setattr(monitor, "send_telegram", sent)
+    monkeypatch.setattr(monitor, "store_report", sent)
     commands = []
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: commands.append(a) or SimpleNamespace(returncode=0))
 
@@ -77,7 +77,7 @@ def test_import_does_not_load_environment():
 async def test_dry_run_never_sends(monitor, monkeypatch):
     monkeypatch.setattr(monitor, "run_shadow_analysis", lambda **_: passing_aggregate())
     sent = AsyncMock()
-    monkeypatch.setattr(monitor, "send_telegram", sent)
+    monkeypatch.setattr(monitor, "store_report", sent)
     assert await monitor.main_async(dry_run=True) == 0
     sent.assert_not_awaited()
     assert not monitor.STATE_PATH.exists()
@@ -122,7 +122,7 @@ def test_env_loader_only_uses_notification_keys(monitor, tmp_path, monkeypatch):
 async def test_send_failure_is_not_reported_as_success(monitor, monkeypatch):
     monkeypatch.setattr(monitor, "run_shadow_analysis", lambda **_: passing_aggregate())
     monkeypatch.setattr(monitor, "send_telegram", AsyncMock(return_value=False))
-    assert await monitor.main_async() == 1
+    assert await monitor.main_async(telegram=True) == 1
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_real_shadow_records_stay_descriptive(monitor, monkeypatch):
     (monitor.SHADOW_LOG_DIR / f"{date.today():%Y%m%d}.jsonl").write_text(
         (json.dumps(record) + "\n") * 50)
     sent = AsyncMock(return_value=True)
-    monkeypatch.setattr(monitor, "send_telegram", sent)
+    monkeypatch.setattr(monitor, "store_report", sent)
     assert await monitor.main_async() == 0
     text = sent.call_args.args[0]
     assert "<b>50</b>건" in text
@@ -161,7 +161,7 @@ async def test_malformed_observation_reports_unavailable(monitor, monkeypatch):
         raise TypeError("fixture contains invalid field")
     monkeypatch.setattr(monitor, "run_shadow_analysis", fail)
     sent = AsyncMock(return_value=True)
-    monkeypatch.setattr(monitor, "send_telegram", sent)
+    monkeypatch.setattr(monitor, "store_report", sent)
     assert await monitor.main_async() == 0
     assert "자료 분석 불가" in sent.call_args.args[0]
     assert not monitor.STATE_PATH.exists()
@@ -175,7 +175,7 @@ async def test_real_invalid_jsonl_keeps_nightly_report(monitor, monkeypatch, rec
     monitor.SHADOW_LOG_DIR.mkdir()
     (monitor.SHADOW_LOG_DIR / f"{date.today():%Y%m%d}.jsonl").write_text(json.dumps(record) + "\n")
     sent = AsyncMock(return_value=True)
-    monkeypatch.setattr(monitor, "send_telegram", sent)
+    monkeypatch.setattr(monitor, "store_report", sent)
     assert await monitor.main_async() == 0
     assert "자료 분석 불가" in sent.call_args.args[0]
     assert not monitor.STATE_PATH.exists()
