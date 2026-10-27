@@ -185,7 +185,7 @@ class SEPATrendStrategy(BaseStrategy):
         if rr_blocked:
             logger.warning(
                 f"[SEPA] R/R 차단: {len(rr_blocked)}개 "
-                f"(target cap과 stop 충돌 → R/R<1.5 종목)"
+                f"(최소 손익비 2.0 기준 미충족)"
             )
             for sym, name, sp, tp, rr in rr_blocked[:5]:
                 logger.warning(f"  ✗ {sym} {name}: stop={sp:.1f}% target={tp:.1f}% R/R={rr:.2f}")

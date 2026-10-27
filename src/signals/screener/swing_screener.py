@@ -660,14 +660,10 @@ class SwingScreener:
         self, candidates: List[SwingCandidate]
     ) -> List[SwingCandidate]:
         """
-        4단계: 복합 점수 (0-100)
+        4단계: 수급·재무 근거를 지표에 보강하고 기본 기술 순위 점수를 설정한다.
 
-        | 카테고리 | 비중 | 내용 |
-        |---------|------|------|
-        | 기술적 | 40% | RSI 위치, MA 정렬, BB 위치 |
-        | 수급 | 30% | 외국인+기관 순매수 |
-        | 재무 | 20% | PER/PBR/ROE |
-        | 섹터 | 10% | 섹터 모멘텀 |
+        이후 스크리너 오버레이가 순위를 보정한다. 전략별 진입 점수는
+        generate_batch_signals에서 별도로 계산하므로 이 점수와 같은 척도가 아니다.
         """
         from src.analytics.swing_supply import (
             utc_now, previous_session, ranking_evidence, valid_evidence, supply_age,
