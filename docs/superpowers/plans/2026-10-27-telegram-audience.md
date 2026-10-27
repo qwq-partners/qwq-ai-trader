@@ -75,9 +75,9 @@
 
 **Files:** 실행 원장, 보고 도메인 계약, CLAUDE.md, CHANGELOG.md, docs/README.md.
 
-- [ ] 관련 검사, 전체 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`, 비밀 검사.
-- [ ] 독립 중요 리뷰에서 실제 차이·테스트 증거·채널 개인정보 경계·state 처리를 검토한다.
-- [ ] 문서/커밋/push/PR/CI를 마친다. 구현·병합·운영 적용·자연 수신 확인을 별도로 기록한다.
+- 병합 필수 게이트: 관련 검사, 전체 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`, 비밀 검사.
+- [x] 독립 중요 리뷰에서 실제 차이·테스트 증거·채널 개인정보 경계·state 처리를 검토한다.
+- 인수 절차: 문서/커밋/push/PR/CI를 마친다. 최종 CI/병합 상태는 [PR #275](https://github.com/qwq-partners/qwq-ai-trader/pull/275)의 최신 head 검사·merge 기록으로 확인한다. 구현·병합·운영 적용·자연 수신 확인을 별도로 기록한다.
 - [ ] 운영 후속은 명시 설정 전환과 설치 cron 교체 후 고정 SHA 배포, 다음 자연 슬롯의 대상/횟수/API 결과 확인이다.
 
 ## Plan → Do → See 진행 기록
