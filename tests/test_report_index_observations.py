@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
 
 from src.analytics.report_index_observations import parse_index_observation
 from src.data.providers.kis_market_data import KISMarketData
@@ -79,10 +80,21 @@ class _Session:
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self._retry_connection = True
+        self.closed = False
 
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return self.responses.pop(0)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        await self.close()
+
+    async def close(self):
+        self.closed = True
 
 
 class _Observed:
@@ -102,6 +114,7 @@ class _Observed:
 def _provider(monkeypatch, responses):
     provider = KISMarketData(token_manager=SimpleNamespace(base_url="https://example.invalid"))
     session = _Session(responses)
+    created = []
 
     async def headers(tr_id):
         assert tr_id == "FHKUP03500200"
@@ -110,7 +123,12 @@ def _provider(monkeypatch, responses):
     async def acquire(*_args):
         return None
 
-    monkeypatch.setattr(provider, "_get_session", lambda: _async_value(session))
+    def session_factory(*, timeout):
+        created.append(timeout)
+        return session
+
+    monkeypatch.setattr(provider, "_get_session", lambda: (_ for _ in ()).throw(AssertionError("shared session used")))
+    monkeypatch.setattr("src.data.providers.kis_market_data.aiohttp.ClientSession", session_factory)
     monkeypatch.setattr(provider, "_get_headers", headers)
     monkeypatch.setattr("src.data.providers.kis_market_data.kis_rate_limit.acquire", acquire)
     monkeypatch.setattr("src.data.providers.kis_market_data.kis_direct_metrics.observe_get", lambda *_args: _Observed())
@@ -119,15 +137,13 @@ def _provider(monkeypatch, responses):
         def now(cls, tz=None):
             return RECEIVED if tz is None else RECEIVED.astimezone(tz)
     monkeypatch.setattr("src.data.providers.kis_market_data.datetime", _FixedDatetime)
-    return provider, session
-
-
-async def _async_value(value):
-    return value
+    return provider, session, created
 
 
 def test_provider_makes_two_sequential_gets_and_never_mutates_shared_cache(monkeypatch):
-    provider, session = _provider(monkeypatch, [_Response(_payload([_row()])), _Response(_payload([_row(price="700" )]))])
+    provider, session, created = _provider(monkeypatch, [_Response(_payload([_row()])), _Response(_payload([_row(price="700" )]))])
+    shared_session = SimpleNamespace(_retry_connection=True)
+    provider._session = shared_session
     provider._cache["keep"] = {"x": 1}
     provider._cache_ts["keep"] = datetime.now()
     cache_ts = dict(provider._cache_ts)
@@ -146,10 +162,14 @@ def test_provider_makes_two_sequential_gets_and_never_mutates_shared_cache(monke
         }
     assert provider._cache == {"keep": {"x": 1}}
     assert provider._cache_ts == cache_ts
+    assert created[0].total == 15
+    assert session._retry_connection is False
+    assert session.closed is True
+    assert shared_session._retry_connection is True
 
 
 def test_provider_keeps_second_observation_after_first_error(monkeypatch):
-    provider, session = _provider(monkeypatch, [_Response(error=ValueError("bad response")), _Response(_payload([_row(price="700")]))])
+    provider, session, _ = _provider(monkeypatch, [_Response(error=ValueError("bad response")), _Response(_payload([_row(price="700")]))])
 
     rows = asyncio.run(provider.fetch_report_index_observations(REPORT_DATE))
 
@@ -158,11 +178,74 @@ def test_provider_keeps_second_observation_after_first_error(monkeypatch):
 
 
 def test_provider_propagates_cancellation_without_second_request(monkeypatch):
-    provider, session = _provider(monkeypatch, [_Response(error=asyncio.CancelledError()), _Response(_payload([_row()]))])
+    provider, session, _ = _provider(monkeypatch, [_Response(error=asyncio.CancelledError()), _Response(_payload([_row()]))])
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(provider.fetch_report_index_observations(REPORT_DATE))
     assert len(session.calls) == 1
+    assert session.closed is True
+
+
+def test_provider_skips_without_request_when_retry_control_is_missing(monkeypatch):
+    provider = KISMarketData(token_manager=SimpleNamespace(base_url="https://example.invalid"))
+
+    class _NoRetrySession:
+        closed = False
+
+        def get(self, *_args, **_kwargs):
+            raise AssertionError("request must not be sent")
+
+        async def close(self):
+            self.closed = True
+
+    session = _NoRetrySession()
+    monkeypatch.setattr(provider, "_get_session", lambda: (_ for _ in ()).throw(AssertionError("shared session used")))
+    monkeypatch.setattr("src.data.providers.kis_market_data.aiohttp.ClientSession", lambda **_kwargs: session)
+
+    assert asyncio.run(provider.fetch_report_index_observations(REPORT_DATE)) == ()
+    assert session.closed is True
+
+
+def test_loopback_disconnect_does_not_retry_a_get(monkeypatch):
+    async def scenario():
+        seen = []
+
+        async def handler(request):
+            seen.append(request.query["FID_INPUT_ISCD"])
+            request.transport.close()
+            return web.Response()
+
+        app = web.Application()
+        app.router.add_get("/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice", handler)
+        app_runner = web.AppRunner(app)
+        await app_runner.setup()
+        site = web.TCPSite(app_runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        provider = KISMarketData(token_manager=SimpleNamespace(base_url=f"http://127.0.0.1:{port}"))
+
+        async def headers(_tr_id):
+            return {"tr_id": "FHKUP03500200"}
+
+        async def acquire(*_args):
+            return None
+
+        monkeypatch.setattr(provider, "_get_headers", headers)
+        monkeypatch.setattr(provider, "_get_session", lambda: (_ for _ in ()).throw(AssertionError("shared session used")))
+        monkeypatch.setattr("src.data.providers.kis_market_data.kis_rate_limit.acquire", acquire)
+        monkeypatch.setattr("src.data.providers.kis_market_data.kis_direct_metrics.observe_get", lambda *_args: _Observed())
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return RECEIVED if tz is None else RECEIVED.astimezone(tz)
+        monkeypatch.setattr("src.data.providers.kis_market_data.datetime", _FixedDatetime)
+        try:
+            assert await provider.fetch_report_index_observations(REPORT_DATE) == ()
+        finally:
+            await app_runner.cleanup()
+        assert seen == ["0001", "1001"]
+
+    asyncio.run(scenario())
 
 
 def test_direct_metrics_allow_report_index_bar_dimension():
