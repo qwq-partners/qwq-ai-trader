@@ -6,6 +6,8 @@ API acceptance is not proof of delivery to the reader. Urgent alerts bypass it.
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 import os
+import fcntl
+import json
 from pathlib import Path
 import re
 import sqlite3
@@ -45,6 +47,7 @@ class ReportStore:
             db.execute("CREATE INDEX IF NOT EXISTS report_events_day ON report_events(report_date)")
             db.execute("CREATE TABLE IF NOT EXISTS slots (audience TEXT, kind TEXT, report_date TEXT, source_snapshot_id TEXT, status TEXT, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
+            db.execute("CREATE TABLE IF NOT EXISTS market_inputs (report_date TEXT PRIMARY KEY, owner TEXT, status TEXT, rows_json TEXT)")
             with db:
                 yield db
         finally:
@@ -96,3 +99,53 @@ class ReportStore:
         with self._db() as db:
             row = db.execute("SELECT slots.*,payloads.body FROM slots LEFT JOIN payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
             return dict(row) if row else None
+
+    @contextmanager
+    def input_guard(self, report_date: str):
+        """Nonblocking cross-process ownership; never unlink an inode with waiters."""
+        validate_slot("market", "after", report_date)
+        canonical = self.path.resolve()
+        canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock = canonical.with_name(f"{canonical.name}.after-{report_date}.lock")
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+            else:
+                try:
+                    yield True
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def claim_inputs(self, report_date: str, owner: str) -> bool:
+        """Spend the entire day's report GET allowance before network activity."""
+        validate_slot("market", "after", report_date)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM slots WHERE audience='market' AND kind='after' AND report_date=?", (report_date,)).fetchone():
+                return False
+            return db.execute("INSERT OR IGNORE INTO market_inputs VALUES (?,?,'collecting',NULL)", (report_date, owner)).rowcount == 1
+
+    def complete_inputs(self, report_date: str, owner: str, rows) -> None:
+        validate_slot("market", "after", report_date)
+        if not isinstance(rows, (list, tuple)) or len(rows) > 2:
+            raise ValueError("report observations must contain at most two indices")
+        fields = {"code", "label", "price", "source_observed_at", "received_at", "source", "observation_kind", "finality"}
+        if any(not isinstance(row, dict) or set(row) != fields for row in rows):
+            raise ValueError("unsupported observation fields")
+        data = json.dumps(rows, allow_nan=False, ensure_ascii=False)
+        if len(data) > 4096:
+            raise ValueError("oversize report observations")
+        with self._db() as db:
+            db.execute("UPDATE market_inputs SET status='completed',rows_json=? WHERE report_date=? AND owner=? AND status='collecting'", (data, report_date, owner))
+
+    def load_inputs(self, report_date: str) -> tuple:
+        """Only completed inputs are reusable. Abandoned collecting is never reset."""
+        validate_slot("market", "after", report_date)
+        with self._db() as db:
+            row = db.execute("SELECT status,rows_json FROM market_inputs WHERE report_date=?", (report_date,)).fetchone()
+        return tuple(json.loads(row["rows_json"])) if row and row["status"] == "completed" else ()

@@ -1,15 +1,24 @@
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+import pytest
 
 from src.analytics import report_context as context
 
 
 def bot(cash=0, verified=True):
     return SimpleNamespace(
-        engine=SimpleNamespace(get_available_cash=lambda: Decimal(str(cash))),
+        engine=SimpleNamespace(get_available_cash=lambda: Decimal(str(cash)), broker=SimpleNamespace(is_connected=True)),
         risk_manager=SimpleNamespace(_cash_verified=verified),
     )
+
+
+@pytest.fixture(autouse=True)
+def recent_sync(monkeypatch):
+    from src.utils import loop_heartbeat
+    monkeypatch.setattr(loop_heartbeat, 'loop_status', lambda now: {
+        'kr_portfolio_sync': {'last_success': now.timestamp()-60, 'consecutive_failures': 0, 'idle_reason': None}})
 
 
 def test_cash_and_buy_halt_are_explicit_without_private_amounts():
