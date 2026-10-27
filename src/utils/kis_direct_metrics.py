@@ -19,12 +19,13 @@ OPERATIONS = frozenset({
     "holidays", "sector_indices", "fluctuation_rank", "foreign_institution",
     "frgnmem_trade_estimate", "stock_investor_daily", "investor_trend_estimate",
     "stock_valuation", "night_futures_quote", "index_price", "volume_surge",
-    "new_highs", "other",
+    "new_highs", "report_index_bar", "other",
 })
 TR_IDS = frozenset({
     "CTCA0903R", "FHPUP02140000", "FHPST01700000", "FHPTJ04400000",
     "FHKST644100C0", "FHKST01010900", "HHPTJ04160200", "FHKST01010100",
-    "FHMIF10000000", "FHPUP02100000", "FHPST01710000", "FHPST01720000", "other",
+    "FHMIF10000000", "FHPUP02100000", "FHPST01710000", "FHPST01720000",
+    "FHKUP03500200", "other",
 })
 OUTCOMES = ("success", "http_error", "api_error", "network_error", "cancelled",
             "invalid_json", "other")
