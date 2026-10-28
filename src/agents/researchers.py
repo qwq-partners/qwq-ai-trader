@@ -193,7 +193,11 @@ class ResearchTeam:
         from ..utils.llm import LLMProvider
         provider_name = provider.value
         health = self._provider_stats.setdefault(provider_name, {"cooldowns": 0, "skipped": 0})
-        if monotonic() < self._provider_cooldowns.get(provider_name, 0.0):
+        # The real manager isolates Claude CLI/API cooldowns. An API payment
+        # failure must not suppress the next subscribed CLI opportunity.
+        transport_managed = (provider == LLMProvider.ANTHROPIC and
+                             getattr(self._llm, "requires_independent_review", False) is True)
+        if not transport_managed and monotonic() < self._provider_cooldowns.get(provider_name, 0.0):
             health["skipped"] += 1
             # Before complete_with: no transmission, budget reservation, model,
             # or billing usage can be attributed to this suppressed request.
@@ -221,7 +225,7 @@ class ResearchTeam:
         )
         ok = bool(getattr(resp, "success", False))
         http_status = getattr(resp, "http_status", None)
-        if not ok and type(http_status) is int and http_status == 402:
+        if not transport_managed and not ok and type(http_status) is int and http_status == 402:
             now = monotonic()
             if now >= self._provider_cooldowns.get(provider_name, 0.0):
                 health["cooldowns"] += 1

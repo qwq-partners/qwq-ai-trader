@@ -225,3 +225,29 @@ async def test_caller_cancellation_records_completed_sibling_and_propagates(monk
     assert len(rows) == 2 and rows[0]["success"] is True
     assert rows[1]["error"] == "cancelled"
     assert rows[1]["attempt_trail"][0]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_api_402_does_not_suppress_later_subscription_review():
+    class ApiThenSubscription(ReviewManager):
+        anthropic_calls = 0
+        async def complete_with(self, prompt, *, provider, **kwargs):
+            if provider == LLMProvider.ANTHROPIC:
+                self.anthropic_calls += 1
+                if self.anthropic_calls == 1:
+                    return reply(provider, "", success=False, http_status=402,
+                                 transport="anthropic_messages", billing_channel="api",
+                                 error="API payment required")
+                return reply(provider, transport="claude_cli", billing_channel="subscription")
+            return reply(provider)
+    manager = ApiThenSubscription()
+    team = researchers.ResearchTeam(manager, rounds=1)
+    first = await team.debate("S1", "", [])
+    second = await team.debate("S2", "", [])
+    assert first.bear_final is None and first.consensus is None
+    assert second.bear_final is True and second.consensus is True
+    assert manager.anthropic_calls == 2
+    rows = reproducibility.LLMLedger.load()
+    assert rows[1]["http_status"] == 402 and rows[1]["billing_channel"] == "api"
+    assert rows[3]["transport"] == "claude_cli" and rows[3]["billing_channel"] == "subscription"
+    assert team.get_stats()["providers"]["anthropic"]["skipped"] == 0
