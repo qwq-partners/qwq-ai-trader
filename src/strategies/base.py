@@ -12,6 +12,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from math import isfinite
 from typing import Dict, List, Optional, Any
 
 import pandas as pd
@@ -522,25 +523,32 @@ class BaseStrategy(ABC):
 
         # 2026-08-08 P2: 왕복 수수료 반영 순 R/R — gross 기준은 경계값(2.0)을
         # 과대평가 (KR 왕복 ~0.227%). US는 zero-commission이라 비용 0.
-        cost_status = "calculated"
         try:
             from ..utils.fee_calculator import get_fee_calculator
             _fc = get_fee_calculator(getattr(self, "market", "KR"))
-            _rt_cost = float(
-                _fc.calculate_buy_fee(entry_price) + _fc.calculate_sell_fee(entry_price)
-            )
+            _buy_fee = _fc.calculate_buy_fee(entry_price)
+            _sell_fee = _fc.calculate_sell_fee(entry_price)
+            # FeeCalculator returns Decimal amounts. Validate each leg before
+            # summing so a negative fee cannot hide inside a positive total.
+            if any(not isinstance(fee, Decimal) or not fee.is_finite() or fee < 0
+                   for fee in (_buy_fee, _sell_fee)):
+                raise ValueError("invalid fee amount")
+            _rt_cost = float(_buy_fee + _sell_fee)
+            if not isfinite(_rt_cost):
+                raise ValueError("invalid round-trip cost")
         except Exception:
-            _rt_cost = 0.0
-            cost_status = "unavailable_zero_assumed"
+            if diagnostics is not None:
+                diagnostics.update(gross_rr=gross_rr, cost_status="unavailable")
+            logger.warning(f"[R/R] {self.name} 비용 미확인 — 진입 보류")
+            return False
         reward -= _rt_cost
         risk += _rt_cost
 
         rr_ratio = reward / risk
         if diagnostics is not None:
             diagnostics.update(
-                gross_rr=gross_rr, gate_rr=rr_ratio, cost_status=cost_status,
-                fee_adjusted_rr=rr_ratio if cost_status == "calculated" else None,
-                round_trip_cost=_rt_cost if cost_status == "calculated" else None,
+                gross_rr=gross_rr, gate_rr=rr_ratio, cost_status="calculated",
+                fee_adjusted_rr=rr_ratio, round_trip_cost=_rt_cost,
             )
         if rr_ratio < min_rr:
             logger.debug(

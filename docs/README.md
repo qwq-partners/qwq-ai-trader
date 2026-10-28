@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **2026-10-28 비용 계약 후속:** [E02-COST 검토](reviews/cash-and-sepa-rr-2026-10-28.md#e02-cost) · [상태/NEXT](operations/execution-roadmap.md#e02-cost-20261028). 비용 계산 실패는0 가정 대신 진입 보류하며 정상 계산/문턱은 유지한다. 매도가·수량 비용 비교와 실제 체결 성과를 구분한다. 운영 미적용이며 아래 E02-RR은 이전 단계의 기록이다.
+
 > **2026-10-28 현금 제약·손익비:** [검토 결과](reviews/cash-and-sepa-rr-2026-10-28.md) · [단일 원장의 상태/NEXT](operations/execution-roadmap.md#cash-and-rr-20261028). 현금 부족 중 신규 거래 성과는 미측정이며 기존 보유 손익/조건부 가격과 구분한다. E02-RR의 실제 비용/순RR 진단을 보완하고 매매 기준·운영/예약은 유지한다. 다음은 기존 비용 모형의 실패·매도 금액/수량 계약 검토다.
 
 > **2026-10-28 공급자 전환:** 사용자 지시로 Gemini를 중단하고 GPT·Claude를 사용한다. [E04-D2](operations/execution-roadmap.md#e04-gpt-claude-20261028)에서 GPT 일반 분석·신규 Gemini 전송 차단은 PR #283/main `293a3a59`에 병합했다. Claude 구독 CLI 우선·API 대체는 PR #284/main `0bfd6191`·전체9,424검사로 병합됐고 운영 전환은 아직이다. [완료·잔여 작업/현재 실행 계획](operations/execution-roadmap.md#task-reconcile-20261028)에서 E02-RR 분석과 E04-D2 운영 인수를 분리한다. 아래 Google 공급자 복구 대기는 이번 결정으로 대체한다. 월USD100·매수 중지·기존 예약은 유지한다.
