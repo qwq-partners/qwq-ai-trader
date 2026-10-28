@@ -149,7 +149,7 @@ def _compare_order_rr(*, entry_price, target_price, stop_price, quantity,
                       fee_config_ref, original_gate):
     inputs = {
         "entry_price": None, "target_price": None, "stop_price": None,
-        "quantity": quantity if type(quantity) is int else None,
+        "quantity": quantity if type(quantity) is int and 0 <= quantity <= MAX_QUANTITY else None,
     }
     provenance = {
         "source_path": source_path if isinstance(source_path, str) else None,

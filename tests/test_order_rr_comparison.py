@@ -58,6 +58,9 @@ def test_uses_combined_amount_fee_rounding_for_quantity_model_not_per_share_fill
         "target_amount": "11460", "target_sell_fee": "57", "reward": "1393",
         "stop_amount": "9300", "stop_sell_fee": "47", "risk": "757", "rr": str(D("1393") / D("757")),
     }
+    assert result["provenance"]["fee_rates"] == {
+        "buy_commission_rate": "0.001", "sell_commission_rate": "0.002", "sell_tax_rate": "0.003",
+    }
 
 
 def test_keeps_target_and_stop_price_snapshots_independent():
@@ -154,13 +157,22 @@ def test_rejects_each_invalid_fee_rate_and_reports_fee_failures_without_raw_valu
     assert "private" not in repr(result)
 
 
-def test_invalid_inputs_are_sanitized_to_a_json_serializable_unavailable_result():
-    """Would fail if rejected caller objects leak into the analytical report."""
-    result = compare(quantity=D("1"), source_ref=object())
+def test_invalid_source_ref_is_sanitized_to_a_json_serializable_invalid_result():
+    """Would fail if rejected provenance objects leak into the analytical report."""
+    result = compare(source_ref=object())
 
     assert result["calculation_status"] == "invalid"
-    assert result["inputs"]["quantity"] is None
+    assert result["inputs"]["quantity"] == 10
     assert result["provenance"]["source_ref"] is None
+    json.dumps(result)
+
+
+def test_invalid_decimal_quantity_is_sanitized_separately_from_provenance():
+    """Would fail if a rejected quantity leaks into a JSON report."""
+    result = compare(quantity=D("1"))
+
+    assert (result["calculation_status"], result["calculation_reason"]) == ("invalid", "invalid_quantity")
+    assert result["inputs"]["quantity"] is None
     json.dumps(result)
 
 
@@ -187,6 +199,7 @@ def test_documented_gross_thresholds_remain_distinct_from_legacy_net(threshold):
     })
 
     assert gross["gate"]["decimal_comparison"] == "meets_threshold"
+    assert gross["gate"]["decimal_value"] == str(D("146") / D("70"))
     assert legacy["gate"]["decimal_comparison"] == "below_threshold"
     assert legacy["hypothetical_policy_comparisons"][0]["status"] == "hypothetical_model_change"
 
@@ -200,6 +213,8 @@ def test_documented_gross_thresholds_remain_distinct_from_legacy_net(threshold):
     {"basis": "gross", "positive_threshold": 2.0, "evidence_ref": "x"},
     {"basis": "gross", "positive_threshold": "NaN", "evidence_ref": "x"},
     {"basis": "gross", "positive_threshold": "2", "evidence_ref": " "},
+    {"basis": "gross", "positive_threshold": "2"},
+    {"basis": "gross", "positive_threshold": "2", "evidence_ref": "x", "extra": "forbidden"},
     {"status": "not_applicable", "evidence_ref": "x", "extra": "forbidden"},
 ])
 def test_invalid_gate_forms_never_escape_or_change_calculation_status(gate):
@@ -229,13 +244,13 @@ def test_invalid_inputs_beat_missing_inputs_and_stop_inversion(overrides, status
     assert result["calculation_reason"] == reason
 
 
-def test_target_at_or_below_entry_is_a_calculated_negative_or_zero_reward_case():
+@pytest.mark.parametrize("target, expected_reward", [("1000", "0"), ("999", "-10")])
+def test_target_at_or_below_entry_is_a_calculated_negative_or_zero_reward_case(target, expected_reward):
     """Would fail if target<=entry is rejected instead of analyzed."""
-    result = compare(target_price="1000", fee_config=ZERO)
+    result = compare(target_price=target, fee_config=ZERO)
 
     assert result["calculation_status"] == "ok"
-    assert result["gross_rr"] == "0"
-    assert result["quantity_adjusted"]["reward"] == "0"
+    assert result["quantity_adjusted"]["reward"] == expected_reward
 
 
 def test_combined_rounding_is_explicitly_distinct_from_split_arithmetic_without_partial_fills():
@@ -244,9 +259,9 @@ def test_combined_rounding_is_explicitly_distinct_from_split_arithmetic_without_
     buy_split = compare(fee_config=FeeConfig(D("0.0004"), D("0.0004"), D("0")), quantity=3)["quantity_adjusted"]
 
     assert (rounded["target_sell_fee"], rounded["stop_sell_fee"]) == ("57", "47")
-    assert (D("6") * 10, D("5") * 10) == (D("60"), D("50"))
+    assert (rounded["target_sell_fee"], rounded["stop_sell_fee"]) != ("60", "50")
     assert buy_split["buy_fee"] == "1"
-    assert D("0") * 3 == D("0")
+    assert buy_split["buy_fee"] != "0"
 
 
 @pytest.mark.parametrize("side, returned", [
@@ -314,3 +329,25 @@ def test_extreme_decimal_exponents_are_rejected_without_escaping():
 
     assert (price["calculation_status"], price["calculation_reason"]) == ("invalid", "invalid_price")
     assert (gate["calculation_status"], gate["gate_status"]) == ("ok", "invalid_gate")
+
+
+def test_entry_price_snapshot_changes_buy_legacy_and_quantity_arithmetic_independently():
+    """Would fail if an entry-only snapshot reuses the previous entry fees or cost."""
+    result = compare(entry_price="1100", fee_config=ROUNDED)
+
+    assert result["legacy_one_share"] == {
+        "buy_fee": "1", "sell_fee_at_entry": "6", "reward": "39", "risk": "177",
+        "rr": str(D("39") / D("177")),
+    }
+    assert {key: result["quantity_adjusted"][key] for key in ("buy_fee", "cost", "reward", "risk")} == {
+        "buy_fee": "11", "cost": "11011", "reward": "392", "risk": "1758",
+    }
+
+
+def test_oversized_quantity_does_not_break_json_serialization():
+    """Would fail if a rejected oversized integer is copied into the JSON result."""
+    result = compare(quantity=10 ** 5000)
+
+    assert (result["calculation_status"], result["calculation_reason"]) == ("invalid", "invalid_quantity")
+    assert result["inputs"]["quantity"] is None
+    json.dumps(result)
