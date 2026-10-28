@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-28 배포 복구:** [현재 원장](docs/operations/execution-roadmap.md#e02-rr-deploy-recovery-20261028). PR #290은 로컬/PR/main CI9,600검사를 통과했지만 운영 검증의 기존 종료 상태 즉시 검사1건에서 실패해0b82af5d/PID3734201로 정상 롤백했다. 합성 경로로 커널 종료 전환 경쟁을 재현해 테스트만 보완했고 로컬9,601검사·독립 리뷰를 통과했다. 최종 후속 PR 영수증에서 새 고정SHA 배포 인수를 확인한다. 아래 기록은 당시 상태다.
+> **2026-10-28 배포 복구:** [현재 원장](docs/operations/execution-roadmap.md#e02-rr-deploy-recovery-20261028). PR #290은 로컬/PR/main CI9,600검사를 통과했지만 운영 검증의 기존 종료 상태 즉시 검사1건에서 실패해0b82af5d/PID3734201로 정상 롤백했다. 합성 경로로 커널 종료 전환 경쟁을 재현해 테스트만 보완했고 로컬9,601검사·독립 리뷰를 통과했다. 최종 [PR #291](https://github.com/qwq-partners/qwq-ai-trader/pull/291) 영수증에서 새 고정SHA 배포 인수를 확인한다. 아래 기록은 당시 상태다.
 
 > **2026-10-28 현재:** [E02-RR-CONTEXT 인수·NEXT](docs/operations/execution-roadmap.md#e02-rr-context-20261028). SEPA 선정 당시 RR/비용/P/T/S를 기존 대기 계획→실행 신호 기록에 보존했다. 로컬 전체9,600검사·격리0·독립 실제 Claude Opus5.5 재리뷰 APPROVE(P0/P1/P2 0). 원래 선정 근거와 현재 가격·각 수량 출처를 구분하며 거래 판정/청산 정책은 유지한다. 작성 시 운영은0b82af5d/PID3705216이고, 최종 CI/병합·운영 반영은 [PR #290](https://github.com/qwq-partners/qwq-ai-trader/pull/290) 완료 영수증을 따른다. NEXT는 기존 자료의 오프라인 비교다. 아래 머리글은 당시 이력이다.
 
