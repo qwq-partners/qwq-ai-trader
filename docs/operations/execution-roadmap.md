@@ -3,27 +3,79 @@
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
 <a id="deploy-and-order-rr-20261028"></a>
-**2026-10-28 현재 — 통합 배포 → E02-ORDER-RR:** 사용자 “완료되면 배포하고 다음 작업” 승인으로 PR #288/main `0b82af5d`를 고정 적용했다. PR #288의 로컬/CI9,470검사·독립 Claude Opus5.5 리뷰·[병합 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/288#issuecomment-6464056761)은 DONE이다. 아래 이전 `0bfd6191` 배포 계획은 이번 통합 SHA로 대체하며 E04-D1/D2·E02-RR/COST/PNL-COST가 함께 포함된다.
+**2026-10-28 완료 이력 — 통합 배포 → E02-ORDER-RR:** 사용자 “완료되면 배포하고 다음 작업” 승인으로 PR #288/main `0b82af5d`를 고정 적용했다. PR #288의 로컬/CI9,470검사·독립 Claude Opus5.5 리뷰·[병합 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/288#issuecomment-6464056761)은 DONE이다. 아래 이전 `0bfd6191` 배포 계획은 이번 통합 SHA로 대체하며 E04-D1/D2·E02-RR/COST/PNL-COST가 함께 포함된다.
 
 - **Plan:** 기존 local_deploy 전체 verify/재시작/롤백, 검증된 CLI 절대경로1개만 환경에 추가. 원본 환경·보호 파일·매수 중지·예약·예산 보존, 미체결/복구·충돌 확인. 실패 시 복구 상태를 확인하며 Gemini 전환 성공으로 세지 않는다.
 - **Do / See:** 사전검사에서 active·pending0·recovery ready·CLI2.1.310·보호46파일을 확인했다. 독립 Astra/high 누적 배포 범위 감사 P0~P2없음(실제metadata 미노출). 운영17:37:36 재기동·17:40:29 사후 인수20조건(172.3초)을 완료했다. 운영 전체9,470passed/2skipped/2xfailed·790.97초·격리0·문법/비밀PASS, 새PID3705216·NRestarts0·복구ready·미체결0·계좌 초기화/대시보드 소유 확인·기동오류0. 보호46파일/cron 지문과 기존KIS 자격·override·매수 중지·월USD100/log_and_continue는 보존, 환경의CLI 경로1개만 적용했다. [공개 배포 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/288#issuecomment-6464631035)과 비공개 `~/.local/state/qwq-deploy/e02-cost-20261028/acceptance-public.json`에 기록했다. 실제 자연 Claude 판단/정산은 별도 WAIT이며 기동 확인만으로 모델 품질·순수익을 입증하지 않는다. root 전용 drop-in은 내용 접근 권한이 없어 새 내용 지문을 만들지 않으며 재작성/권한 변경도 하지 않는다.
 - **E02-ORDER-RR Plan / Do:** [기존 승인 설계](../reviews/cash-and-sepa-rr-2026-10-28.md#e02-order-rr-design)에 따라 오프라인 순수 함수와 합성 검사를 추가했다. 기준`0b82af5d`, 작성 Terra/high(실제metadata 미노출), coordinator가 통합한다. 기존1주 근사와 계획 수량/목표·손절별 비용을 구분하며 엔진/주문/스케줄러에는 연결하지 않는다.
-- **See / 리뷰 처분:** 초기 독립 실제 Claude Opus5.5/high 요청 리뷰 P1 3건/P2 3건에 한 수정 묶음을 적용했다. scoped 재리뷰는 제품 P1/P2없음이나 검사 구분2건으로 `request_changes`였다. coordinator가 소스와 대조해 두 검사를 보강하고 거대 정수의 JSON 직렬화 결함도 함께 해결하도록 범위를 확정했다. 최종 델타는 독립 Sol/high 리뷰 APPROVE·P0/P1/P2 0(실제metadata 미노출)이며 reviewer 직접63검사/격리0, coordinator 관련140검사/격리0를 확인했다. 최종 전체/CI·병합은 이 변경 PR의 완료 영수증을 따른다. 중간 전체9,527passed/2skipped/2xfailed·781.78초·격리0는 수정 전 기준이며 최종 코드 검증을 대체하지 않는다.
+- **See / 리뷰 처분:** 초기 독립 실제 Claude Opus5.5/high 요청 리뷰 P1 3건/P2 3건에 한 수정 묶음을 적용했다. scoped 재리뷰는 제품 P1/P2없음이나 검사 구분2건으로 `request_changes`였다. coordinator가 소스와 대조해 두 검사를 보강하고 거대 정수의 JSON 직렬화 결함도 함께 해결하도록 범위를 확정했다. 최종 델타는 독립 Sol/high 리뷰 APPROVE·P0/P1/P2 0(실제metadata 미노출)이며 reviewer 직접63검사/격리0, coordinator 관련140검사/격리0를 확인했다. 최종 로컬/PR CI9,533passed/2skipped/2xfailed·격리0·PR #289/main62998f67 병합과 main CI SUCCESS는 [완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/289#issuecomment-6467233257)을 따른다. 중간 전체9,527passed/2skipped/2xfailed·781.78초·격리0는 수정 전 기준이며 최종 코드 검증을 대체하지 않는다.
 - **Ruling — 계산 정밀도:** 가격/문턱/비용률은28자리·exponent/adjusted 절댓값28 이하, 수량0~10^12와 고정Decimal28/half-even 문맥을 쓴다. 호출자 정밀도에 따른 값 변화를 막지만 큰 곱셈은28자리에서 반올림되거나 기존 비용 quantize가 실패해 unavailable이 될 수 있다. 거래 규모 검증이나 실제 runtime float 동일성은 주장하지 않는다.
 - **Ruling — 실패 의미:** 비용/산술 실패는 일부 gross만 성공으로 남기지 않는 all-null 진단이며 넓은 예외 경계와 `fee_calculation_unavailable` 이유를 유지한다. 세부 원인 분류가 없으므로 후속 분석은 unavailable을0비용으로 바꾸지 않는다.
 - **NEXT E02-RR-CONTEXT:** 비교 입력의 출처 연결. 아래 [다음 계약](#e02-rr-context-20261028)을 먼저 확정하고 기존 metadata/원장 재사용 여부를 검증한다. 현재 자료가 없는 gate나 수량을 만들어 넣지 않으며 새 수집 기간·가상계좌·매수 재개는 없다.
 
 
 <a id="e02-rr-context-20261028"></a>
-### E02-RR-CONTEXT — 다음 작업의 입력 출처 연결
+### E02-RR-CONTEXT — 선정 근거와 실행 신호 기록 연결
 
-**Plan:** 현재 계산기를 실제 선정 분석에 쓰려면 같은 판단의 원래 gate·신호 가격·최종 계획 수량·실제 청산 정책을 구분한 근거가 필요하다. 별도 원장을 새로 만들기 전에 기존 `signal_events.metadata`, `entry_risk`, `PendingSignal`, 선택적 `entry_observation`을 재사용한다. 원래 gate를 현재 전략 설정으로 역산하지 않는다.
+**현재:** 기존 입력 출처 연결의 구현·독립 재리뷰·로컬 전체 검증을 완료했다. 최종 CI/병합/운영 인수는 이 변경의 PR 완료 영수증으로 확정한다. 기준 main`62998f67`의 PR #289는 로컬/PR CI9,533검사와 병합 후 main CI까지 SUCCESS이며 [완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/289#issuecomment-6467233257)을 확인했다. 운영0b82af5d와 새 소스 통합을 구분한다.
 
-**Do — 선행 소스 대조 완료:** 요청 Sol/high(실제metadata 미노출)의 읽기 전용 분석 뒤 coordinator가 source를 확인했다. SEPA `Signal.metadata`에는 통과한 RR basis/threshold가 없고, 일반 `_log_signal`은 signal P/T/S를 저장하지 않는다. 최종 수량은 risk모드 `entry_risk`와 제출 intent에 이미 존재한다. signal stop/target은 ExitManager 등록 인자로 전달되지 않으며 등록은 전략별 exit_params를 쓴다. 계획 net SL·최초 등록 SL·crash 보정 effective stop도 각각 다르다. [경로 근거](../reviews/cash-and-sepa-rr-2026-10-28.md#e02-order-rr-design)를 따른다.
+**Goal / Spec:** 이전 E02-ORDER-RR은 오프라인 계산을 갖췄다. 이번에는 실제 SEPA 배치의 원래 gate와 P/T/S가 대기 JSON·실행 신호·기존 signal_events 기록까지 도달하게 만든다. 매매 조건을 바꾸지 않고 가격 변경 전후 근거를 구분하는 것이 완료 조건이다. [기존 RR 계약](../reviews/cash-and-sepa-rr-2026-10-28.md#e02-order-rr-design)을 따른다.
 
-**다음 구현 범위:** source별 명시적 snapshot 계약과 기존 metadata에 넣을 최소 필드/소비자를 같은 설계에서 정한다. 소비자 없는 별도 builder나 모든 원장 schema 확장부터 시작하지 않는다. 첫 대상으로 SEPA 원래 RR 근거와 동일 signal의 P/T/S를 고정하고, 최종 수량/청산 정책은 기존 식별자로 연결 가능한지 확인한다. 라이브 기록 배선은 매매 판정·수량·청산 인자 동일성 회귀와 독립 중요 리뷰를 통과한 후 적용한다. 현금 부족으로 수량/체결이 없으면 그대로 결측이다.
+**Architecture / 선택:** 별도 원장이나 소비자 없는 builder 대신 현재 Signal.metadata → PendingSignal.inputs_ref → entry_plan → signal_events.metadata를 사용한다. 기존 JSONB라 DB migration/새 상태파일이 없다. 현재 설정으로 과거 gate를 복원하는 대안은 출처가 없어 제외한다. 원래 gate를 주문 직전 gate로 통합하는 대안은 거래정책 변경이라 제외한다. coordinator의 구현 선택이며 새로운 매매정책 승인이 아니다.
 
-**See:** 누락·충돌은 null/reason으로 남고 unknown gate를2.0으로 보충하지 않아야 한다. 동일 signal/order ID·각 시점·비용 설정 출처를 보존하며 계획/실제 체결/현재 정책을 섞지 않는다. 합성 검사는 계산/기록 계약만 확인하고 경제성은 실제 체결·청산·비용 자료 전까지 미측정이다. 이 절은 설계 착수 근거이며 구현/운영 완료를 뜻하지 않는다.
+**선행 감사:** 요청 Astra/high(실제metadata 미노출)와 coordinator가 실제 `generate_batch_signals` 호출을 확인했다. 실행 P는 현재가, S는 레짐/장중 상태에 따라 조정된다. `_log_sig`의 passed와 entry_risk 수량은 pending lock 재검사/제출보다 앞선 자료다. snapshot metadata를 기록해도 주문 제출/체결 증거로 승격하지 않는다. 현금 부족으로 수량이 없으면 결측이다.
+
+**Global constraints:** 가격/문턱/비용 계산·boolean gate·선정 순서·사이징·주문·pending/쿨다운·ExitManager 인자를 변경하지 않는다. 새 API/LLM 호출·토큰/환경/예약/DB schema·과거 행 backfill 없음. live RR 계산기 연결 없음. 기록 실패는 진단 unavailable로 축소하며 기존 신호/주문 흐름을 유지한다. 기존 fail-closed 비용 처리는 그대로다. 증명 없는 문턱2.0/default 적용·수량 생성·실제 exit 설정 추정 금지.
+
+**Files / 역할:** `src/utils/rr_context.py`(새 bounded 순수 snapshot helper), `src/strategies/base.py`(실제 비용 계산기에서 선택적 진단 복사), `src/strategies/kr/sepa_trend.py`(통과 근거 생성), `src/core/batch_analyzer.py`(기존 inputs_ref 전달), `src/core/engine.py`(기존 _log_sig 소비), `tests/test_rr_context.py`(새 연결/동작 보존 검사). coordinator가 원장/CHANGELOG/CLAUDE/docs 인덱스를 갱신한다. helper는 실제 producer/consumer에서 사용하며 독립 새 수집기를 만들지 않는다.
+
+**Interfaces / 명시 계약:**
+1. `capture_fee_snapshot(calculator) -> dict`: 이미 사용한 `_fc`의 실제 FeeCalculator/FeeConfig rates 3개만 문자열로 복사한다. 별도 get_fee_calculator 호출 없음. 정상0 유지, config 없음/유효하지 않은 값은 unavailable. 기존 비용 계산 try/except와 **분리한 안전 경계**에서 diagnostics['fee_snapshot']에 추가한다. capture 실패가 원래 True/False를 바꾸면 안 된다.
+2. `capture_sepa_rr_selection(signal, diagnostics) -> dict`: 통과한 batch SEPA Signal에 metadata['rr_selection']을 붙인다. version1, status/reason, symbol/strategy, source_ref=`src/strategies/kr/sepa_trend.py:generate_batch_signals`, 원래 P/T/S 문자열, signal.timestamp(원래 시간대 의미 유지), gate basis=`entry_roundtrip_per_share`/threshold=`2.0`/passed=true, 실제 float diagnostics5필드와 fee_snapshot을 독립 복사한다. 현재판정 재계산·새 git subprocess·현재 설정 재조회 없음. diagnostics가 미확보면 unavailable이며 신호는 유지한다.
+3. `copy_rr_selection(value, *, symbol, strategy) -> dict`: 알려진 v1 schema·source/identity·bounded scalar만 별개 복사한다. None은 not_captured, 잘못된 version/source/identity/비유한·순환·과대값은 unavailable 또는 conflict. raw arbitrary 객체/default=str/deepcopy로 직렬화하지 않는다. 문자열≤256자·숫자 문자열≤128자, quantity0..10^12; 고정 키만 처리하여 payload를 작게 유지한다.
+4. `_to_pending_signal`은 inputs_ref['rr_selection']에 안전 복사를 넣는다. old JSON/VCP/다른 전략에서 근거가 없으면 unknown/not_captured이며 SEPA를 추정하지 않는다. 기존 execute_pending_signals의 entry_plan 경로를 이용해 top-level 중복 추가는 하지 않는다.
+5. `build_rr_log_context(event, extra_metadata=None) -> dict`: `_log_sig`가 await/task 생성 전에 새 rr_context를 고정한다. direct metadata.rr_selection과 entry_plan.inputs_ref.rr_selection이 모두 있고 다르면 conflict; 임의 우선순위 없음. 원래 selection과 현재 event P/T/S·event.id/source/timestamp·plan_id/version·quote_as_of를 별개 구조로 보존한다. 기왕 존재하는 requested_quantity(extra metadata), entry_risk.planned_quantity/planned_price, size_trace.quantity는 **서로 다른 근거**로만 보존하고 제출 증거/통합수량으로 합치지 않는다. no evidence=null, 실제0=0. event/metadata의 후속 변경이 저장값을 바꾸지 않아야 한다. 추가 caller metadata가 rr_context를 덮어쓰지 못하게 helper 결과를 마지막에 넣는다. helper 자체가 예외를 내도 호출부가 unavailable marker로 축소한다.
+
+**범위 한계:** 최초 SEPA gate만 캡처한다. 프리장 추가 gross 검사·장중 직접스크리너·VCP/다른 전략의 gate는 이번에 수집하지 않으며 전체 gate 이력을 설명한다고 하지 않는다. batch 기본 candidate_id는 실제 후보 원문 ID로 승격하지 않는다. signal target/stop과 전략 exit_params/계획 net SL/실제 등록 SL/현재 effective stop은 다르다. 이번에는 청산 설정 스냅샷이나 execution intent join을 구현하지 않는다.
+
+**Review focus / See:**
+- [x] RED: source SEPA → 실제 _to_pending_signal → JSON 저장/재로드 → execute_pending_signals → 실제 _log_sig fake sink에서 원래 gate/비용/가격이 도달하지 않는 재현.
+- [x] 동작 보존: 기록 유무 대조(기존 동작 근사) 및 캡처 예외 대조로 후보/순서/score/strength/P/T/S, emit 수, risk/non-risk q>0·q0·early cash/G3 차단·pending race·기존 entry_risk/size_trace/LLM metadata 동일. 기존 lifecycle/T11/attribution 회귀 재사용.
+- [x] 변이/오류: 원본 Signal/fee config/event를 기록 후 변경해도 snapshot 고정. 조정된 현재 P/S가 원래 snapshot을 덮지 않음. legacy missing, source/identity/version 오류, direct/plan conflict, NaN/Inf/bool/큰값/순환, feeconfig/helper 실패에도 기존 gate/주문 흐름 동일.
+- [x] 실제 수량0와 결측·sizing quantity·제출 의도/실체결을 구분. unknown gate를2.0으로 복원하지 않음. 추가 gate 미수집 한계 명시.
+- [x] 관련 검사·로컬 전체 verify·비밀정보 검사·독립 중요 리뷰. **9,600 passed / 2 skipped / 2 xfailed / 8 warnings / 780.02초 / rc0**, 운영 상태·외부 네트워크 접근0. 문법/비밀 검사 PASS. 고정 PR CI/병합과 운영 고정SHA 인수는 PR 완료 영수증으로 별도 확정하며 소스 완료와 혼동하지 않는다.
+
+**실행:** 한 Astra/high 구현자와 독립 실제 Claude Opus5.5/high 리뷰, coordinator 문서/통합. 구현자는 위6파일만 별도 worktree에서 수정한다. 신규 로컬 기본 검사에 운영 자격/API 사용0. 기준 관련87검사 통과/격리0, full9533의 직전 main CI SUCCESS를 baseline으로 재사용한다.
+
+**See 중간 근거:** 실제 batch→대기 JSON→실행 신호→기록 RED를 확인했고, 관련296검사·추가 attribution/관측/LLM270검사(각 격리0)를 coordinator가 재실행했다. 첫 독립 구독 Claude CLI Opus5.5/high 소스 리뷰는 P0/P1 없음, P2 검증 공백3건으로 보류했다. 기존 소비자/미계산 수량 감사와 실제 on_signal까지의 연결 검사를 보완하며, 이 중간 통과를 최종 인수로 세지 않는다. 요청 모델과 실제 응답 모델 일치·도구/MCP0·실효 effort 미노출. 실제 제출/체결·신규 거래 수익은 미검증이다.
+
+**병행 자연 인수 — 21:01 KST:** 운영0b82af5d/PID3705216·active/running·NRestarts0·broker connected·미체결0·recovery ready를 읽기 확인했다. 당일 보고 슬롯은 장전367자/장후532자/개인21시924자 API accepted, 장중은 `skipped_missing_current_market_basis`다. 실제 모바일 수신/가독성은 별도 확인이며 재발송하지 않았다. 역할 감사 파일은 여전히 미발견으로 자연 Claude 역할 호출 인수는 WAIT다. 파일 부재를 모든 LLM 호출 부재로 해석하지 않는다. 예약·설정·운영 프로세스 변경0.
+
+**독립 리뷰 최종 처분:** 재리뷰는 실제 응답모델 `claude-opus-5-5`/high 요청·실효 effort 미노출·도구/MCP0·rc0·112.25초로 **APPROVE, P0/P1/P2 0**이다. P2-1/2는 실제 소비자17경로/수량 호출3곳을 전수 대조해 확인된 결함이 아님을 확인했고, P2-3은 실제 on_signal 연쇄4조합과 배선 제거 RED4실패로 보완했다. 동일 결측 marker·공백 숫자·비용 계산기 출처를 보완했다. fee snapshot은 실제 FeeCalculator/FeeConfig의 비율만이며 반올림 구현 전체가 아니다. source-only reviewer는 테스트를 실행하지 않았다.
+
+재리뷰 비차단 P3는 현재/가정 범위를 구분한다. 문턱 spy의 미래 기본값 변경 위험은 현재 호출부가 `min_rr=2.0`을 명시하므로 현 결함이 아니다. 비정규 숫자 문자열·인스턴스 monkeypatch는 정상 producer 근거가 없고, 추가 로그 개수 단언은 검사 강도 제안이다. 임의 입력 정규화나 새 정책을 이 변경에 더하지 않으며 실제 재현 시 후속 이슈로 다룬다. 요청/실제 모델·소스 지문·비공개 리뷰 영수증은 `~/.local/state/qwq-task-audit/20261028/rr-context-rereview/`에 보존한다. 구독 표시 비용은 API 실청구액으로 해석하지 않는다. 최종 전체/CI는 아래 완료 영수증으로 확정한다.
+
+**사전 충돌 대조:**
+
+| producer → consumer | 계약 대조 | 결정 |
+|---|---|---|
+| Base diagnostics → SEPA | fee snapshot 오류가 기존 비용 오류(False)로 번질 수 있음 | 실제 비용 try 밖에서 별도 capture 안전 경계; boolean 불변 검사 |
+| SEPA → PendingSignal | float 가격 변환과 얕은 metadata 복사가 원래 근거를 바꿀 수 있음 | 원래 Decimal 문자열을 고정한 v1만 inputs_ref 별개 복사 |
+| PendingSignal/direct → _log_sig | 두 출처 충돌·후속 가격 변경·task 시작 전 예외 | 불일치 conflict, 현재 P/T/S 분리, task 생성 전 bounded 복사/오류 marker |
+| 기록 → 수량 해석 | passed/entry_risk가 실제 제출로 오인될 수 있음 | 각 source별 기존 수량만 저장; intent/체결 해석과 분리 |
+
+**Ruling:** 기록 불능 때문에 매매 판정을 바꾸지 않는다. 실패한 새 문맥만 unavailable로 축소한다. 이 선택의 비용은 해당 판단의 분석 근거 결측이며, 결측을0비용/통과/실제 거래로 채우지 않는다.
+**Ruling:** 최초 SEPA gate만 이번 범위로 고정하고 프리장 추가 gate·실제 청산 policy/intent join은 다음 단계로 둔다. 이 선택으로 전체 진입·청산 경로의 설명은 아직 완성되지 않지만 기존 출처를 추정으로 메우지 않는다.
+
+
+<a id="e02-rr-compare-next"></a>
+**NEXT — E02-RR-COMPARE (계약 검토 DONE / 구현 READY):** 기존 `compare_order_rr`를 저장된 `signal_events.metadata.rr_context`에 연결하는 오프라인 판독으로 이어간다. 목적은 선정 당시 매력이 실행 참조가격/손절 조정 뒤 어떻게 달라지는지 한 표로 확인하는 것이다. 소스 분석 Sol/high(실제metadata 미노출)에서 기존 최근 신호/SSE에는 metadata가 없고, 실행 intent에는 수량/attribution만 있으며 가격·비용률은 없음을 확인했다. 기존 exporter가 있다고 가정하지 않는다. 합성 fixture 검증과 필요한 필드만의 로컬 자료 추출/실제 판독을 분리하며, 실제 추출은 아직 수행하지 않았다.
+
+- **Plan:** 명시한 오프라인 저장행만 읽는 adapter/작은 CLI를 설계한다. 원래 float gate/진단과 현재 signal P/T/S의 Decimal 재구성을 나란히 표시한다. 비용률은 선정 당시 자료로 고정한 분석이며 현재 비용 설정/실제 실행 RR로 표시하지 않는다. 새 API/LLM 호출·DB 연결·수집기·가상자금·실거래 gate 변경은 없다.
+- **Do:** 첫 범위는 기존 계획 수량 근거별 비교와 결측표다. requested/entry_risk/size_trace를 각각 표시하고 서로 다르면 고르지 않는다. 결측을1주나 현금 기반 수량으로 채우지 않는다. 실제 intent 연결이 필요하면 별도 검증된 export의 정확한 signal_id와 종목/전략만 대조하고, plan_id 단독/복수 후보/유사 시각으로 붙이지 않는다. 해당 확장은 최초 판독 결과가 필요성을 보여줄 때 수행한다.
+- **See:** 실제 저장 schema의 합성 fixture→기존 비교기 결과·가격 변경·0/결측·충돌·지원 범위 제외·입력 지문/분모 검증, 관련/전체 검사·독립 리뷰. 실제 자료가 없으면 비교 불가 건수와 이유를 낸다. 선정 float와 재구성 Decimal 차이를 순수 가격 효과로 단정하거나 passed를 제출/체결로 승격하지 않는다.
+- **복귀점:** 첫 실제 판독에서 드러난 한 가지 선정/진입 결함을 근거로 개선한다. 비교 가능 자료 부족을 새 장기 수집이나 반복 기록 기능 개발로 자동 전환하지 않는다. 경제성은 실체결·실비용 확보 전까지 미검증이다.
+
 
 **Goal:** 좋은 종목을 고르고 실제로 진입할 수 있는 시점을 판단해, 거래·데이터·LLM 비용 후 순수익을 개선한다. R02 최소 보완은 운영 적용했고10/28 장전 발송·새 KIS 실시간 수신까지 확인했다. E04-D1은 PR #282 병합 후 위 통합 배포에 포함됐다. **E04-D2는 PR #284로 소스 통합했고, 위 통합SHA `0b82af5d`로 운영 적용·기동 인수를 완료**했다. 자연 Claude 호출 인수는 별도 대기다. Google 결제 복구를 다음 조건으로 요구하지 않는다. 이후 E02의 선정·비용 기준 검증으로 연결한다. 기술 결함 해결과 순수익 개선을 구분하며 R02/T04 자연 슬롯과 O02 보존 기한을 병행한다.
 
@@ -56,7 +108,7 @@
 - **O02 소비 cron 정리 DONE:** 20:59:06에 표시된 단발7줄만 제거했다. 다른 모든 바이트·기존 반복3개·예약 결과7개·원본/고정 도구를 보존했고 파일 삭제는0이다. 기존 retention 기한과 삭제 전 참조 점검은 WAIT다.
 - `.env`·설정/사용자 override·매수 중지·기존 관측 자료·접수불명 파일 상태8경로, helper5파일, 기존 비용 terminal3,294행과 예산 설정을 보존했다. 토스 start/token0·무접속 검사rc0으로 재확인했으며 실제 API 성공 근거로 세지 않는다.
 
-**현재 주 과제와 NEXT:** E02-RR/COST/PNL-COST는 PR #286/#287/#288로 검증·통합하고 고정`0b82af5d`에 운영 적용했다. 현재는 **E02-ORDER-RR 오프라인 계산 대조기** 최종 인수 단계이며, NEXT는 **E02-RR-CONTEXT 출처 연결**이다. E04-D2는 기동 인수 DONE이며 다음 자연 호출에서 실제 transport/billing/모델·완료/비용을 확인한다. 현금 부족/매수 중지 중 신규 거래 순수익은 미측정이며 기술 검증은 계속한다. E01/F1/W1의 자연 자료와 R02/T04/O02 기한을 병행한다. 새20일 수집·가상자금·매수 재개·유료 R1은 시작하지 않는다.
+**현재 주 과제와 NEXT:** E02-RR/COST/PNL-COST는 PR #286/#287/#288로 검증·통합하고 고정`0b82af5d`에 운영 적용했다. **E02-ORDER-RR 오프라인 계산 대조기**는 검증/PR #289/main CI까지 DONE이다. **E02-RR-CONTEXT 출처 연결**은 구현/독립 재리뷰/로컬9,600검사를 완료했고 최종 CI/운영 인수를 진행한다. 다음 분석은 E02-RR-COMPARE 계약을 따른다. E04-D2는 기동 인수 DONE이며 다음 자연 호출에서 실제 transport/billing/모델·완료/비용을 확인한다. 현금 부족/매수 중지 중 신규 거래 순수익은 미측정이며 기술 검증은 계속한다. E01/F1/W1의 자연 자료와 R02/T04/O02 기한을 병행한다. 새20일 수집·가상자금·매수 재개·유료 R1은 시작하지 않는다.
 
 문서/오프라인 후속 main과 운영 고정 `0b82af5d`를 구분하며 문서만을 위한 재배포는 하지 않는다. T04의 남은 자연 슬롯과 O02 retention은 병행 트랙이다. 배포는 기술 적용 완료이며 KIS 요청 절감·Toss 장중 분산·경제성 검증 완료가 아니다.
 
@@ -71,7 +123,9 @@
 | **1 E02-RR 선정 통과 가능성** | 분석/진단 구현/독립 리뷰·운영 적용 DONE | 점수 통과 후보가 비용 후 RR에서 막히는 이유 규명 | 기본/실제 파일 override·36 산술 조합 대조. 약 ATR4.9~6% 상단 통과 구조 확인. 기존 게이트 값으로 비용 후 RR/비용/상태를 로그에 표시 | [영수증](#cash-and-rr-20261028)의 검사/독립 리뷰/CI. 목표/문턱/판정 변경0, 경제성은 미입증. **NEXT:E02-COST** |
 | **E02-COST 비용 계약** | PR #287/main7a685909·CI/검증/리뷰·운영 적용 DONE | 비용 실패와 계획/실현 비용의 의미 차이를 정리 | 비용 예외/유효하지 않은 비용을0으로 가정하지 않고 보류. 정상1,280판정 일치·매도가/수량 경계 차이 확인 | [검증·한계·NEXT](#e02-cost-20261028). 정상 모형/문턱 유지. 실제 체결 비용·주문 직전 RR 통일은 미완료 |
 | **E02-PNL-COST 체결 비용** | 관련161·전체/CI9,470검사·독립 중요 리뷰·PR288·운영 적용 DONE | 실제 SELL 비용 실패의 부분 회계 변경 방지 | [검증/한계](#e02-pnl-cost-20261028)와 위 통합 배포 영수증 | 정상 결과 동일·실패 시 원본 보존/대사 보류. 다음은 오프라인 계산 대조 |
-| **현재 E02-ORDER-RR** | 구현 완료·최종 델타 검증/통합 | 최종 계획 수량·가격별 비용 차이를 기존1주 근사와 비교 | [설계/사례](../reviews/cash-and-sepa-rr-2026-10-28.md#e02-order-rr-design), Decimal 문맥 독립/입력 오류/계산 출처·8사례 검증 | 관련/전체 검사·독립 리뷰·PR 인수 영수증. 실제 주문 허용이나 청산 성과로 승격하지 않음. **NEXT:E02-RR-CONTEXT** |
+| **E02-ORDER-RR** | PR #289·로컬/PR/main CI9,533·독립 리뷰 DONE | 최종 계획 수량·가격별 비용 차이를 기존1주 근사와 비교 | [설계/사례](../reviews/cash-and-sepa-rr-2026-10-28.md#e02-order-rr-design), Decimal 문맥 독립/입력 오류/계산 출처·8사례 검증 | 관련/전체 검사·독립 리뷰·PR 인수 영수증. 실제 주문 허용이나 청산 성과로 승격하지 않음. **NEXT:E02-RR-CONTEXT** |
+| **E02-RR-CONTEXT** | 구현/독립 재리뷰/로컬 전체9,600검사 DONE; CI/운영 인수 별도 | 선정 당시 실제 gate/P/T/S/비용을 실행 신호 기록까지 보존 | 기존 inputs_ref/entry_plan/signal_events 재사용. 현재 가격·각 수량 근거와 원래 선정 자료 분리 | [Plan→Do→See](#e02-rr-context-20261028). 최종 CI/운영 인수는 PR 완료 영수증. **NEXT:E02-RR-COMPARE** |
+| **E02-RR-COMPARE** | 계약 검토 DONE; 구현 READY | 선정 당시와 현재 실행 참조가격의 비용 후 차이 판독 | [범위/결측/수량 계약](#e02-rr-compare-next)의 오프라인 소비자부터 구현. 새 수집/DB 연결/매매 정책 없음 | 명시 저장행→기존 비교기·분모/결측/가격 변화 검사·독립 리뷰. 실제 자료와 합성 검증 분리 |
 | **운영 1 E04-D2 적용 준비/배포** | 소스/실측/리뷰/PR284 **DONE**; 준비 **DONE**, 실제 배포 **DONE:0b82af5d/17:40 사후 인수** | Gemini 중단·GPT/Claude 계약을 실행 중인 봇에 적용 | 아래 고정 SHA 체크리스트로 CLI 절대경로·환경/예산·기존 예약·복구/미체결/helper를 대조. 운영 단계에서만 기존 배포 절차 실행 | 통합 고정`0b82af5d` 적용·복구 정상·보호/기존 원장/예약 유지. **NEXT:아래 자연 호출 인수**. 준비를 배포 완료로 세지 않음 |
 | **운영 2 E04-D2 자연 호출 인수** | **WAIT: 적용 이후 다음 해당 호출** | 실제 서비스에서도 CLI 우선/API 대체와 독립 검토 보류 확인 | 전환 시점 이후의 요청만 GPT/Claude 실제 모델·transport·billing·완료/timeout·지연·API 예산으로 대조. 기존 Gemini 기록과 구분. API 대체가 자연 발생하지 않으면 오프라인 계약/소규모 실측 완료와 자연 대체 미관측을 분리 | 새 Gemini 전송0·허용된 경로·원장 일치·구독/API 비용 분리·미완료 시 단독 승인0. 표본 없는 자연 API 대체를 무기한 배포 장애로 취급하지 않음. **NEXT:E02/W1·조건부 E04 비교** |
 | **2 E02-F1/W1 미관측 조건** | F2/양성 가점/역사 위키 문맥 DONE; **WAIT: 구별 가능한 자연 입력** | 선정 입력과 위키가 설계대로 쓰이는지 확인 | F1은 기록 단계의 전체 입력에서 공백→재등장, W1은 실제 판단에 들어간 최근 연구행/수집일을 대조. 상위 목록 미등장을 공백으로 추정하지 않음 | 해당 경계의 정상 처리 또는 재현된 결함1개. 증거가 없으면 이유·재개 사건만 남기고 다음 READY로 이동. 비활성 RSI2 충돌·과거 위키 사용은 다시 대기하지 않음 |
