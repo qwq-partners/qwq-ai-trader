@@ -91,7 +91,9 @@ class ReportSchedule:
                 return "already_consumed"
             await asyncio.to_thread(self.store.finish, audience, kind, day, status)
             if status != "skipped_holiday":
-                await asyncio.to_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: 원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.", now=now)
+                reason = ("유효한 지수 또는 참고자료 없음. 수신시각을 원천시각으로 대체하지 않음."
+                          if kind == "midday" else "원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.")
+                await asyncio.to_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
             return status
         result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store)
         if kind == "morning" and result == "accepted" and self.dispatch_recorder:
