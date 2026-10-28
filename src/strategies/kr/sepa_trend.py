@@ -111,14 +111,14 @@ class SEPATrendStrategy(BaseStrategy):
                 target_pct = self.config.take_profit_pct
                 if atr is not None and atr > 0:
                     stop_pct = max(_min_stop, min(_max_stop, atr * 2.0))
-                    # target: stop × 2.0 이상 보장 + 최대 20% (추세 추종 공간 확보)
-                    # 2026-08-08 P1: ×1.5 → ×2.0 — 아래 min_rr=2.0 게이트와 정합.
-                    # 기존엔 ATR 2~3.5% 후보의 R/R이 1.5로 계산돼 전부 차단됐다.
+                    # 비용 전 목표 비율: stop × 2.0과 ATR 기반 목표 중 큰 값.
+                    # 아래 게이트는 수수료·세금 반영 후 2.0이므로,
+                    # 비용 전 2.0만으로 통과를 보장하지 않는다.
                     target_pct = max(stop_pct * 2.0, min(20.0, atr * 3.0))
                 candidate.stop_price = candidate.entry_price * Decimal(str(1 - stop_pct / 100))
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
-                # R/R 비율 필터 (min_rr=2.0): US SEPA와 동일 기준 통일
+                # 비용 후 R/R 필터 (min_rr=2.0): 실제 비용 모형은 BaseStrategy 기준
                 if not self.check_rr_ratio(
                     candidate.entry_price, candidate.target_price,
                     candidate.stop_price, min_rr=2.0
@@ -185,10 +185,10 @@ class SEPATrendStrategy(BaseStrategy):
         if rr_blocked:
             logger.warning(
                 f"[SEPA] R/R 차단: {len(rr_blocked)}개 "
-                f"(최소 손익비 2.0 기준 미충족)"
+                f"(최소 비용 후 손익비 2.0 기준 미충족)"
             )
             for sym, name, sp, tp, rr in rr_blocked[:5]:
-                logger.warning(f"  ✗ {sym} {name}: stop={sp:.1f}% target={tp:.1f}% R/R={rr:.2f}")
+                logger.warning(f"  ✗ {sym} {name}: stop={sp:.1f}% target={tp:.1f}% 비용 전 R/R={rr:.2f}")
 
         # 점수 분포 요약 로그
         if all_scores:

@@ -525,7 +525,7 @@ class BaseStrategy(ABC):
         rr_ratio = reward / risk
         if rr_ratio < min_rr:
             logger.debug(
-                f"[R/R] {self.name} R/R={rr_ratio:.2f} < {min_rr} — 진입 차단"
+                f"[R/R] {self.name} 비용 후 R/R={rr_ratio:.2f} < {min_rr} — 진입 차단"
             )
             return False
         return True
