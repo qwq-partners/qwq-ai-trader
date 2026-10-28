@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-28 현재:** [E02-RR-CONTEXT 인수·NEXT](docs/operations/execution-roadmap.md#e02-rr-context-20261028). SEPA 선정 당시 RR/비용/P/T/S를 기존 대기 계획→실행 신호 기록에 보존했다. 로컬 전체9,600검사·격리0·독립 실제 Claude Opus5.5 재리뷰 APPROVE(P0/P1/P2 0). 원래 선정 근거와 현재 가격·각 수량 출처를 구분하며 거래 판정/청산 정책은 유지한다. 작성 시 운영은0b82af5d/PID3705216이고, 최종 CI/병합·운영 반영은 해당 PR 완료 영수증을 따른다. NEXT는 기존 자료의 오프라인 비교다. 아래 머리글은 당시 이력이다.
+> **2026-10-28 현재:** [E02-RR-CONTEXT 인수·NEXT](docs/operations/execution-roadmap.md#e02-rr-context-20261028). SEPA 선정 당시 RR/비용/P/T/S를 기존 대기 계획→실행 신호 기록에 보존했다. 로컬 전체9,600검사·격리0·독립 실제 Claude Opus5.5 재리뷰 APPROVE(P0/P1/P2 0). 원래 선정 근거와 현재 가격·각 수량 출처를 구분하며 거래 판정/청산 정책은 유지한다. 작성 시 운영은0b82af5d/PID3705216이고, 최종 CI/병합·운영 반영은 [PR #290](https://github.com/qwq-partners/qwq-ai-trader/pull/290) 완료 영수증을 따른다. NEXT는 기존 자료의 오프라인 비교다. 아래 머리글은 당시 이력이다.
 
 > **2026-10-28 E02-PNL-COST:** [현재 검증·통합·NEXT](docs/operations/execution-roadmap.md#e02-pnl-cost-20261028). KR SELL 비용을 포지션 변경 전에 확인해 비용 오류의0 가정/부분 변경을 막는다. 실패한 원본 체결·False 영수증·대사 보류와 기존 보호 매도 예외를 보존한다. 신규22검사·관련161/전체9,470검사·격리0·독립 Claude Opus5.5 리뷰 통과, 최종 CI/병합은 원장 영수증을 따른다. 운영`c4bc4f0e`·예약/매수 중지는 그대로이며 신규 거래 순수익은 미측정이다. 아래 E02-COST의 실현손익 미수정 설명은 PR #287 당시 범위다.
 
