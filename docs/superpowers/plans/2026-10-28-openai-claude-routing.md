@@ -33,9 +33,9 @@
 
 **Interfaces:** `ROLE_POLICY_VERSION='engine-roles-v2-openai'`; REPORT_ONE_LINE/MORNING_BRIEF는 `openai/gpt-5-mini`, `reasoning_effort='minimal'`, 기존 출력·입력·시한 유지. POST_EXIT_RESEARCH 유지. 현재 판독은 v2/OpenAI/stop를 검증하며 v1/Gemini 기록을 v2 성공으로 세지 않는다.
 
-- [ ] 기대 프로필·현행/과거 판독을 검사하는 실패 테스트를 추가/수정하고 RED 확인.
-- [ ] 프로필·판독 계약과 필요한 fixture만 변경. 반복 호출·유료 시험·운영 artifact 교체 없음.
-- [ ] 관련 검사를 통과시키고 diff·독립 리뷰 후 통합.
+- [x] 기대 프로필·현행/과거 판독을 검사하는 실패 테스트를 추가/수정하고 RED 확인.
+- [x] 프로필·판독 계약과 필요한 fixture만 변경. 반복 호출·유료 시험·운영 artifact 교체 없음.
+- [x] 관련 검사를 통과시키고 diff·독립 리뷰 후 작업 브랜치에 통합. main/운영 반영은 Task4에서 별도 확인.
 
 ### Task 2: 공통 GPT 라우팅과 신규 Gemini 전송 차단
 
@@ -43,10 +43,10 @@
 
 **Interfaces:** 일반 `complete()` task primary는 OpenAI; light는 fallback 없음, heavy 실패 시 별도 모델인 OpenAI light 1회만. 기존 `complete_json()`의 형식 복구와 명시적 `complete_with(retry_on_empty=...)`의 빈 응답 복구는 유지하며 전체 API의 무조건1회 상한을 뜻하지 않는다. 고정 보고 역할은 한 번만 호출한다. 명시적 독립 provider 경로는 cross-provider fallback 없음. 역사 Gemini 가격/원장을 보존하고 신규 Gemini 전송은 client 경계에서도 미전송으로 차단한다. Claude 연결은 별도 의존 작업으로 둔다.
 
-- [ ] stale 설정·일반 task·직접 Gemini client·비교 activation의 신규 Gemini HTTP0 회귀 작성.
-- [ ] 공통 라우팅/명시적 provider lookup/차단 계약 구현. 새로운 유료 상향 폴백 없음.
-- [ ] 예산·attempt trail·refusal·deadline·historical ledger 관련 검사 통과.
-- [x] coordinator: `src/core/adversarial_validator.py`에서 `provider_error_code=provider_disabled`를 명시적 차단으로 처리. peer timeout 뒤에도 판정을 유지하고 단일 GPT fallback으로 우회하지 않는다. 관련7실패 재현→기존 판단 기록 포함34검사 통과. 독립 리뷰/전체 검증 전이다.
+- [x] stale 설정·일반 task·직접 Gemini client·비교 activation의 신규 Gemini HTTP0 회귀 작성.
+- [x] 공통 라우팅/명시적 provider lookup/차단 계약 구현. 새로운 유료 상향 폴백 없음.
+- [x] 예산·attempt trail·refusal·deadline·historical ledger 관련 검사 통과. 전체에서 발견한 기존 Gemini 활성 전송 전제4개를 별도 테스트 수정으로 정비했고, 관련132검사·격리0을 확인했다. 최종 전체CI는 Task4의 별도 게이트다.
+- [x] coordinator: `src/core/adversarial_validator.py`에서 `provider_error_code=provider_disabled`를 명시적 차단으로 처리. peer timeout 뒤에도 판정을 유지하고 단일 GPT fallback으로 우회하지 않는다. 독립 리뷰P1의 일일 한도 우회도 수정해 호출 전에 정책을 확인한다. 통합 관련131·독립 재검증12통과, 미해결P0/P1/P2 0.
 
 ### Task 3: Claude 독립 위험 검토 연결
 
@@ -60,8 +60,10 @@
 
 ### Task 4: 통합 검증·운영 적용 기록
 
-- [ ] 독립 중요 리뷰, 관련/전체 verify, 비밀 검사, CI 확인.
-- [ ] 원장·CHANGELOG·관련 운영 문서, 커밋·푸시·PR 통합.
+- [x] Phase A 독립 중요 소스 리뷰·일일 한도 우회 수정 재리뷰 승인. 마지막 테스트 전용4파일은 별도 한정 재검토한다.
+- [ ] Phase A 최종 관련 검사·전체CI·비밀 검사 후 PR #283 통합. 정확한 최종 HEAD의 검증·병합 영수증은 해당 PR에서 확인한다.
+- [x] 원장·CHANGELOG·관련 운영 문서에 Phase A와 미완료 Claude/운영 단계를 구분했다.
+- [ ] Claude 연결 구현 후 전체 GPT·Claude 계약에 대한 독립 중요 리뷰·관련/전체 검증.
 - [ ] 허용된 실행창에서 고정 SHA 적용, 신규 Gemini0·GPT/Claude 실제 identity·예산·기존 예약 대조. 적용 전까지 운영 미전환으로 명시한다.
 
 ## 근거
@@ -73,3 +75,7 @@
 ## 진행 기록
 
 - 11:34 KST: 작업 branch `feature/openai-claude-routing-20261028`, base `cfdf4910`. 운영 `c4bc4f0e` 미변경. Claude 연결 질문 대기 중이며 Task1부터 수행.
+- PR [#283](https://github.com/qwq-partners/qwq-ai-trader/pull/283)에 Gemini 차단/GPT 전환 단계만 제출한다. Claude 연결·운영 적용을 완료로 승격하지 않는다.
+- 첫 완료된 로컬 전체 검증은4실패/9,288통과/2skip/2xfail·격리0이었다. 이4개를 새 계약으로 정비했다. 원래 age 검증·예산 단독 장애·전송별 원장·402 억제/미확인 비용 보존 검증은 유지하고, 사용 중지 정책이 월/일 한도에 우선한다는 통합 검사를 추가했다. 제품 코드 추가 수정 없이 관련132검사·격리0을 확인했으며 최종 PR 전체CI를 통합 게이트로 사용한다. 실패 실행이나 중간 중단 실행을 전체 성공으로 인용하지 않는다.
+
+- 최종 통합 브랜치에서 위4개와 정책 차단·비교 worker·고정 역할·장전 판독을 함께 실행해 **201passed/23.47초·격리0**을 확인했다. 최종 전체 검증은 동일 코드의 PR CI로 수행한다.
