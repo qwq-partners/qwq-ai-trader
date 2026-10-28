@@ -63,7 +63,7 @@ class LLMCallRecord:
     round_no: int
 
     provider: str = ""
-    model: str = ""                 # **실제 응답 모델 ID** (요청 모델과 다를 수 있다)
+    model: str = ""                 # Legacy model; resolved_model is provider evidence.
     params: Dict[str, Any] = field(default_factory=dict)
 
     prompt_hash: str = ""
@@ -87,6 +87,13 @@ class LLMCallRecord:
     request_sent: Optional[bool] = None
     billing_status: Optional[str] = None
     http_status: Optional[int] = None
+    transport: Optional[str] = None
+    billing_channel: Optional[str] = None
+    requested_model: Optional[str] = None
+    resolved_model: Optional[str] = None
+    attempt_trail: Optional[List[Dict[str, Any]]] = None
+    refusal_detected: Optional[bool] = None
+    transport_error_kind: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -127,6 +134,13 @@ class LLMLedger:
         request_sent: Optional[bool] = None,
         billing_status: Optional[str] = None,
         http_status: Optional[int] = None,
+        transport: Optional[str] = None,
+        billing_channel: Optional[str] = None,
+        requested_model: Optional[str] = None,
+        resolved_model: Optional[str] = None,
+        attempt_trail: Optional[List[Dict[str, Any]]] = None,
+        refusal_detected: Optional[bool] = None,
+        transport_error_kind: Optional[str] = None,
     ) -> Optional[LLMCallRecord]:
         """
         호출 1건을 원장에 남긴다.
@@ -149,6 +163,10 @@ class LLMLedger:
             latency_ms=latency_ms, success=success, error=error,
             prompt_version=prompt_version,
             request_sent=request_sent, billing_status=billing_status, http_status=http_status,
+            transport=transport, billing_channel=billing_channel,
+            requested_model=requested_model, resolved_model=resolved_model,
+            attempt_trail=attempt_trail,
+            refusal_detected=refusal_detected, transport_error_kind=transport_error_kind,
         )
 
         try:

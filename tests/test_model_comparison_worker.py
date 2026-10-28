@@ -14,14 +14,35 @@ import pytest
 
 from src.analytics import model_comparison_input as mci
 from src.analytics.model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy
-from src.utils.llm import LLMProvider
 from src.utils.llm_budget import BudgetBlocked, MonthlyBudgetLedger
 from tests.test_model_comparison_runner import NOW, FakeGemini, FakeOpenAI
 
-MODELS = {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
-          (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}
-FAKE_LLM = SimpleNamespace(_get_model=lambda p, w: MODELS[(p, w)])
 SUFFIX = "\n이 매수 시그널을 승인하시겠습니까? YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
+# Frozen historical comparison contract.  These worker/runner regressions exercise
+# the retired OpenAI/Gemini pair, so they must not track the live Claude Bear role.
+HISTORICAL_COMPARISON_CONTROLS = {
+    "bull": {"model": "gpt-5-mini", "max_output_tokens": 400, "reasoning_effort": "minimal",
+             "temperature": 0.3, "seed": 20260803, "timeout_seconds": 12.0},
+    "bear": {"model": "gemini-3.1-flash-lite", "max_output_tokens": 400, "reasoning_effort": None,
+             "temperature": 0.0, "seed": None, "timeout_seconds": 12.0},
+    "fallback_chain": [
+        {"model": "gpt-5.6-sol", "max_output_tokens": 100, "reasoning_effort": None,
+         "temperature": 0.3, "seed": None, "timeout_seconds": 10.0},
+        {"model": "gemini-3.1-pro-preview", "max_output_tokens": 100, "reasoning_effort": None,
+         "temperature": 0.3, "seed": None, "timeout_seconds": 10.0},
+    ],
+    "fallback_chain_timeout_seconds": 10.0,
+    "fallback_prompt_suffix": SUFFIX,
+    "fallback_system": "",
+    "empty_retries": 1,
+    "strict_on_disagreement": False,
+}
+HISTORICAL_COMPARISON_MODELS = ("gpt-5-mini", "gemini-3.1-flash-lite", "gpt-5.6-sol", "gemini-3.1-pro-preview")
+
+
+def historical_comparison_controls():
+    """Return a detached literal snapshot; never derive test history from live controls."""
+    return json.loads(json.dumps(HISTORICAL_COMPARISON_CONTROLS))
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +56,7 @@ def api():
 
 
 def manifest(**kw):
-    controls = mci.operating_role_controls(FAKE_LLM, fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0)
+    controls = historical_comparison_controls()
     value = {"experiment_id": "R", "enabled": True, "fixed_at": (NOW - timedelta(hours=1)).isoformat(),
              "horizon_seconds": 900, "strict_on_disagreement": controls["strict_on_disagreement"],
              "empty_retries": controls["empty_retries"], "current": controls["bull"],
@@ -43,7 +64,7 @@ def manifest(**kw):
              "fallback_chain": controls["fallback_chain"],
              "fallback_chain_timeout_seconds": controls["fallback_chain_timeout_seconds"],
              "execution_policy": {"daily_attempt_cap": 40, "max_output_tokens": 400,
-                                  "allowed_models": sorted(set(MODELS.values())),
+                                  "allowed_models": list(HISTORICAL_COMPARISON_MODELS),
                                   "experiment_usd_ceiling": "100", "valid_from": "2026-01-01",
                                   "valid_until": "2027-12-31", "pairs_per_day": 20,
                                   "max_common_context_bytes": 65536, "required_policy_mode": "normal"}}
@@ -77,7 +98,7 @@ def build(tmp_path, *, ledger=None, op=None, ge=None, clock=None, man=None, runn
 def envelope(worker, decision_id="dec-1", *, at=NOW, nonce=None, **kw):
     fields = dict(decision_id=decision_id, signal_id="sig-" + decision_id, symbol="005930", strategy="momentum",
                   score=90.0, market_regime="sideways", common_context="<entry_facts>{}</entry_facts>",
-                  role_controls=mci.operating_role_controls(FAKE_LLM, fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0),
+                  role_controls=historical_comparison_controls(),
                   neutral_sizing=None, producer=mci.producer_identity(**worker.producer_config()),
                   input_available_at=at.isoformat(), handed_off_at=at.isoformat(), nonce=nonce)
     fields.update(kw)
@@ -269,7 +290,7 @@ def test_cross_validator_to_worker_end_to_end_keeps_verdict_and_ids(tmp_path, mo
     set_decision_recorder(recorder)
     ledger = MonthlyBudgetLedger(tmp_path / "budget.db", 100, policy_enabled=True)
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
-        experiment_id="R", daily_attempt_cap=40, allowed_models=tuple(sorted(set(MODELS.values()))), max_output_tokens=400,
+        experiment_id="R", daily_attempt_cap=40, allowed_models=HISTORICAL_COMPARISON_MODELS, max_output_tokens=400,
         experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
         pairs_per_day=20, max_common_context_bytes=65536))
     op, ge = GatedOpenAI(), FakeGemini()
@@ -279,6 +300,10 @@ def test_cross_validator_to_worker_end_to_end_keeps_verdict_and_ids(tmp_path, mo
         cross = _cross(monkeypatch, _LLM())
         baseline = asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="sig-e2e"))
         base_meta = {k: v for k, v in cross.last_llm_decision.items() if k != "decision_id"}
+        # This regression runs the retired historical manifest, while the real
+        # producer now reports a Claude Bear.  Freeze only this test producer.
+        monkeypatch.setattr(mci, "operating_role_controls",
+                            lambda *_args, **_kwargs: historical_comparison_controls())
         worker.start()
         m.attach(worker, cross)
         assert asyncio.run(cross.llm_second_check("005930", "momentum", 90, {}, "sideways", signal_id="sig-e2e")) is baseline
@@ -310,6 +335,7 @@ def test_dryrun_entrypoint_runs_offline_under_isolation_guard(capsys):
     spec.loader.exec_module(module)
     assert module.main() == 0
     out = json.loads(capsys.readouterr().out)
+    assert out["fixture_scope"] == "historical_openai_gemini_synthetic_only"
     assert out["offer"] == "accepted" and out["health"]["finished"] == 1 and out["ledger"]["settled_count"] == 3
 
 

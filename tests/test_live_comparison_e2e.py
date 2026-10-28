@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.analytics import model_comparison_admission as adm
+from src.analytics import model_comparison_input as mci
 from src.analytics import model_comparison_daily_report as daily
 from src.analytics.llm_decision_record import DecisionRecorder, set_decision_recorder
 from src.analytics.model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy
@@ -24,7 +25,8 @@ from src.utils.llm_budget_reconciliation import reconcile_budget
 from tests.test_decision_quote_join import OK_LEDGER, _quote, _state
 from tests.test_model_comparison_input import _LLM, _cross
 from tests.test_model_comparison_outcome import fees, live_v2
-from tests.test_model_comparison_worker import FakeGemini, FakeOpenAI, manifest, wait, api as worker_api
+from tests.test_model_comparison_worker import (FakeGemini, FakeOpenAI, SUFFIX, envelope,
+                                                historical_comparison_controls, manifest, wait, api as worker_api)
 
 KST = timezone(timedelta(hours=9))
 
@@ -49,9 +51,18 @@ def _stack(tmp_path, monkeypatch, *, ceiling="100", openai=None, pairs_per_day=N
     worker = worker_api().ComparisonWorker(runner, manifest=man, max_input_age_seconds=30.0,
                                            journal_dir=journal_dir).start()
     cross = _cross(monkeypatch, _LLM())
+    # The production producer now snapshots Claude Bear controls.  This retired
+    # historical Gemini manifest must reject those controls, so the E2E fixture
+    # explicitly supplies its frozen historical producer snapshot instead.
+    actual_operating_role_controls = mci.operating_role_controls
+    current_controls = actual_operating_role_controls(cross._llm_manager,
+                                                       fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0)
+    monkeypatch.setattr(mci, "operating_role_controls",
+                        lambda *_args, **_kwargs: historical_comparison_controls())
     worker_api().attach(worker, cross)
     return SimpleNamespace(recorder=recorder, ledger=ledger, guard=guard, runner=runner, worker=worker,
                            cross=cross, op=op, ge=ge, manifest=man, journal_dir=journal_dir,
+                           current_controls=current_controls,
                            path=tmp_path / "budget.db")
 
 
@@ -99,6 +110,16 @@ def _teardown(s):
     s.worker.stop(5)
     s.recorder.close()
     set_decision_recorder(None)
+
+
+def test_historical_e2e_manifest_rejects_current_claude_producer_controls(tmp_path, monkeypatch):
+    s = _stack(tmp_path, monkeypatch)
+    try:
+        assert s.current_controls["bear"]["model"] == "claude-opus-5-5"
+        assert s.worker.offer(envelope(s.worker, "current-claude", role_controls=s.current_controls)) == "rejected_control_mismatch"
+        assert s.op.calls == [] and s.ge.calls == []
+    finally:
+        _teardown(s)
 
 
 def test_hook_to_daily_report_happy_path_then_restart_without_spend(tmp_path, monkeypatch):
@@ -737,6 +758,8 @@ def test_install_from_env_passes_manifest_input_age_and_rejects_bad_values(tmp_p
     # is offered, and this does not qualify a replacement independent Bear.
     for role in ("current", "candidate", "bear"):
         man[role]["model"] = "gpt-5-mini"
+    for fallback in man["fallback_chain"]:
+        fallback["model"] = "gpt-5-mini"
     man["execution_policy"]["allowed_models"] = ["gpt-5-mini", "gpt-5.6-sol"]
     path.write_text(_json.dumps(man))
     worker = m.install_from_env(cross, env={"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)})

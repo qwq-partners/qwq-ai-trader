@@ -51,9 +51,10 @@ def test_role_controls_copy_operating_adversarial_and_fallback_conditions():
     c = _controls()
     assert c["bull"] == {"model": "openai-light", "max_output_tokens": MAX_TOKENS, "reasoning_effort": "minimal",
                          "temperature": 0.3, "seed": VERDICT_SEED, "timeout_seconds": 12.0}
-    assert c["bear"]["model"] == "gemini-light" and c["bear"]["temperature"] == 0.0 and c["bear"]["seed"] is None
+    assert c["bear"]["model"] == "anthropic-light" and c["bear"]["temperature"] is None and c["bear"]["seed"] is None
     assert [f["model"] for f in c["fallback_chain"]] == ["openai-heavy", "openai-light"]
     assert all(f["max_output_tokens"] == 100 and f["timeout_seconds"] == 10.0 for f in c["fallback_chain"])
+    assert c["bear"]["reasoning_effort"] == "low" and c["bear_empty_retries"] == 0
     assert c["empty_retries"] == 1 and c["strict_on_disagreement"] is False and c["fallback_system"] == ""
     assert c["fallback_chain_timeout_seconds"] == 10.0     # 운영 SINGLE_FALLBACK_TIMEOUT 은 체인 전체 시한
     unknown = mci.operating_role_controls(object(), fallback_prompt_suffix="x", fallback_timeout=10.0)
@@ -121,7 +122,7 @@ class _LLM:
         self.delay, self.prompts = delay, []
 
     def _get_model(self, provider, weight):
-        return {(LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
+        return {(LLMProvider.ANTHROPIC, "light"): "claude-opus-5-5", (LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
                 (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}[(provider, weight)]
 
     async def complete_with(self, prompt, *, provider, **kwargs):

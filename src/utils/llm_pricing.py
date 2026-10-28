@@ -28,6 +28,7 @@ _RATES = {
     'gpt-5.6-sol': (4.0, 20.0),
     'gpt-6.1-sol': (2.0, 10.0),
     'gpt-6-astra': (10.0, 50.0),
+    'claude-opus-5-5': (4.0, 20.0),
     'gemini-3.1-pro-preview': (2.0, 12.0),
     'gemini-3.1-flash-lite': (0.25, 1.5),
     'gemini-3.1-flash-lite-preview': (0.25, 1.5),
@@ -51,6 +52,11 @@ def rate_quote(model: str, input_tokens: int, output_tokens: int,
         return None
     input_rate, output_rate = rates
     basis = 'standard_conservative_estimate_not_invoice_no_cache_read_discount'
+    if model == 'claude-opus-5-5':
+        # API only. Include the 1-hour cache-write ceiling (2026-10-28 official
+        # pricing); subscription CLI list-price estimates are never API spend.
+        input_rate *= 2
+        basis += '_cache_write_1h_ceiling'
     if model in {'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6-astra'}:
         input_rate *= 1.25
         basis += '_cache_write_ceiling'

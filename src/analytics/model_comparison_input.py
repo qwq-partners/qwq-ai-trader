@@ -97,7 +97,7 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
     route = LLMManager.TASK_CONFIG[LLMTask.STRATEGY_ANALYSIS]
     return {
         "bull": role(LLMProvider.OPENAI, "light", av.MAX_TOKENS, "minimal", 0.3, av.VERDICT_SEED, av.LLM_TIMEOUT),
-        "bear": role(LLMProvider.GEMINI, "light", av.MAX_TOKENS, None, 0.0, None, av.LLM_TIMEOUT),
+        "bear": role(LLMProvider.ANTHROPIC, "light", av.MAX_TOKENS, "low", None, None, av.LLM_TIMEOUT),
         "fallback_chain": [role(p, w, 100, LLMManager._task_controls(model(p, w), w, {}).get("reasoning_effort"),
                                 0.3, None, fallback_timeout)
                            for p, w in (route["primary"], route["fallback"])],
@@ -105,7 +105,10 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
         "fallback_chain_timeout_seconds": float(fallback_timeout),
         "fallback_prompt_suffix": fallback_prompt_suffix,
         "fallback_system": "",
-        "empty_retries": 1,
+        "empty_retries": 1,  # legacy scalar: Bull / ordinary GPT calls
+        "bear_empty_retries": 0,
+        "bear_internal_timeout_seconds": max(0.001, av.LLM_TIMEOUT - 0.5),
+        "bear_transport_order": ["claude_cli", "anthropic_messages"],
         "strict_on_disagreement": bool(av.STRICT_ON_DISAGREEMENT),
     }
 

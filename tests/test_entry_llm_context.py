@@ -81,7 +81,7 @@ def test_source_text_cannot_close_facts_delimiter():
 class RecordingLLM:
     def __init__(self, bull="unparseable", bear="unparseable", single="YES"):
         self.prompts = []
-        self.answers = {LLMProvider.OPENAI: bull, LLMProvider.GEMINI: bear}
+        self.answers = {LLMProvider.OPENAI: bull, LLMProvider.ANTHROPIC: bear}
         self.single = single
 
     async def complete_with(self, prompt, *, provider, **kwargs):

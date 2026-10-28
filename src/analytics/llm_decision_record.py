@@ -68,7 +68,8 @@ def _int_or_none(value: Any) -> Optional[int]:
 
 def _estimated_cost_usd(response) -> Optional[str]:
     """공급자가 사용량을 보고했고 단가표에 있는 모델만 추정 비용(Decimal 문자열). 결측·불명은 None(0 으로 대체하지 않음)."""
-    if response is None or getattr(response, "usage_known", False) is not True:
+    if (response is None or getattr(response, "usage_known", False) is not True
+            or getattr(response, "billing_channel", "api") != "api"):
         return None
     tokens_in, tokens_out = _int_or_none(getattr(response, "input_tokens", None)), _int_or_none(getattr(response, "output_tokens", None))
     if tokens_in is None or tokens_out is None:
@@ -164,6 +165,10 @@ def attempt_record(role: str, provider: Any, requested_at: Optional[datetime], r
         "reasoning_tokens": _int_or_none(getattr(resp, "reasoning_tokens", None)) if usage_known else None,
         "usage_known": getattr(resp, "usage_known", None),
         "billing_status": getattr(resp, "billing_status", None),
+        "transport": getattr(resp, "transport", None),
+        "billing_channel": getattr(resp, "billing_channel", "api"),
+        "subscription_estimated_cost_usd": getattr(resp, "subscription_estimated_cost_usd", None),
+        "actual_incremental_cost_usd": getattr(resp, "actual_incremental_cost_usd", None),
         # 최종 응답 1건의 추정 비용(Decimal 문자열). 재시도·폴백을 포함한 호출 전체는 calls 에 있다.
         "estimated_cost_usd": _estimated_cost_usd(resp),
         # LLMManager 가 이 응답을 만들기까지 실제로 보낸 공급자 시도(재시도·폴백 각 1행, 예약 토큰 포함)

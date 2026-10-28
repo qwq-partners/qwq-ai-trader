@@ -244,7 +244,7 @@ class _FakeLLM:
         self.calls = []
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None):
+                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None, call_timeout_seconds=None):
         assert budget_priority == "essential"
         self.calls.append((provider, prompt))
         i = self._idx.get(provider, 0)
@@ -259,7 +259,7 @@ def test_research_team_round2_flip_gets_change_reason_and_unrecorded_fallback():
 
     fake = _FakeLLM({
         LLMProvider.OPENAI: ["APPROVE 1차 근거", "APPROVE 유지(변경 없음)"],
-        LLMProvider.GEMINI: [
+        LLMProvider.ANTHROPIC: [
             "REJECT 1차 리스크",
             "ACCEPT 완화됨\n변경사유: 새근거 — 실적 서프라이즈 확인",
         ],
@@ -279,7 +279,7 @@ def test_research_team_flip_without_change_reason_line_is_unrecorded():
 
     fake = _FakeLLM({
         LLMProvider.OPENAI: ["APPROVE", "REJECT (사유 줄 없이 입장만 바꿈)"],
-        LLMProvider.GEMINI: ["REJECT", "REJECT"],
+        LLMProvider.ANTHROPIC: ["REJECT", "REJECT"],
     })
     team = ResearchTeam(llm_manager=fake, rounds=2)
     result = asyncio.run(team.debate("005930", "삼성전자", []))
@@ -290,7 +290,7 @@ def test_research_team_flip_without_change_reason_line_is_unrecorded():
 def test_research_team_ledger_records_prompt_version_and_real_reasoning_effort():
     from src.agents.researchers import DEBATE_SEED, DEBATE_TEMPERATURE, PROMPT_VERSION, REASONING_EFFORT, ResearchTeam
 
-    fake = _FakeLLM({LLMProvider.OPENAI: ["APPROVE"], LLMProvider.GEMINI: ["ACCEPT"]})
+    fake = _FakeLLM({LLMProvider.OPENAI: ["APPROVE"], LLMProvider.ANTHROPIC: ["ACCEPT"]})
     team = ResearchTeam(llm_manager=fake, rounds=1)
     asyncio.run(team.debate("005930", "삼성전자", []))
     rows = reproducibility.LLMLedger.load()
@@ -301,9 +301,9 @@ def test_research_team_ledger_records_prompt_version_and_real_reasoning_effort()
     assert row["params"]["seed"] == DEBATE_SEED
     assert "temperature" not in row["params"]
     bear_row = next(item for item in rows if item["role"] == "bear")
-    assert "reasoning_effort" not in bear_row["params"]
+    assert bear_row["params"]["reasoning_effort"] == "low"
     assert "seed" not in bear_row["params"]
-    assert bear_row["params"]["temperature"] == DEBATE_TEMPERATURE
+    assert "temperature" not in bear_row["params"]
 
 
 # ══════════════════════════════════════════════════════════════════════════

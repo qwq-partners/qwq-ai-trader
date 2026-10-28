@@ -751,11 +751,8 @@ class CrossStrategyValidator:
         LLM 종합 판단 — 고점수(85+) + 비강세장에서만 호출 (PRISM 차용)
 
         비용 최소화: 하루 최대 10회 (_daily_llm_max), 거부 시 주문 차단.
-        실시간 성능: 타임아웃 10초, 실패 시 통과(fail-open).
-
-        fail-open 정책 의도: LLM 장애나 한도 소진 시 매수 차단보다 기회 손실 방지를 우선.
-        규칙1~9는 이미 결정론적 게이트로 작동하므로 LLM은 추가 안전장치 역할.
-        엄격 모드가 필요하면 return True → return False 로 변경 (정책 결정 사안).
+        실제 매니저의 필수 독립 검토는 장애·한도 소진 시 보류한다.
+        기존 advisory 매니저는 fail-open 계약을 유지한다.
         """
         self._budget_context.set(None)
         self._neutral_sizing_context.set(None)
@@ -770,7 +767,16 @@ class CrossStrategyValidator:
         _attempts, _adv_attempts = [], []
         common_context = None
 
+        required_review = False
+
         def unavailable(reason):
+            if required_review:
+                return self._finish_decision(
+                    False, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                    market_regime=market_regime, common_context=common_context, stage="unavailable",
+                    attempts=_attempts or _adv_attempts,
+                    result={"confidence": 0.0, "failed": False, "reason": reason,
+                            "independent_review_status": "unavailable"})
             if self._neutral_sizing_context.get() is None:
                 return True
             # Keep fail-open behavior, but do not label absence as model approval.
@@ -789,6 +795,8 @@ class CrossStrategyValidator:
         # 고점수 시그널만 검증
         if score < 85:
             return True
+
+        required_review = getattr(self._llm_manager, "requires_independent_review", False) is True
 
         # A deliberately retired provider is not a transient/quota failure.
         # Check before counting or requesting either opinion; otherwise quota
@@ -809,6 +817,8 @@ class CrossStrategyValidator:
             self._daily_llm_count_date = today
         if self._daily_llm_count >= self._daily_llm_max:
             self._budget_context.set({'status': 'unavailable', 'reason': 'validation_daily_call_limit'})
+            if required_review:
+                return unavailable("validation_daily_call_limit")
             # 2026-04-23 수정: 한도 소진 시 경고 로그 승격 + 통과 유지
             # 기존엔 debug 로그라 LLM 보호 상실 인지 지연 → warning으로 즉시 알림
             # 상위 호출자(engine.py:1389)가 변동성 큰 날 본 로그를 보고 수동 조치 가능
@@ -893,9 +903,9 @@ class CrossStrategyValidator:
                                    common_context=common_context, fallback_suffix=prompt[len(common_context):],
                                    collected_at=_collected_at)
             # 적대적 교차 검증 (2026-08-02~)
-            #   Bull(OpenAI) / Bear(Gemini)에게 서로 다른 역할을 주고 합의를 본다.
+            #   Bull(OpenAI) / Bear(Claude)에게 서로 다른 역할을 주고 합의를 본다.
             #   Bear는 "문제 없음" 답변이 금지되어 반증 책임을 진다 → 확증 편향 완화.
-            #   실패 시 아래 단일 LLM 경로로 폴백한다.
+            #   필수 독립 검토 실패는 보류하고 기존 advisory만 단일 LLM으로 폴백한다.
             if self._adversarial is not None:
                 adv = await self._adversarial.validate(
                     symbol=symbol, strategy=strategy, score=score,
@@ -907,8 +917,13 @@ class CrossStrategyValidator:
                 self._daily_llm_count += 1
                 budget_reason = getattr(adv, 'budget_block_reason', None)
                 if isinstance(budget_reason, str) and budget_reason:
-                    self._budget_context.set({'status': 'unavailable' if adv.failed else 'partial',
+                    self._budget_context.set({'status': 'unavailable' if (adv.failed or
+                                              adv.meta.get('independent_review_status') == 'unavailable') else 'partial',
                                               'reason': budget_reason, 'stage': 'adversarial'})
+                if (required_review and adv.approved and
+                        (type(adv.bull_verdict) is not bool or type(adv.bear_verdict) is not bool)):
+                    _adv_attempts = list(adv.meta.get("attempts") or [])
+                    return unavailable("independent_validator_incomplete")
                 if not adv.failed:
                     if not adv.approved:
                         logger.info(f"[크로스검증] 적대검증 거부: {symbol} — {adv.reason}")
@@ -917,12 +932,17 @@ class CrossStrategyValidator:
                         market_regime=market_regime, common_context=common_context, stage="adversarial",
                         attempts=list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else [],
                         result={"confidence": adv.confidence, "reason": adv.reason, "failed": False,
-                                "disagreed": adv.disagreed, "bull": adv.bull_verdict, "bear": adv.bear_verdict})
+                                "disagreed": adv.disagreed, "bull": adv.bull_verdict, "bear": adv.bear_verdict,
+                                **({"independent_review_status": adv.meta["independent_review_status"]}
+                                   if "independent_review_status" in adv.meta else {})})
                 # adv.failed면 폴백 (아래 단일 LLM 경로)
                 _adv_attempts = list(adv.meta.get("attempts")) if adv.meta.get("attempts") is not None else []
                 _adv_failed_reason = adv.reason
             else:
                 _adv_attempts, _adv_failed_reason = [], None
+
+            if required_review:
+                return unavailable("independent_validator_unavailable")
 
             # 단일 LLM 폴백 — GPT-5.4 (STRATEGY_ANALYSIS)
             # 2026-08-08 P2: 적대검증 실패 후 폴백도 실호출 1회로 계수 (한도 정합).

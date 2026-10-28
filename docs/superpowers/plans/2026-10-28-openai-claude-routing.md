@@ -52,18 +52,18 @@
 
 **Files:** 선택한 transport client, `src/agents/researchers.py`, `src/core/adversarial_validator.py`, 예산/가격·메타데이터 및 테스트.
 
-**Dependency:** API 또는 구독 CLI에 대한 사용자 선택. 인증 자격값은 문서/채팅/커밋에 넣지 않는다.
+**Dependency 충족:** 사용자 선택은 구독 CLI 1순위·API 2순위다. [후속 상세 계획](2026-10-28-claude-cli-api.md)에서 구현/검증한다. 인증 자격값은 문서/채팅/커밋에 넣지 않는다.
 
-- [ ] 선택한 transport의 모델·인증·과금·시한/동시성·출력·취소 계약을 이 문서에 구체화한다.
-- [ ] 정상/미인증/시간 초과/거절/잘린 출력/미확인 비용/취소/실제 모델 불일치 회귀를 먼저 작성한다.
-- [ ] 두 Bear 역할을 Claude로 연결하고 미완료 상태를 보존한다. 신규 BUY의 독립 검토 요구와 단일 GPT fallback 표시를 함께 검증한다.
+- [x] 선택한 transport의 모델·인증·과금·시한/동시성·출력·취소 계약을 이 문서에 구체화한다.
+- [x] 정상/미인증/시간 초과/거절/잘린 출력/미확인 비용/취소/실제 모델 불일치 회귀를 먼저 작성한다.
+- [x] 두 Bear 역할을 Claude로 연결하고 미완료 상태를 보존한다. 신규 BUY의 독립 검토 요구와 단일 GPT fallback 표시를 함께 검증한다.
 
 ### Task 4: 통합 검증·운영 적용 기록
 
 - [x] Phase A 독립 중요 소스 리뷰·일일 한도 우회 수정 재리뷰 승인. 마지막 테스트 전용4파일은 별도 한정 재검토한다.
-- [ ] Phase A 최종 관련 검사·전체CI·비밀 검사 후 PR #283 통합. 정확한 최종 HEAD의 검증·병합 영수증은 해당 PR에서 확인한다.
+- [x] Phase A 최종 관련 검사·전체CI·비밀 검사 후 PR #283/main293a3a59 통합. CI9,293passed/2skip/2xfail·격리0. 정확한 최종 HEAD의 검증·병합 영수증은 해당 PR에서 확인한다.
 - [x] 원장·CHANGELOG·관련 운영 문서에 Phase A와 미완료 Claude/운영 단계를 구분했다.
-- [ ] Claude 연결 구현 후 전체 GPT·Claude 계약에 대한 독립 중요 리뷰·관련/전체 검증.
+- [x] Claude 연결·독립 중요 리뷰·관련266검사 완료. 최종 전체CI·소스 통합은 [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284)의 HEAD별 check·병합 영수증을 따른다.
 - [ ] 허용된 실행창에서 고정 SHA 적용, 신규 Gemini0·GPT/Claude 실제 identity·예산·기존 예약 대조. 적용 전까지 운영 미전환으로 명시한다.
 
 ## 근거

@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-> **2026-10-28 공급자 전환:** 사용자 지시로 Gemini를 중단하고 GPT·Claude를 사용한다. [E04-D2](operations/execution-roadmap.md#e04-gpt-claude-20261028)에서 GPT 일반 분석·신규 Gemini 전송 차단을 개발/검증 중이며, Claude API/구독 CLI 선택과 운영 전환은 아직이다. 아래 Google 공급자 복구 대기는 이번 결정으로 대체한다. 월USD100·매수 중지·기존 예약은 유지한다.
+> **2026-10-28 공급자 전환:** 사용자 지시로 Gemini를 중단하고 GPT·Claude를 사용한다. [E04-D2](operations/execution-roadmap.md#e04-gpt-claude-20261028)에서 GPT 일반 분석·신규 Gemini 전송 차단은 PR #283/main `293a3a59`에 병합했다. Claude는 사용자 선택대로 구독 CLI 우선·API 대체를 구현 중이며 운영 전환은 아직이다. 아래 Google 공급자 복구 대기는 이번 결정으로 대체한다. 월USD100·매수 중지·기존 예약은 유지한다.
 
 > **2026-10-28 오전:** [실제 장전/WS·선정/위키 확인과 다음 순서](operations/execution-roadmap.md#morning-acceptance-20261028). 비용 전/후 RR 진단을 구분하고 E04-D1 공급자 실패 처리의 개발/독립 리뷰를 마쳤다. 운영 적용·외부 복구는 별도 대기다. 운영`c4bc4f0e`와 기존 예약은 유지하며 기술 인수와 순수익 검증을 구분한다. 아래 이전 날짜는 이력이다.
 

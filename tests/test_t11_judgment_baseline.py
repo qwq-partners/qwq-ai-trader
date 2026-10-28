@@ -144,7 +144,7 @@ class _FakeLLM:
         self._idx: Dict[LLMProvider, int] = {}
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None):
+                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None, call_timeout_seconds=None):
         assert budget_priority == "essential"
         i = self._idx.get(provider, 0)
         items = self._script[provider]
@@ -155,7 +155,7 @@ class _FakeLLM:
 
 def test_research_team_both_silent_is_failed_with_zero_confidence():
     """양측 무응답 → failed=True, confidence=0.0, stats['failed'] 증가."""
-    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.GEMINI: [""]})
+    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.ANTHROPIC: [""]})
     team = ResearchTeam(llm_manager=fake, rounds=1)
     result = asyncio.run(team.debate("005930", "삼성전자", []))
     assert result.failed is True
@@ -166,7 +166,7 @@ def test_research_team_both_silent_is_failed_with_zero_confidence():
 
 def test_research_team_bull_alone_reject_is_respected_as_consensus_false():
     """Bull 단독 응답 + REJECT, Bear 무응답 → 단독 반대는 존중(consensus False, conf 0.5)."""
-    fake = _FakeLLM({LLMProvider.OPENAI: ["REJECT 단독 반대"], LLMProvider.GEMINI: [""]})
+    fake = _FakeLLM({LLMProvider.OPENAI: ["REJECT 단독 반대"], LLMProvider.ANTHROPIC: [""]})
     team = ResearchTeam(llm_manager=fake, rounds=1)
     result = asyncio.run(team.debate("005930", "삼성전자", []))
     assert result.consensus is False
@@ -176,7 +176,7 @@ def test_research_team_bull_alone_reject_is_respected_as_consensus_false():
 
 def test_research_team_bear_alone_accept_is_held_as_consensus_none():
     """Bear 단독 응답 + ACCEPT, Bull 무응답 → 단독 지지는 합의로 승격하지 않는다(consensus None, conf 0.3)."""
-    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.GEMINI: ["ACCEPT 단독 지지"]})
+    fake = _FakeLLM({LLMProvider.OPENAI: [""], LLMProvider.ANTHROPIC: ["ACCEPT 단독 지지"]})
     team = ResearchTeam(llm_manager=fake, rounds=1)
     result = asyncio.run(team.debate("005930", "삼성전자", []))
     assert result.consensus is None
@@ -186,7 +186,7 @@ def test_research_team_bear_alone_accept_is_held_as_consensus_none():
 
 def test_research_team_split_opinion_is_consensus_none_with_half_confidence():
     """Bull APPROVE / Bear REJECT(의견 분열) → consensus None, confidence 0.5."""
-    fake = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 근거"], LLMProvider.GEMINI: ["REJECT 근거"]})
+    fake = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 근거"], LLMProvider.ANTHROPIC: ["REJECT 근거"]})
     team = ResearchTeam(llm_manager=fake, rounds=1)
     result = asyncio.run(team.debate("005930", "삼성전자", []))
     assert result.consensus is None
@@ -196,13 +196,13 @@ def test_research_team_split_opinion_is_consensus_none_with_half_confidence():
 
 def test_research_team_unanimous_support_and_reject_stats():
     """만장일치 지지/반대 — stats['consensus_buy']·['consensus_reject'] 카운터 고정."""
-    support = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 지지"], LLMProvider.GEMINI: ["ACCEPT 지지"]})
+    support = _FakeLLM({LLMProvider.OPENAI: ["APPROVE 지지"], LLMProvider.ANTHROPIC: ["ACCEPT 지지"]})
     team_support = ResearchTeam(llm_manager=support, rounds=1)
     r1 = asyncio.run(team_support.debate("005930", "삼성전자", []))
     assert r1.consensus is True and r1.confidence == 1.0
     assert team_support.stats["consensus_buy"] == 1
 
-    reject = _FakeLLM({LLMProvider.OPENAI: ["REJECT 반대"], LLMProvider.GEMINI: ["REJECT 반대"]})
+    reject = _FakeLLM({LLMProvider.OPENAI: ["REJECT 반대"], LLMProvider.ANTHROPIC: ["REJECT 반대"]})
     team_reject = ResearchTeam(llm_manager=reject, rounds=1)
     r2 = asyncio.run(team_reject.debate("005930", "삼성전자", []))
     assert r2.consensus is False and r2.confidence == 1.0

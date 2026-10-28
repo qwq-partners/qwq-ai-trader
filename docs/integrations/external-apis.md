@@ -327,7 +327,20 @@
   (실패 시 빈 문자열, 브리핑에서 섹션 생략). 매매 판단 경로에 연결 금지
   (T+1 데이터). 출처 표기 조건부 라이선스 — 브리핑에 출처 명시함
 
-## LLM — OpenAI / Gemini 호출 계약 (2026-10-12)
+
+## Claude 엔진 연결 — 2026-10-28
+
+일반 뉴스·분석·보고는 GPT를 사용하고, 진입 반증/팀 Bear는 `claude-opus-5-5`/low로 검토한다. 로그인된 CLI를 먼저 호출하며 가용성 실패 때만 같은 모델의 Anthropic Messages API를 한 번 호출한다. 신규 Gemini는 client 경계에서 차단하며 과거 원장은 보존한다. 아래 과거 LLM 계약의 모델/라우팅 설명보다 이 절과 [현재 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)을 우선한다.
+
+CLI는 빈 임시 cwd·입력 stdin·도구/MCP0·safe mode·기존 구독 로그인·API 환경 제외를 사용한다. 자식 그룹을 종료/회수한 후 API로 전환한다. 기존 전체12초/20초 안에서 CLI에 절반(최대8초), API에 실제 남은 시한을 준다. 모델 불일치·명시적 거절·도구/인증 정책 위반·호출자 취소는 자동 대체하지 않는다. 두 검토가 완성되지 않으면 검토 미완료로 보류한다.
+
+API는 `https://api.anthropic.com/v1/messages`·리디렉션/자동재시도 없음·출력상한400을 쓴다. Opus5.5 API는 adaptive thinking을 요구하므로 `thinking.type=adaptive`와 `output_config.effort=low`를 전달하고 추론 포함 출력 한도를 유지한다. CLI의 요청 옵션과 API의 실효 추론이 같다고 추정하지 않는다. [공식 마이그레이션 계약](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
+
+`ANTHROPIC_API_KEY_FILE` 기본 경로는 `~/.config/qwq-ai-trader/anthropic-api-key`다. 대체 호출 시에만 읽으며 소유자·정규 파일·0600·크기·symlink를 확인한다. 선택적인 `ANTHROPIC_API_KEY`는 CLI에 상속하지 않는다. 키 값은 YAML/명령줄/로그/원장에 기록하지 않는다.
+
+CLI는 `billing_channel=subscription`, API는 `api`다. 구독 표시 list cost는 별도 추정치이며 실제 추가 청구액은null이다. 월USD100·80/95/100%·KST 월초 복원·`log_and_continue`는 API 원장에 적용한다. API 가격 견적은 입력 캐시 쓰기 상한까지 포함하며 청구서 확정액이 아니다. 실제 모델/가용성 확인, 소스 병합, 운영 배포는 [Plan→Do→See](../superpowers/plans/2026-10-28-claude-cli-api.md)에서 분리한다.
+
+## LLM — OpenAI / Gemini 호출 계약 (2026-10-12, 과거)
 
 기본은 OpenAI heavy `gpt-5.6-sol`/light `gpt-5-mini`, Gemini heavy `gemini-3.1-pro-preview`/light `gemini-3.1-flash-lite-preview`다. 실제 라우팅은 `LLMManager.TASK_CONFIG`이며 `llm.primary`/`fallback`은 기존 설명용 설정으로 이를 덮어쓰지 않는다. 모델은 이번에 변경하지 않았다.
 

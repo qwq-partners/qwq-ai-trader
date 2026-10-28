@@ -39,6 +39,7 @@ class LLMProvider(str, Enum):
     """LLM 제공자"""
     OPENAI = "openai"
     GEMINI = "gemini"
+    ANTHROPIC = "anthropic"
 
 
 # Manus로 보내도 되는 태스크 (2026-08-03 Codex용 추가 → 2026-08-05 Manus 전환)
@@ -71,6 +72,11 @@ class LLMConfig:
     """LLM 설정"""
     openai_api_key: str = ""
     gemini_api_key: str = ""  # Deprecated, ignored by the disabled client.
+    anthropic_api_key: str = field(default="", repr=False)
+    anthropic_api_key_file: str = ""
+    claude_model: str = "claude-opus-5-5"
+    claude_cli_enabled: bool = True
+    claude_cli_command: str = "claude"
 
     # 모델 선택
     # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.4 최신 모델)
@@ -111,6 +117,15 @@ class LLMConfig:
     missing_cost_policy: str = "block"
 
     def __post_init__(self):
+        if not isinstance(self.claude_cli_enabled, bool):
+            raise ValueError("claude_cli_enabled must be boolean")
+        if self.claude_model != "claude-opus-5-5":
+            raise ValueError("Unsupported Claude model identity")
+        if not isinstance(self.claude_cli_command, str) or not self.claude_cli_command.strip():
+            raise ValueError("claude_cli_command must be an executable name or path")
+        if (not isinstance(self.anthropic_api_key_file, str) or
+                (self.anthropic_api_key_file and not Path(self.anthropic_api_key_file).expanduser().is_absolute())):
+            raise ValueError("anthropic_api_key_file must be absolute or home-relative")
         if (not isinstance(self.missing_cost_policy, str)
                 or self.missing_cost_policy not in {"block", "log_and_continue"}):
             raise ValueError("llm.missing_cost_policy must be block or log_and_continue")
@@ -137,6 +152,9 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
+            claude_cli_command=os.getenv("CLAUDE_CLI_COMMAND", "claude"),
         )
 
     @classmethod
@@ -156,6 +174,11 @@ class LLMConfig:
             llm_cfg = llm_cfg["llm"]
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+            anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
+            claude_model=llm_cfg.get("claude_model", "claude-opus-5-5"),
+            claude_cli_enabled=llm_cfg.get("claude_cli_enabled", True),
+            claude_cli_command=os.getenv("CLAUDE_CLI_COMMAND", "claude"),
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
             monthly_budget_usd=llm_cfg.get("monthly_budget"),
             budget_state_path=llm_cfg.get("budget_state_path"),
@@ -253,6 +276,11 @@ class LLMResponse:
     uncertain_cost_ceiling_usd: Optional[float] = None  # Durable hold, never actual spend.
     missing_cost_policy: str = "block"
     cost_accounting_skipped: bool = False
+    transport: Optional[str] = None
+    billing_channel: str = "api"
+    model_identity_status: Optional[str] = None
+    subscription_estimated_cost_usd: Optional[float] = None
+    actual_incremental_cost_usd: Optional[float] = None
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -691,6 +719,16 @@ class LLMManager:
 
         self.openai = OpenAIClient(self.config)
         self.gemini = GeminiClient(self.config)
+        # Lazy construction: OpenAI-only callers neither inspect subscription
+        # authentication nor open the API credential file.
+        self.claude_cli = None
+        self.anthropic = None
+        self.requires_independent_review = True
+        self._claude_transport_cooldowns = {}
+        self._subscription_usage = {"attempts": 0, "sent": 0, "input_tokens": 0,
+                                    "output_tokens": 0, "list_cost_estimate_usd": 0.0,
+                                    "actual_incremental_cost_usd": None,
+                                    "scope": "process_lifetime_subscription_not_api_bill"}
 
         # 사용량 추적
         self.daily_usage = LLMUsage()
@@ -722,6 +760,9 @@ class LLMManager:
             return self.openai
         if provider == LLMProvider.GEMINI:
             return self.gemini
+        if provider == LLMProvider.ANTHROPIC:
+            self._ensure_claude_clients()
+            return self.claude_cli
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
     def _get_model(self, provider: LLMProvider, weight: str) -> str:
@@ -730,7 +771,40 @@ class LLMManager:
             return self.config.openai_model_heavy if weight == "heavy" else self.config.openai_model_light
         if provider == LLMProvider.GEMINI:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
+        if provider == LLMProvider.ANTHROPIC:
+            return self.config.claude_model
         raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    def _ensure_claude_clients(self):
+        if self.claude_cli is None or self.anthropic is None:
+            from .claude_transport import ClaudeCLIClient, AnthropicAPIClient
+            if self.claude_cli is None:
+                self.claude_cli = ClaudeCLIClient(self.config)
+            if self.anthropic is None:
+                self.anthropic = AnthropicAPIClient(self.config)
+
+    def _client_provider(self, client):
+        if client is self.openai:
+            return LLMProvider.OPENAI
+        if client is self.gemini:
+            return LLMProvider.GEMINI
+        if client is not None and (client is self.claude_cli or client is self.anthropic):
+            return LLMProvider.ANTHROPIC
+        raise ValueError("Unregistered LLM client")
+
+    def _stamp_transport(self, response, client):
+        # Trust the registered transport, never a model/response claim of free use.
+        if client is not None and client is self.claude_cli:
+            response.provider = LLMProvider.ANTHROPIC
+            response.transport = "claude_cli"
+            response.billing_channel = "subscription"
+        elif client is not None and client is self.anthropic:
+            response.provider = LLMProvider.ANTHROPIC
+            response.transport = "anthropic_messages"
+            response.billing_channel = "api"
+        else:
+            response.billing_channel = "api"
+        return response
 
     @staticmethod
     def _task_controls(model: str, weight: str, controls: dict) -> dict:
@@ -1103,6 +1177,11 @@ class LLMManager:
             self.stats["error_count"] += 1
             return response
 
+        if provider == LLMProvider.ANTHROPIC:
+            response = await self._complete_claude(prompt, system, **kwargs)
+            self.stats["success_count" if response.success else "error_count"] += 1
+            return response
+
         if not self._check_budget():
             logger.warning("일일 LLM 예산 초과")
             return LLMResponse(
@@ -1141,6 +1220,78 @@ class LLMManager:
 
         return response
 
+    async def _complete_claude(self, prompt: str, system: str, **kwargs) -> LLMResponse:
+        """One subscription attempt, then at most one separately admitted API call."""
+        total = kwargs.pop("call_timeout_seconds", 12.0)
+        if (isinstance(total, bool) or not isinstance(total, (int, float))
+                or not math.isfinite(total) or not 0 < total <= 20):
+            raise ValueError("Claude call_timeout_seconds must be positive and at most 20")
+        if kwargs.get("reasoning_effort", "low") != "low":
+            raise ValueError("Claude engine roles require low effort")
+        if any(kwargs.get(k) is not None for k in ("seed", "temperature", "thinking_level")):
+            raise ValueError("Unsupported Claude role controls")
+        kwargs.setdefault("reasoning_effort", "low")
+        kwargs.setdefault("max_tokens", 400)
+        model = self.config.claude_model
+        loop = asyncio.get_running_loop()
+        started, deadline = loop.time(), loop.time() + total
+        self._ensure_claude_clients()
+        cooldown = self._claude_cooldown_response(self.claude_cli, model)
+        if cooldown is not None:
+            response = cooldown
+            self._account_attempt(response, "complete_with", "primary")
+        elif self.config.claude_cli_enabled:
+            response = await self._complete_attempt(
+                self.claude_cli, prompt, system, model, "complete_with", "primary",
+                _deadline=min(deadline, started + min(8.0, total / 2)), **kwargs)
+            if response.transport_error_kind in {"cli_rate_limited", "cli_auth_unavailable"}:
+                self._claude_transport_cooldowns["claude_cli"] = (
+                    loop.time() + 300.0, response.transport_error_kind)
+        else:
+            response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
+                                   error="Claude CLI disabled", requested_model=model,
+                                   request_sent=False, usage_known=False, billing_status="not_sent",
+                                   transport_error_kind="cli_unavailable")
+            self._stamp_transport(response, self.claude_cli)
+            self._account_attempt(response, "complete_with", "primary")
+        permitted = {"cli_unavailable", "cli_timeout", "cli_rate_limited",
+                     "cli_auth_unavailable", "cli_incomplete"}
+        if (response.success or response.refusal_detected or self._closing
+                or response.transport_error_kind not in permitted or loop.time() >= deadline):
+            return response
+        # The subscription attempt is reaped/settled before API admission.
+        cooldown = self._claude_cooldown_response(self.anthropic, model)
+        if cooldown is not None:
+            self._account_attempt(cooldown, "complete_with", "fallback")
+            return cooldown
+        if not self._check_budget():
+            response = self._monthly_blocked_response(
+                LLMProvider.ANTHROPIC, model,
+                "daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded")
+            self._stamp_transport(response, self.anthropic)
+            self._account_attempt(response, "complete_with", "fallback")
+            return response
+        self.stats["fallback_count"] += 1
+        response = await self._complete_attempt(
+            self.anthropic, prompt, system, model, "complete_with", "fallback",
+            _deadline=deadline, **kwargs)
+        if not response.success and response.http_status in {401, 402, 403, 429}:
+            self._claude_transport_cooldowns["anthropic_messages"] = (
+                loop.time() + 300.0, "transport_cooldown")
+        return response
+
+    def _claude_cooldown_response(self, client, model):
+        transport = "claude_cli" if client is self.claude_cli else "anthropic_messages"
+        until, kind = self._claude_transport_cooldowns.get(transport, (0.0, None))
+        if asyncio.get_running_loop().time() >= until:
+            return None
+        response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
+                               error="Claude transport cooldown", requested_model=model,
+                               request_sent=False, usage_known=False, billing_status="not_sent",
+                               transport_error_kind=kind)
+        self._stamp_transport(response, client)
+        return response
+
     def _monthly_blocked_response(self, provider: LLMProvider, model: str, reason: str) -> LLMResponse:
         return LLMResponse("", model, provider, success=False,
                            error=f"Monthly budget blocked: {reason}", requested_model=model,
@@ -1168,7 +1319,7 @@ class LLMManager:
             return
         try:
             cost = None
-            if response.request_sent and response.usage_known and isinstance(response.input_tokens, int) \
+            if response.billing_channel == "api" and response.request_sent and response.usage_known and isinstance(response.input_tokens, int) \
                     and isinstance(response.output_tokens, int):
                 _model = response.requested_model if response.requested_model is not None else response.model
                 quote = rate_quote(_model, response.input_tokens, response.output_tokens)
@@ -1177,6 +1328,10 @@ class LLMManager:
                     cost = str(Decimal(str(quote.cost_usd)))
             trail.append({
                 "provider": getattr(response.provider, "value", str(response.provider)),
+                "transport": response.transport, "billing_channel": response.billing_channel,
+                "model_identity_status": response.model_identity_status,
+                "subscription_estimated_cost_usd": response.subscription_estimated_cost_usd,
+                "actual_incremental_cost_usd": response.actual_incremental_cost_usd,
                 "task": task, "role": role,
                 "requested_model": response.requested_model if response.requested_model is not None else response.model,
                 "resolved_model": response.resolved_model,
@@ -1234,9 +1389,10 @@ class LLMManager:
     async def _complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                 _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         if self._closing:
-            provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+            provider = self._client_provider(_client)
             response = self._monthly_blocked_response(provider, _model, "manager_closing")
             response.error = "LLM manager closing"
+            self._stamp_transport(response, _client)
             self._account_attempt(response, _task, _role)
             return response
         # 호출자 전체가 아니라 이 요청의 전송·정산 수명만 소유한다.
@@ -1257,8 +1413,9 @@ class LLMManager:
             response = getattr(exc, "_llm_response", None)
             if response is None:
                 # 시작 전 취소는 예약/전송이 없고, 시작 후 취소는 아래 경계가 기록한다.
-                provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+                provider = self._client_provider(_client)
                 response = self._monthly_blocked_response(provider, _model, "manager_closing")
+                self._stamp_transport(response, _client)
             response.budget_block_reason = "manager_closing"
             return response
 
@@ -1270,7 +1427,8 @@ class LLMManager:
 
     async def _run_complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
-        provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+        provider = self._client_provider(_client)
+        subscription = _client is self.claude_cli
         if self.provider_policy_block_reason(provider) == "provider_disabled":
             response = _disabled_gemini_response(_model)
             self._account_attempt(response, _task, _role)
@@ -1283,7 +1441,7 @@ class LLMManager:
             priority = "research"
         policy = None
         original_model, original_kwargs = _model, dict(kwargs)
-        if self.config.monthly_budget_usd is not None:
+        if self.config.monthly_budget_usd is not None and not subscription:
             try:
                 if self._monthly_budget_error is not None or self.monthly_budget is None:
                     raise BudgetStateError(self._monthly_budget_error or "storage_unavailable")
@@ -1325,6 +1483,7 @@ class LLMManager:
                             raise
             except BudgetBlocked as exc:
                 response = self._monthly_blocked_response(provider, _model, exc.reason)
+                self._stamp_transport(response, _client)
                 self._annotate_budget(response, policy, priority)
                 self._account_attempt(response, _task, _role)
                 return response
@@ -1335,18 +1494,24 @@ class LLMManager:
                 "", _model, provider, success=False, requested_model=_model,
                 error="Role deadline exceeded", request_sent=False,
                 usage_known=False, billing_status="not_sent")
+            self._stamp_transport(response, _client)
             self._annotate_budget(response, policy, priority)
             self._settle_monthly(token, response, _model)
             self._account_attempt(response, _task, _role)
             return response
         try:
-            response = await _client.complete(_prompt, _system, model=_model, **kwargs)
+            if provider == LLMProvider.ANTHROPIC:
+                response = await _client.complete(_prompt, _system, model=_model,
+                                                  deadline=deadline, **kwargs)
+            else:
+                response = await _client.complete(_prompt, _system, model=_model, **kwargs)
         except asyncio.CancelledError as exc:
             response = getattr(exc, "_llm_response", None)
             if response is None:
                 response = LLMResponse("", _model, provider, success=False,
                                        error="Request cancelled", usage_known=False, billing_status="unknown")
             if response is not None:
+                self._stamp_transport(response, _client)
                 self._annotate_budget(response, policy, priority)
                 self._settle_monthly(token, response, _model)
                 self._account_attempt(response, _task, _role)
@@ -1356,6 +1521,7 @@ class LLMManager:
             # Transport validation errors are local and retain their public raise contract.
             unsent = LLMResponse("", _model, provider, success=False, error="Invalid local controls",
                                  request_sent=False, usage_known=False, billing_status="not_sent")
+            self._stamp_transport(unsent, _client)
             self._annotate_budget(unsent, policy, priority)
             self._settle_monthly(token, unsent, _model)
             self._account_attempt(unsent, _task, _role)
@@ -1364,11 +1530,13 @@ class LLMManager:
         except Exception as exc:
             unknown = LLMResponse("", _model, provider, success=False,
                                   error="Provider invocation failed", usage_known=False, billing_status="unknown")
+            self._stamp_transport(unknown, _client)
             self._annotate_budget(unknown, policy, priority)
             self._settle_monthly(token, unknown, _model)
             self._account_attempt(unknown, _task, _role)
             exc._llm_response = unknown
             raise
+        self._stamp_transport(response, _client)
         # Provider refusal is an unsuccessful result on every route, including
         # fallback; record that fact before the attempt trail and audit persist.
         if response.refusal_detected:
@@ -1396,6 +1564,8 @@ class LLMManager:
         """Record known usage even for empty/error responses before another attempt."""
         response.missing_cost_policy = self.config.missing_cost_policy
         response.cost_accounting_skipped = bool(
+            response.billing_channel == "api"
+            and
             self.config.missing_cost_policy == "log_and_continue"
             and response.request_sent and not response.usage_known
             and response.billing_status != "rejected_before_generation"
@@ -1403,7 +1573,17 @@ class LLMManager:
         if response.cost_accounting_skipped:
             logger.warning("[LLM] 비용 미확인 시도: 금액 합산 제외, 미확인 기록 보존 (log_and_continue)")
         self._append_trail(response, task, role)
-        if response.billing_status == "rejected_before_generation":
+        if response.billing_channel == "subscription":
+            usage = self._subscription_usage
+            usage["attempts"] += 1
+            usage["sent"] += int(response.request_sent)
+            if response.usage_known:
+                usage["input_tokens"] += response.input_tokens
+                usage["output_tokens"] += response.output_tokens
+            estimate = response.subscription_estimated_cost_usd
+            if type(estimate) in (int, float) and math.isfinite(estimate) and estimate >= 0:
+                usage["list_cost_estimate_usd"] += estimate
+        elif response.billing_status == "rejected_before_generation":
             self.daily_usage.inferred_nonbillable_rejections += 1
         elif response.request_sent:
             self.daily_usage.add(response.input_tokens, response.output_tokens,
@@ -1439,9 +1619,14 @@ class LLMManager:
                     logger.warning("[LLM] metadata audit retention scan failed")
                 self._audit_log_date = today
             model = response.requested_model or response.model
-            quote = rate_quote(model, response.input_tokens, response.output_tokens)
+            quote = (rate_quote(model, response.input_tokens, response.output_tokens)
+                     if response.billing_channel == "api" else None)
             row = {
                 "ts": now.isoformat(), "task": task, "provider": response.provider.value,
+                "transport": response.transport, "billing_channel": response.billing_channel,
+                "model_identity_status": response.model_identity_status,
+                "subscription_estimated_cost_usd": response.subscription_estimated_cost_usd,
+                "actual_incremental_cost_usd": response.actual_incremental_cost_usd,
                 "requested_model": model, "resolved_model": response.resolved_model,
                 "requested_reasoning_effort": response.requested_reasoning_effort,
                 "requested_thinking_level": response.requested_thinking_level,
@@ -1464,7 +1649,9 @@ class LLMManager:
                 "provider_error_code": response.provider_error_code,
                 "provider_error_type": response.provider_error_type,
                 "provider_error_status": response.provider_error_status,
-                "cost_basis": ("pre_generation_rejection_inference_not_invoice_proof"
+                "cost_basis": ("subscription_list_estimate_not_invoice"
+                               if response.billing_channel == "subscription" else
+                               "pre_generation_rejection_inference_not_invoice_proof"
                                if response.billing_status == "rejected_before_generation"
                                else "reported_tokens_estimate" if response.usage_known else "unknown"),
                 "outcome": ("error" if not response.success else
@@ -1587,6 +1774,9 @@ class LLMManager:
         for client in (self.openai, self.gemini):
             if client._session is not None and not client._session.closed:
                 await client._session.close()
+        for client in (self.claude_cli, self.anthropic):
+            if client is not None:
+                await client.close()
 
     async def _fire_shadow(
         self,
@@ -1768,6 +1958,8 @@ class LLMManager:
             "audit_enabled": self.audit_dir is not None,
             "configuration_warnings": list(self.configuration_warnings),
             "monthly_budget": self.get_monthly_budget_status(),
+            "cost_scope": "api_only_excludes_subscription",
+            "subscription_usage": dict(self._subscription_usage),
             "stats": self.stats,
         }
 

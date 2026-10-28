@@ -35,6 +35,10 @@ llm:
   # light는 그대로 둔다 — Bull/Bear 토론이 종목당 2~4회씩 부르므로 호출량이 크다.
   # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
   openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, 일반 경량 작업 (light)
+  # Independent Bear: subscribed CLI first, then one budgeted Anthropic API attempt.
+  # API credential is read lazily from ANTHROPIC_API_KEY_FILE, never from this YAML.
+  claude_model: "claude-opus-5-5"
+  claude_cli_enabled: true
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl
@@ -658,4 +662,3 @@ experts:
     kr_economy_expert: 0.8
     global_micro_expert: 0.8
     earnings_expert: 1.0
-

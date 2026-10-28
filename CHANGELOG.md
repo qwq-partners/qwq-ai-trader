@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-28 — Claude 구독 CLI 우선·API 대체 연결
+
+- [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284): 사용자 선택대로 일반 GPT와 독립 Claude Bear를 분리하고, Claude는 로그인된 구독 CLI 뒤에 예산 내 API1회만 허용한다. 도구/MCP0·시한/프로세스 회수·모델 신원·키 파일 보호를 적용했다.
+- 구독 사용량과 API 예산을 분리하고, 미완료 독립 검토·기한/한도 소진은 보류한다. 연구 라운드의 완료한 상대 의견/실제 시도는 보존하며 이전 의견으로 누락을 메우지 않는다.
+- API400의 실제 원인과 수정·최종 검증/리뷰/통합·운영 상태는 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 운영 배포/예약 변경은 이번 작업에 포함하지 않았다.
+
 ## 2026-10-28 — Gemini 전송 차단·GPT 일반 분석 전환
 
 - 사용자 지시로 Google 복구 대신 GPT 일반 분석·Claude 독립 위험 검토 전환을 우선한다. [E04-D2 실행 원장](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)에 연결 선택·구현·검증·운영 상태를 구분한다.
