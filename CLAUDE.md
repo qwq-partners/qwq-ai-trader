@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **2026-10-28 오전:** [R02/O03 실수신·E02 선정/위키·NEXT](docs/operations/execution-roadmap.md#morning-acceptance-20261028). 장전1건·새 KIS 실시간 수신 확인, 비용 전/후 RR 진단 정정. Gemini HTTP402 12실패에 대한 E04-D1 보완을 먼저 진행한다. 운영`c4bc4f0e`·PID3611280·매수 중지/기존 예약 유지, 장중 재시작 없음. 아래 날짜별 안내는 당시 이력이다.
+> **2026-10-28 오전:** [R02/O03 실수신·E02 선정/위키·NEXT](docs/operations/execution-roadmap.md#morning-acceptance-20261028). 장전1건·새 KIS 실시간 수신 확인, 비용 전/후 RR 진단 정정. Gemini HTTP402에 대한 E04-D1 보완은 개발/독립 리뷰 완료, 운영 적용·외부 복구는 대기다. 운영`c4bc4f0e`·PID3611280·매수 중지/기존 예약 유지, 장중 재시작 없음. 아래 날짜별 안내는 당시 이력이다.
 
 > **2026-10-27 22:47 KST R02 운영 적용 완료:** 고정`c4bc4f0e`·PID3611280·CI/운영 각각9,227검사 통과·복구ready·미체결0. 새 KIS 자격/보호23파일·cron3개·Toss 미소비·매수 중지 유지. [운영 영수증·NEXT](docs/operations/execution-roadmap.md#r02-index-health-20261027). 다음은 E02 미관측 조건/비용 후 효과이며 자연 보고/모바일은 별도 대기다. 문서 후속만을 위한 재배포는 하지 않는다.
 
