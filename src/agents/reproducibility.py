@@ -92,6 +92,8 @@ class LLMCallRecord:
     requested_model: Optional[str] = None
     resolved_model: Optional[str] = None
     attempt_trail: Optional[List[Dict[str, Any]]] = None
+    refusal_detected: Optional[bool] = None
+    transport_error_kind: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -137,6 +139,8 @@ class LLMLedger:
         requested_model: Optional[str] = None,
         resolved_model: Optional[str] = None,
         attempt_trail: Optional[List[Dict[str, Any]]] = None,
+        refusal_detected: Optional[bool] = None,
+        transport_error_kind: Optional[str] = None,
     ) -> Optional[LLMCallRecord]:
         """
         호출 1건을 원장에 남긴다.
@@ -162,6 +166,7 @@ class LLMLedger:
             transport=transport, billing_channel=billing_channel,
             requested_model=requested_model, resolved_model=resolved_model,
             attempt_trail=attempt_trail,
+            refusal_detected=refusal_detected, transport_error_kind=transport_error_kind,
         )
 
         try:

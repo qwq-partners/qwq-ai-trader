@@ -240,7 +240,10 @@ class ResearchTeam:
 
     @staticmethod
     def _response_meta(resp, provider, *, controls=None, error=None, trail=None):
-        ok = bool(getattr(resp, "success", False)) and error is None
+        refusal = bool(getattr(resp, "refusal_detected", False))
+        failure_kind = getattr(resp, "transport_error_kind", None)
+        halt_review = refusal or failure_kind in {"refusal", "identity_mismatch", "policy_violation"}
+        ok = bool(getattr(resp, "success", False)) and error is None and not halt_review
         return {
             "text": (resp.content or "").strip() if ok else "",
             "model": getattr(resp, "model", "") or "",
@@ -257,6 +260,9 @@ class ResearchTeam:
             "requested_model": getattr(resp, "requested_model", None),
             "resolved_model": getattr(resp, "resolved_model", None),
             "attempt_trail": trail if trail is not None else getattr(resp, "attempt_trail", None),
+            "refusal_detected": refusal,
+            "transport_error_kind": failure_kind,
+            "halt_review": halt_review,
             "params": {"max_tokens": MAX_TOKENS, "weight": "light",
                        **{key: value for key, value in (controls or {}).items() if value is not None}},
         }
@@ -390,6 +396,8 @@ class ResearchTeam:
                         requested_model=_meta.get("requested_model"),
                         resolved_model=_meta.get("resolved_model"),
                         attempt_trail=_meta.get("attempt_trail"),
+                        refusal_detected=_meta.get("refusal_detected"),
+                        transport_error_kind=_meta.get("transport_error_kind"),
                     )
                 except Exception as _le:
                     logger.debug(f"[리서치팀] 원장 기록 실패: {_le}")
@@ -430,6 +438,10 @@ class ResearchTeam:
             if round_interrupted == "cancelled":
                 raise asyncio.CancelledError
             if round_interrupted:
+                break
+            # A fresh debate round must never bypass a safety refusal or a
+            # model/tool policy failure. Both current-round rows are retained.
+            if bull_meta.get("halt_review") or bear_meta.get("halt_review"):
                 break
 
             # 입장 변경 추적 — 토론이 실제로 작동했는지 보는 지표

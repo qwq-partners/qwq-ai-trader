@@ -58,6 +58,30 @@ class ReviewManager:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['refusal', 'identity_mismatch', 'policy_violation'])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.ANTHROPIC])
+async def test_forbidden_review_failure_stops_debate_after_recording_both_sides(failure, provider):
+    class Manager(ReviewManager):
+        async def complete_with(self, prompt, *, provider, **kwargs):
+            response = await super().complete_with(prompt, provider=provider, **kwargs)
+            if provider == failed_provider and len([p for p, _ in self.calls if p == provider]) == 1:
+                response.success = False
+                response.refusal_detected = failure == 'refusal'
+                response.transport_error_kind = failure
+            return response
+    failed_provider = provider
+    manager = Manager()
+    result = await researchers.ResearchTeam(manager, rounds=2).debate('S', '', [])
+    assert result.consensus is not True and result.rounds_run == 1
+    assert len(manager.calls) == 2
+    rows = reproducibility.LLMLedger.load()
+    assert len(rows) == 2
+    failed = next(row for row in rows if row['provider'] == provider.value)
+    assert failed['transport_error_kind'] == failure
+    assert failed['refusal_detected'] == (failure == 'refusal')
+
+
+@pytest.mark.asyncio
 async def test_both_bears_request_claude_with_bounded_low_effort():
     manager = ReviewManager()
     result = await av.AdversarialValidator(manager).validate("S", "sepa", 90, {}, "sideways")
