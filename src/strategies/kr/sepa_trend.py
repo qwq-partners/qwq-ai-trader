@@ -184,9 +184,11 @@ class SEPATrendStrategy(BaseStrategy):
 
         # R/R 차단 현황 로그 (블랙박스 제거)
         if rr_blocked:
+            cost_unavailable = sum(detail["cost_status"] == "unavailable"
+                                   for *_, detail in rr_blocked)
             logger.warning(
                 f"[SEPA] R/R 차단: {len(rr_blocked)}개 "
-                f"(최소 비용 후 손익비 2.0 기준 미충족)"
+                f"(최소 비용 후 손익비 2.0 검사; 비용 미확인 {cost_unavailable}개)"
             )
             for sym, name, sp, tp, atr, price, detail in rr_blocked[:5]:
                 gross = detail["gross_rr"]
