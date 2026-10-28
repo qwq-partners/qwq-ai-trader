@@ -235,7 +235,7 @@ class NewsCollector:
         Returns:
             True if similar article exists (threshold >= 0.85)
         """
-        if not SKLEARN_AVAILABLE or not self._similarity_cache:
+        if not SKLEARN_AVAILABLE:
             return False
 
         try:
@@ -257,12 +257,13 @@ class NewsCollector:
             tfidf_matrix = vectorizer.fit_transform(all_texts)
 
             # 새 기사와 기존 기사들 간의 코사인 유사도
-            new_vec = tfidf_matrix[-1]
-            existing_vecs = tfidf_matrix[:-1]
-            similarities = cosine_similarity(new_vec, existing_vecs)[0]
-
-            # 최대 유사도
-            max_similarity = float(np.max(similarities)) if len(similarities) > 0 else 0.0
+            if existing_texts:
+                new_vec = tfidf_matrix[-1]
+                existing_vecs = tfidf_matrix[:-1]
+                similarities = cosine_similarity(new_vec, existing_vecs)[0]
+                max_similarity = float(np.max(similarities)) if len(similarities) > 0 else 0.0
+            else:
+                max_similarity = 0.0
 
             if max_similarity >= self._similarity_threshold:
                 logger.debug(
@@ -872,6 +873,23 @@ class ThemeDetector:
                 logger.warning(f"[ThemeDetector] 저장소 연결 실패 (메모리 모드): {e}")
                 self._storage = None
 
+    def _prune_stale(self):
+        """Apply the existing one-hour theme and sentiment expiry rules."""
+        try:
+            cutoff = datetime.now() - timedelta(hours=1)
+            self._themes = {name: theme for name, theme in self._themes.items()
+                            if theme.last_updated > cutoff}
+            stale_symbols = [sym for sym, data in self._stock_sentiments.items()
+                             if data.get("updated_at", datetime.min) < cutoff]
+            for sym in stale_symbols:
+                del self._stock_sentiments[sym]
+        except Exception:
+            pass  # Preserve best-effort cleanup even when a record is malformed.
+
+    def _fresh_theme_list(self):
+        self._prune_stale()
+        return list(self._themes.values())
+
     async def detect_themes(self, force: bool = False) -> List[ThemeInfo]:
         """
         테마 탐지 실행
@@ -883,7 +901,7 @@ class ThemeDetector:
         if not force and self._last_detection:
             elapsed = (datetime.now() - self._last_detection).total_seconds() / 60
             if elapsed < self.detection_interval_minutes:
-                return list(self._themes.values())
+                return self._fresh_theme_list()
 
         logger.info("테마 탐지 시작...")
         self._last_detection = datetime.now()
@@ -897,7 +915,7 @@ class ThemeDetector:
 
             if not news_articles:
                 logger.warning("수집된 뉴스 없음")
-                return list(self._themes.values())
+                return self._fresh_theme_list()
 
             logger.info(f"뉴스 {len(news_articles)}건 수집 완료")
 
@@ -924,7 +942,7 @@ class ThemeDetector:
 
             if not detected_themes:
                 logger.info("감지된 테마 없음 - 기존 테마 유지")
-                return list(self._themes.values())
+                return self._fresh_theme_list()
 
             # 2-2. 종목별 센티멘트 파싱 (themes[].stocks + stock_impacts)
             now = datetime.now()
@@ -1068,28 +1086,14 @@ class ThemeDetector:
                 logger.debug(f"[ThemeDetector] 테마 {len(theme_records)}개 DB 저장")
 
             logger.info(f"테마 탐지 완료: {len(self._themes)}개 테마 활성")
-            return list(self._themes.values())
+            return self._fresh_theme_list()
 
         except Exception as e:
             logger.exception(f"테마 탐지 오류: {e}")
-            return list(self._themes.values())
+            return self._fresh_theme_list()
         finally:
-            # LLM 실패 시에도 stale 테마/센티멘트 정리 (무한 유지 방지)
-            try:
-                cutoff = datetime.now() - timedelta(hours=1)
-                self._themes = {
-                    name: theme
-                    for name, theme in self._themes.items()
-                    if theme.last_updated > cutoff
-                }
-                stale_symbols = [
-                    sym for sym, data in self._stock_sentiments.items()
-                    if data.get("updated_at", datetime.min) < cutoff
-                ]
-                for sym in stale_symbols:
-                    del self._stock_sentiments[sym]
-            except Exception:
-                pass  # 정리 실패해도 무시
+            # Also clean up after failures before a result can be returned.
+            self._prune_stale()
 
     async def _get_stock_hints_for_llm(self) -> str:
         """

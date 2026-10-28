@@ -39,10 +39,10 @@
 ### Task 2: 문서·자료 절차·고정 SHA 배포
 
 **Owner:** coordinator. 작업 원장/CLAUDE/CHANGELOG/docs index·설계 상태 갱신. 실제 자료 준비는 PR #292의 read-only 절차·private0행 영수증을 재사용하고 미검증 수익을 구분한다.
-- [ ] 계획/실행/독립리뷰/전체 검증·운영 사전조건·NEXT를 기록한 뒤 commit/push/PR 검증/병합.
-- [ ] 독립 중요 배포 검토(Astra/high 또는 검증된 Claude Opus), 기존 local_deploy 사용. 장외·서비스 정상·미체결0·recovery ready·helper/보고 충돌 없음·실행전 HEAD/보호파일/cron/설정 지문 확인.
-- [ ] 고정 main SHA 배포→기존 verify/재기동/실패자동rollback→150초 이상 정상 인수. 환경/자격/override/캐시/원장·기존 예약 보존을 대조한다. 자연 토큰 갱신은 원본 지문과 별도 근거로 대사한다.
-- [ ] 정상 배포 뒤 다음 READY 항목을 재대조해 순차 진행한다. 자연 입력 대기는 정확한 조건/시각으로 남기고 재검사·수집 기능을 임의로 만들지 않는다.
+- [x] 계획/실행/독립리뷰/전체 검증·운영 사전조건·NEXT를 기록한 뒤 commit/push/PR 검증/병합.
+- [x] 독립 중요 배포 검토(Astra/high 또는 검증된 Claude Opus), 기존 local_deploy 사용. 장외·서비스 정상·미체결0·recovery ready·helper/보고 충돌 없음·실행전 HEAD/보호파일/cron/설정 지문 확인.
+- [x] 고정 main SHA 배포→기존 verify/재기동/실패자동rollback→150초 이상 정상 인수. 환경/자격/override/캐시/원장·기존 예약 보존을 대조한다. 자연 토큰 갱신은 원본 지문과 별도 근거로 대사한다.
+- [x] 정상 배포 뒤 다음 READY 항목을 재대조해 순차 진행한다. 자연 입력 대기는 정확한 조건/시각으로 남기고 재검사·수집 기능을 임의로 만들지 않는다.
 
 ## Pre-flight / 결정
 
@@ -64,3 +64,5 @@ Terra/high 구현·Sol/high 독립 코드 리뷰 및 Astra/high 배포 계약 �
 기존 봇의00:05~00:10 로그/7일 초과 지정 캐시 정리와 충돌하지 않도록, 실제 배포 시작은00:15 이후 사전검사에서 고정한다. 준비 가능한 외곽 창은10/29 06:20까지지만07시 분석과 겹칠 정도로 지연되면 강행하지 않는다. 기존 정리/토큰 자연 갱신이 보호 지문을 바꾸면 원래 차이를 보존하고 별도 근거로 대사한다.
 
 로컬 전체 verify:9,647passed/2skipped/2xfailed/8warnings·783.54초·rc0·격리0·문법/비밀PASS. 최종 문서 독립 리뷰도APPROVE/P0~P2 0이며11개 링크/앵커 정상. CI/병합·실제 배포는 최종 PR 완료 영수증을 따른다.
+
+R02 전체 단계 완료: PR #293 고정9a193331·10/29 00:28:45 기동,00:31:35/169.6초/20항목PASS·보호48파일/cron 보존. [운영 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/293#issuecomment-6473256376). 다음 도래 기록 판독을 마쳤고 E04-NEWS-DEDUP의 재현된 결함으로 이어갔다. 새13:10 자연보고/모바일은 별도WAIT다.
