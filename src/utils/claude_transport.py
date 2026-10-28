@@ -123,8 +123,15 @@ class ClaudeCLIClient(_Client):
         return [self.config.claude_cli_command, "--safe-mode", "-p", "--model", model,
                 "--effort", effort, "--tools", "", "--strict-mcp-config", "--mcp-config",
                 '{"mcpServers":{}}', "--no-session-persistence", "--disable-slash-commands",
-                "--permission-mode", "dontAsk", "--setting-sources", "", "--output-format",
-                "stream-json", "--verbose", "--include-partial-messages", "--no-chrome",
+                "--permission-mode", "dontAsk", "--setting-sources", "",
+                # Safe mode leaves these built-ins active. Disable them only
+                # for this invocation; preserve managed policy/security mods.
+                "--settings", json.dumps({"enabledPlugins": {
+                    "cc-plugin-agents-md@builtin": False,
+                    "cc-plugin-telemetry@builtin": False,
+                    "cc-plugin-plugin-authoring@builtin": False,
+                }}),
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-chrome",
                 "--max-turns", "1", "--max-budget-usd", "0.25", "--system-prompt",
                 "Provide a bounded independent review of the supplied input. Do not use tools."]
 

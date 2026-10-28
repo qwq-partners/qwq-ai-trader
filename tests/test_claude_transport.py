@@ -102,7 +102,14 @@ async def test_cli_success_is_subscription_and_counts_all_cache_tokens(transport
     assert argv[argv.index("--tools") + 1] == ""
     assert argv[argv.index("--mcp-config") + 1] == '{"mcpServers":{}}'
     assert argv[argv.index("--setting-sources") + 1] == ""
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
     assert "--disable-slash-commands" in argv and "--strict-mcp-config" in argv
+    settings = json.loads(argv[argv.index('--settings') + 1])
+    assert settings == {'enabledPlugins': {
+        'cc-plugin-agents-md@builtin': False,
+        'cc-plugin-telemetry@builtin': False,
+        'cc-plugin-plugin-authoring@builtin': False,
+    }}
     assert "--bare" not in argv and "--dangerously-skip-permissions" not in argv
     assert "synthetic-not-inherited" not in observed["env"].values()
     assert observed["env"]["CLAUDE_CODE_MAX_RETRIES"] == "0"
