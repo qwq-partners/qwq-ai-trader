@@ -83,6 +83,10 @@ class LLMCallRecord:
     latency_ms: float = 0.0
     success: bool = True
     error: Optional[str] = None
+    # None preserves unknown transport/billing metadata on historical callers.
+    request_sent: Optional[bool] = None
+    billing_status: Optional[str] = None
+    http_status: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -120,6 +124,9 @@ class LLMLedger:
         success: bool = True,
         error: Optional[str] = None,
         prompt_version: str = "",
+        request_sent: Optional[bool] = None,
+        billing_status: Optional[str] = None,
+        http_status: Optional[int] = None,
     ) -> Optional[LLMCallRecord]:
         """
         호출 1건을 원장에 남긴다.
@@ -141,6 +148,7 @@ class LLMLedger:
             input_snapshot_hash=sha256_short(input_snapshot) if input_snapshot else "",
             latency_ms=latency_ms, success=success, error=error,
             prompt_version=prompt_version,
+            request_sent=request_sent, billing_status=billing_status, http_status=http_status,
         )
 
         try:

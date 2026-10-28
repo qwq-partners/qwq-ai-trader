@@ -108,6 +108,12 @@ class TraderAgent:
                 # "안전 검증 계층"이라는 도입 목적과 모순된다.
                 stance = Stance.HOLD
                 block_reason = "토론 검증 실패 — 반대 논거 미검증 상태로 매수 불가"
+            elif not (isinstance(debate.bull_final, bool)
+                      and isinstance(debate.bear_final, bool)):
+                # False is a real rejection vote; None/malformed is missing evidence.
+                # Keep scoring and held-position decisions independent of this gate.
+                stance = Stance.HOLD
+                block_reason = "토론 검증 미완료 — 양측 최종 판정이 없어 매수 불가"
 
         if block_reason:
             logger.info(f"[트레이더] {name or symbol} 매수 보류: {block_reason}")
