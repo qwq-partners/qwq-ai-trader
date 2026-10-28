@@ -255,7 +255,7 @@ async def test_unsupported_economy_controls_are_local_block_not_provider_excepti
 
 
 @pytest.mark.asyncio
-async def test_provider_retirement_precedes_monthly_and_validation_quotas(tmp_path, monkeypatch):
+async def test_required_independent_review_holds_when_validation_quota_exhausted(tmp_path, monkeypatch):
     from src.core.cross_validator import CrossStrategyValidator
     m = manager(tmp_path, monkeypatch, 100)
     cross = CrossStrategyValidator(llm_manager=m)
@@ -266,8 +266,8 @@ async def test_provider_retirement_precedes_monthly_and_validation_quotas(tmp_pa
     monkeypatch.setattr('src.analytics.llm_decision_record.get_decision_recorder',
                         lambda: SimpleNamespace(submit=lambda row: records.append(row) or 'accepted'))
     assert await cross.llm_second_check('005930', 'momentum', 90, {}, 'bear') is False
-    assert cross.last_llm_decision['stage'] == 'provider_policy'
-    assert records[0]['result']['independent_review_status'] == 'provider_disabled'
+    assert cross.last_llm_decision['stage'] == 'unavailable'
+    assert records[0]['result']['independent_review_status'] == 'unavailable'
     assert cross.last_llm_decision['attempts'] == 0
     m.openai.complete.assert_not_called()
     m.gemini.complete.assert_not_called()

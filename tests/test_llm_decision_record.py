@@ -103,7 +103,7 @@ def test_recorder_disabled_and_default_is_opt_in(tmp_path, monkeypatch):
 
 class _LLM:
     def __init__(self, bull, bear, single="YES", raise_for=None):
-        self.answers = {LLMProvider.OPENAI: bull, LLMProvider.GEMINI: bear}
+        self.answers = {LLMProvider.OPENAI: bull, LLMProvider.ANTHROPIC: bear}
         self.single, self.raise_for, self.prompts = single, raise_for, []
 
     async def complete_with(self, prompt, *, provider, **kwargs):
@@ -128,7 +128,7 @@ def test_adversarial_result_carries_two_attempts_with_role_prompt_fingerprints()
 
 
 def test_adversarial_exception_on_one_side_is_recorded_not_hidden():
-    adv = AdversarialValidator(_LLM("APPROVE", "unused", raise_for=LLMProvider.GEMINI))
+    adv = AdversarialValidator(_LLM("APPROVE", "unused", raise_for=LLMProvider.ANTHROPIC))
     result = asyncio.run(adv.validate("005930", "momentum", 90, {}, "bear", common_context="ctx"))
     bull, bear = result.meta["attempts"]
     assert bull["outcome"] == "success" and bear["outcome"] == "exception" and "provider down" in bear["error"]
@@ -220,7 +220,7 @@ def test_partial_timeout_keeps_completed_side(monkeypatch):
 
     class _Slow(_LLM):
         async def complete_with(self, prompt, *, provider, **kwargs):
-            if provider == LLMProvider.GEMINI:
+            if provider == LLMProvider.ANTHROPIC:
                 await asyncio.sleep(1.0)
             return _resp("APPROVE", provider=provider)
 
@@ -441,7 +441,7 @@ def test_timeout_row_keeps_request_metadata_from_cancelled_response(monkeypatch)
 
     class _Cancelled(_LLM):
         async def complete_with(self, prompt, *, provider, **kwargs):
-            if provider == LLMProvider.GEMINI:
+            if provider == LLMProvider.ANTHROPIC:
                 try:
                     await asyncio.sleep(1.0)
                 except asyncio.CancelledError as e:
