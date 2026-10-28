@@ -262,3 +262,23 @@ RR = reward / risk
 초기 독립 Claude Opus5.5 리뷰의 P1 3건/P2 3건을 한 번의 수정 묶음으로 보완했다. malformed gate 예외·Decimal 문맥 의존·검사 누락·잘못된 비용 단독 검사·목표/손절 비용 구분·invalid 우선순위를 포함한다. 초기 RED/GREEN 후 관련134검사/격리0를 확인했고, scoped Claude 재리뷰의 잔여 검사2건과 거대 수량 JSON 입력을 보완했다. 최종 델타 독립 Sol/high 승인·직접63검사/격리0, coordinator 관련140검사/격리0다. Claude는 실제 Opus5.5 응답 metadata를 확인했고 Sol은 요청 모델/effort만 확인 가능하다. 최종 전체/CI·통합 상태는 [단일 원장](../operations/execution-roadmap.md#deploy-and-order-rr-20261028) 및 해당 PR 영수증을 따른다. 실제 원본 gate/최종 계획/청산 정책의 연결은 후속 범위다.
 
 고정28자리 연산은 허용 입력의 곱셈에서 반올림할 수 있고, 큰 주문 금액의 원 단위 quantize는 unavailable이 될 수 있다. import 전 Decimal DefaultContext의 exponent 범위를 변경하는 특수 실행 환경은 지원 검증 대상이 아니다. 일반 고정 문맥과 호출자 context 독립성은 검사했다.
+
+<a id="rr-context-cli"></a>
+## E02-RR-COMPARE — 저장 근거의 오프라인 비교
+
+사용 명령(저장소의 개발 환경에서 실행):
+
+```bash
+python scripts/compare_rr_context.py --input /path/to/signal-rows.json --data-kind actual
+python scripts/compare_rr_context.py --input /path/to/signal-rows.json --data-kind actual --format markdown
+```
+
+입력은 `signal_events` 저장행의 JSON 배열이며 최대32MiB/10,000행이다. 합성 입력은 `--data-kind synthetic`으로 명시한다. CLI는 입력 파일만 읽고 stdout에 결과를 내며 DB/환경/네트워크에 연결하지 않는다. 유효한 빈 배열은 rc0·`no_rows`, 읽기/JSON/한도 오류는 원문 없는 분류 메시지와 rc2다. 출력 지문은 읽은 입력을 식별할 뿐 실자료 진위를 인증하지 않는다.
+
+필수 비교 근거는 row의 symbol/strategy/side, metadata.signal_id, metadata.rr_context다. 저장행 id와 signal_id는 다른 식별자다. 정상 SEPA/buy의 신호 ID·종목·전략이 문맥과 일치해야 하며, legacy/미수집·충돌·지원 외 입력은 제외 이유로 남긴다. event_time/event_type은 출처이며 passed도 제출/체결 증거는 아니다. 전체 metadata를 출력하지 않는다.
+
+`selection_observed`는 당시 float 진단과 gate, 가격, 비용률을 보존한다. `current_reference`는 이후 Signal의 가격과 계획 ID/시각이다. 각 수량 출처에 대해 같은 기록 수량을 선정 가격과 현재 가격에 각각 적용한다. 선정 당시 실제 수량을 복원한 것이 아니며, 현재 비용률·실제 체결 손절·실행 RR·순수익도 아니다. 수량 출처가 다르면 충돌을 표시하고 임의로 한 수량을 선택하지 않는다. 원래 gate와 Decimal 결과 사이의 차이를 모두 가격 변화 효과로 해석하지 않는다.
+
+coverage의 `row_count`는 기록행, `unique_signal_count`는 일치하는 신호 ID, `eligible_rows`는 비교 문맥 검증 통과행, `comparison_pairs`는 두 가격 계산이 모두 성공한 수량 출처별 쌍이다. 같은 신호의 반복행/세 수량 출처는 별개의 투자 기회가 아니다. eligible만으로 수량/비용 충족을 주장하지 않으며 `no_comparable_lanes`와 계산 사유를 함께 읽는다. 0행과0수량·결측은 서로 다르다.
+
+실자료 추출은 coordinator가 별도로 수행한다. 기존 연결을 사용한 read-only transaction 안에서 `event_time >= 시작 AND event_time < 끝`의 id/time/symbol/strategy/side/event_type/block_gate와 metadata의 signal_id/rr_context만 읽고,5초 시한·10,001행 sentinel(허용10,000)을 둔다. 상한 초과는 완전 자료로 내보내지 않는다. 일반 storage 초기화는 DDL을 실행하므로 사용하지 않는다. 결과는 저장소 밖 비공개0600 JSON과 범위·시각·해시·행 수 영수증에 남긴다. 10/28 첫 판독 범위/결과 및 최종 검증은 [실행 원장](../operations/execution-roadmap.md#e02-rr-compare-20261028)을 따른다.
