@@ -725,17 +725,32 @@ def test_install_from_env_passes_manifest_input_age_and_rejects_bad_values(tmp_p
             created.update(kw); super().__init__(*a, **kw)
     monkeypatch.setattr(m, "ComparisonWorker", Spy)
     cross = SimpleNamespace(_comparison_handoff=None, _comparison_producer_config=None)
-    man = _manifest(enabled=True, max_input_age_seconds=2.5); path = tmp_path / "R.json"; path.write_text(_json.dumps(man))
+    # This isolates installer age wiring behind synthetic clients. A retired
+    # manifest must first be rejected, even when raw clients are injected.
+    man = _manifest(enabled=True, max_input_age_seconds=2.5)
+    path = tmp_path / "R.json"
+    path.write_text(_json.dumps(man))
+    env = {"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)}
+    assert m.install_from_env(cross, env=env) is None
+    assert created == {} and cross._comparison_handoff is None
+    # Synthetic provider-neutral controls exercise age validation only; no pair
+    # is offered, and this does not qualify a replacement independent Bear.
+    for role in ("current", "candidate", "bear"):
+        man[role]["model"] = "gpt-5-mini"
+    man["execution_policy"]["allowed_models"] = ["gpt-5-mini", "gpt-5.6-sol"]
+    path.write_text(_json.dumps(man))
     worker = m.install_from_env(cross, env={"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)})
     try:
         assert worker is not None and created["max_input_age_seconds"] == 2.5 and cross._comparison_handoff is not None
     finally:
         if worker is not None:
             worker.stop(5)
-    bad = _manifest(enabled=True, max_input_age_seconds=0); path.write_text(_json.dumps(bad))
-    cross2 = SimpleNamespace(_comparison_handoff=None, _comparison_producer_config=None)
-    assert m.install_from_env(cross2, env={"COMPARISON_WORKER": "1", "COMPARISON_EXPERIMENT_MANIFEST": str(path)}) is None
-    assert cross2._comparison_handoff is None
+    for age in (0, -1, 61, True, None, "2.5", float("nan")):
+        created.clear()
+        path.write_text(_json.dumps(dict(man, max_input_age_seconds=age)))
+        cross2 = SimpleNamespace(_comparison_handoff=None, _comparison_producer_config=None)
+        assert m.install_from_env(cross2, env=env) is None
+        assert cross2._comparison_handoff is None and created == {}
 
 
 def test_ledger_block_reason_reaches_stop_conditions_without_pair_rows():
