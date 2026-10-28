@@ -3,6 +3,7 @@ import asyncio
 import importlib
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 
@@ -77,6 +78,22 @@ async def observed_pid(path):
 def assert_reaped(pid):
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+async def assert_descendant_stopped(pid, *, timeout=0.5):
+    """SIGKILL 전달 뒤 커널의 종료 상태 전환을 유한하게 기다린다."""
+    loop = asyncio.get_running_loop()
+    until = loop.time() + timeout
+    while True:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except FileNotFoundError:
+            return
+        if state == "Z":
+            return
+        if loop.time() >= until:
+            raise AssertionError(f"owned descendant did not stop: pid={pid}, state={state}")
+        await asyncio.sleep(0.005)
 
 
 @pytest.mark.asyncio
@@ -413,9 +430,28 @@ async def test_cli_timeout_kills_owned_descendant(transport, tmp_path):
     assert response.transport_error_kind == "cli_timeout"
     assert_reaped(json.loads(observed.read_text())["pid"])
     pid = int(descendant.read_text())
-    state = Path(f"/proc/{pid}/stat")
-    # 손자는 init의 회수 대상이다. 실행/수면 상태로 생존해서는 안 된다.
-    assert not state.exists() or state.read_text().split()[2] == "Z"
+    # 직접 자식 wait와 손자의 커널 종료 완료는 같은 시점이 아니다.
+    await assert_descendant_stopped(pid)
+
+
+@pytest.mark.asyncio
+async def test_descendant_check_rejects_a_real_surviving_process():
+    # 검사 완화가 실제 생존을 숨기지 않는 음성대조. 이 테스트 소유 그룹만 정리한다.
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(30)",
+        env={"PATH": os.defpath}, stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        with pytest.raises(AssertionError, match="owned descendant did not stop"):
+            await assert_descendant_stopped(proc.pid, timeout=0.03)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+    await assert_descendant_stopped(proc.pid)
 
 
 @pytest.mark.asyncio

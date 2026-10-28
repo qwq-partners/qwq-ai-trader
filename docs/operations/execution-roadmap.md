@@ -2,6 +2,18 @@
 
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
+<a id="e02-rr-deploy-recovery-20261028"></a>
+### E02-RR-DEPLOY-RECOVERY — 배포 검증의 종료 상태 관측 경쟁 보완
+
+**복구 준비 당시 상태:** PR #290/main`d78c10d6`의 소스·독립 리뷰·로컬/PR/main CI는 완료했지만, 운영 verify에서 기존 Claude 합성 종료 검사1건이 실패해 자동 롤백했다. 운영은`0b82af5d`/PID3734201·21:28:29 KST 재기동·active/NRestarts0·복구ready·미체결0이다. **RR 연결의 운영 적용 완료가 아니다.** [실패/복구 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/290#issuecomment-6469023692)을 보존한다. 다음 비교 구현보다 이 배포 인수를 먼저 마친다.
+
+- **Plan:** systematic-debugging으로 실제 살아남은 자손과 커널 종료 상태 전환 지연을 구분한다. 제품 transport·시한·주문 정책은 그대로 두고, 근거가 확인된 테스트 동기화만 보완한다. 실패 영수증/원장은 지우지 않으며 새 고정SHA/별도 배포 시도로 진행한다.
+- **Do / 원인:** 독립 Astra/high 요청(실제metadata 미노출)이 소유한 합성 프로세스만으로 실제 complete→timeout→cleanup120회를 계측했다. 기존 즉시 assertion 위치에서R3회가 재현됐고 같은PID/starttime/group이 추가 kill 없이 다음 관측1.36/2.44/1.82ms 안에Z로 전환됐다. 정상120회 모두종료, 부모만 종료시킨 음성대조3회는150ms 뒤에도 살아 있어 모두실패했다. 단독cleanup240회에서는 즉시R이 재현되지 않아 실제 경로로 좁혔다. 실제 Claude/API/운영 파일 접근0. 이는 모든 자손 프로그램의 종료 보증으로 확대하지 않는다.
+- **Do / 최소 수정:** `tests/test_claude_transport.py`에서 자손만 monotonic 최대0.5초/5ms 간격으로 부재 또는Z를 확인한다. 기존 timeout 응답·직접 부모 회수 단언은 유지한다. 실제 살아 있는 소유 합성 프로세스가0.03초 상한 뒤 반드시 실패하는 음성대조를 추가하고 finally에서 그 그룹만 회수한다. 고정 sleep 뒤 통과·무조건 retry·검사 skip은 없다. [kill(2)](https://man7.org/linux/man-pages/man2/kill.2.html)와 [wait(2)](https://man7.org/linux/man-pages/man2/waitpid.2.html)의 신호 전달/직접 자식 회수 경계와 계측 결과를 근거로 한다.
+- **See:** 관련 Claude133검사/4.58초/rc0·격리0 통과. 독립 Astra/high 요청(실제metadata 미노출) 소스 리뷰 APPROVE/P0/P1/P2 0, 실제 helper의 별도5계약 검사도 일치했다. 로컬 전체 verify **9,601 passed / 2 skipped / 2 xfailed / 8 warnings / 780.75초 / rc0**, 격리0·문법/비밀 검사 PASS. 최종 CI/병합·새 배포 인수는 [PR #291](https://github.com/qwq-partners/qwq-ai-trader/pull/291)의 완료 영수증으로 확정한다. 최초 focused 명령의 잘못된 파일명은 수집오류(rc4/검사0)였고 올바른4파일로 다시 실행했다.
+- **롤백 사후 인수:** 276초·broker/복구/환경/자격/예산/cron/매수 중지 정상. 보호48개 중47개 지문 동일, KIS 캐시1개는 재시작 전 기존PID의21:21 정상 TokenManager 갱신 완료 로그와24시간 만료로 대사했다. 인증키/환경 변경이 아니다. 원래 hash 불일치 영수증을 보존하고 별도 `rollback-reconciled.json`에 자연 갱신을 명시했다. 캐시를 옛 토큰으로 되돌리거나 지문을 조용히 덮지 않는다.
+- **NEXT:** 복구 패치 검증·고정SHA 배포 인수 → E02-RR-COMPARE의 기존 자료 판독. 신규 거래 순수익은 여전히 미검증이며 가상자금·매수 재개·새 장기 수집은 없다.
+
 <a id="deploy-and-order-rr-20261028"></a>
 **2026-10-28 완료 이력 — 통합 배포 → E02-ORDER-RR:** 사용자 “완료되면 배포하고 다음 작업” 승인으로 PR #288/main `0b82af5d`를 고정 적용했다. PR #288의 로컬/CI9,470검사·독립 Claude Opus5.5 리뷰·[병합 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/288#issuecomment-6464056761)은 DONE이다. 아래 이전 `0bfd6191` 배포 계획은 이번 통합 SHA로 대체하며 E04-D1/D2·E02-RR/COST/PNL-COST가 함께 포함된다.
 
