@@ -67,7 +67,7 @@ def response(provider, *, success=True, status=200):
 
 
 class ScriptedLLM:
-    def __init__(self, failed_provider=LLMProvider.GEMINI, status=402, success=False):
+    def __init__(self, failed_provider=LLMProvider.ANTHROPIC, status=402, success=False):
         self.calls = []
         self.failed_provider = failed_provider
         self.status = status
@@ -80,13 +80,13 @@ class ScriptedLLM:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize("provider", [LLMProvider.OPENAI, LLMProvider.ANTHROPIC])
 async def test_402_suppresses_later_rounds_symbols_and_records_unsent(provider):
     llm = ScriptedLLM(provider)
     team = researchers.ResearchTeam(llm, rounds=2)
     first = await team.debate("synthetic1", "", [])
     second = await team.debate("synthetic2", "", [])
-    other = LLMProvider.GEMINI if provider == LLMProvider.OPENAI else LLMProvider.OPENAI
+    other = LLMProvider.ANTHROPIC if provider == LLMProvider.OPENAI else LLMProvider.OPENAI
     assert llm.calls.count(provider) == 1
     assert llm.calls.count(other) == 4
     assert first.consensus is None and second.consensus is None
@@ -115,19 +115,19 @@ async def test_expiry_retries_naturally_and_success_logs_recovery_once(monkeypat
         await team.debate("synthetic", "", [])
         clock[0] = 399.999
         await team.debate("synthetic", "", [])
-        assert llm.calls.count(LLMProvider.GEMINI) == 1
+        assert llm.calls.count(LLMProvider.ANTHROPIC) == 1
         clock[0] = 400.0
         llm.success = True
         result = await team.debate("synthetic", "", [])
         assert result.bear_final is True
         await team.debate("synthetic", "", [])
-        assert llm.calls.count(LLMProvider.GEMINI) == 3
-        health = team.get_stats()["providers"]["gemini"]
+        assert llm.calls.count(LLMProvider.ANTHROPIC) == 3
+        health = team.get_stats()["providers"]["anthropic"]
         assert health["cooldown_active"] is False
         assert health["cooldowns"] == 1 and health["skipped"] == 1
         warnings = [event["message"] for event in events if event["level"].name == "WARNING"]
         assert len(warnings) == 1
-        assert "gemini" in warnings[0] and "402" in warnings[0]
+        assert "anthropic" in warnings[0] and "402" in warnings[0]
         assert "sanitized" not in warnings[0] and "synthetic" not in warnings[0]
         assert sum("recovered" in event["message"] for event in events) == 1
     finally:
@@ -141,7 +141,7 @@ async def test_only_failed_typed_402_starts_cooldown(status, success):
     llm = ScriptedLLM(status=status, success=success)
     team = researchers.ResearchTeam(llm, rounds=2)
     await team.debate("synthetic", "", [])
-    assert llm.calls.count(LLMProvider.GEMINI) == 2
+    assert llm.calls.count(LLMProvider.ANTHROPIC) == 2
 
 
 @pytest.mark.asyncio
@@ -162,19 +162,19 @@ async def test_older_inflight_success_cannot_clear_new_402():
 
     llm = ConcurrentLLM()
     team = researchers.ResearchTeam(llm)
-    older = asyncio.create_task(team._ask("old", "", LLMProvider.GEMINI))
+    older = asyncio.create_task(team._ask("old", "", LLMProvider.ANTHROPIC))
     await started.wait()
-    await team._ask("new", "", LLMProvider.GEMINI)
+    await team._ask("new", "", LLMProvider.ANTHROPIC)
     release.set()
     assert (await older)["success"] is True
-    skipped = await team._ask("later", "", LLMProvider.GEMINI)
+    skipped = await team._ask("later", "", LLMProvider.ANTHROPIC)
     assert llm.calls == 2
     assert skipped["request_sent"] is False
-    assert team.get_stats()["providers"]["gemini"]["cooldown_active"] is True
+    assert team.get_stats()["providers"]["anthropic"]["cooldown_active"] is True
 
 
 @pytest.mark.asyncio
-async def test_suppressed_requests_never_reserve_budget_or_rewrite_missing_cost(tmp_path):
+async def test_suppressed_requests_never_reserve_budget_or_rewrite_missing_cost(tmp_path, monkeypatch):
     import sqlite3
     from src.utils.llm import LLMConfig, LLMManager
     from test_llm_transport_contract import Reply, Session
@@ -186,6 +186,14 @@ async def test_suppressed_requests_never_reserve_budget_or_rewrite_missing_cost(
     manager._LLM_LOG_DIR = tmp_path / "responses"
     manager.gemini._session = Session()
     manager.openai._session = Session(Reply({}, status=402))
+    real_complete_with = manager.complete_with
+    async def offline_complete_with(prompt, *, provider, **kwargs):
+        if provider == LLMProvider.ANTHROPIC:
+            return LLMResponse("", "claude-opus-5-5", provider, success=False,
+                               request_sent=False, billing_status="not_sent",
+                               error="offline unavailable")
+        return await real_complete_with(prompt, provider=provider, **kwargs)
+    monkeypatch.setattr(manager, "complete_with", offline_complete_with)
     team = researchers.ResearchTeam(manager, rounds=2)
     await team.debate("synthetic1", "", [])
     with sqlite3.connect(tmp_path / "budget.sqlite3") as db:
@@ -206,7 +214,7 @@ async def test_suppressed_requests_never_reserve_budget_or_rewrite_missing_cost(
     assert len(bull) == len(bear) == 4
     assert sum(row["billing_status"] == "not_sent" for row in bull) == 3
     assert all(row["request_sent"] is False and row["verdict"] is None for row in bear)
-    assert all(row["error"] == "Provider disabled by user policy" for row in bear)
+    assert all(row["error"] == "offline unavailable" for row in bear)
     assert team.get_stats()["providers"]["openai"]["skipped"] == 3
 
 
@@ -232,20 +240,20 @@ async def test_overlapping_402_warns_once_and_new_instance_has_no_cooldown(monke
     events = []
     sink = logger.add(lambda message: events.append(message.record), level="WARNING")
     try:
-        older = asyncio.create_task(team._ask("old", "", LLMProvider.GEMINI))
+        older = asyncio.create_task(team._ask("old", "", LLMProvider.ANTHROPIC))
         await first_started.wait()
-        await team._ask("new", "", LLMProvider.GEMINI)
+        await team._ask("new", "", LLMProvider.ANTHROPIC)
         release.set()
         await older
-        await team._ask("suppressed", "", LLMProvider.GEMINI)
+        await team._ask("suppressed", "", LLMProvider.ANTHROPIC)
         assert len(events) == 1
         assert llm.calls == 2  # both requests were already in flight before failure
         clock[0] = 400.0
-        await team._ask("natural retry", "", LLMProvider.GEMINI)
+        await team._ask("natural retry", "", LLMProvider.ANTHROPIC)
         assert len(events) == 2
-        assert team.get_stats()["providers"]["gemini"]["cooldowns"] == 2
+        assert team.get_stats()["providers"]["anthropic"]["cooldowns"] == 2
         second = researchers.ResearchTeam(llm)
-        await second._ask("independent instance", "", LLMProvider.GEMINI)
+        await second._ask("independent instance", "", LLMProvider.ANTHROPIC)
         assert llm.calls == 4
     finally:
         logger.remove(sink)

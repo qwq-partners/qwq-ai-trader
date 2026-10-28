@@ -380,7 +380,8 @@ class _ScriptedLLM:
         self._idx: Dict[str, int] = {}
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty, seed, temperature, budget_priority):
+                            reasoning_effort, retry_on_empty, seed=None, temperature=None, budget_priority=None,
+                            call_timeout_seconds=None):
         assert budget_priority == "essential"
         pv = getattr(provider, "value", str(provider))
         i = self._idx.get(pv, 0)
@@ -392,12 +393,13 @@ class _ScriptedLLM:
 
 def test_cond6_recorded_change_reason_preserved_across_rounds(iso, monkeypatch):
     monkeypatch.setattr(repro_mod, "LEDGER_DIR", iso / "llm_ledger6a")
+    monkeypatch.setattr(repro_mod, "_ledger", None)
     script = {
         LLMProvider.OPENAI.value: [
             "APPROVE 실적 서프라이즈 확인",
             "APPROVE 반론을 검토했으나 입장 유지",
         ],
-        LLMProvider.GEMINI.value: [
+        LLMProvider.ANTHROPIC.value: [
             "REJECT 모멘텀 부족",
             "ACCEPT\n변경사유: 새근거 — 반등 거래량 확인",
         ],
@@ -433,9 +435,10 @@ def test_cond6_recorded_change_reason_preserved_across_rounds(iso, monkeypatch):
 
 def test_cond6_unrecorded_change_when_no_reason_text(iso, monkeypatch):
     monkeypatch.setattr(repro_mod, "LEDGER_DIR", iso / "llm_ledger6b")
+    monkeypatch.setattr(repro_mod, "_ledger", None)
     script = {
         LLMProvider.OPENAI.value: ["APPROVE 근거 있음", "APPROVE 유지"],
-        LLMProvider.GEMINI.value: ["REJECT 근거 부족", "ACCEPT 그냥 마음이 바뀜"],
+        LLMProvider.ANTHROPIC.value: ["REJECT 근거 부족", "ACCEPT 그냥 마음이 바뀜"],
     }
     team = ResearchTeam(llm_manager=_ScriptedLLM(script), rounds=2)
     result = asyncio.run(team.debate("005930", "삼성전자", _decent_reports()))

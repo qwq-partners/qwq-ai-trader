@@ -12,7 +12,7 @@ Research 팀 — Bull과 Bear가 2라운드로 토론한다 (생성-검증 패�
 **상대 논거를 반영한 뒤에도 입장이 유지되는지**를 보기 위해서다.
 R1에서 갈렸다가 R2에서 한쪽이 설득되면 그 합의는 R1 만장일치보다 정보량이 많다.
 
-모델을 갈라 쓴다 (Bull=OpenAI, Bear=Gemini). 같은 모델로 양쪽을 돌리면
+모델을 갈라 쓴다 (Bull=OpenAI, Bear=Claude). 같은 모델로 양쪽을 돌리면
 같은 편향을 공유해 토론이 형식적으로 흐른다.
 
 fail 정책(2026-09-15 정정 — 이전 docstring의 "fail-open"은 stale했다):
@@ -205,17 +205,17 @@ class ResearchTeam:
                 "http_status": None,
             }
         failure_generation = self._provider_failures.get(provider_name, 0)
-        # Provider-specific controls: Gemini formerly ignored the OpenAI knob.
-        # None means unspecified, preserving its existing thinking default.
-        controls = {
-            "reasoning_effort": REASONING_EFFORT if provider == LLMProvider.OPENAI else None,
-            "seed": DEBATE_SEED if provider == LLMProvider.OPENAI else None,
-            "temperature": DEBATE_TEMPERATURE if provider == LLMProvider.GEMINI else None,
-        }
+        if provider == LLMProvider.ANTHROPIC:
+            controls = {"reasoning_effort": "low",
+                        "call_timeout_seconds": max(0.001, ROUND_TIMEOUT - 0.5)}
+        elif provider == LLMProvider.OPENAI:
+            controls = {"reasoning_effort": REASONING_EFFORT, "seed": DEBATE_SEED}
+        else:
+            controls = {"temperature": DEBATE_TEMPERATURE}
         resp = await self._llm.complete_with(
             prompt, provider=provider, weight="light",
             system=system, max_tokens=MAX_TOKENS,
-            retry_on_empty=EMPTY_RETRY,
+            retry_on_empty=0 if provider == LLMProvider.ANTHROPIC else EMPTY_RETRY,
             budget_priority="essential",
             **controls,
         )
@@ -232,19 +232,29 @@ class ResearchTeam:
               and provider_name in self._provider_cooldowns):
             del self._provider_cooldowns[provider_name]
             logger.info(f"[리서치팀] provider={provider_name} recovered")
+        return self._response_meta(resp, provider, controls=controls)
+
+    @staticmethod
+    def _response_meta(resp, provider, *, controls=None, error=None, trail=None):
+        ok = bool(getattr(resp, "success", False)) and error is None
         return {
             "text": (resp.content or "").strip() if ok else "",
             "model": getattr(resp, "model", "") or "",
             "provider": getattr(getattr(resp, "provider", None), "value",
-                                str(getattr(resp, "provider", ""))),
+                                str(getattr(resp, "provider", provider.value))),
             "latency_ms": float(getattr(resp, "latency_ms", 0.0) or 0.0),
             "success": ok,
-            "error": getattr(resp, "error", None),
+            "error": error or getattr(resp, "error", None),
             "request_sent": getattr(resp, "request_sent", None),
             "billing_status": getattr(resp, "billing_status", None),
-            "http_status": http_status,
+            "http_status": getattr(resp, "http_status", None),
+            "transport": getattr(resp, "transport", None),
+            "billing_channel": getattr(resp, "billing_channel", None),
+            "requested_model": getattr(resp, "requested_model", None),
+            "resolved_model": getattr(resp, "resolved_model", None),
+            "attempt_trail": trail if trail is not None else getattr(resp, "attempt_trail", None),
             "params": {"max_tokens": MAX_TOKENS, "weight": "light",
-                       **{key: value for key, value in controls.items() if value is not None}},
+                       **{key: value for key, value in (controls or {}).items() if value is not None}},
         }
 
     # ── 토론 ───────────────────────────────────────────────
@@ -302,21 +312,40 @@ class ResearchTeam:
                     "ACCEPT 또는 REJECT로 시작하라." + _CHANGE_REASON_INSTRUCTION
                 )
 
+            slots = {}
+            round_interrupted = False
+
+            async def capture(role, prompt, system, provider):
+                try:
+                    meta = await self._ask(prompt, system, provider)
+                except asyncio.CancelledError as error:
+                    slots[role] = self._response_meta(
+                        getattr(error, "_llm_response", None), provider, error="timeout",
+                        trail=getattr(error, "_llm_trail", None))
+                    raise
+                except Exception as error:
+                    meta = self._response_meta(
+                        getattr(error, "_llm_response", None), provider,
+                        error="provider_exception", trail=getattr(error, "_llm_trail", None))
+                slots[role] = meta
+
             try:
-                bull_new, bear_new = await asyncio.wait_for(
+                await asyncio.wait_for(
                     asyncio.gather(
-                        self._ask(bull_prompt, BULL_SYSTEM, LLMProvider.OPENAI),
-                        self._ask(bear_prompt, BEAR_SYSTEM, LLMProvider.GEMINI),
-                        return_exceptions=True,
-                    ),
-                    timeout=ROUND_TIMEOUT,
+                        capture("bull", bull_prompt, BULL_SYSTEM, LLMProvider.OPENAI),
+                        capture("bear", bear_prompt, BEAR_SYSTEM, LLMProvider.ANTHROPIC),
+                    ), timeout=ROUND_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"[리서치팀] {symbol} R{rnd} 타임아웃")
-                break
-            except Exception as e:
-                logger.warning(f"[리서치팀] {symbol} R{rnd} 예외: {e}")
-                break
+                round_interrupted = True
+            except asyncio.CancelledError:
+                # Save the interrupted round before propagating cancellation.
+                round_interrupted = "cancelled"
+                for meta in slots.values():
+                    if meta.get("error") == "timeout":
+                        meta["error"] = "cancelled"
+            bull_new, bear_new = slots.get("bull", {}), slots.get("bear", {})
 
             # 이번 라운드의 **원시 응답**을 분리해서 다룬다.
             #   직전 라운드 텍스트를 그대로 이번 turn에 기록하면, 응답이 비었던 라운드가
@@ -352,6 +381,11 @@ class ResearchTeam:
                         request_sent=_meta.get("request_sent"),
                         billing_status=_meta.get("billing_status"),
                         http_status=_meta.get("http_status"),
+                        transport=_meta.get("transport"),
+                        billing_channel=_meta.get("billing_channel"),
+                        requested_model=_meta.get("requested_model"),
+                        resolved_model=_meta.get("resolved_model"),
+                        attempt_trail=_meta.get("attempt_trail"),
                     )
                 except Exception as _le:
                     logger.debug(f"[리서치팀] 원장 기록 실패: {_le}")
@@ -381,13 +415,18 @@ class ResearchTeam:
                 change_reason=bear_reason))
             result.rounds_run = rnd
 
-            # 다음 라운드 프롬프트와 최종 판정에는 마지막으로 확보된 응답을 이어 쓴다
-            # (한쪽이 한 라운드 실패했다고 그 관점을 통째로 버리지는 않는다)
+            # Current-round votes alone authorize consensus. Prior text may
+            # inform later prompts, but cannot replace a missing review.
             prev_bull, prev_bear = bull_v, bear_v
+            bull_v, bear_v = round_bull_v, round_bear_v
             if round_bull:
-                bull_text, bull_v = round_bull, round_bull_v
+                bull_text = round_bull
             if round_bear:
-                bear_text, bear_v = round_bear, round_bear_v
+                bear_text = round_bear
+            if round_interrupted == "cancelled":
+                raise asyncio.CancelledError
+            if round_interrupted:
+                break
 
             # 입장 변경 추적 — 토론이 실제로 작동했는지 보는 지표
             if rnd > 1 and (prev_bull != bull_v or prev_bear != bear_v):

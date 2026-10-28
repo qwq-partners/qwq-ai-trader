@@ -13,7 +13,7 @@
    Bear에게 반증 책임을 지우면, 승인 쪽으로 기울던 판단이 균형을 찾는다.
 
 2) **서로 다른 provider (교차 검증)**
-   Bull은 OpenAI, Bear는 Gemini로 돌린다. 두 모델이 같은 결론이면 신뢰도가 높고,
+   Bull은 OpenAI, Bear는 Claude로 돌린다. 두 모델이 같은 결론이면 신뢰도가 높고,
    갈리면 그 자체가 "불확실한 신호"라는 정보다.
 
 판정:
@@ -22,9 +22,9 @@
     불일치                → STRICT 모드면 차단, 아니면 통과하되 confidence 0.5로 표시
                             (호출측이 점수를 감점하는 데 쓸 수 있다)
 
-fail-open: LLM 장애·타임아웃·예산 소진 시에는 통과시킨다.
-결정론적 규칙 9개가 이미 앞단에서 걸러내므로, LLM 장애로 매매가 멈추는 쪽이 더 해롭다.
-사용자가 중지한 공급자는 예외다. 독립 검토 미완료로 차단하며 단일 모델로 우회하지 않는다.
+실제 매니저는 양쪽 검토가 필요하다. 장애·타임아웃·예산 소진 시 판단을 보류하며
+단일 모델로 우회하지 않는다. 기존 advisory 매니저만 fail-open 계약을 유지한다.
+사용자가 중지한 공급자는 매니저 종류와 관계없이 독립 검토 미완료로 차단한다.
 """
 
 from __future__ import annotations
@@ -133,7 +133,7 @@ def _attempts_from_slots(requested_at, slots):
     from ..utils.llm import LLMProvider
     rows = []
     for role, provider, system, suffix in (("bull", LLMProvider.OPENAI, BULL_SYSTEM, BULL_SUFFIX),
-                                            ("bear", LLMProvider.GEMINI, BEAR_SYSTEM, BEAR_SUFFIX)):
+                                            ("bear", LLMProvider.ANTHROPIC, BEAR_SYSTEM, BEAR_SUFFIX)):
         slot = slots.get(role)
         if slot is None:
             slot = {}
@@ -184,11 +184,12 @@ class AdversarialValidator:
         from ..utils.llm import LLMProvider
         prompt = context + BEAR_SUFFIX
         return await self._llm.complete_with(
-            prompt, provider=LLMProvider.GEMINI, weight="light",
+            prompt, provider=LLMProvider.ANTHROPIC, weight="light",
             system=BEAR_SYSTEM, max_tokens=MAX_TOKENS,
             budget_priority="essential",
-            retry_on_empty=1,
-            temperature=0.0,
+            retry_on_empty=0,
+            reasoning_effort="low",
+            call_timeout_seconds=max(0.001, LLM_TIMEOUT - 0.5),
         )
 
     def provider_policy_block_reason(self) -> Optional[str]:
@@ -196,7 +197,7 @@ class AdversarialValidator:
         from ..utils.llm import LLMProvider
         check = getattr(self._llm, "provider_policy_block_reason", None)
         if callable(check):
-            for provider in (LLMProvider.OPENAI, LLMProvider.GEMINI):
+            for provider in (LLMProvider.OPENAI, LLMProvider.ANTHROPIC):
                 if check(provider) == "provider_disabled":
                     return "provider_disabled"
         return None
@@ -217,6 +218,15 @@ class AdversarialValidator:
             False, 0.0, "공급자 사용 중지 — 독립 검토 미완료", failed=False,
             meta={"attempts": _attempts_from_slots(requested_at, slots),
                   "independent_review_status": "provider_disabled"})
+
+    def _review_unavailable(self, requested_at, slots, *, budget_reason=None):
+        """Required review absence is a hold, never a fallback request."""
+        self.stats["blocked"] += 1
+        return AdversarialResult(
+            False, 0.0, "독립 검토 미완료 — 판단 보류", failed=False,
+            budget_block_reason=budget_reason,
+            meta={"attempts": _attempts_from_slots(requested_at, slots),
+                  "independent_review_status": "unavailable"})
 
     # ── 검증 ───────────────────────────────────────────────
     async def validate(
@@ -242,6 +252,7 @@ class AdversarialValidator:
             self.stats["failed"] += 1
             return AdversarialResult(True, 0.0, "LLM 매니저 없음 — 검증 생략", failed=True)
 
+        required = getattr(self._llm, "requires_independent_review", False) is True
         context = (common_context if common_context is not None else
                    self._build_context(symbol, strategy, score, indicators,
                                        market_regime, sector, extra_context))
@@ -277,6 +288,8 @@ class AdversarialValidator:
             policy_block = self._provider_policy_block(requested_at, slots)
             if policy_block is not None:
                 return policy_block
+            if required:
+                return self._review_unavailable(requested_at, slots)
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 타임아웃 ({LLM_TIMEOUT}s) — fail-open 통과")
             return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True,
@@ -285,6 +298,8 @@ class AdversarialValidator:
             policy_block = self._provider_policy_block(requested_at, slots)
             if policy_block is not None:
                 return policy_block
+            if required:
+                return self._review_unavailable(requested_at, slots)
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
             return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True,
@@ -312,6 +327,9 @@ class AdversarialValidator:
 
         bull_verdict = _parse_verdict(bull_text, "APPROVE", "REJECT")
         bear_verdict = _parse_verdict(bear_text, "ACCEPT", "REJECT")
+
+        if required and (bull_verdict is None or bear_verdict is None):
+            return self._review_unavailable(requested_at, slots, budget_reason=budget_reason)
 
         # 둘 다 판정 불가 → 검증 실패 (fail-open)
         if bull_verdict is None and bear_verdict is None:

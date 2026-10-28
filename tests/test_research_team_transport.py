@@ -1,9 +1,9 @@
-"""Exercise active Bull transport and the retired Bear unsent contract."""
+"""Exercise active Bull transport and the unavailable Claude Bear unsent contract."""
 
 import pytest
 
 from src.agents import researchers
-from src.utils.llm import LLMConfig, LLMManager
+from src.utils.llm import LLMConfig, LLMManager, LLMProvider, LLMResponse
 
 
 class Response:
@@ -35,7 +35,7 @@ class Session:
 
 
 @pytest.mark.asyncio
-async def test_only_bull_reaches_http_and_retired_bear_cannot_form_consensus(monkeypatch):
+async def test_only_bull_reaches_http_when_claude_unavailable_cannot_form_consensus(monkeypatch):
     rows = []
 
     class Ledger:
@@ -52,6 +52,14 @@ async def test_only_bull_reaches_http_and_retired_bear_cannot_form_consensus(mon
         "candidates": [{"content": {"parts": [{"text": "ACCEPT evidence"}]}, "finishReason": "STOP"}],
         "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 20},
     })
+    real_complete_with = manager.complete_with
+    async def offline_complete_with(prompt, *, provider, **kwargs):
+        if provider == LLMProvider.ANTHROPIC:
+            return LLMResponse("", "claude-opus-5-5", provider, success=False,
+                               request_sent=False, billing_status="not_sent",
+                               error="offline unavailable")
+        return await real_complete_with(prompt, provider=provider, **kwargs)
+    monkeypatch.setattr(manager, "complete_with", offline_complete_with)
     result = await researchers.ResearchTeam(manager, rounds=1).debate("000001", "synthetic", [])
     assert result.bull_final is True
     assert result.bear_final is None and result.consensus is None
@@ -59,12 +67,12 @@ async def test_only_bull_reaches_http_and_retired_bear_cannot_form_consensus(mon
     assert manager.gemini._session.payloads == []
     assert manager.openai._session.payloads[0]["reasoning_effort"] == "minimal"
     assert rows[0]["request_sent"] is True and rows[0]["verdict"] is True
-    assert rows[1]["provider"] == "gemini" and rows[1]["role"] == "bear"
+    assert rows[1]["provider"] == "anthropic" and rows[1]["role"] == "bear"
     assert rows[1]["request_sent"] is False and rows[1]["billing_status"] == "not_sent"
     assert rows[1]["success"] is False and rows[1]["verdict"] is None
-    assert rows[1]["error"] == "Provider disabled by user policy"
+    assert rows[1]["error"] == "offline unavailable"
     assert rows[1]["response"] == ""
     assert rows[0]["params"]["reasoning_effort"] == "minimal"
-    assert "reasoning_effort" not in rows[1]["params"]
+    assert rows[1]["params"]["reasoning_effort"] == "low"
     assert "seed" not in rows[1]["params"]
-    assert rows[1]["params"]["temperature"] == 0.0
+    assert "temperature" not in rows[1]["params"]
