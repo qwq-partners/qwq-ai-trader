@@ -90,11 +90,14 @@ def _midday_provider_references(snapshot: MarketSnapshot, now: datetime):
     if now.weekday() >= 5 or not (9 * 60 <= now.hour * 60 + now.minute < 15 * 60 + 30):
         return []
     rows = [row for row in snapshot.indices if isinstance(row, dict)]
-    counts = {label: sum(row.get("label") == label for row in rows) for label in ("KOSPI", "KOSDAQ")}
+    groups = {label: [row for row in rows if row.get("label") == label]
+              for label in ("KOSPI", "KOSDAQ")}
     result = []
-    for row in rows:
-        label = row.get("label")
-        if not isinstance(label, str) or label not in counts or counts[label] != 1 or row.get("source") != "kis":
+    for label, group in groups.items():
+        if not group or any(row != group[0] for row in group[1:]):
+            continue
+        row = group[0]
+        if row.get("source") != "kis":
             continue
         if "source_observed_at" not in row or row["source_observed_at"] is not None:
             continue

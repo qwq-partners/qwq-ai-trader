@@ -65,10 +65,16 @@ def test_reference_is_limited_to_weekday_regular_hours(now):
     assert render_market_report('midday', MarketSnapshot(indices=(row(received_at=now.isoformat()),)), now) is None
 
 
-def test_duplicates_or_conflicts_are_not_arbitrarily_selected():
-    for second in (row(), row(price=3100), row(source='unknown')):
-        assert render_market_report('midday', MarketSnapshot(indices=(row(), second)), NOW) is None
-    text = render_market_report('midday', MarketSnapshot(indices=(row(), row(price=3100), row('KOSDAQ'))), NOW)
+def test_identical_rows_are_shown_once():
+    text = render_market_report('midday', MarketSnapshot(indices=(row(), row())), NOW)
+    assert text is not None and text.count('• KOSPI ') == 1
+
+
+@pytest.mark.parametrize('second', [row(price=3100), row(source='unknown'),
+                                    row(received_at=(NOW - timedelta(seconds=1)).isoformat())])
+def test_conflicting_rows_exclude_label(second):
+    assert render_market_report('midday', MarketSnapshot(indices=(row(), second)), NOW) is None
+    text = render_market_report('midday', MarketSnapshot(indices=(row(), second, row('KOSDAQ'))), NOW)
     assert 'KOSPI' not in text and 'KOSDAQ' in text
 
 
@@ -106,3 +112,12 @@ async def test_cached_receipt_through_scheduler_and_real_notifier_once(tmp_path)
     assert await holiday.tick(NOW, False, snapshot, '') == 'skipped_holiday'
     assert notifier._send_report_once.await_count == 1
     fetch.assert_not_awaited()
+
+
+def test_reference_and_many_maximum_length_sectors_fit_message_limits():
+    sectors = tuple({'name': '&' * 100, 'r1': value, 'as_of': '2026-10-28', 'source': 'etf'}
+                    for value in range(30))
+    text = render_market_report('midday', MarketSnapshot(indices=(row(), row('KOSDAQ')),
+                                                           sectors=sectors, kr_basis_date='2026-10-28'), NOW)
+    assert len(text) <= 1800 and len(text.splitlines()) <= 35
+    assert text.count('• &amp;') == 4
