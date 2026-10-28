@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **현재 작업:** [R02 장중 참고란·실자료 판독 준비 통합](docs/operations/execution-roadmap.md#r02-indicative-20261028). PR #292의 자료 추출/첫 판독은 재사용하고, 최근 KIS 응답을 원천시각/전일 기준 미확인 참고란으로 연결한다. 사용자 운영배포 승인으로 검증·독립 리뷰·고정SHA 인수를 진행한다. 작성 시 운영은 `fcb3a71e`이며 최종 적용/다음 작업은 원장과 PR 완료 영수증을 따른다. 아래 미배포·NEXT는 각 시점 이력이다.
+
 > **2026-10-28 최신:** [E02-RR-COMPARE](docs/operations/execution-roadmap.md#e02-rr-compare-20261028). 운영fcb3a71e의22:18 배포/사후 인수는 완료했다. 오프라인 비교 도구·실자료0행 판독·전체9,618검사·독립 리뷰를 완료했다. 최종 CI/통합은 원장에 연결한 PR #292 영수증을 따른다. NEXT는 실제 신호 판독과 R02 참고자료 구현이며 이번 도구는 재배포 대상이 아니다. 아래 배포 복구/미반영 머리글은 당시 이력이다.
 
 > **2026-10-28 배포 복구:** [현재 원장](docs/operations/execution-roadmap.md#e02-rr-deploy-recovery-20261028). PR #290은 로컬/PR/main CI9,600검사를 통과했지만 운영 검증의 기존 종료 상태 즉시 검사1건에서 실패해0b82af5d/PID3734201로 정상 롤백했다. 합성 경로로 커널 종료 전환 경쟁을 재현해 테스트만 보완했고 로컬9,601검사·독립 리뷰를 통과했다. 최종 [PR #291](https://github.com/qwq-partners/qwq-ai-trader/pull/291) 영수증에서 새 고정SHA 배포 인수를 확인한다. 아래 기록은 당시 상태다.
@@ -728,7 +730,7 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 ## LLM 모델 선택
 
-**10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래는 개발 코드의 계약이며 운영`c4bc4f0e`는 아직 전환하지 않았다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 사용자 선택은 구독 CLI 우선·API 대체이며 PR #284에 연결/실측/검증을 완료했다. 운영 적용과 실제 서비스 호출 인수는 아직이다.
+**10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래 계약은10/28 17:40 운영 인수로 적용했다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 사용자 선택은 구독 CLI 우선·API 대체이며 PR #284에 연결/실측/검증을 완료했다. 운영 적용은 완료했으며 실제 서비스의 자연 호출 결과는 별도 인수한다.
 
 고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v2-openai`다. 일반 task와 고정 보고/복기 역할을 구분한다.
 
@@ -739,7 +741,7 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 | 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
 | 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
 | 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
-| Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | 구독 CLI 우선·예산 내 API1회 대체. 소스 통합 완료·운영 미반영. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
+| Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | 구독 CLI 우선·예산 내 API1회 대체. 소스/운영 적용 완료·자연 호출 인수 별도. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
 
 월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지다. Claude 연결/모델 검증은 완료됐지만 실제 비교는 현재 Claude용 manifest/runner 지원·동일 입력/응답 후 가격·비용 상한 설계가 필요하며 옛 Gemini 합성 경로를 재활성화하지 않는다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
 
