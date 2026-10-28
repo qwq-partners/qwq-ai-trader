@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-> **2026-10-28 공급자 전환:** 사용자 지시로 Gemini를 중단하고 GPT·Claude를 사용한다. [E04-D2](operations/execution-roadmap.md#e04-gpt-claude-20261028)에서 GPT 일반 분석·신규 Gemini 전송 차단은 PR #283/main `293a3a59`에 병합했다. Claude는 사용자 선택대로 구독 CLI 우선·API 대체를 구현 중이며 운영 전환은 아직이다. 아래 Google 공급자 복구 대기는 이번 결정으로 대체한다. 월USD100·매수 중지·기존 예약은 유지한다.
+> **2026-10-28 공급자 전환:** 사용자 지시로 Gemini를 중단하고 GPT·Claude를 사용한다. [E04-D2](operations/execution-roadmap.md#e04-gpt-claude-20261028)에서 GPT 일반 분석·신규 Gemini 전송 차단은 PR #283/main `293a3a59`에 병합했다. Claude 구독 CLI 우선·API 대체는 PR #284/main `0bfd6191`·전체9,424검사로 병합됐고 운영 전환은 아직이다. [완료·잔여 작업/현재 실행 계획](operations/execution-roadmap.md#task-reconcile-20261028)에서 E02-RR 분석과 E04-D2 운영 인수를 분리한다. 아래 Google 공급자 복구 대기는 이번 결정으로 대체한다. 월USD100·매수 중지·기존 예약은 유지한다.
 
 > **2026-10-28 오전:** [실제 장전/WS·선정/위키 확인과 다음 순서](operations/execution-roadmap.md#morning-acceptance-20261028). 비용 전/후 RR 진단을 구분하고 E04-D1 공급자 실패 처리의 개발/독립 리뷰를 마쳤다. 운영 적용·외부 복구는 별도 대기다. 운영`c4bc4f0e`와 기존 예약은 유지하며 기술 인수와 순수익 검증을 구분한다. 아래 이전 날짜는 이력이다.
 
@@ -16,7 +16,7 @@
 
 > **R02 16:10 단발 배포 예약 설치:** [고정SHA·16:10 단발 실행·Toss 조건·복구·결과 확인](operations/execution-roadmap.md#r02-deploy-20261027). 보고7파일 준비/검사와 실제 운영 전환을 구분한다.
 
-> **Telegram 보고 개편 R02:** [구현·검증·운영 인수 계획](superpowers/plans/2026-10-27-telegram-audience.md). 채널 한국시장3슬롯·개인 엔진1회+중요 즉시 알림, 원천 날짜/결측 보존. 현재 운영·고정 cron은 미적용이며 국내 장중 지수의 원천시각 확보가 남아 있다. [상태 정본](operations/execution-roadmap.md#r02-telegram).
+> **Telegram 보고 개편 R02:** [구현·검증·운영 인수 계획](superpowers/plans/2026-10-27-telegram-audience.md). 채널 한국시장3슬롯·개인 엔진1회+중요 즉시 알림, 원천 날짜/결측 보존. 이 설계 이후 운영·고정 cron 전환은 완료됐다. 국내 장중 지수의 원천시각/전일 비교 근거와 실제 모바일 인수는 남아 있다. [상태 정본](operations/execution-roadmap.md#r02-telegram).
 
 > **10월27일 첫 자연 실행 판독:** [E02 배치·장중 수급·보고 결과](operations/execution-roadmap.md#e02-morning-20261027). 후보6→SEPA 점수 통과0의 위치를 확인했고 F1 양성 가점을 실측했다. 스크리너 순위와 진입 점수는 다른 척도이며 선정 조건을 낮추지 않는다. 표시/설명 수정은 후속 PR, 운영은 `804e7b22`다.
 
