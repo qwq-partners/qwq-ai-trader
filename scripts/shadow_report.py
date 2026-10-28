@@ -142,11 +142,13 @@ def build_report(days: int = 1) -> str:
     L.append("")
     L.append("■ 반복 입력 판정 — LLM 프로세스 품질 지표 (투자 성능·P&L 미측정)")
     if ledger:
+        from src.agents.reproducibility import LLMLedger
+        transport = LLMLedger.transport_counts(ledger)
         groups = {}
         empty = 0
         models = Counter()
         for r in ledger:
-            if not r.get("success"):
+            if r.get("request_sent") is False or not r.get("success"):
                 continue
             if not (r.get("response") or "").strip():
                 empty += 1
@@ -162,8 +164,11 @@ def build_report(days: int = 1) -> str:
             L.append("  ※ 응답 내용·모델별 재현성·투자 성과를 검증한 값이 아닙니다.")
         else:
             L.append("  동일 입력 반복 없음 — 측정 불가 (정상: 종목마다 입력이 다름)")
-        L.append(f"  LLM 호출 {len(ledger)}건 / 빈 응답 {empty}건")
-        L.append("  모델: " + ", ".join(f"{k} {n}" for k, n in models.most_common(3)))
+        L.append(f"  원장 레코드 {transport['total_records']}건 / 전송 확인 {transport['sent']}건"
+                 f" / 미전송 {transport['not_sent']}건 / 전송 미확인 {transport['unknown']}건")
+        L.append(f"  성공 기록 중 빈 응답 {empty}건 (전송 미확인 포함)")
+        L.append("  응답 모델 기록(전송 미확인 포함): "
+                 + ", ".join(f"{k} {n}" for k, n in models.most_common(3)))
     else:
         L.append("  원장 기록 없음")
 

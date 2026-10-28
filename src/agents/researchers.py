@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from time import monotonic
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -36,6 +37,7 @@ from .types import AnalystReport, DebateResult, DebateTurn
 
 # 라운드당 타임아웃 (초)
 ROUND_TIMEOUT = 20.0
+PROVIDER_COOLDOWN_SECONDS = 300.0
 
 # gpt-5 계열은 추론 모델이라 이 값이 작으면 본문이 빈 문자열로 온다.
 # (src/core/adversarial_validator.py MAX_TOKENS 주석 참조) 줄이지 말 것.
@@ -144,6 +146,11 @@ class ResearchTeam:
                       "split": 0, "failed": 0, "flipped": 0, "one_sided": 0}
         # 재현성 원장 — 모든 토론 호출을 append-only로 남긴다
         self._ledger = get_ledger()
+        # Process-local, per-instance health. A failure generation prevents a
+        # response already in flight from clearing a newer 402 cooldown.
+        self._provider_failures: Dict[str, int] = {}
+        self._provider_cooldowns: Dict[str, float] = {}
+        self._provider_stats: Dict[str, Dict[str, int]] = {}
 
     def set_llm_manager(self, llm_manager) -> None:
         self._llm = llm_manager
@@ -184,6 +191,20 @@ class ResearchTeam:
         resolved_model을 사용해야 하며 이름만으로 실제 스냅샷을 단정하지 않는다.
         """
         from ..utils.llm import LLMProvider
+        provider_name = provider.value
+        health = self._provider_stats.setdefault(provider_name, {"cooldowns": 0, "skipped": 0})
+        if monotonic() < self._provider_cooldowns.get(provider_name, 0.0):
+            health["skipped"] += 1
+            # Before complete_with: no transmission, budget reservation, model,
+            # or billing usage can be attributed to this suppressed request.
+            return {
+                "text": "", "model": "", "provider": provider_name,
+                "latency_ms": 0.0, "success": False,
+                "error": "provider_unavailable", "params": {},
+                "request_sent": False, "billing_status": "not_sent",
+                "http_status": None,
+            }
+        failure_generation = self._provider_failures.get(provider_name, 0)
         # Provider-specific controls: Gemini formerly ignored the OpenAI knob.
         # None means unspecified, preserving its existing thinking default.
         controls = {
@@ -199,6 +220,18 @@ class ResearchTeam:
             **controls,
         )
         ok = bool(getattr(resp, "success", False))
+        http_status = getattr(resp, "http_status", None)
+        if not ok and type(http_status) is int and http_status == 402:
+            now = monotonic()
+            if now >= self._provider_cooldowns.get(provider_name, 0.0):
+                health["cooldowns"] += 1
+                logger.warning(f"[리서치팀] provider={provider_name} status=402 cooldown")
+            self._provider_failures[provider_name] = self._provider_failures.get(provider_name, 0) + 1
+            self._provider_cooldowns[provider_name] = now + PROVIDER_COOLDOWN_SECONDS
+        elif (ok and failure_generation == self._provider_failures.get(provider_name, 0)
+              and provider_name in self._provider_cooldowns):
+            del self._provider_cooldowns[provider_name]
+            logger.info(f"[리서치팀] provider={provider_name} recovered")
         return {
             "text": (resp.content or "").strip() if ok else "",
             "model": getattr(resp, "model", "") or "",
@@ -207,6 +240,9 @@ class ResearchTeam:
             "latency_ms": float(getattr(resp, "latency_ms", 0.0) or 0.0),
             "success": ok,
             "error": getattr(resp, "error", None),
+            "request_sent": getattr(resp, "request_sent", None),
+            "billing_status": getattr(resp, "billing_status", None),
+            "http_status": http_status,
             "params": {"max_tokens": MAX_TOKENS, "weight": "light",
                        **{key: value for key, value in controls.items() if value is not None}},
         }
@@ -313,6 +349,9 @@ class ResearchTeam:
                         latency_ms=_meta.get("latency_ms", 0.0),
                         success=bool(_meta.get("success")),
                         error=_meta.get("error"),
+                        request_sent=_meta.get("request_sent"),
+                        billing_status=_meta.get("billing_status"),
+                        http_status=_meta.get("http_status"),
                     )
                 except Exception as _le:
                     logger.debug(f"[리서치팀] 원장 기록 실패: {_le}")
@@ -408,6 +447,14 @@ class ResearchTeam:
 
     def get_stats(self) -> Dict[str, Any]:
         s: Dict[str, Any] = dict(self.stats)
+        now = monotonic()
+        s["providers"] = {
+            provider: {**counts,
+                       "cooldown_active": self._provider_cooldowns.get(provider, 0.0) > now,
+                       "cooldown_remaining_seconds": max(
+                           0.0, self._provider_cooldowns.get(provider, 0.0) - now)}
+            for provider, counts in self._provider_stats.items()
+        }
         t = s.get("total", 0)
         if t:
             s["consensus_rate"] = round(

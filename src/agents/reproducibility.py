@@ -83,6 +83,10 @@ class LLMCallRecord:
     latency_ms: float = 0.0
     success: bool = True
     error: Optional[str] = None
+    # None preserves unknown transport/billing metadata on historical callers.
+    request_sent: Optional[bool] = None
+    billing_status: Optional[str] = None
+    http_status: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -120,6 +124,9 @@ class LLMLedger:
         success: bool = True,
         error: Optional[str] = None,
         prompt_version: str = "",
+        request_sent: Optional[bool] = None,
+        billing_status: Optional[str] = None,
+        http_status: Optional[int] = None,
     ) -> Optional[LLMCallRecord]:
         """
         호출 1건을 원장에 남긴다.
@@ -141,6 +148,7 @@ class LLMLedger:
             input_snapshot_hash=sha256_short(input_snapshot) if input_snapshot else "",
             latency_ms=latency_ms, success=success, error=error,
             prompt_version=prompt_version,
+            request_sent=request_sent, billing_status=billing_status, http_status=http_status,
         )
 
         try:
@@ -176,6 +184,14 @@ class LLMLedger:
         return rows
 
     @staticmethod
+    def transport_counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Separate records from known transport outcomes; legacy rows stay unknown."""
+        sent = sum(r.get("request_sent") is True for r in rows)
+        not_sent = sum(r.get("request_sent") is False for r in rows)
+        return {"total_records": len(rows), "sent": sent, "not_sent": not_sent,
+                "unknown": len(rows) - sent - not_sent}
+
+    @staticmethod
     def agreement_rate(day: Optional[str] = None) -> Dict[str, Any]:
         """
         재현성 지표 — **같은 입력(prompt_hash)** 에 대해 판정이 얼마나 일치했는지.
@@ -184,10 +200,13 @@ class LLMLedger:
         입력이 다르면 판정이 달라도 비재현이 아니므로, prompt_hash로 묶어서 본다.
         """
         rows = LLMLedger.load(day)
+        counts = LLMLedger.transport_counts(rows)
+        # Legacy call records remain eligible without claiming confirmed sending.
+        call_counts = {**counts, "total_calls": counts["sent"] + counts["unknown"]}
         groups: Dict[str, List[Optional[bool]]] = {}
         for r in rows:
             h = r.get("prompt_hash")
-            if not h or not r.get("success"):
+            if r.get("request_sent") is False or not h or not r.get("success"):
                 continue
             groups.setdefault(h, []).append(r.get("verdict"))
 
@@ -196,7 +215,7 @@ class LLMLedger:
             return {
                 "measurable": False,
                 "reason": "동일 입력 반복 호출 없음 — 재현성 측정 불가",
-                "total_calls": len(rows),
+                **call_counts,
                 "unique_prompts": len(groups),
             }
 
@@ -206,16 +225,18 @@ class LLMLedger:
             "agreement_rate": round(consistent / len(repeated) * 100, 1),
             "repeated_prompts": len(repeated),
             "consistent_prompts": consistent,
-            "total_calls": len(rows),
+            **call_counts,
             "unique_prompts": len(groups),
         }
 
     @staticmethod
     def model_usage(day: Optional[str] = None) -> Dict[str, int]:
-        """실제 응답 모델별 호출 수 — 모델 교체·폴백 발생을 추적한다"""
+        """모델별 호출 기록 수 — 명시적 미전송 제외, 과거 전송 미확인 포함."""
         rows = LLMLedger.load(day)
         usage: Dict[str, int] = {}
         for r in rows:
+            if r.get("request_sent") is False:
+                continue
             key = f"{r.get('provider','?')}/{r.get('model','?')}"
             usage[key] = usage.get(key, 0) + 1
         return usage
