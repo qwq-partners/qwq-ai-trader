@@ -83,5 +83,33 @@ def test_repeat_consistency_uses_groups_not_all_calls_or_response_text(report_in
     assert "저장 판정 일치율 50.0% (1/2그룹" in report
     assert "반복 prompt_hash" in report
     assert "응답 내용·모델별 재현성·투자 성과를 검증한 값이 아닙니다" in report
-    assert "LLM 호출 5건" in report
+    assert "원장 레코드 5건 / 전송 확인 0건 / 미전송 0건 / 전송 미확인 5건" in report
     assert "✅ 일치율" not in report
+
+
+def test_suppressed_rows_are_separate_from_calls_and_agreement(report_inputs):
+    sent = [{"provider": "openai", "model": "synthetic", "success": True,
+             "request_sent": True, "prompt_hash": "actual", "verdict": True,
+             "response": "APPROVE synthetic"} for _ in range(4)]
+    failed = {"provider": "gemini", "model": "synthetic", "success": False,
+              "request_sent": True, "response": ""}
+    suppressed = [{"provider": "gemini", "model": "", "success": True,
+                   "request_sent": False, "prompt_hash": "actual", "verdict": False,
+                   "response": ""} for _ in range(3)]
+    report_inputs([decision("hold", True)], calls=sent + [failed] + suppressed)
+    report = report_mod.build_report(days=7)
+    assert "원장 레코드 8건 / 전송 확인 5건 / 미전송 3건 / 전송 미확인 0건" in report
+    assert "저장 판정 일치율 100.0% (1/1그룹" in report
+    assert "gemini/" not in report
+    assert "빈 응답 0건" in report
+    assert "LLM 호출 8건" not in report
+
+
+def test_legacy_transport_is_not_promoted_to_confirmed_sent(report_inputs):
+    first = {"provider": "openai", "model": "legacy", "success": True,
+             "prompt_hash": "same", "verdict": True, "response": "APPROVE synthetic"}
+    report_inputs([decision("hold", True)], calls=[first, {**first, "request_sent": None}])
+    report = report_mod.build_report(days=7)
+    assert "원장 레코드 2건 / 전송 확인 0건 / 미전송 0건 / 전송 미확인 2건" in report
+    assert "저장 판정 일치율 100.0% (1/1그룹" in report
+    assert "openai/legacy 2" in report
