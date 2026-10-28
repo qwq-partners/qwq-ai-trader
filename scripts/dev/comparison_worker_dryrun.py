@@ -39,16 +39,23 @@ class _FakeGemini(GeminiClient):
                            requested_model=model, resolved_model=model, usage_known=True)
 
 
-class _Models:
-    def _get_model(self, provider, weight):
-        return MODELS[(provider, weight)]
-
-
 def main() -> int:
-    from src.core.cross_validator import SINGLE_FALLBACK_TIMEOUT
     suffix = "\n이 매수 시그널을 승인하시겠습니까? YES 또는 NO로 답하고, 한 줄 사유를 적어주세요."
-    controls = mci.operating_role_controls(_Models(), fallback_prompt_suffix=suffix,
-                                           fallback_timeout=SINGLE_FALLBACK_TIMEOUT)
+    # This is a retired Gemini comparison fixture, never the current Claude
+    # operating contract. Keep it explicit so new roles cannot mutate history.
+    controls = {
+        "bull": {"model": "gpt-5-mini", "max_output_tokens": 400, "reasoning_effort": "minimal",
+                 "temperature": 0.3, "seed": 20260803, "timeout_seconds": 12.0},
+        "bear": {"model": "gemini-3.1-flash-lite", "max_output_tokens": 400, "reasoning_effort": None,
+                 "temperature": 0.0, "seed": None, "timeout_seconds": 12.0},
+        "fallback_chain": [
+            {"model": model, "max_output_tokens": 100, "reasoning_effort": None,
+             "temperature": 0.3, "seed": None, "timeout_seconds": 10.0}
+            for model in ("gpt-5.6-sol", "gemini-3.1-pro-preview")],
+        "fallback_chain_timeout_seconds": 10.0,
+        "fallback_prompt_suffix": suffix, "fallback_system": "",
+        "empty_retries": 1, "strict_on_disagreement": False,
+    }
     manifest = {"experiment_id": "DRYRUN", "enabled": True, "fixed_at": "2026-01-01T00:00:00+00:00",
                 "horizon_seconds": 900, "strict_on_disagreement": controls["strict_on_disagreement"],
                 "empty_retries": controls["empty_retries"], "current": controls["bull"],
@@ -79,7 +86,8 @@ def main() -> int:
         from src.analytics.model_comparison_worker import read_offer_journal
         journal = sorted(worker.journal_dir.glob("offers-*.jsonl"))
         records = [r for path in journal for r in read_offer_journal(path, max_bytes=1 << 20)["records"]]
-        print(json.dumps({"offer": status, "health": health, "ledger": ledger.status(),
+        print(json.dumps({"fixture_scope": "historical_openai_gemini_synthetic_only",
+                          "offer": status, "health": health, "ledger": ledger.status(),
                           "journal": {"paths": [str(p) for p in journal],
                                       "records": [(r["kind"], r["status"]) for r in records]}},
                          default=str, ensure_ascii=False, indent=1))

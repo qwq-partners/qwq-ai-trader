@@ -335,6 +335,7 @@ def test_dryrun_entrypoint_runs_offline_under_isolation_guard(capsys):
     spec.loader.exec_module(module)
     assert module.main() == 0
     out = json.loads(capsys.readouterr().out)
+    assert out["fixture_scope"] == "historical_openai_gemini_synthetic_only"
     assert out["offer"] == "accepted" and out["health"]["finished"] == 1 and out["ledger"]["settled_count"] == 3
 
 
