@@ -15,6 +15,7 @@ from ..base import BaseStrategy, StrategyConfig
 from ...core.types import (
     Signal, Position, OrderSide, SignalStrength, StrategyType
 )
+from ...utils.rr_context import capture_sepa_rr_selection
 from ...utils.sizing import atr_position_multiplier
 from ...analytics.swing_supply import supply_age, supply_values, sides, pair_basis
 
@@ -169,6 +170,13 @@ class SEPATrendStrategy(BaseStrategy):
                         "position_multiplier": _pos_mult,
                     },
                 )
+                # 기록 실패가 후보 선정 결과를 바꾸지 않도록 별도 경계로 둔다.
+                try:
+                    signal.metadata["rr_selection"] = capture_sepa_rr_selection(signal, rr_details)
+                except Exception:
+                    signal.metadata["rr_selection"] = {
+                        "version": 1, "status": "unavailable", "reason": "capture_failed",
+                    }
                 signals.append(signal)
 
                 displayed_lci = (candidate.indicators.get("lci")

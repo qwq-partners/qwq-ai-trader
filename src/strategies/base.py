@@ -24,6 +24,7 @@ from ..core.types import (
 )
 from ..core.event import MarketDataEvent, ThemeEvent
 from ..indicators.technical import compute_indicators
+from ..utils.rr_context import capture_fee_snapshot
 
 
 # ============================================================
@@ -541,6 +542,14 @@ class BaseStrategy(ABC):
                 diagnostics.update(gross_rr=gross_rr, cost_status="unavailable")
             logger.warning(f"[R/R] {self.name} 비용 미확인 — 진입 보류")
             return False
+        # 비용 판정과 독립된 진단 경계: 스냅샷 실패는 기존 gate를 바꾸지 않는다.
+        if diagnostics is not None:
+            try:
+                diagnostics["fee_snapshot"] = capture_fee_snapshot(_fc)
+            except Exception:
+                diagnostics["fee_snapshot"] = {
+                    "version": 1, "status": "unavailable", "reason": "capture_failed",
+                }
         reward -= _rt_cost
         risk += _rt_cost
 

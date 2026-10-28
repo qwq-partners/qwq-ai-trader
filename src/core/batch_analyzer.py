@@ -32,6 +32,7 @@ from .types import (
 )
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
+from ..utils.rr_context import copy_rr_selection
 from ..utils.sizing import atr_position_multiplier
 from ..utils.kis_request_metrics import request_source
 
@@ -570,6 +571,12 @@ class BatchAnalyzer:
             # 없으면 None 유지 — now·수집 시각으로 채우면 신선도 세탁이 된다
             _ind_as_of = _ts.isoformat() if isinstance(_ts, datetime) else None
 
+        try:
+            rr_selection = copy_rr_selection(meta.get("rr_selection"),
+                                             symbol=sig.symbol, strategy=strategy)
+        except Exception:
+            rr_selection = {"version": 1, "status": "unavailable", "reason": "capture_failed"}
+
         return PendingSignal(
             symbol=sig.symbol,
             name=meta.get("candidate_name", sig.symbol),
@@ -594,6 +601,7 @@ class BatchAnalyzer:
             setup=setup_for_strategy(strategy, entry_mode),
             decided_at=now.isoformat(),
             inputs_ref={
+                "rr_selection": rr_selection,
                 "indicator_keys": sorted(indicators.keys()) if isinstance(indicators, dict) else [],
                 # 지표의 실제 관측 시각을 모르면 None — now 로 채우면 신선도 세탁이 된다
                 "indicators_as_of": _ind_as_of,

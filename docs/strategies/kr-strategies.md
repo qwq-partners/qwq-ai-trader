@@ -67,6 +67,16 @@
 [산술 재현·현금 제약·미검증 경제성](../reviews/cash-and-sepa-rr-2026-10-28.md)과
 [E02-COST 검증/운영 상태](../operations/execution-roadmap.md#e02-cost-20261028)를 따른다.
 
+### 선정 당시 근거와 실행 신호 기록
+
+SEPA 배치의 통과 신호는 `metadata.rr_selection`에 같은 호출의 원래 가격·문턱·RR 진단·비용률을 보존한다.
+`PendingSignal.inputs_ref.rr_selection`과 기존 `entry_plan`을 거쳐 `signal_events.metadata.rr_context`로 전달한다.
+현재 실행 가격·손절과 각 출처의 계획 수량은 별도 필드이며, `passed` 기록은 주문 제출/체결 증거가 아니다.
+비용률 스냅샷은 반올림이나 계산 구현 전체가 아니며 실제 게이트 사용 비용은 `diagnostics.round_trip_cost`다.
+구형 기록·미지원 전략·결측/충돌은 사유를 남긴다. 새 기록 실패가 기존 진입 판단을 바꾸지 않는다.
+이 연결은 최초 SEPA gate만 다루며 후속 추가 gate·실제 청산 설정·체결 비용은 포함하지 않는다.
+[구현·검증·운영 상태](../operations/execution-roadmap.md#e02-rr-context-20261028)를 확인한다.
+
 ### 스코어링 (100점 만점, overlay 포함 후 100점 클램핑)
 | 팩터 | 최대 점수 | 기준 |
 |------|----------|------|
