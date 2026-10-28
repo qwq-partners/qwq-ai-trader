@@ -29,8 +29,8 @@ def manager(tmp_path, *, spent=0, monthly=True):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,model,cap,control', [
-    ('report_one_line', 'gemini-3.1-flash-lite', 512, 'minimal'),
-    ('morning_brief', 'gemini-3.1-flash-lite', 1600, 'minimal'),
+    ('report_one_line', 'gpt-5-mini', 512, 'minimal'),
+    ('morning_brief', 'gpt-5-mini', 1600, 'minimal'),
     ('post_exit_research', 'gpt-6.1-sol', 4096, 'medium'),
 ])
 @pytest.mark.parametrize('spent', [0, 80])
@@ -41,18 +41,9 @@ async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model,
     assert result.budget_policy_mode == ('normal' if spent == 0 else 'economy')
     priority = 'research' if role == 'post_exit_research' else 'standard'
     assert result.budget_priority == priority
-    if model.startswith('gemini'):
-        assert m.openai._session.payloads == []
-        payload = m.gemini._session.payloads[0]
-        assert payload['generationConfig'] == {
-            'temperature': 0.3, 'maxOutputTokens': cap,
-            'thinkingConfig': {'thinkingLevel': control},
-        }
-    else:
-        assert m.gemini._session.payloads == []
-        payload = m.openai._session.payloads[0]
-        assert payload['model'] == model and payload['max_completion_tokens'] == cap
-        assert payload['reasoning_effort'] == control and 'temperature' not in payload
+    payload = m.openai._session.payloads[0]
+    assert payload['model'] == model and payload['max_completion_tokens'] == cap
+    assert payload['reasoning_effort'] == control and 'temperature' not in payload
     assert len(result.attempt_trail) == 1
     assert result.attempt_trail[0]['task'] == role
     with sqlite3.connect(m.monthly_budget.path) as db:
@@ -73,7 +64,7 @@ async def test_role_monthly_stop_never_sends(tmp_path, role, spent, reason):
     m = manager(tmp_path, spent=spent)
     result = await m.complete_role('p', role=role)
     assert result.budget_block_reason == reason and not result.request_sent
-    assert m.openai._session.payloads == m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
     assert m.stats['fallback_count'] == 0
 
 
@@ -81,24 +72,21 @@ async def test_role_monthly_stop_never_sends(tmp_path, role, spent, reason):
 @pytest.mark.parametrize('content', ['', 'not JSON'])
 async def test_role_never_retries_empty_or_invalid_json(tmp_path, content):
     m = manager(tmp_path)
-    m.gemini._session = Session(gemini_reply(content))
+    m.openai._session = Session(openai_reply(content))
     response = await m.complete_role('p', role='report_one_line')
     assert response.content == content
-    assert len(m.gemini._session.payloads) == 1 and len(response.attempt_trail) == 1
-    assert m.openai._session.payloads == []
+    assert len(m.openai._session.payloads) == 1 and len(response.attempt_trail) == 1
 
 
 @pytest.mark.asyncio
 async def test_role_known_refusal_settles_once_without_fallback(tmp_path):
     m = manager(tmp_path)
-    m.gemini._session = Session(Reply({
-        'promptFeedback': {'blockReason': 'SAFETY'},
-        'usageMetadata': {'promptTokenCount': 5, 'candidatesTokenCount': 0, 'thoughtsTokenCount': 0},
-    }))
+    reply = openai_reply()
+    reply.data['choices'][0]['message']['refusal'] = 'synthetic refusal'
+    m.openai._session = Session(reply)
     response = await m.complete_role('p', role='report_one_line')
     assert not response.success and response.usage_known
     assert len(response.attempt_trail) == 1 and m.monthly_budget.status()['settled_count'] == 1
-    assert m.openai._session.payloads == []
 
 
 @pytest.mark.asyncio
@@ -108,7 +96,7 @@ async def test_role_does_not_accept_callsite_overrides(tmp_path, override):
     m = manager(tmp_path)
     with pytest.raises(TypeError):
         await m.complete_role('p', role='report_one_line', **{override: 'unexpected'})
-    assert m.openai._session.payloads == m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
 
 
 @pytest.mark.asyncio
@@ -128,7 +116,7 @@ async def test_utf8_limit_counts_system_and_prompt_before_admission(tmp_path, ro
     assert not response.success and not response.request_sent
     assert response.error == 'Role input byte limit exceeded'
     assert m.monthly_budget.status()['reserved_usd'] == 0
-    assert m.openai._session.payloads == m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
     valid = await m.complete_role('a' * (bound - 3), role=role, system='한')
     assert valid.success
 
@@ -141,10 +129,10 @@ async def test_role_preflight_fails_closed_even_without_monthly_budget(tmp_path,
     if fault == 'price':
         monkeypatch.setattr(llm, 'rate_quote', lambda *a, **kw: None)
     else:
-        monkeypatch.setitem(llm._GEMINI_LEVELS, 'gemini-3.1-flash-lite', {'low'})
+        monkeypatch.setitem(llm._OPENAI_EFFORTS, 'gpt-5-mini', {'low'})
     with pytest.raises(ValueError):
         await m.complete_role('p', role='report_one_line')
-    assert m.openai._session.payloads == m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
 
 
 @pytest.mark.asyncio
@@ -153,7 +141,7 @@ async def test_closing_role_is_unsent(tmp_path):
     m._closing = True
     result = await m.complete_role('p', role='report_one_line')
     assert result.budget_block_reason == 'manager_closing' and not result.request_sent
-    assert m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
 
 
 def short_role(monkeypatch, seconds=0.5):
@@ -171,7 +159,7 @@ async def test_role_timeout_after_send_preserves_accounting_and_blocks_later(tmp
     class SlowReply(Reply):
         async def json(self):
             await asyncio.Event().wait()
-    m.gemini._session = Session(SlowReply({}))
+    m.openai._session = Session(SlowReply({}))
     response = await m.complete_role('p', role='report_one_line')
     assert not response.success and response.request_sent and not response.usage_known
     assert len(response.attempt_trail) == 1
@@ -179,7 +167,7 @@ async def test_role_timeout_after_send_preserves_accounting_and_blocks_later(tmp
     assert m.monthly_budget.status()['unresolved_count'] == 1
     blocked = await m.complete_role('p', role='report_one_line')
     assert blocked.budget_block_reason == 'daily_unknown_cost'
-    assert len(m.gemini._session.payloads) == 1
+    assert len(m.openai._session.payloads) == 1
 
 
 @pytest.mark.asyncio
@@ -190,7 +178,7 @@ async def test_role_external_cancel_preserves_trail_and_original_cancellation(tm
         async def json(self):
             entered.set()
             await asyncio.Event().wait()
-    m.gemini._session = Session(WaitingReply({}))
+    m.openai._session = Session(WaitingReply({}))
     task = asyncio.create_task(m.complete_role('p', role='report_one_line'))
     await entered.wait()
     task.cancel()
@@ -214,14 +202,14 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
     monkeypatch.setattr(m.monthly_budget, 'reserve', slow_reserve)
     response = await m.complete_role('p', role='report_one_line')
     assert not response.success and not response.request_sent
-    assert m.gemini._session.payloads == []
+    assert m.openai._session.payloads == []
     assert m.monthly_budget.status()['reserved_usd'] == 0
     assert m.monthly_budget.status()['unresolved_count'] == 0
 
 
 def test_role_table_is_versioned_and_immutable():
     from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
-    assert ROLE_POLICY_VERSION == 'engine-roles-v1'
+    assert ROLE_POLICY_VERSION == 'engine-roles-v2-openai'
     with pytest.raises(TypeError):
         ROLE_PROFILES[LLMRole.REPORT_ONE_LINE] = None
     with pytest.raises(FrozenInstanceError):
@@ -242,8 +230,9 @@ async def test_narrative_experts_use_one_line_role(tmp_path, expert, args):
     obj = object.__new__(cls)
     obj.llm_manager = manager(tmp_path)
     assert await obj._llm_synthesize(*args) == 'ok'
-    assert obj.llm_manager.openai._session.payloads == []
-    assert obj.llm_manager.gemini._session.payloads[0]['generationConfig']['maxOutputTokens'] == 512
+    payload = obj.llm_manager.openai._session.payloads[0]
+    assert payload['model'] == 'gpt-5-mini' and payload['max_completion_tokens'] == 512
+    assert payload['reasoning_effort'] == 'minimal'
 
 
 @pytest.mark.asyncio
@@ -310,31 +299,22 @@ async def test_deadline_during_settlement_keeps_completed_paid_attempt(tmp_path,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider,finish,refusal,content', [
-    ('gemini', 'MAX_TOKENS', False, '잘린 설명'),
-    ('gemini', 'SAFETY', False, '거절'),
-    ('gemini', None, False, '종료 불명'),
-    ('openai', 'length', False, '잘린 설명'),
-    ('openai', 'content_filter', False, '거절'),
-    ('openai', None, False, '종료 불명'),
-    ('openai', 'stop', True, '거절'),
-    ('openai', 'stop', False, ''),
+@pytest.mark.parametrize('finish,refusal,content', [
+    ('length', False, '잘린 설명'),
+    ('content_filter', False, '거절'),
+    (None, False, '종료 불명'),
+    ('stop', True, '거절'),
+    ('stop', False, ''),
 ])
 async def test_role_incomplete_or_refused_output_is_not_usable_but_billed_once(
-        tmp_path, provider, finish, refusal, content):
+        tmp_path, finish, refusal, content):
     m = manager(tmp_path)
-    if provider == 'gemini':
-        reply = gemini_reply(content)
-        reply.data['candidates'][0]['finishReason'] = finish
-        m.gemini._session = Session(reply)
-        role = 'report_one_line'
-    else:
-        reply = openai_reply(content)
-        reply.data['choices'][0]['finish_reason'] = finish
-        if refusal:
-            reply.data['choices'][0]['message']['refusal'] = 'synthetic refusal'
-        m.openai._session = Session(reply)
-        role = 'post_exit_research'
+    reply = openai_reply(content)
+    reply.data['choices'][0]['finish_reason'] = finish
+    if refusal:
+        reply.data['choices'][0]['message']['refusal'] = 'synthetic refusal'
+    m.openai._session = Session(reply)
+    role = 'report_one_line'
     result = await m.complete_role('p', role=role)
     assert not result.success and result.request_sent and result.usage_known
     assert result.finish_reason == finish
@@ -343,7 +323,7 @@ async def test_role_incomplete_or_refused_output_is_not_usable_but_billed_once(
     assert not result.attempt_trail[0]['success']
     assert m.monthly_budget.status()['settled_count'] == 1
     assert m.monthly_budget.status()['unresolved_count'] == 0
-    assert len(m.gemini._session.payloads) + len(m.openai._session.payloads) == 1
+    assert len(m.openai._session.payloads) == 1
     rows = [json.loads(line) for p in (tmp_path / 'audit').glob('*.jsonl') for line in p.read_text().splitlines()]
     assert len(rows) == 1 and rows[0]['outcome'] == 'error'
 
@@ -363,17 +343,17 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
     import stat
     m = manager(tmp_path)
     m.audit_dir = None
-    reply = gemini_reply('private-response', modelVersion='provider-reported-version')
-    reply.data['candidates'][0]['finishReason'] = 'MAX_TOKENS'
-    m.gemini._session = Session(reply)
+    reply = openai_reply('private-response', model='provider-reported-version')
+    reply.data['choices'][0]['finish_reason'] = 'length'
+    m.openai._session = Session(reply)
     response = await m.complete_role('private-prompt', role='report_one_line')
     assert not response.success
     audit_dir = tmp_path / 'role-audit'
     files = list(audit_dir.glob('llm-audit-*.jsonl'))
     assert len(files) == 1
     row = json.loads(files[0].read_text())
-    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v1'
-    assert row['requested_thinking_level'] == 'minimal'
+    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v2-openai'
+    assert row['requested_reasoning_effort'] == 'minimal'
     assert row['resolved_model'] == 'provider-reported-version'
     assert row['outcome'] == 'error' and row['elapsed_ms'] >= 0
     assert 'private-prompt' not in files[0].read_text() and 'private-response' not in files[0].read_text()

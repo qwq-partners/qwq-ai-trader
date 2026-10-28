@@ -16,11 +16,11 @@ def api():
 
 def row(**kwargs):
     value = dict(ts='2026-10-16T07:01:00', task='morning_brief',
-                 provider='gemini', request_sent=True, refusal_detected=False, role_policy_version='engine-roles-v1',
-                 requested_model='gemini-3.1-flash-lite', resolved_model='gemini-3.1-flash-lite',
-                 requested_thinking_level='minimal', outcome='success', usage_known=True,
+                 provider='openai', request_sent=True, refusal_detected=False, role_policy_version='engine-roles-v2-openai',
+                 requested_model='gpt-5-mini', resolved_model='gpt-5-mini',
+                 requested_reasoning_effort='minimal', outcome='success', usage_known=True,
                  input_tokens=100, output_tokens=30, elapsed_ms=200,
-                 finish_reason='STOP', estimated_cost_usd=0.001)
+                 finish_reason='stop', estimated_cost_usd=0.001)
     return value | kwargs
 
 
@@ -35,10 +35,33 @@ def test_provider_unknown_or_error_never_passes():
     a = api()
     for patch in ({'resolved_model': None}, {'outcome': 'error'}, {'usage_known': False},
                   {'finish_reason': 'MAX_TOKENS'}, {'requested_model': 'other'},
-                  {'elapsed_ms': float('nan')}, {'provider': 'openai'}, {'request_sent': False},
+                  {'elapsed_ms': float('nan')}, {'provider': 'gemini'}, {'request_sent': False},
                   {'role_policy_version': None}, {'refusal_detected': True}):
         result = a.summarize_roles([row(**patch)], datetime.fromisoformat('2026-10-16T07:35:00+09:00'))
         assert result['morning_brief']['status'] == 'review_required'
+
+
+def test_v1_gemini_record_never_satisfies_v2_openai_audit():
+    a = api()
+    legacy = row(provider='gemini', role_policy_version='engine-roles-v1',
+                 requested_model='gemini-3.1-flash-lite', resolved_model='gemini-3.1-flash-lite',
+                 requested_reasoning_effort=None, requested_thinking_level='minimal')
+    result = a.summarize_roles([legacy], datetime.fromisoformat('2026-10-16T07:35:00+09:00'))
+    assert result['morning_brief']['status'] == 'review_required'
+
+
+@pytest.mark.parametrize('resolved_model', ['gpt-5-mini-preview', 'gpt-5-mini-2026-10-28'])
+def test_resolved_model_must_exactly_match_recognized_v2_openai_id(resolved_model):
+    a = api()
+    result = a.summarize_roles([row(resolved_model=resolved_model)], datetime.fromisoformat('2026-10-16T07:35:00+09:00'))
+    assert result['morning_brief']['status'] == 'review_required'
+
+
+def test_recognized_v2_openai_snapshot_id_satisfies_audit():
+    a = api()
+    result = a.summarize_roles([row(resolved_model='gpt-5-mini-2025-08-07')],
+                               datetime.fromisoformat('2026-10-16T07:35:00+09:00'))
+    assert result['morning_brief']['status'] == 'call_metadata_verified'
 
 
 def test_success_is_metadata_only_not_delivery_or_profit():

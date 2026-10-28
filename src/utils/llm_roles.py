@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 
 
-ROLE_POLICY_VERSION = 'engine-roles-v1'
+ROLE_POLICY_VERSION = 'engine-roles-v2-openai'
 
 
 class LLMRole(str, Enum):
@@ -37,11 +37,11 @@ class RoleProfile:
 # 95% 필수 전용/100% 중단은 기존 공통 원장의 입장 검사로 적용한다.
 ROLE_PROFILES = MappingProxyType({
     LLMRole.REPORT_ONE_LINE: RoleProfile(
-        'gemini', 'gemini-3.1-flash-lite', 512, 20.0, 32 * 1024, 'standard',
-        thinking_level='minimal'),
+        'openai', 'gpt-5-mini', 512, 20.0, 32 * 1024, 'standard',
+        reasoning_effort='minimal'),
     LLMRole.MORNING_BRIEF: RoleProfile(
-        'gemini', 'gemini-3.1-flash-lite', 1600, 45.0, 64 * 1024, 'standard',
-        thinking_level='minimal'),
+        'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
+        reasoning_effort='minimal'),
     LLMRole.POST_EXIT_RESEARCH: RoleProfile(
         'openai', 'gpt-6.1-sol', 4096, 90.0, 128 * 1024, 'research',
         reasoning_effort='medium'),
