@@ -640,6 +640,25 @@ class UnifiedEngine:
             logger.error(f"[엔진] SELL 수량 대사 필요: {symbol} 체결={fill.quantity}, 보유={pos.quantity}")
             return False
 
+        if fill.side != OrderSide.BUY:
+            sell_qty = fill.quantity
+            if sell_qty > pos.quantity:
+                logger.error(f"[엔진] SELL fill {symbol} 초과: 요청={sell_qty}, 보유={pos.quantity} → 보정")
+                sell_qty = pos.quantity
+            # 비용 실패는 실제 체결 부재가 아니다. 상태 변경 전에 보류하면
+            # on_fill의 기존 False 영수증/원본 fill/대사 보호가 유지된다.
+            try:
+                from ..utils.fee_calculator import get_fee_calculator
+                fee_calc = get_fee_calculator()
+                sell_fee = fee_calc.calculate_sell_fee(fill.total_value)
+                buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * Decimal(str(sell_qty)))
+                if any(not isinstance(fee, Decimal) or not fee.is_finite() or fee < 0
+                       for fee in (sell_fee, buy_fee)):
+                    raise ValueError("invalid fee amount")
+            except Exception:
+                logger.error(f"[엔진] SELL 비용 미확인: {symbol} — 체결 적용 보류·대사 필요")
+                return False
+
         # 기존 포지션에 메타데이터 없으면 채우기
         if pos.strategy is None and fill.strategy:
             pos.strategy = fill.strategy
@@ -677,29 +696,12 @@ class UnifiedEngine:
                 logger.debug(f"[원장] BUY 기록 실패 (무시): {_lg_e}")
 
         else:
-            # 매도 — fill 수량이 보유 수량 초과 시 보정 (음수 수량 방지)
-            sell_qty = fill.quantity
-            if sell_qty > pos.quantity:
-                logger.error(f"[엔진] SELL fill {symbol} 초과: 요청={sell_qty}, 보유={pos.quantity} → 보정")
-                sell_qty = pos.quantity
             pos.quantity -= sell_qty
-
-            # 매도 비용 계산 (수수료 + 거래세 0.20%, fee_calculator 기준 통일)
-            try:
-                from ..utils.fee_calculator import get_fee_calculator
-                fee_calc = get_fee_calculator()
-                sell_fee = fee_calc.calculate_sell_fee(fill.total_value)
-            except ImportError:
-                sell_fee = Decimal("0")
 
             # 실현 손익 = (매도가 - 평균단가) x 수량 - 매도비용 - 매수비용(매도분 귀속)
             # 2026-08-05 P2: 초과수량 보정(sell_qty) 후에도 미보정 fill.quantity로
             # 계산해 이상 fill 시 daily_pnl이 과대/과소 반영되던 문제 → sell_qty 사용
             # 2026-08-08 P2: 매수 수수료 누락으로 일일손실 게이트가 낙관 계산되던 보정
-            try:
-                buy_fee = fee_calc.calculate_buy_fee(pos.avg_price * Decimal(str(sell_qty)))
-            except Exception:
-                buy_fee = Decimal("0")
             realized_pnl = (
                 (fill.price - pos.avg_price) * Decimal(str(sell_qty)) - sell_fee - buy_fee
             )
