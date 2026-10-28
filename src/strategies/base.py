@@ -488,6 +488,8 @@ class BaseStrategy(ABC):
         target_price: Optional[Decimal],
         stop_price: Optional[Decimal],
         min_rr: float = 2.0,
+        *,
+        diagnostics: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         R/R 비율 체크 — min_rr 미만이면 False (진입 차단)
@@ -497,7 +499,14 @@ class BaseStrategy(ABC):
             target_price: 목표가
             stop_price: 손절가
             min_rr: 최소 R/R 비율 (기본 2.0)
+            diagnostics: 선택적 출력. 판정에 실제 사용한 값이며 실현 손익이 아님.
         """
+        if diagnostics is not None:
+            diagnostics.clear()
+            diagnostics.update(
+                gross_rr=None, fee_adjusted_rr=None, gate_rr=None,
+                round_trip_cost=None, cost_status="not_evaluated",
+            )
         if target_price is None or stop_price is None:
             return True  # 목표/손절 미설정 시 통과
         if entry_price <= 0:
@@ -509,8 +518,11 @@ class BaseStrategy(ABC):
         if risk <= 0:
             return False  # 손절가 >= 진입가: 잘못된 설정 → 진입 차단
 
+        gross_rr = reward / risk
+
         # 2026-08-08 P2: 왕복 수수료 반영 순 R/R — gross 기준은 경계값(2.0)을
         # 과대평가 (KR 왕복 ~0.227%). US는 zero-commission이라 비용 0.
+        cost_status = "calculated"
         try:
             from ..utils.fee_calculator import get_fee_calculator
             _fc = get_fee_calculator(getattr(self, "market", "KR"))
@@ -519,10 +531,17 @@ class BaseStrategy(ABC):
             )
         except Exception:
             _rt_cost = 0.0
+            cost_status = "unavailable_zero_assumed"
         reward -= _rt_cost
         risk += _rt_cost
 
         rr_ratio = reward / risk
+        if diagnostics is not None:
+            diagnostics.update(
+                gross_rr=gross_rr, gate_rr=rr_ratio, cost_status=cost_status,
+                fee_adjusted_rr=rr_ratio if cost_status == "calculated" else None,
+                round_trip_cost=_rt_cost if cost_status == "calculated" else None,
+            )
         if rr_ratio < min_rr:
             logger.debug(
                 f"[R/R] {self.name} 비용 후 R/R={rr_ratio:.2f} < {min_rr} — 진입 차단"

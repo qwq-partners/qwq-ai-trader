@@ -60,7 +60,7 @@ class SEPATrendStrategy(BaseStrategy):
         """
         signals = []
         all_scores: List[tuple] = []
-        rr_blocked: List[tuple] = []  # (symbol, stop_pct, target_pct, rr) 추적
+        rr_blocked: List[tuple] = []  # 후보별 실제 게이트 진단 (최대 5개 표시)
 
         # 장중 후반 진입 차단: 14:30 이후 → 익일 갭 리스크
         from datetime import datetime as _dt
@@ -119,12 +119,13 @@ class SEPATrendStrategy(BaseStrategy):
                 candidate.target_price = candidate.entry_price * Decimal(str(1 + target_pct / 100))
 
                 # 비용 후 R/R 필터 (min_rr=2.0): 실제 비용 모형은 BaseStrategy 기준
+                rr_details: Dict[str, Any] = {}
                 if not self.check_rr_ratio(
                     candidate.entry_price, candidate.target_price,
-                    candidate.stop_price, min_rr=2.0
+                    candidate.stop_price, min_rr=2.0, diagnostics=rr_details,
                 ):
-                    rr = target_pct / stop_pct if stop_pct > 0 else 0
-                    rr_blocked.append((candidate.symbol, candidate.name, stop_pct, target_pct, rr))
+                    rr_blocked.append((candidate.symbol, candidate.name, stop_pct,
+                                       target_pct, atr, candidate.entry_price, rr_details))
                     continue
 
                 if score >= 85:
@@ -187,8 +188,19 @@ class SEPATrendStrategy(BaseStrategy):
                 f"[SEPA] R/R 차단: {len(rr_blocked)}개 "
                 f"(최소 비용 후 손익비 2.0 기준 미충족)"
             )
-            for sym, name, sp, tp, rr in rr_blocked[:5]:
-                logger.warning(f"  ✗ {sym} {name}: stop={sp:.1f}% target={tp:.1f}% 비용 전 R/R={rr:.2f}")
+            for sym, name, sp, tp, atr, price, detail in rr_blocked[:5]:
+                gross = detail["gross_rr"]
+                net = detail["fee_adjusted_rr"]
+                cost = detail["round_trip_cost"]
+                gross_text = f"{gross:.4f}" if gross is not None else "미평가"
+                net_text = f"{net:.4f}" if net is not None else "미확인"
+                cost_text = (f"{cost / float(price) * 100:.4f}%"
+                             if cost is not None and price > 0 else "미확인")
+                logger.warning(
+                    f"  ✗ {sym} {name}: stop={sp:.4f}% target={tp:.4f}% "
+                    f"ATR={atr:.4f}% 비용 전 R/R={gross_text} 비용 후 R/R={net_text} "
+                    f"왕복비용={cost_text} 기준=2.00 비용상태={detail['cost_status']}"
+                )
 
         # 점수 분포 요약 로그
         if all_scores:

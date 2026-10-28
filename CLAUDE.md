@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-28 현금 제약·E02-RR:** [현재 영수증·NEXT](docs/operations/execution-roadmap.md#cash-and-rr-20261028). 신규 매수용 현금 부족/매수 중지 상태에서는 현재 버전의 신규 거래 순수익을 실증할 수 없다. 기존 보유 계좌 손익·선정/호출 검증·조건부 가격을 구분하고 가상자금/모의 체결을 만들지 않는다. E02-RR은 산식/36조합 분석과 실제 판정값 진단을 보완했다. 비용 전/후 RR·반올림·비용 미확인을 표시하며 입장 기준은 유지한다. 전체검사/독립리뷰/병합은 원장을 따른다. 운영`c4bc4f0e`·예약은 그대로이고 NEXT는 E02-COST 비용 계약 검토다. 아래 이전 대기 상태는 당시 기록이다.
+
 > **2026-10-28 작업 재정합:** [완료·남은 작업·다음 실행 계획](docs/operations/execution-roadmap.md#task-reconcile-20261028). PR #284/main `0bfd6191`·전체9,424검사/독립 리뷰·CLI/API 실측은 DONE, 운영`c4bc4f0e`·PID3611280는 유지한다. 지금 가능한 주 분석은 **E02-RR 비용 후 손익비 계약**, 다음 운영 작업은 **E04-D2 고정SHA/검증한CLI 경로 적용(WAIT: 별도 운영 실행 요청·실행창)**이다.13:10 시장 보고는 현재 자료 근거 부족으로 생략됐으며 남은 자연 보고·Toss10/30 만료·retention 기한은 병행한다.
 
 > **2026-10-28 GPT·Claude 전환:** 사용자 지시로 Gemini 신규 전송 차단과 일반 GPT 라우팅을 [PR #283](https://github.com/qwq-partners/qwq-ai-trader/pull/283)에 구현했다. [E04-D2 현재 상태·NEXT](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)가 우선이며 Google 결제 복구는 진행 조건이 아니다. 사용자가 **구독 CLI 우선·Anthropic API 대체**를 선택했고 [연결 계약](docs/superpowers/plans/2026-10-28-claude-cli-api.md)을 구현·실측·독립 리뷰했다. 최종 CI·병합은 [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284), 운영 반영 상태는 원장을 따른다. 운영 `c4bc4f0e`·기존 예약은 그대로여서 실행 중인 봇의 전환 완료를 뜻하지 않는다.
