@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **2026-10-28 작업 재정합:** [완료·남은 작업·다음 실행 계획](docs/operations/execution-roadmap.md#task-reconcile-20261028). PR #284/main `0bfd6191`·전체9,424검사/독립 리뷰·CLI/API 실측은 DONE, 운영`c4bc4f0e`·PID3611280는 유지한다. 지금 가능한 주 분석은 **E02-RR 비용 후 손익비 계약**, 다음 운영 작업은 **E04-D2 고정SHA/검증한CLI 경로 적용(WAIT: 별도 운영 실행 요청·실행창)**이다.13:10 시장 보고는 현재 자료 근거 부족으로 생략됐으며 남은 자연 보고·Toss10/30 만료·retention 기한은 병행한다.
+
 > **2026-10-28 GPT·Claude 전환:** 사용자 지시로 Gemini 신규 전송 차단과 일반 GPT 라우팅을 [PR #283](https://github.com/qwq-partners/qwq-ai-trader/pull/283)에 구현했다. [E04-D2 현재 상태·NEXT](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)가 우선이며 Google 결제 복구는 진행 조건이 아니다. 사용자가 **구독 CLI 우선·Anthropic API 대체**를 선택했고 [연결 계약](docs/superpowers/plans/2026-10-28-claude-cli-api.md)을 구현·실측·독립 리뷰했다. 최종 CI·병합은 [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284), 운영 반영 상태는 원장을 따른다. 운영 `c4bc4f0e`·기존 예약은 그대로여서 실행 중인 봇의 전환 완료를 뜻하지 않는다.
 
 > **2026-10-28 오전:** [R02/O03 실수신·E02 선정/위키·NEXT](docs/operations/execution-roadmap.md#morning-acceptance-20261028). 장전1건·새 KIS 실시간 수신 확인, 비용 전/후 RR 진단 정정. Gemini HTTP402에 대한 E04-D1 보완은 개발/독립 리뷰 완료, 운영 적용·외부 복구는 대기다. 운영`c4bc4f0e`·PID3611280·매수 중지/기존 예약 유지, 장중 재시작 없음. 아래 날짜별 안내는 당시 이력이다.
@@ -714,7 +716,7 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 ## LLM 모델 선택
 
-**10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래는 개발 코드의 계약이며 운영`c4bc4f0e`는 아직 전환하지 않았다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. Claude API/구독 CLI 선택은 답변 대기이며 연결 완료로 표시하지 않는다.
+**10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래는 개발 코드의 계약이며 운영`c4bc4f0e`는 아직 전환하지 않았다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 사용자 선택은 구독 CLI 우선·API 대체이며 PR #284에 연결/실측/검증을 완료했다. 운영 적용과 실제 서비스 호출 인수는 아직이다.
 
 고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v2-openai`다. 일반 task와 고정 보고/복기 역할을 구분한다.
 
@@ -725,9 +727,9 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 | 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
 | 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
 | 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
-| Bull / 독립 Bear | Bull GPT 유지; Gemini Bear 미전송 | Claude 연결 대기. 금지된 공급자를 단독 승인·일일 한도·timeout으로 우회하지 않음 |
+| Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | 구독 CLI 우선·예산 내 API1회 대체. 소스 통합 완료·운영 미반영. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
 
-월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지이며 현재 raw 비교 경로는 새 독립 공급자가 검증될 때까지 사용 불가다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
+월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지다. Claude 연결/모델 검증은 완료됐지만 실제 비교는 현재 Claude용 manifest/runner 지원·동일 입력/응답 후 가격·비용 상한 설계가 필요하며 옛 Gemini 합성 경로를 재활성화하지 않는다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
 
 ---
 
@@ -775,7 +777,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 거래 교훈을 전략/섹터/시장체제/**종목**별 마크다운 위키로 축적 (종목 차원 2026-08-07~)
 - 위치: `~/.cache/ai_trader/wiki/`
 - 3가지 오퍼레이션:
-  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM(Gemini Flash) 교훈 추출
+  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출. 최신 소스는 GPT light/minimal이며 운영 전환은 E04-D2 인수 후 확정(이전 Gemini 설명 대체)
   - **Query**: 크로스검증 시 전략/섹터/체제별 교훈 + **종목 노트**(query_symbol) 컨텍스트 반환
   - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지 + 180일 종목 페이지 아카이브)
 - **종목 페이지** (`symbols/<코드>.md`): 거래 이력·교훈 + 전문가 리서치 노트

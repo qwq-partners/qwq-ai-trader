@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-28 — 완료·잔여 작업 재대조와 다음 실행 계획
+
+- PR #284/main0bfd6191·전체9,424검사/실측/독립리뷰를 소스DONE으로 확정하고, 선택/연결 대기로 남은 문서를 정정했다. 운영은c4bc4f0e/PID3611280 유지.
+- [실행 원장](docs/operations/execution-roadmap.md#task-reconcile-20261028)에 E02 비용 후RR 분석, 별도 E04 운영인수, R02/T04/O02기한과 A01/E03~E05 재개조건을 Plan→Do→See로 정리했다. 기존완료물을다시개발하지않는다.
+- 오늘13:10 시장보고는원천근거부족으로생략된영수증을확인했다. 반복cron3개·retention3개정의/링크를재확인했으며 예약변경·제품코드·외부모델호출·배포는없다.
+
 ## 2026-10-28 — Claude 구독 CLI 우선·API 대체 연결
 
 - [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284): 사용자 선택대로 일반 GPT와 독립 Claude Bear를 분리하고, Claude는 로그인된 구독 CLI 뒤에 예산 내 API1회만 허용한다. 도구/MCP0·시한/프로세스 회수·모델 신원·키 파일 보호를 적용했다.
@@ -10,7 +16,7 @@
 
 - 사용자 지시로 Google 복구 대신 GPT 일반 분석·Claude 독립 위험 검토 전환을 우선한다. [E04-D2 실행 원장](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)에 연결 선택·구현·검증·운영 상태를 구분한다.
 - 일반 task와 보고 역할을 GPT로 옮기고 Gemini를 직접 client·공통 경계·비교 작업에서 미전송 처리한다. light의 일반 fallback은 없고 heavy 실패는 별도 GPT light만 사용한다. 기존 JSON/명시적 빈 응답 복구와 역사 비용 원장은 보존한다.
-- 사용 중지한 공급자를 GPT 단독 승인·peer timeout·일일 한도로 우회하지 않도록 진입 검증을 보완했다. 통합 관련131검사·독립 중요 재리뷰 통과, 최종 전체/CI는 해당 PR 영수증을 따른다. 월USD100·매수 중지 유지. Claude 연결과 운영 적용은 아직이다.
+- 사용 중지한 공급자를 GPT 단독 승인·peer timeout·일일 한도로 우회하지 않도록 진입 검증을 보완했다. 통합 관련131검사·독립 중요 재리뷰 통과, 최종 전체/CI는 해당 PR 영수증을 따른다. 월USD100·매수 중지 유지. 이 Phase A 시점에는 Claude 연결/운영이 미완료였으며, 연결 소스 통합은 위 PR #284에서 완료했다. 운영 적용은 아직이다.
 
 ## 2026-10-28 — 팀 심의 실패 처리·미송신 집계·오전 인수
 
