@@ -24,6 +24,7 @@
 
 fail-open: LLM 장애·타임아웃·예산 소진 시에는 통과시킨다.
 결정론적 규칙 9개가 이미 앞단에서 걸러내므로, LLM 장애로 매매가 멈추는 쪽이 더 해롭다.
+사용자가 중지한 공급자는 예외다. 독립 검토 미완료로 차단하며 단일 모델로 우회하지 않는다.
 """
 
 from __future__ import annotations
@@ -190,6 +191,33 @@ class AdversarialValidator:
             temperature=0.0,
         )
 
+    def provider_policy_block_reason(self) -> Optional[str]:
+        """Expose explicit provider retirement before caller quota fail-open."""
+        from ..utils.llm import LLMProvider
+        check = getattr(self._llm, "provider_policy_block_reason", None)
+        if callable(check):
+            for provider in (LLMProvider.OPENAI, LLMProvider.GEMINI):
+                if check(provider) == "provider_disabled":
+                    return "provider_disabled"
+        return None
+
+    def _provider_policy_block(self, requested_at, slots) -> Optional[AdversarialResult]:
+        """A user-disabled provider is a policy decision, not transient fail-open.
+
+        Completed slots also survive a peer timeout. ``failed=False`` prevents
+        the caller from converting this explicit block into a single-model retry.
+        """
+        disabled = any(
+            getattr(slot.get("response"), "provider_error_code", None) == "provider_disabled"
+            for slot in slots.values())
+        if not disabled:
+            return None
+        self.stats["blocked"] += 1
+        return AdversarialResult(
+            False, 0.0, "공급자 사용 중지 — 독립 검토 미완료", failed=False,
+            meta={"attempts": _attempts_from_slots(requested_at, slots),
+                  "independent_review_status": "provider_disabled"})
+
     # ── 검증 ───────────────────────────────────────────────
     async def validate(
         self,
@@ -246,15 +274,24 @@ class AdversarialValidator:
                 timeout=LLM_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            policy_block = self._provider_policy_block(requested_at, slots)
+            if policy_block is not None:
+                return policy_block
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 타임아웃 ({LLM_TIMEOUT}s) — fail-open 통과")
             return AdversarialResult(True, 0.0, "타임아웃 — fail-open", failed=True,
                                      meta={"attempts": _attempts_from_slots(requested_at, slots)})
         except Exception as e:
+            policy_block = self._provider_policy_block(requested_at, slots)
+            if policy_block is not None:
+                return policy_block
             self.stats["failed"] += 1
             logger.warning(f"[적대검증] {symbol} 예외 — fail-open 통과: {e}")
             return AdversarialResult(True, 0.0, f"예외 ({e}) — fail-open", failed=True,
                                      meta={"attempts": _attempts_from_slots(requested_at, slots)})
+        policy_block = self._provider_policy_block(requested_at, slots)
+        if policy_block is not None:
+            return policy_block
         meta = {"attempts": _attempts_from_slots(requested_at, slots)}
 
         budget_reasons = sorted({reason for resp in (bull_resp, bear_resp)

@@ -552,9 +552,9 @@ def attach(worker: ComparisonWorker, cross_validator) -> None:
 
 
 def _raw_clients():
-    from ..utils.llm import GeminiClient, LLMConfig, OpenAIClient
-    config = LLMConfig.from_env()
-    return OpenAIClient(config), GeminiClient(config)
+    # The current comparison adapter requires Gemini as its independent Bear.
+    # Activation remains unavailable until a replacement transport is qualified.
+    raise ValueError("provider_disabled: comparison Bear transport is retired")
 
 
 def install_from_env(cross_validator, *, env=None) -> ComparisonWorker | None:
@@ -570,6 +570,18 @@ def install_from_env(cross_validator, *, env=None) -> ComparisonWorker | None:
         if not isinstance(manifest, dict) or manifest.get("enabled") is not True:
             logger.info("[비교작업자] manifest.enabled=false — 작업자 미생성")
             return None
+        # Dormant historical manifests remain evidence, never activation authority.
+        # Scan all values so alternate/nested role controls cannot hide Gemini.
+        def contains_gemini(value):
+            if isinstance(value, str):
+                return value.strip().lower().startswith("gemini")
+            if isinstance(value, dict):
+                return any(contains_gemini(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return any(contains_gemini(item) for item in value)
+            return False
+        if contains_gemini(manifest):
+            raise ValueError("provider_disabled: Gemini comparison manifests cannot be activated")
         from ..utils.llm import get_llm_manager
         from .model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy
         from .model_comparison_runner import SingleAttemptAdapter

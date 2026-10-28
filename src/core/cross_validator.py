@@ -790,6 +790,18 @@ class CrossStrategyValidator:
         if score < 85:
             return True
 
+        # A deliberately retired provider is not a transient/quota failure.
+        # Check before counting or requesting either opinion; otherwise quota
+        # exhaustion would turn an explicit policy block back into approval.
+        policy_check = getattr(self._adversarial, "provider_policy_block_reason", None)
+        if callable(policy_check) and policy_check() == "provider_disabled":
+            return self._finish_decision(
+                False, signal_id=signal_id, symbol=symbol, strategy=strategy, score=score,
+                market_regime=market_regime, common_context=None, stage="provider_policy",
+                attempts=[], result={"confidence": 0.0, "failed": False,
+                                     "reason": "공급자 사용 중지 — 독립 검토 미완료",
+                                     "independent_review_status": "provider_disabled"})
+
         # 일일 한도 체크 (비용 제어)
         today = datetime.now().date()
         if self._daily_llm_count_date != today:

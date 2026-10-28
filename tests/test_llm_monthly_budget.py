@@ -299,8 +299,8 @@ async def test_definitive_rejection_releases_then_fallback_is_settled(tmp_path):
     m = manager(tmp_path)
     rejection = response('', success=False, usage_known=False)
     rejection.billing_status = 'rejected_before_generation'
-    m.openai = FakeClient([rejection])
-    m.gemini = FakeClient([response(provider=LLMProvider.GEMINI)])
+    rejection.model = 'gpt-5.6-sol'
+    m.openai = FakeClient([rejection, response()])
     assert (await m.complete('p', task=LLMTask.MARKET_ANALYSIS)).success
     status = m.get_monthly_budget_status()
     assert status['settled_count'] == 1
@@ -483,9 +483,9 @@ def test_unmetered_no_config_is_closed(monkeypatch):
 async def test_manus_enabled_does_not_block_other_tasks(tmp_path):
     m = manager(tmp_path)
     m.config.manus_enabled = True
-    m.gemini = FakeClient([response(provider=LLMProvider.GEMINI)])
+    m.openai = FakeClient([response()])
     assert (await m.complete('p', task=LLMTask.QUICK_CLASSIFY)).success
-    assert m.gemini.calls == 1
+    assert m.openai.calls == 1
 
 
 @pytest.mark.asyncio

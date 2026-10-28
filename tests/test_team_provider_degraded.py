@@ -177,28 +177,37 @@ async def test_older_inflight_success_cannot_clear_new_402():
 async def test_suppressed_requests_never_reserve_budget_or_rewrite_missing_cost(tmp_path):
     import sqlite3
     from src.utils.llm import LLMConfig, LLMManager
-    from test_llm_transport_contract import Reply, Session, openai_reply
+    from test_llm_transport_contract import Reply, Session
 
     manager = LLMManager(LLMConfig(
         openai_api_key="offline", gemini_api_key="offline",
         monthly_budget_usd=100, budget_state_path=str(tmp_path / "budget.sqlite3"),
         missing_cost_policy="log_and_continue"), audit_dir=tmp_path / "audit")
     manager._LLM_LOG_DIR = tmp_path / "responses"
-    manager.gemini._session = Session(Reply({}, status=402))
-    manager.openai._session = Session(*[openai_reply() for _ in range(4)])
+    manager.gemini._session = Session()
+    manager.openai._session = Session(Reply({}, status=402))
     team = researchers.ResearchTeam(manager, rounds=2)
     await team.debate("synthetic1", "", [])
-    await team.debate("synthetic2", "", [])
-    assert len(manager.gemini._session.payloads) == 1
-    assert len(manager.openai._session.payloads) == 4
     with sqlite3.connect(tmp_path / "budget.sqlite3") as db:
-        assert db.execute("SELECT COUNT(*) FROM reservations").fetchone()[0] == 5
+        initial = db.execute("SELECT * FROM reservations").fetchall()
+    assert len(initial) == 1 and initial[0][4:6] == ('unknown', None)
+    await team.debate("synthetic2", "", [])
+    assert manager.gemini._session.payloads == []
+    assert len(manager.openai._session.payloads) == 1
+    with sqlite3.connect(tmp_path / "budget.sqlite3") as db:
+        assert db.execute("SELECT * FROM reservations").fetchall() == initial
     status = manager.get_monthly_budget_status()
     assert status["skipped_unknown_count"] == 1
     assert status["cost_accounting_complete"] is False
     assert status["blocked"] is False
     rows = reproducibility.LLMLedger.load()
-    assert sum(row["billing_status"] == "not_sent" for row in rows) == 3
+    bull = [row for row in rows if row["role"] == "bull"]
+    bear = [row for row in rows if row["role"] == "bear"]
+    assert len(bull) == len(bear) == 4
+    assert sum(row["billing_status"] == "not_sent" for row in bull) == 3
+    assert all(row["request_sent"] is False and row["verdict"] is None for row in bear)
+    assert all(row["error"] == "Provider disabled by user policy" for row in bear)
+    assert team.get_stats()["providers"]["openai"]["skipped"] == 3
 
 
 @pytest.mark.asyncio

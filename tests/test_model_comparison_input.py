@@ -52,7 +52,7 @@ def test_role_controls_copy_operating_adversarial_and_fallback_conditions():
     assert c["bull"] == {"model": "openai-light", "max_output_tokens": MAX_TOKENS, "reasoning_effort": "minimal",
                          "temperature": 0.3, "seed": VERDICT_SEED, "timeout_seconds": 12.0}
     assert c["bear"]["model"] == "gemini-light" and c["bear"]["temperature"] == 0.0 and c["bear"]["seed"] is None
-    assert [f["model"] for f in c["fallback_chain"]] == ["openai-heavy", "gemini-heavy"]
+    assert [f["model"] for f in c["fallback_chain"]] == ["openai-heavy", "openai-light"]
     assert all(f["max_output_tokens"] == 100 and f["timeout_seconds"] == 10.0 for f in c["fallback_chain"])
     assert c["empty_retries"] == 1 and c["strict_on_disagreement"] is False and c["fallback_system"] == ""
     assert c["fallback_chain_timeout_seconds"] == 10.0     # 운영 SINGLE_FALLBACK_TIMEOUT 은 체인 전체 시한
@@ -258,3 +258,13 @@ def test_decision_record_accepts_preassigned_id_and_stays_compatible():
     b = rec.decision_record(signal_id="s", symbol="X", strategy="s", score=1, market_regime="r", common_context="c",
                             stage="adversarial", attempts=[], approved=True, result={}, budget_context=None)
     assert a["decision_id"] == "dec-fixed" and b["decision_id"].startswith("dec-") and b["decision_id"] != "dec-fixed"
+
+
+def test_light_fallback_snapshot_records_effective_reasoning_control():
+    from src.utils.llm import LLMConfig, LLMManager
+    controls = mci.operating_role_controls(LLMManager(LLMConfig()),
+        fallback_prompt_suffix="YES/NO", fallback_timeout=10.0)
+    primary, fallback = controls["fallback_chain"]
+    assert primary["reasoning_effort"] is None
+    assert fallback["model"] == "gpt-5-mini"
+    assert fallback["reasoning_effort"] == "minimal"

@@ -1,4 +1,4 @@
-"""Exercise both research roles through actual provider payload construction."""
+"""Exercise active Bull transport and the retired Bear unsent contract."""
 
 import pytest
 
@@ -35,7 +35,7 @@ class Session:
 
 
 @pytest.mark.asyncio
-async def test_both_roles_reach_http_and_ledger_records_provider_specific_controls(monkeypatch):
+async def test_only_bull_reaches_http_and_retired_bear_cannot_form_consensus(monkeypatch):
     rows = []
 
     class Ledger:
@@ -54,11 +54,16 @@ async def test_both_roles_reach_http_and_ledger_records_provider_specific_contro
     })
     result = await researchers.ResearchTeam(manager, rounds=1).debate("000001", "synthetic", [])
     assert result.bull_final is True
-    assert result.bear_final is True
-    assert len(manager.openai._session.payloads) == len(manager.gemini._session.payloads) == 1
+    assert result.bear_final is None and result.consensus is None
+    assert len(manager.openai._session.payloads) == 1
+    assert manager.gemini._session.payloads == []
     assert manager.openai._session.payloads[0]["reasoning_effort"] == "minimal"
-    assert "thinkingConfig" not in manager.gemini._session.payloads[0]["generationConfig"]
-    assert manager.gemini._session.payloads[0]["generationConfig"]["temperature"] == 0.0
+    assert rows[0]["request_sent"] is True and rows[0]["verdict"] is True
+    assert rows[1]["provider"] == "gemini" and rows[1]["role"] == "bear"
+    assert rows[1]["request_sent"] is False and rows[1]["billing_status"] == "not_sent"
+    assert rows[1]["success"] is False and rows[1]["verdict"] is None
+    assert rows[1]["error"] == "Provider disabled by user policy"
+    assert rows[1]["response"] == ""
     assert rows[0]["params"]["reasoning_effort"] == "minimal"
     assert "reasoning_effort" not in rows[1]["params"]
     assert "seed" not in rows[1]["params"]

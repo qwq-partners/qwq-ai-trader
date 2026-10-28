@@ -72,8 +72,8 @@ async def test_essential_models_provider_controls_preserved(tmp_path, monkeypatc
     assert heavy.success and heavy.model == 'gpt-5.6-sol'
     assert m.openai.complete.call_args.kwargs['reasoning_effort'] == 'high'
     explicit = await m.complete_with('bear', LLMProvider.GEMINI, budget_priority='essential', temperature=0)
-    assert explicit.success and explicit.provider == LLMProvider.GEMINI
-    assert m.gemini.complete.call_args.kwargs['temperature'] == 0
+    assert not explicit.success and explicit.provider_error_code == 'provider_disabled'
+    m.gemini.complete.assert_not_called()
     await m.close()
 
 
@@ -137,10 +137,19 @@ async def test_advisory_budget_failure_is_not_approval_evidence(tmp_path, monkey
     from src.core.adversarial_validator import AdversarialValidator
     from src.core.cross_validator import CrossStrategyValidator
     m = manager(tmp_path, monkeypatch, 100)
-    adv = AdversarialValidator(m)
+    # Budget-only availability is a separate contract from explicit retirement.
+    # Use provider-neutral unsent replies; never enable a retired transport.
+    async def quota_only(prompt, *, provider=LLMProvider.OPENAI, **kwargs):
+        return LLMResponse("", "", provider, success=False, request_sent=False,
+                           usage_known=False, billing_status="not_sent",
+                           budget_block_reason="monthly_limit_exceeded")
+    budget_only = SimpleNamespace(complete_with=AsyncMock(side_effect=quota_only),
+                                 complete=AsyncMock(side_effect=quota_only),
+                                 get_monthly_budget_status=m.get_monthly_budget_status)
+    adv = AdversarialValidator(budget_only)
     result = await adv.validate('005930', 'momentum', 90, {}, 'bear')
     assert result.approved and result.failed and result.budget_block_reason == 'monthly_limit_exceeded'
-    cross = CrossStrategyValidator(llm_manager=m)
+    cross = CrossStrategyValidator(llm_manager=budget_only)
     monkeypatch.setattr(cross, "_load_panel_outlook", lambda: None)
     cross._adversarial = adv
     assert await cross.llm_second_check('005930', 'momentum', 90, {}, 'bear') is True
@@ -242,4 +251,26 @@ async def test_unsupported_economy_controls_are_local_block_not_provider_excepti
     assert response.budget_block_reason == 'unsupported_economy_controls'
     m.openai.complete.assert_not_called()
     m.gemini.complete.assert_not_called()
+    await m.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_retirement_precedes_monthly_and_validation_quotas(tmp_path, monkeypatch):
+    from src.core.cross_validator import CrossStrategyValidator
+    m = manager(tmp_path, monkeypatch, 100)
+    cross = CrossStrategyValidator(llm_manager=m)
+    from src.core.adversarial_validator import AdversarialValidator
+    cross._adversarial = AdversarialValidator(m)
+    cross._daily_llm_max = 0
+    records = []
+    monkeypatch.setattr('src.analytics.llm_decision_record.get_decision_recorder',
+                        lambda: SimpleNamespace(submit=lambda row: records.append(row) or 'accepted'))
+    assert await cross.llm_second_check('005930', 'momentum', 90, {}, 'bear') is False
+    assert cross.last_llm_decision['stage'] == 'provider_policy'
+    assert records[0]['result']['independent_review_status'] == 'provider_disabled'
+    assert cross.last_llm_decision['attempts'] == 0
+    m.openai.complete.assert_not_called()
+    m.gemini.complete.assert_not_called()
+    with sqlite3.connect(m.monthly_budget.path) as db:
+        assert db.execute('SELECT COUNT(*) FROM reservations').fetchone()[0] == 1  # seed only
     await m.close()
