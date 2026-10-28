@@ -26,14 +26,13 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from ..utils.rr_context import copy_rr_selection
-
 from .event import SignalEvent
 from .types import (
     Signal, OrderSide, SignalStrength, StrategyType
 )
 from ..data.storage.signal_event_storage import SignalEventStorage as _SigLog
 from ..utils.fee_calculator import get_fee_calculator
+from ..utils.rr_context import copy_rr_selection
 from ..utils.sizing import atr_position_multiplier
 from ..utils.kis_request_metrics import request_source
 

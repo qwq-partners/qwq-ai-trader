@@ -25,12 +25,11 @@ import sys
 
 from loguru import logger
 
-from ..utils.rr_context import build_rr_log_context
-
 from ..analytics.entry_observation import capture_order_ready, freeze_pre_pending_capital, capture_llm_check_started
 from ..analytics.order_attribution_capture import capture_order_attribution
 from ..execution.entry_plan import check_entry_plan
 from ..utils.entry_risk import applied_sha, build_entry_risk_snapshot, effective_config_hash
+from ..utils.rr_context import build_rr_log_context
 from ..utils.sizing import atr_position_multiplier, risk_quantity_cap
 from ..utils.stop_policy import StopDecision
 from src.data.storage.signal_event_storage import SignalEventStorage as _SigLog

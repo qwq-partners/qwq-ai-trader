@@ -22,26 +22,35 @@ def _signals(monkeypatch):
         @classmethod
         def now(cls, tz=None):
             return cls(2026, 9, 15, 10, 30, tzinfo=tz)
-    monkeypatch.setattr(clock, 'datetime', Morning)
     strategy = SEPATrendStrategy()
     monkeypatch.setattr(strategy, '_calculate_sepa_score', lambda row: 80)
     candidates = [SimpleNamespace(symbol=sym, name='합성', entry_price=D('10000'),
                                  indicators={'atr_14': atr}, reasons=[])
                   for sym, atr in [('000001', 2.6), (SYM, 4.9)]]
-    return asyncio.run(strategy.generate_batch_signals(candidates))
+    # SEPA 함수의 내부 datetime import 동안만 시계를 고정한다.
+    with monkeypatch.context() as clock_patch:
+        clock_patch.setattr(clock, 'datetime', Morning)
+        return asyncio.run(strategy.generate_batch_signals(candidates))
 
 
-def _logged_execution(ba, monkeypatch):
+def _logged_execution(ba, monkeypatch, *, risk_manager=None, orders=None, event_type="passed"):
     logged, events = [], []
-    rm = object.__new__(eng.RiskManager)
-    rm.engine = SimpleNamespace(_market_regime='caution')
+    rm = risk_manager
+    if rm is None:
+        rm = object.__new__(eng.RiskManager)
+        rm.engine = SimpleNamespace(_market_regime='caution',
+                                    portfolio=SimpleNamespace(positions={}))
     class Sink:
         async def log(self, **kw):
             logged.append(kw)
     monkeypatch.setattr(eng._SigLog, 'get', staticmethod(lambda: Sink()))
     async def emit(event):
         events.append(event)
-        rm._log_sig(event, event_type='passed')
+        if risk_manager is None:
+            rm._log_sig(event, event_type='passed')
+        else:
+            event.timestamp = event.signal.timestamp = NOW
+            orders.extend(await rm.on_signal(event) or [])
     async def quote(_symbol):
         return {'price': 10100}
     async def positions():
@@ -50,8 +59,9 @@ def _logged_execution(ba, monkeypatch):
         return set()
     async def no_sleep(_seconds):
         pass
-    ba._engine = SimpleNamespace(portfolio=SimpleNamespace(positions={}), emit=emit,
-                                 _stock_name_cache={})
+    ba._engine = rm.engine
+    ba._engine.emit = emit
+    ba._engine._stock_name_cache = {}
     ba._broker = SimpleNamespace(get_quote=quote, get_positions=positions,
                                  get_nxt_symbols=nxt)
     ba._sector_momentum = None
@@ -59,8 +69,9 @@ def _logged_execution(ba, monkeypatch):
     ba._market_regime = 'caution'
     monkeypatch.setattr('src.core.batch_analyzer.asyncio.sleep', no_sleep)
     asyncio.run(ba.execute_pending_signals())
-    assert len(events) == len(logged) == 1
-    return events[0], logged[0]['metadata']
+    passed = [row for row in logged if row['event_type'] == event_type]
+    assert len(events) == len(passed) == 1
+    return events[0], passed[0]['metadata']
 
 
 def test_source_gate_survives_pending_json_execution_and_real_log(analyzer, monkeypatch):
@@ -250,14 +261,16 @@ def test_capture_exception_does_not_change_signal_or_execution(analyzer, monkeyp
 
 @pytest.mark.parametrize('rates', [None, D('0'), D('NaN'), D('-1'), True])
 def test_fee_snapshot_preserves_zero_and_never_changes_boolean(monkeypatch, rates):
-    from src.utils.fee_calculator import FeeConfig
+    from src.utils.fee_calculator import FeeCalculator, FeeConfig
+    from src.utils.rr_context import capture_fee_snapshot
     config = FeeConfig(buy_commission_rate=rates)
     fees = SimpleNamespace(config=config, calculate_buy_fee=lambda p: D(0),
                            calculate_sell_fee=lambda p: D(0))
     monkeypatch.setattr('src.utils.fee_calculator.get_fee_calculator', lambda *a: fees)
     diagnostics = {}
     assert SEPATrendStrategy().check_rr_ratio(D(100), D(120), D(90), diagnostics=diagnostics)
-    snapshot = diagnostics['fee_snapshot']
+    assert diagnostics['fee_snapshot']['status'] == 'unavailable'  # 대체 구현은 근거 아님
+    snapshot = capture_fee_snapshot(FeeCalculator(config))
     assert snapshot['status'] == ('captured' if rates == D(0) and type(rates) is D else 'unavailable')
     if snapshot['status'] == 'captured':
         assert snapshot['buy_commission_rate'] == '0'
@@ -360,3 +373,118 @@ def test_legacy_signal_does_not_acquire_known_gate(analyzer, monkeypatch, strate
     result = build_rr_log_context(event)
     assert result['selection']['reason'] == 'not_captured'
     assert 'gate' not in result['selection']
+
+
+@pytest.mark.parametrize('mode', ['risk', 'nominal'])
+@pytest.mark.parametrize('cash', ['5000000', '0'])
+def test_plan_rr_reaches_real_order_path_and_matches_without_recording(analyzer, home, monkeypatch, mode, cash):
+    """기록 없는 실행은 main 근사이며 main checkout 실행 자체와 구분한다."""
+    from test_risk_sizing import _em, _rm
+    from test_t11_entry_plan import _order_env
+    from test_t11_money_path_baseline import _fingerprint
+
+    def run(recording):
+        signal = _signals(monkeypatch)[0]
+        if not recording:
+            signal.metadata.pop('rr_selection')
+        pending = analyzer._to_pending_signal(signal, now=NOW,
+                                              expires=NOW + timedelta(hours=5), slippage_pct=3)
+        if not recording:
+            pending.inputs_ref.pop('rr_selection', None)
+        analyzer._pending = [pending]
+        analyzer._save_json()
+        analyzer._pending = []
+        rm = _rm(monkeypatch, mode=mode, em=_em(), cash=cash)
+        _order_env(monkeypatch, rm)
+        orders = []
+        event, logged = _logged_execution(
+            analyzer, monkeypatch, risk_manager=rm, orders=orders,
+            event_type='blocked' if cash == '0' else 'passed')
+        assert 'rr_selection' not in event.metadata
+        assert len(orders) == (0 if cash == '0' else 1)
+        quantity = orders[0].order.quantity if orders else None
+        if cash == '0':
+            assert quantity is None
+        else:
+            assert quantity > 0
+        context = logged['rr_context']
+        assert context['quantities']['size_trace_quantity'] == quantity
+        assert context['quantities']['entry_risk']['planned_quantity'] == (quantity if mode == 'risk' else None)
+        assert context['quantities']['entry_risk']['planned_price'] == (
+            str(event.price) if mode == 'risk' and quantity is not None else None)
+        assert context['quantities']['requested_quantity'] is None  # passed는 제출 증거 아님
+        if recording:
+            assert context['selection']['status'] == 'captured'
+            assert context['selection']['gate']['threshold'] == '2.0'
+            assert context['selection']['prices']['entry'] == '10000'
+            assert context['signal']['prices']['entry'] == '10100.0'
+            assert event.metadata['entry_plan']['inputs_ref']['rr_selection'] == context['selection']
+        else:
+            assert context['selection']['reason'] == 'not_captured'
+        return ([_fingerprint(o.order) for o in orders], set(rm._pending_orders),
+                dict(rm._pending_quantities), dict(rm._last_signal_time),
+                {key: deepcopy(logged[key]) for key in ('entry_risk', 'size_trace', 'llm_decision')})
+
+    assert run(False) == run(True)
+
+
+def test_capture_threshold_matches_actual_gate_argument(monkeypatch):
+    # 게이트 호출 literal만 바뀌어도 이 검사가 실패한다. 판정은 원 함수를 그대로 실행한다.
+    actual = SEPATrendStrategy.check_rr_ratio
+    observed = []
+    def observe(self, entry, target, stop, min_rr=2.0, **kwargs):
+        passed = actual(self, entry, target, stop, min_rr=min_rr, **kwargs)
+        observed.append((passed, min_rr))
+        return passed
+    monkeypatch.setattr(SEPATrendStrategy, 'check_rr_ratio', observe)
+    signal = _signals(monkeypatch)[0]
+    assert [threshold for passed, threshold in observed if passed] == [
+        float(signal.metadata['rr_selection']['gate']['threshold'])]
+
+
+@pytest.mark.parametrize('reason', ['not_captured', 'capture_failed', 'diagnostics_unavailable'])
+def test_same_unavailable_markers_remain_unavailable(monkeypatch, reason):
+    from src.utils.rr_context import build_rr_log_context
+    event = SignalEvent.from_signal(_signals(monkeypatch)[0])
+    marker = {'version': 1, 'status': 'unavailable', 'reason': reason}
+    event.metadata['rr_selection'] = marker
+    event.metadata['entry_plan'] = {'symbol': SYM, 'strategy': 'sepa_trend',
+                                   'inputs_ref': {'rr_selection': deepcopy(marker)}}
+    assert build_rr_log_context(event)['selection'] == marker
+
+
+def test_absent_selection_evidence_does_not_create_plan_identity_conflict(monkeypatch):
+    from src.utils.rr_context import build_rr_log_context
+    event = SignalEvent.from_signal(_signals(monkeypatch)[0])
+    event.metadata.pop('rr_selection')
+    marker = {'version': 1, 'status': 'unavailable', 'reason': 'not_captured'}
+    event.metadata['entry_plan'] = {'symbol': '000000', 'strategy': 'legacy_unknown',
+                                   'inputs_ref': {'rr_selection': marker}}
+    assert build_rr_log_context(event)['selection'] == marker
+
+
+@pytest.mark.parametrize('bad', [' 10000', '10000 ', '\t10000'])
+def test_numeric_snapshot_strings_reject_outer_whitespace(monkeypatch, bad):
+    from src.utils.rr_context import copy_rr_selection
+    value = _selection(monkeypatch)
+    value['prices']['entry'] = bad
+    assert copy_rr_selection(value, symbol=SYM, strategy='sepa_trend')['status'] == 'unavailable'
+
+
+def test_custom_fee_calculator_or_config_is_not_rate_evidence(monkeypatch):
+    from src.utils.fee_calculator import FeeCalculator, FeeConfig
+    from src.utils.rr_context import capture_fee_snapshot
+    class DifferentCalculator(FeeCalculator):
+        def calculate_buy_fee(self, amount):
+            return D(0)
+        def calculate_sell_fee(self, amount):
+            return D(0)
+    class DifferentConfig(FeeConfig):
+        pass
+    custom = DifferentCalculator()
+    monkeypatch.setattr('src.utils.fee_calculator.get_fee_calculator', lambda *args: custom)
+    details = {}
+    assert SEPATrendStrategy().check_rr_ratio(D(100), D(120), D(90), diagnostics=details)
+    assert details['round_trip_cost'] == 0
+    assert details['fee_snapshot']['status'] == 'unavailable'
+    assert capture_fee_snapshot(FeeCalculator(DifferentConfig()))['status'] == 'unavailable'

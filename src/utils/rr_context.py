@@ -7,6 +7,8 @@ from datetime import datetime
 from decimal import Decimal
 from math import isfinite
 
+from .fee_calculator import FeeCalculator, FeeConfig
+
 SOURCE_REF = 'src/strategies/kr/sepa_trend.py:generate_batch_signals'
 _RATES = ('buy_commission_rate', 'sell_commission_rate', 'sell_tax_rate')
 _DIAGNOSTICS = ('gross_rr', 'fee_adjusted_rr', 'gate_rr', 'round_trip_cost')
@@ -34,7 +36,7 @@ def _number(value):
     if type(value) is Decimal and (not value.is_finite() or len(value.as_tuple().digits) > 128):
         raise ValueError('invalid decimal')
     text = str(value)
-    if len(text) > 128:
+    if len(text) > 128 or text != text.strip():
         raise ValueError('oversized number')
     number = Decimal(text)
     if (not number.is_finite() or abs(number.adjusted()) > 128
@@ -71,8 +73,14 @@ def _copy_fee(value):
 
 
 def capture_fee_snapshot(calculator) -> dict:
-    """이미 계산에 사용한 객체의 비용률만 복사한다. 전역 설정 재조회 없음."""
+    """이미 사용한 FeeCalculator/FeeConfig의 비용률만 복사한다. 재조회 없음.
+
+    비율은 계산 규칙·원 단위 반올림의 스냅샷이 아니다. 실제 사용한 비용은
+    diagnostics.round_trip_cost가 정본이다. 알 수 없는 대체 구현은 추정하지 않는다.
+    """
     try:
+        if type(calculator) is not FeeCalculator or type(calculator.config) is not FeeConfig:
+            return _unavailable('fee_config_unavailable')
         config = calculator.config
         return _copy_fee({'version': 1, 'status': 'captured', 'reason': None,
                           **{key: getattr(config, key) for key in _RATES}})
@@ -180,14 +188,15 @@ def build_rr_log_context(event, extra_metadata=None) -> dict:
         refs = refs if type(refs) is dict else {}
         strategy = event.strategy.value if event.strategy is not None else ''
         direct, planned = meta.get('rr_selection'), refs.get('rr_selection')
-        selection = copy_rr_selection(direct if 'rr_selection' in meta else planned,
-                                      symbol=event.symbol, strategy=strategy)
+        planned_selection = copy_rr_selection(planned, symbol=event.symbol, strategy=strategy)
+        selection = (copy_rr_selection(direct, symbol=event.symbol, strategy=strategy)
+                     if 'rr_selection' in meta else planned_selection)
         if 'rr_selection' in meta and 'rr_selection' in refs:
-            other = copy_rr_selection(planned, symbol=event.symbol, strategy=strategy)
-            # 성공한 두 사본만 동등함을 증명할 수 있다. 손상된 이중 출처는 충돌이다.
-            if selection['status'] != 'captured' or other != selection:
+            # 같은 결측 사유는 충돌이 아니다. 서로 다른 검증 결과만 충돌로 남긴다.
+            if planned_selection != selection:
                 selection = _unavailable('selection_conflict', conflict=True)
-        if 'rr_selection' in refs and (plan.get('symbol') != event.symbol or plan.get('strategy') != strategy):
+        if planned_selection['status'] == 'captured' and (
+                plan.get('symbol') != event.symbol or plan.get('strategy') != strategy):
             selection = _unavailable('identity_mismatch', conflict=True)
         extra = extra_metadata if type(extra_metadata) is dict else {}
         risk = meta.get('entry_risk')

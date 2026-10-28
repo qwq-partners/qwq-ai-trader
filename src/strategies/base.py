@@ -18,14 +18,13 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 from loguru import logger
 
-from ..utils.rr_context import capture_fee_snapshot
-
 from ..core.types import (
     Signal, Position, Portfolio, Price, Quote,
     OrderSide, SignalStrength, StrategyType, TimeHorizon
 )
 from ..core.event import MarketDataEvent, ThemeEvent
 from ..indicators.technical import compute_indicators
+from ..utils.rr_context import capture_fee_snapshot
 
 
 # ============================================================
