@@ -235,7 +235,7 @@ def test_markdown_includes_readable_quantity_comparison(tmp_path):
                          capture_output=True, text=True, cwd=tmp_path,
                          env={'HOME': str(tmp_path), 'PATH': '/usr/bin:/bin'})
     assert run.returncode == 0
-    assert '| Signal | Quantity source | Quantity | Selected RR | Current RR |' in run.stdout
+    assert '| Signal | Quantity source | Quantity | Original float gate RR | Selected reconstructed RR | Current reconstructed RR | Quantity conflict |' in run.stdout
     assert '| sig-1 | requested_quantity | 10 |' in run.stdout
 
 
@@ -266,3 +266,45 @@ def test_cli_empty_actual_and_row_limit(tmp_path):
     path.write_text(json.dumps([None] * 10001))
     result = run()
     assert result.returncode == 2 and not result.stdout and 'invalid_rows' in result.stderr
+
+
+def test_invalid_current_price_never_reaches_comparison_as_valid():
+    for value in (' 10100', '10100 ', '0' * 129 + '10100', '1' * 29):
+        r = row()
+        r['metadata']['rr_context']['signal']['prices']['entry'] = value
+        result = compare([r])
+        item = result['rows'][0]
+        assert item['current_reference']['prices']['entry'] is None
+        assert item['current_reference']['price_status']['entry'] == 'invalid'
+        assert item['price_changes']['entry']['reason'] == 'invalid_current_price'
+        assert result['coverage']['comparison_pairs'] == 0
+        for lane in item['quantity_lanes'].values():
+            assert lane['current_prices']['calculation_status'] == 'invalid'
+            assert lane['current_prices']['calculation_reason'] == 'invalid_price'
+    r = row()
+    r['metadata']['rr_context']['signal']['prices']['entry'] = None
+    item = compare([r])['rows'][0]
+    assert item['current_reference']['price_status']['entry'] == 'missing'
+    assert item['price_changes']['entry']['reason'] == 'missing_current_price'
+    assert item['quantity_lanes']['requested_quantity']['current_prices']['calculation_reason'] == 'missing_price'
+
+
+def test_markdown_labels_original_gate_reconstructions_and_quantity_conflict(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    r = row()
+    r['metadata']['rr_context']['quantities']['size_trace_quantity'] = 11
+    path = tmp_path / 'input.json'
+    path.write_text(json.dumps([r]))
+    result = subprocess.run([sys.executable, str(root / 'scripts/compare_rr_context.py'),
+                             '--input', str(path), '--data-kind', 'synthetic', '--format', 'markdown'],
+                            capture_output=True, text=True, cwd=tmp_path,
+                            env={'HOME': str(tmp_path), 'PATH': '/usr/bin:/bin'})
+    assert result.returncode == 0
+    table = result.stdout.split('## Full provenance and coverage')[0]
+    assert '| Original float gate RR | Selected reconstructed RR | Current reconstructed RR | Quantity conflict |' in table
+    assert '| sig-1 | requested_quantity | 10 | 1.9 |' in table
+    assert ' | yes |' in table

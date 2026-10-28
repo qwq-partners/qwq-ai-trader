@@ -33,11 +33,14 @@ def _price(value):
         return None
 
 
-def _changes(selected, current):
+def _changes(selected, current, current_status):
     changes = {}
     for key in ('entry', 'target', 'stop'):
-        old, new = _price(selected.get(key)), _price(current.get(key))
-        change = {'changed': None, 'percent': None, 'reason': 'missing_or_unsupported_price'}
+        old, new = _price(selected.get(key)), current.get(key)
+        reason = ('missing_current_price' if current_status[key] == 'missing' else
+                  'invalid_current_price' if current_status[key] == 'invalid' else
+                  'unsupported_selected_price')
+        change = {'changed': None, 'percent': None, 'reason': reason}
         if old is not None and new is not None:
             try:
                 with localcontext(DECIMAL_CONTEXT):
@@ -85,18 +88,22 @@ def _analyze(row, source_ref):
             current_prices = _mapping(signal.get('prices'))
             # Only known bounded fields are copied; never return arbitrary metadata.
             safe_prices = {k: _price(current_prices.get(k)) for k in ('entry', 'target', 'stop')}
+            price_status = {k: ('missing' if current_prices.get(k) is None else
+                                'invalid' if safe_prices[k] is None else 'valid') for k in safe_prices}
+            calculation_prices = {k: ('invalid' if price_status[k] == 'invalid' else safe_prices[k])
+                                  for k in safe_prices}
             plan = _mapping(context.get('plan'))
             risk = _mapping(_mapping(context.get('quantities')).get('entry_risk'))
             version = plan.get('plan_version')
             record['current_reference'] = {
                 'signal_id': signal_id, 'source': _text(signal.get('source')),
                 'timestamp': _text(signal.get('timestamp')), 'quote_as_of': _text(signal.get('quote_as_of')),
-                'prices': safe_prices,
+                'prices': safe_prices, 'price_status': price_status,
                 'plan': {'plan_id': _text(plan.get('plan_id')),
                          'plan_version': version if type(version) is int and 0 <= version <= 10**12 else None,
                          'planned_price': _price(risk.get('planned_price'))},
             }
-            record['price_changes'] = _changes(selection['prices'], current_prices)
+            record['price_changes'] = _changes(selection['prices'], safe_prices, price_status)
             quantities = _mapping(context.get('quantities'))
             risk = _mapping(quantities.get('entry_risk'))
             values = (quantities.get('requested_quantity'), risk.get('planned_quantity'),
@@ -115,7 +122,7 @@ def _analyze(row, source_ref):
                 invalid_quantity = value is not None and safe_quantity is None
                 lane = {'quantity': safe_quantity, 'quantity_status': ('invalid' if invalid_quantity else
                         'missing' if value is None else 'zero' if value == 0 else 'present')}
-                for basis, prices in (('selected_prices', selection['prices']), ('current_prices', current_prices)):
+                for basis, prices in (('selected_prices', selection['prices']), ('current_prices', calculation_prices)):
                     lane[basis] = compare_order_rr(
                         entry_price=prices.get('entry'), target_price=prices.get('target'),
                         stop_price=prices.get('stop'), quantity=value, source_path='signal_events.metadata.rr_context',

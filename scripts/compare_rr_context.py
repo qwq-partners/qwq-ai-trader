@@ -79,8 +79,8 @@ def _markdown(result, rendered):
     lines = ['# Offline SEPA RR context comparison', '',
              'Conditional analysis; selection fee rates and current recorded quantities are applied to both price sets.',
              'This is not an actual execution result. The original float gate is separate from the Decimal reconstruction.',
-             '', '| Signal | Quantity source | Quantity | Selected RR | Current RR |',
-             '| --- | --- | ---: | ---: | ---: |']
+             '', '| Signal | Quantity source | Quantity | Original float gate RR | Selected reconstructed RR | Current reconstructed RR | Quantity conflict |',
+             '| --- | --- | ---: | ---: | ---: | ---: | --- |']
     for row in result['rows']:
         for name, lane in row['quantity_lanes'].items():
             def value(basis):
@@ -90,7 +90,9 @@ def _markdown(result, rendered):
                 return calculation['calculation_reason']
             sid = html.escape(row['signal_id']).replace('|', '&#124;').replace('\n', ' ').replace('\r', ' ')
             quantity = lane['quantity'] if lane['quantity'] is not None else lane['quantity_status']
-            lines.append(f'| {sid} | {name} | {quantity} | {value("selected_prices")} | {value("current_prices")} |')
+            gate_rr = row['selection_observed']['diagnostics']['gate_rr']
+            conflict = 'yes' if row['quantity_conflict'] else 'no'
+            lines.append(f'| {sid} | {name} | {quantity} | {gate_rr} | {value("selected_prices")} | {value("current_prices")} | {conflict} |')
     lines += ['', '## Full provenance and coverage', '',
               *('    ' + line for line in rendered.splitlines())]
     return '\n'.join(lines)
