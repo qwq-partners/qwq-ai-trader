@@ -33,9 +33,9 @@ class Session:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI])
 @pytest.mark.parametrize('failure', ['connect', 'socket', 'disconnect', 'timeout'])
-async def test_only_proven_connection_failure_allows_other_provider_fallback(provider, failure):
+async def test_only_proven_connection_failure_allows_light_fallback(provider, failure):
     class FailingConnection(Reply):
         async def __aenter__(self):
             if failure == 'connect':
@@ -48,23 +48,19 @@ async def test_only_proven_connection_failure_allows_other_provider_fallback(pro
             raise TimeoutError()
 
     manager = LLMManager(LLMConfig(openai_api_key='test', gemini_api_key='test'))
-    if provider == LLMProvider.OPENAI:
-        task, primary, fallback, good_reply = LLMTask.MARKET_ANALYSIS, manager.openai, manager.gemini, gemini_reply()
-    else:
-        task, primary, fallback, good_reply = LLMTask.QUICK_ANALYSIS, manager.gemini, manager.openai, openai_reply()
-    primary._session = Session(FailingConnection({}))
-    fallback._session = Session(good_reply)
+    task, primary, fallback, good_reply = LLMTask.MARKET_ANALYSIS, manager.openai, manager.openai, openai_reply()
+    primary._session = Session(FailingConnection({}), good_reply)
     result = await manager.complete('prompt', task=task)
     if failure == 'connect':
         assert result.success
-        assert len(fallback._session.payloads) == 1
+        assert len(fallback._session.payloads) == 2
         assert manager.daily_usage.unknown_usage_requests == 0
         assert manager._check_budget()
     else:
         assert not result.success
         assert result.request_sent
         assert result.billing_status == 'unknown'
-        assert fallback._session.payloads == []
+        assert len(fallback._session.payloads) == 1
         assert manager.daily_usage.unknown_usage_requests == 1
         assert not manager._check_budget()
 
@@ -82,18 +78,13 @@ def gemini_reply(content='ok', **extra):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI])
 async def test_unreliable_usage_does_not_increase_known_cost_subtotal(provider, tmp_path):
     manager = LLMManager(LLMConfig(openai_api_key='test', gemini_api_key='test'), audit_dir=tmp_path)
     manager.daily_usage.add(100, 50, 'gpt-5-mini')
     known_cost = manager.daily_usage.estimated_cost_usd
-    if provider == LLMProvider.OPENAI:
-        reply = openai_reply(output_tokens='malformed')
-        manager.openai._session = Session(reply)
-    else:
-        reply = gemini_reply()
-        reply.data['usageMetadata']['totalTokenCount'] = 999
-        manager.gemini._session = Session(reply)
+    reply = openai_reply(output_tokens='malformed')
+    manager.openai._session = Session(reply)
     response = await manager.complete_with('prompt', provider=provider)
     assert not response.usage_known
     assert manager.daily_usage.estimated_cost_usd == known_cost
@@ -140,16 +131,13 @@ async def test_openai_rejects_unsupported_controls_before_http(model, controls):
 
 
 @pytest.mark.asyncio
-async def test_gemini_thought_tokens_and_level():
-    client = GeminiClient(LLMConfig(gemini_api_key='test-secret'))
-    client._session = Session(gemini_reply(modelVersion='reported-gemini'))
-    result = await client.complete('prompt', model='gemini-3.1-pro-preview', thinking_level='high')
-    assert client._session.payloads[0]['generationConfig']['thinkingConfig'] == {'thinkingLevel': 'high'}
-    assert result.output_tokens == 50
-    assert result.visible_output_tokens == 20
-    assert result.reasoning_tokens == 30
-    assert result.resolved_model == 'reported-gemini'
-    assert result.requested_thinking_level == 'high'
+async def test_historical_gemini_visible_and_thought_tokens():
+    from src.utils.llm import _gemini_usage
+    data = gemini_reply().data
+    usage = _gemini_usage(data, data['usageMetadata'])
+    assert usage['usage_known']
+    assert usage['visible_output_tokens'] == 20
+    assert usage['reasoning_tokens'] == 30
 
 
 @pytest.mark.asyncio
@@ -158,8 +146,9 @@ async def test_gemini_thought_tokens_and_level():
 async def test_gemini_rejects_ignored_controls(controls):
     client = GeminiClient(LLMConfig(gemini_api_key='test-secret'))
     client._session = Session(gemini_reply())
-    with pytest.raises(ValueError):
-        await client.complete('prompt', **controls)
+    result = await client.complete('prompt', **controls)
+    assert result.provider_error_code == 'provider_disabled'
+    assert not result.request_sent
     assert client._session.payloads == []
 
 
@@ -183,7 +172,7 @@ def test_zero_budget_and_legacy_descriptive_routes():
     manager = LLMManager(config)
     assert not manager._check_budget()
     assert manager._get_model(LLMProvider.OPENAI, 'heavy') == 'gpt-5.6-sol'
-    assert manager.TASK_CONFIG[LLMTask.QUICK_CLASSIFY]['primary'] == (LLMProvider.GEMINI, 'light')
+    assert manager.TASK_CONFIG[LLMTask.QUICK_CLASSIFY]['primary'] == (LLMProvider.OPENAI, 'light')
 
 
 @pytest.mark.parametrize('model,expected', [('gpt-5-mini', 0.00225), ('gpt-5.6-sol', 0.025),
@@ -243,6 +232,7 @@ async def test_failed_primary_reported_usage_is_charged_before_fallback():
     manager.openai._session = Session(Reply({'error': {'message': 'private diagnostic'},
         'usage': {'prompt_tokens': 100, 'completion_tokens': 50}}, status=500))
     manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     result = await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)
     assert result.success
     assert manager.daily_usage.input_tokens == 200
@@ -278,12 +268,13 @@ async def test_legacy_openai_payload_keeps_temperature_without_reasoning():
 
 
 @pytest.mark.asyncio
-async def test_no_key_is_unsent_and_does_not_block_fallback():
+async def test_no_openai_key_is_unsent_and_cannot_use_stale_gemini_key():
     manager = LLMManager(LLMConfig(gemini_api_key='secret'))
     manager.gemini._session = Session(gemini_reply())
     result = await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)
-    assert result.success
-    assert manager.daily_usage.input_tokens == 100
+    assert not result.success
+    assert not result.request_sent
+    assert manager.daily_usage.input_tokens == 0
     assert manager.daily_usage.unknown_usage_requests == 0
 
 
@@ -293,6 +284,7 @@ async def test_failed_primary_with_explicit_zero_usage_can_fallback():
     manager.openai._session = Session(Reply({'error': {'message': 'rejected'},
         'usage': {'prompt_tokens': 0, 'completion_tokens': 0}}, status=400))
     manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     assert (await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)).success
     assert not manager.daily_usage.cost_missing
 
@@ -329,9 +321,9 @@ async def test_timeout_has_unknown_usage_and_does_not_expose_url_key():
         closed = False
         def post(self, *args, **kwargs):
             raise asyncio.TimeoutError('https://provider?key=private-key')
-    manager = LLMManager(LLMConfig(gemini_api_key='private-key'))
-    manager.gemini._session = TimeoutSession()
-    result = await manager.complete_with('prompt', LLMProvider.GEMINI)
+    manager = LLMManager(LLMConfig(openai_api_key='private-key'))
+    manager.openai._session = TimeoutSession()
+    result = await manager.complete_with('prompt', LLMProvider.OPENAI)
     assert not result.success
     assert 'private-key' not in result.error
     assert manager.get_usage_summary()['budget_remaining_usd'] is None
@@ -352,14 +344,14 @@ def test_threshold_rate_is_not_long_until_exceeded():
 
 
 @pytest.mark.asyncio
-async def test_gemini_38_omits_deprecated_sampling_and_rejects_minimal():
+async def test_gemini_38_is_disabled_regardless_of_controls():
     client = GeminiClient(LLMConfig(gemini_api_key='secret'))
     client._session = Session(gemini_reply())
-    await client.complete('prompt', model='gemini-3.8-flash', thinking_level='low')
-    assert 'temperature' not in client._session.payloads[0]['generationConfig']
-    with pytest.raises(ValueError):
-        await client.complete('prompt', model='gemini-3.8-flash', thinking_level='minimal')
-    assert len(client._session.payloads) == 1
+    for level in ('low', 'minimal'):
+        response = await client.complete('prompt', model='gemini-3.8-flash', thinking_level=level)
+        assert response.provider_error_code == 'provider_disabled'
+        assert not response.request_sent
+    assert client._session.payloads == []
 
 
 @pytest.mark.asyncio
@@ -382,7 +374,7 @@ async def test_json_retry_attempts_are_charged_with_distinct_roles(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI])
 async def test_elapsed_uses_monotonic_clock_not_wall_clock(monkeypatch, provider):
     import src.utils.llm as module
     class JumpingClock:
@@ -406,6 +398,7 @@ async def test_structured_pre_generation_rejection_preserves_usage_and_auth_boun
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'), audit_dir=tmp_path)
     manager.openai._session = Session(Reply({'error': {'message': 'rejected', 'type': 'request_error'}}, status=status))
     manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     result = await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)
     if status in {401, 403}:
         assert not result.success and not manager.gemini._session.payloads
@@ -424,13 +417,15 @@ async def test_structured_pre_generation_rejection_preserves_usage_and_auth_boun
 
 
 @pytest.mark.asyncio
-async def test_gemini_structured_rejection_allows_openai_fallback():
+async def test_gemini_disabled_never_falls_back_to_openai():
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'))
-    manager.gemini._session = Session(Reply({'error': {'code': 429, 'message': 'rejected'}}, status=429))
+    manager.gemini._session = Session(Reply({'error': {'code': 429}}, status=429))
     manager.openai._session = Session(openai_reply())
-    assert (await manager.complete('prompt')).success
-    assert manager.daily_usage.inferred_nonbillable_rejections == 1
-    assert manager.daily_usage.output_tokens == 50
+    result = await manager.complete_with('prompt', LLMProvider.GEMINI)
+    assert not result.success and result.provider_error_code == 'provider_disabled'
+    assert manager.daily_usage.inferred_nonbillable_rejections == 0
+    assert manager.daily_usage.output_tokens == 0
+    assert manager.openai._session.payloads == manager.gemini._session.payloads == []
 
 
 @pytest.mark.asyncio
@@ -444,6 +439,7 @@ async def test_ambiguous_failure_still_blocks_fallback(status, payload):
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'))
     manager.openai._session = Session(Reply(payload, status=status))
     manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     assert not (await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)).success
     assert manager.daily_usage.inferred_nonbillable_rejections == 0
     assert manager.daily_usage.unknown_usage_requests == 1
@@ -456,24 +452,24 @@ async def test_429_with_reported_usage_is_charged():
     manager.openai._session = Session(Reply({'error': {'message': 'rejected'},
         'usage': {'prompt_tokens': 100, 'completion_tokens': 50}}, status=429))
     manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     assert (await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS)).success
     assert manager.daily_usage.input_tokens == 200
     assert manager.daily_usage.inferred_nonbillable_rejections == 0
 
 
 @pytest.mark.asyncio
-async def test_cross_provider_fallback_does_not_translate_explicit_controls():
-    manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'))
+async def test_light_fallback_does_not_translate_unsupported_explicit_controls():
+    manager = LLMManager(LLMConfig(openai_api_key='secret'))
     manager.openai._session = Session(Reply({'error': {'message': 'rejected'}}, status=429))
-    manager.gemini._session = Session(gemini_reply())
     with pytest.raises(ValueError, match='reasoning_effort'):
-        await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS, reasoning_effort='low')
-    assert manager.gemini._session.payloads == []
+        await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS, reasoning_effort='none')
+    assert len(manager.openai._session.payloads) == 1
     assert manager.daily_usage.inferred_nonbillable_rejections == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI])
 async def test_caller_timeout_accounts_sent_cancelled_attempt_and_propagates(provider, tmp_path):
     import asyncio
     class PendingReply:
@@ -520,11 +516,11 @@ async def test_cancellation_is_accounted_once_across_manager_paths(role, tmp_pat
             pass
     manager = LLMManager(LLMConfig(openai_api_key='secret', gemini_api_key='secret'), audit_dir=tmp_path)
     if role == 'fallback':
-        manager.openai._session = Session(Reply({'error': {'message': 'rejected'}}, status=429))
-        manager.gemini._session = Session(PendingReply())
+        manager.openai._session = Session(Reply({'error': {'message': 'rejected'}}, status=429), PendingReply())
     else:
         manager.openai._session = Session(PendingReply())
         manager.gemini._session = Session(gemini_reply())
+    manager.openai._session.replies.append(openai_reply())
     if role == 'shadow':
         call = manager._fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {},
             LLMResponse('ok', 'gpt-5-mini', LLMProvider.OPENAI), 'gpt-6.1-sol')
@@ -562,12 +558,11 @@ def test_preflight_warns_about_priced_model_in_wrong_provider_slot():
       'promptFeedback': {'blockReason': 'SAFETY'}}, 0),
 ])
 async def test_gemini_proto_omitted_zero_output_counts_remain_known(payload, outputs):
-    client = GeminiClient(LLMConfig(gemini_api_key='secret'))
-    client._session = Session(Reply(payload))
-    response = await client.complete('prompt')
-    assert response.usage_known
-    assert response.output_tokens == outputs
-    assert response.visible_output_tokens == 0
+    from src.utils.llm import _gemini_usage
+    response = _gemini_usage(payload, payload['usageMetadata'])
+    assert response['usage_known']
+    assert response['visible_output_tokens'] + response['reasoning_tokens'] == outputs
+    assert response['visible_output_tokens'] == 0
 
 
 @pytest.mark.asyncio
@@ -577,9 +572,8 @@ async def test_gemini_proto_omitted_zero_output_counts_remain_known(payload, out
     {'promptTokenCount': 10, 'candidatesTokenCount': 5, 'totalTokenCount': 16},
 ])
 async def test_gemini_malformed_or_inconsistent_usage_stays_unknown(counts):
-    client = GeminiClient(LLMConfig(gemini_api_key='secret'))
-    client._session = Session(Reply({'usageMetadata': counts, 'candidates': []}))
-    assert not (await client.complete('prompt')).usage_known
+    from src.utils.llm import _gemini_usage
+    assert not _gemini_usage({'usageMetadata': counts, 'candidates': []}, counts)['usage_known']
 
 
 @pytest.mark.asyncio
@@ -612,7 +606,7 @@ def test_model_preflight_reports_static_warnings_without_config_content():
         gemini_model_light=['bad'], openai_model_light_shadow='unknown-model'))
     warnings = manager.get_usage_summary()['configuration_warnings']
     assert 'openai_model_heavy:unpriced_model' in warnings
-    assert 'gemini_model_light:invalid_model' in warnings
+    assert all(not warning.startswith('gemini_') for warning in warnings)
     assert 'openai_model_light_shadow:unpriced_model' in warnings
     assert 'private-secret-value' not in json.dumps(warnings)
 
@@ -683,7 +677,7 @@ async def test_audit_cleanup_failure_does_not_drop_current_record(tmp_path, monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('provider', [LLMProvider.OPENAI, LLMProvider.GEMINI])
+@pytest.mark.parametrize('provider', [LLMProvider.OPENAI])
 @pytest.mark.parametrize('kind', ['list_json', 'html'])
 async def test_non_object_or_html_response_is_unknown_and_safe(provider, kind):
     class HtmlReply(Reply):
@@ -747,7 +741,6 @@ async def test_budget_exhausted_failed_primary_has_explicit_skip_counter():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('reason', ['BLOCK_REASON_UNSPECIFIED', 'unrecognized-provider-value'])
 async def test_unspecified_block_reason_does_not_prove_zero_generation(reason):
-    client = GeminiClient(LLMConfig(gemini_api_key='secret'))
-    client._session = Session(Reply({'usageMetadata': {'promptTokenCount': 10},
-        'promptFeedback': {'blockReason': reason}}))
-    assert not (await client.complete('prompt')).usage_known
+    from src.utils.llm import _gemini_usage
+    payload = {'usageMetadata': {'promptTokenCount': 10}, 'promptFeedback': {'blockReason': reason}}
+    assert not _gemini_usage(payload, payload['usageMetadata'])['usage_known']

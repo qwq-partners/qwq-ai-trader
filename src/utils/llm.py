@@ -1,12 +1,12 @@
 """
 AI Trading Bot - LLM 통합 모듈
 
-OpenAI와 Gemini를 통합 관리하며, 용도별 최적 모델을 자동 선택합니다.
+GPT general-task routing with an inert legacy Gemini compatibility boundary.
 
 설계 철학:
-- 가벼운 작업(테마 탐지, 분류) -> Gemini Flash (저비용, 빠름)
-- 중요한 작업(시장 분석, 복기) -> GPT-4 (깊은 분석)
-- 폴백 체인: GPT-4 -> GPT-3.5 -> Gemini -> 규칙 기반
+- 가벼운 작업(테마 탐지, 분류) -> OpenAI light, no fallback
+- 중요한 작업(시장 분석, 복기) -> OpenAI heavy
+- Heavy failure -> distinct OpenAI light at most once
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from loguru import logger
 from .llm_roles import LLMRole, ROLE_POLICY_VERSION, get_role_profile
 from .llm_pricing import rate_quote
 from .llm_budget import MonthlyBudgetLedger, BudgetBlocked, BudgetStateError
-from .llm_budget_bounds import GEMINI_TIMEOUT_CONTRACT
 from contextvars import ContextVar
 
 # 64차: complete()/complete_with() 한 호출 동안 실제 공급자 시도(재시도·폴백 포함)를 모아 응답에 붙인다
@@ -55,15 +54,15 @@ MANUS_ALLOWED_TASKS = frozenset({
 
 class LLMTask(str, Enum):
     """LLM 작업 유형 - 용도별 최적 모델 자동 선택"""
-    THEME_DETECTION = "theme_detection"      # 테마 탐지 -> Gemini Flash
-    STOCK_MAPPING = "stock_mapping"          # 종목 매핑 -> Gemini Flash
-    NEWS_SUMMARY = "news_summary"            # 뉴스 요약 -> Gemini Flash
-    MARKET_ANALYSIS = "market_analysis"      # 시장 분석 -> GPT-4
-    TRADE_REVIEW = "trade_review"            # 거래 복기 -> GPT-4
-    QUICK_CLASSIFY = "quick_classify"        # 빠른 분류 -> Gemini Flash
-    STRATEGY_ANALYSIS = "strategy_analysis"  # 전략 분석/진화 -> GPT-4
-    QUICK_ANALYSIS = "quick_analysis"        # 빠른 실시간 분석 -> Gemini Flash
-    WIKI_INGEST = "wiki_ingest"              # 위키 교훈 추출 -> Gemini Flash
+    THEME_DETECTION = "theme_detection"      # 테마 탐지 -> OpenAI light
+    STOCK_MAPPING = "stock_mapping"          # 종목 매핑 -> OpenAI light
+    NEWS_SUMMARY = "news_summary"            # 뉴스 요약 -> OpenAI light
+    MARKET_ANALYSIS = "market_analysis"      # 시장 분석 -> OpenAI heavy
+    TRADE_REVIEW = "trade_review"            # 거래 복기 -> OpenAI heavy
+    QUICK_CLASSIFY = "quick_classify"        # 빠른 분류 -> OpenAI light
+    STRATEGY_ANALYSIS = "strategy_analysis"  # 전략 분석/진화 -> OpenAI heavy
+    QUICK_ANALYSIS = "quick_analysis"        # 빠른 실시간 분석 -> OpenAI light
+    WIKI_INGEST = "wiki_ingest"              # 위키 교훈 추출 -> OpenAI light
     REPORT_SUMMARY = "report_summary"       # Non-decision summaries; economy eligible.
 
 
@@ -71,7 +70,7 @@ class LLMTask(str, Enum):
 class LLMConfig:
     """LLM 설정"""
     openai_api_key: str = ""
-    gemini_api_key: str = ""
+    gemini_api_key: str = ""  # Deprecated, ignored by the disabled client.
 
     # 모델 선택
     # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.4 최신 모델)
@@ -79,6 +78,7 @@ class LLMConfig:
     openai_model_heavy: str = "gpt-5.6-sol"
     # Light: 빠른 분류, 테마 탐지에 사용
     openai_model_light: str = "gpt-5-mini"
+    # Inert compatibility labels for legacy callers and historical audit rows.
     gemini_model_heavy: str = "gemini-3.1-pro-preview"
     gemini_model_light: str = "gemini-3.1-flash-lite"
 
@@ -137,7 +137,6 @@ class LLMConfig:
     def from_env(cls) -> "LLMConfig":
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         )
 
     @classmethod
@@ -157,7 +156,6 @@ class LLMConfig:
             llm_cfg = llm_cfg["llm"]
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-            gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
             monthly_budget_usd=llm_cfg.get("monthly_budget"),
             budget_state_path=llm_cfg.get("budget_state_path"),
@@ -165,12 +163,6 @@ class LLMConfig:
             missing_cost_policy=llm_cfg.get("missing_cost_policy", "block"),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
             openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
-            gemini_model_heavy=(
-                llm_cfg.get("gemini_model_heavy") or "gemini-3.1-pro-preview"
-            ),
-            gemini_model_light=(
-                llm_cfg.get("gemini_model_light") or "gemini-3.1-flash-lite"
-            ),
             openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
             manus_enabled=bool((llm_cfg.get("manus") or {}).get("enabled", False)),
             manus_agent_profile=(
@@ -556,115 +548,27 @@ class OpenAIClient(BaseLLMClient):
             return {"error": "Invalid JSON response", "raw": response.content}
 
 
+def _disabled_gemini_response(model: str) -> LLMResponse:
+    """Stable unsent contract for retired provider calls; never admits spend."""
+    return LLMResponse(
+        "", model, LLMProvider.GEMINI, success=False, requested_model=model,
+        error="Provider disabled by user policy", provider_error_code="provider_disabled",
+        request_sent=False, usage_known=False, billing_status="not_sent")
+
+
 class GeminiClient(BaseLLMClient):
-    """Google Gemini 클라이언트"""
+    """Deprecated inert compatibility client. Historical records remain readable."""
 
     def __init__(self, config: LLMConfig):
         self.config = config
-        self.api_key = config.gemini_api_key
-        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.config.timeout_seconds)
-            self._session = aiohttp.ClientSession(timeout=timeout)
-        return self._session
+        self._session = None
 
     async def complete(
-        self,
-        prompt: str,
-        system: str = "",
-        model: Optional[str] = None,
-        temperature: float = 0.3,
-        max_tokens: Optional[int] = None,
-        **kwargs
+        self, prompt: str, system: str = "", model: Optional[str] = None,
+        temperature: float = 0.3, max_tokens: Optional[int] = None, **kwargs,
     ) -> LLMResponse:
-        """Gemini output billing includes candidate and thought tokens separately."""
-        model = model if model is not None else self.config.gemini_model_light
-        _validate_controls(model, LLMProvider.GEMINI, kwargs)
-        level = kwargs.get("thinking_level")
-        metadata = dict(requested_model=model, requested_thinking_level=level,
-                        usage_known=False, request_sent=False, billing_status="not_sent")
-        if not self.api_key:
-            return LLMResponse("", model, LLMProvider.GEMINI, success=False,
-                               error="Gemini API key not configured", **metadata)
-        generation = {"temperature": temperature,
-                      "maxOutputTokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
-        if model in {"gemini-3.8-flash", "gemini-4-argon"}:
-            generation.pop("temperature")
-        if level is not None:
-            generation["thinkingConfig"] = {"thinkingLevel": level}
-        full_prompt = f"{system}\n\n{prompt}" if system else prompt
-        start_time = time.perf_counter()
-        input_count = output_count = 0
-        try:
-            session = await self._get_session()
-            metadata["request_sent"] = True
-            metadata["billing_status"] = "unknown"
-            async with session.post(
-                f"{self.base_url}/models/{model}:generateContent?key={self.api_key}",
-                headers={"Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": full_prompt}]}], "generationConfig": generation},
-            ) as resp:
-                metadata["http_status"] = resp.status
-                data = await resp.json()
-                if not isinstance(data, dict):
-                    raise ValueError("Provider response must be an object")
-                metadata.update(_provider_errors(data))
-                usage = data.get("usageMetadata") or {}
-                feedback = data.get("promptFeedback") or {}
-                metadata["refusal_detected"] = (
-                    isinstance(feedback, dict)
-                    and feedback.get("blockReason") not in (None, "", "BLOCK_REASON_UNSPECIFIED"))
-                if not isinstance(usage, dict):
-                    usage = {}
-                input_count = _token_count(usage.get("promptTokenCount"))
-                output_count = (_token_count(usage.get("candidatesTokenCount"))
-                                + _token_count(usage.get("thoughtsTokenCount")))
-                metadata.update(_gemini_usage(data, usage))
-                metadata["resolved_model"] = data.get("modelVersion")
-                candidates = data.get("candidates") or []
-                candidate = candidates[0] if candidates else {}
-                metadata["finish_reason"] = candidate.get("finishReason")
-                metadata["refusal_detected"] = metadata["refusal_detected"] or (
-                    metadata["finish_reason"] in {
-                        "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"})
-                parts = (candidate.get("content") or {}).get("parts") or []
-                content = "".join(part.get("text", "") for part in parts if not part.get("thought"))
-                metadata["billing_status"] = _billing_status(data, resp.status, metadata["usage_known"])
-                success = resp.status == 200 and bool(candidates) and not metadata["refusal_detected"]
-                return LLMResponse(
-                    content, model, LLMProvider.GEMINI,
-                    input_tokens=_token_count(usage.get("promptTokenCount")),
-                    output_tokens=output_count,
-                    latency_ms=(time.perf_counter() - start_time) * 1000,
-                    success=success,
-                    error=None if success else f"Gemini HTTP {resp.status} or missing candidates",
-                    **metadata,
-                )
-        except asyncio.CancelledError as exc:
-            # Preserve the original exception type: asyncio.timeout checks it exactly.
-            exc._llm_response = LLMResponse(
-                "", model, LLMProvider.GEMINI, success=False,
-                input_tokens=input_count, output_tokens=output_count,
-                error="Request cancelled",
-                latency_ms=(time.perf_counter() - start_time) * 1000,
-                **metadata,
-            )
-            raise
-        except Exception as exc:
-            if isinstance(exc, aiohttp.ClientConnectorError) and metadata.get("http_status") is None:
-                metadata.update(request_sent=False, billing_status="not_sent")
-            if isinstance(exc, asyncio.TimeoutError):
-                metadata["transport_error_kind"] = "timeout"
-            return LLMResponse(
-                "", model, LLMProvider.GEMINI, success=False,
-                input_tokens=input_count, output_tokens=output_count,
-                error="Request timeout" if isinstance(exc, asyncio.TimeoutError) else "Gemini transport failure",
-                latency_ms=(time.perf_counter() - start_time) * 1000,
-                **metadata,
-            )
+        return _disabled_gemini_response(
+            model if model is not None else self.config.gemini_model_light)
 
     async def complete_json(
         self,
@@ -696,43 +600,43 @@ class LLMManager:
     TASK_CONFIG = {
         LLMTask.REPORT_SUMMARY: {
             "primary": (LLMProvider.OPENAI, "heavy"),
-            "fallback": (LLMProvider.GEMINI, "heavy"),
+            "fallback": (LLMProvider.OPENAI, "light"),
         },
         LLMTask.THEME_DETECTION: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
         LLMTask.STOCK_MAPPING: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
         LLMTask.NEWS_SUMMARY: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
         LLMTask.MARKET_ANALYSIS: {
             "primary": (LLMProvider.OPENAI, "heavy"),
-            "fallback": (LLMProvider.GEMINI, "heavy"),
+            "fallback": (LLMProvider.OPENAI, "light"),
         },
         LLMTask.TRADE_REVIEW: {
             "primary": (LLMProvider.OPENAI, "heavy"),
-            "fallback": (LLMProvider.GEMINI, "heavy"),
+            "fallback": (LLMProvider.OPENAI, "light"),
         },
         LLMTask.QUICK_CLASSIFY: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
         LLMTask.STRATEGY_ANALYSIS: {
             "primary": (LLMProvider.OPENAI, "heavy"),
-            "fallback": (LLMProvider.GEMINI, "heavy"),
+            "fallback": (LLMProvider.OPENAI, "light"),
         },
         LLMTask.QUICK_ANALYSIS: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
         LLMTask.WIKI_INGEST: {
-            "primary": (LLMProvider.GEMINI, "light"),
-            "fallback": (LLMProvider.OPENAI, "light"),
+            "primary": (LLMProvider.OPENAI, "light"),
+            "fallback": None,
         },
     }
 
@@ -759,7 +663,7 @@ class LLMManager:
                     self.config.budget_state_path, self.config.monthly_budget_usd,
                     policy_enabled=self.config.budget_policy_enabled,
                     missing_cost_policy=self.config.missing_cost_policy,
-                    economy_summary_models=(self.config.openai_model_light, self.config.gemini_model_light),
+                    economy_summary_models=(self.config.openai_model_light,),
                 )
             except BudgetBlocked as exc:
                 self._monthly_budget_error = exc.reason
@@ -770,8 +674,7 @@ class LLMManager:
         self._resource_close_task: Optional[asyncio.Task] = None
         self._closing = False
         self.configuration_warnings = []
-        for field_name in ("openai_model_heavy", "openai_model_light", "gemini_model_heavy",
-                           "gemini_model_light", "openai_model_light_shadow"):
+        for field_name in ("openai_model_heavy", "openai_model_light", "openai_model_light_shadow"):
             model = getattr(self.config, field_name)
             if field_name == "openai_model_light_shadow" and model == "":
                 continue
@@ -779,7 +682,7 @@ class LLMManager:
                 warning = f"{field_name}:invalid_model"
             elif rate_quote(model, 0, 0) is None:
                 warning = f"{field_name}:unpriced_model"
-            elif model not in (_OPENAI_EFFORTS if field_name.startswith("openai_") else _GEMINI_LEVELS):
+            elif model not in _OPENAI_EFFORTS:
                 warning = f"{field_name}:unsupported_provider_controls"
             else:
                 continue
@@ -805,22 +708,36 @@ class LLMManager:
         }
 
         logger.info(
-            f"LLMManager 초기화: OpenAI={'설정됨' if self.config.openai_api_key else '없음'}, "
-            f"Gemini={'설정됨' if self.config.gemini_api_key else '없음'}"
+            f"LLMManager 초기화: OpenAI={'설정됨' if self.config.openai_api_key else '없음'}"
         )
 
     def _get_client(self, provider: LLMProvider) -> BaseLLMClient:
         """제공자별 클라이언트 반환"""
         if provider == LLMProvider.OPENAI:
             return self.openai
-        return self.gemini
+        if provider == LLMProvider.GEMINI:
+            return self.gemini
+        raise ValueError(f"Unsupported LLM provider: {provider}")
 
     def _get_model(self, provider: LLMProvider, weight: str) -> str:
         """제공자와 가중치에 따른 모델명 반환"""
         if provider == LLMProvider.OPENAI:
             return self.config.openai_model_heavy if weight == "heavy" else self.config.openai_model_light
-        else:
+        if provider == LLMProvider.GEMINI:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    @staticmethod
+    def _task_controls(model: str, weight: str, controls: dict) -> dict:
+        """Bound common light reasoning without changing explicit role controls."""
+        result = dict(controls)
+        if weight == "light" and result.get("reasoning_effort") is None:
+            supported = _OPENAI_EFFORTS.get(model, set())
+            for effort in ("minimal", "low"):
+                if effort in supported:
+                    result["reasoning_effort"] = effort
+                    break
+        return result
 
     def _daily_unknown_blocks(self) -> bool:
         return (self.config.missing_cost_policy == "block"
@@ -983,7 +900,8 @@ class LLMManager:
         primary_model = self._get_model(primary_provider, primary_weight)
 
         response = await self._complete_attempt(
-            primary_client, prompt, system, primary_model, task.value, attempt_role, **kwargs
+            primary_client, prompt, system, primary_model, task.value, attempt_role,
+            **self._task_controls(primary_model, primary_weight, kwargs)
         )
 
         if response.refusal_detected:
@@ -1024,16 +942,24 @@ class LLMManager:
             self.stats[reason] = self.stats.get(reason, 0) + 1
             return response
 
-        # Fallback 시도
+        fallback = task_config.get("fallback")
+        if fallback is None:
+            self.stats["error_count"] += 1
+            return response
+        fallback_provider, fallback_weight = fallback
+        fallback_model = self._get_model(fallback_provider, fallback_weight)
+        # Economy mode may already have selected light for the primary attempt.
+        if (fallback_provider == response.provider
+                and fallback_model in (response.model, response.resolved_model)):
+            self.stats["error_count"] += 1
+            return response
         logger.warning(f"Primary LLM 실패 ({primary_provider.value}): {response.error}, 폴백 시도")
         self.stats["fallback_count"] += 1
-
-        fallback_provider, fallback_weight = task_config["fallback"]
         fallback_client = self._get_client(fallback_provider)
-        fallback_model = self._get_model(fallback_provider, fallback_weight)
 
         response = await self._complete_attempt(
-            fallback_client, prompt, system, fallback_model, task.value, "fallback", **kwargs
+            fallback_client, prompt, system, fallback_model, task.value, "fallback",
+            **self._task_controls(fallback_model, fallback_weight, kwargs)
         )
 
         if response.success:
@@ -1166,6 +1092,11 @@ class LLMManager:
                 재현성이 중요한 경로에서만 1 이상을 준다. 기본 0 = 기존 동작 유지.
         """
         self.stats["total_requests"] += 1
+        if provider == LLMProvider.GEMINI:
+            response = _disabled_gemini_response(self._get_model(provider, weight))
+            self._account_attempt(response, "complete_with", "primary")
+            self.stats["error_count"] += 1
+            return response
 
         if not self._check_budget():
             logger.warning("일일 LLM 예산 초과")
@@ -1335,6 +1266,10 @@ class LLMManager:
     async def _run_complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
+        if provider == LLMProvider.GEMINI:
+            response = _disabled_gemini_response(_model)
+            self._account_attempt(response, _task, _role)
+            return response
         token = None
         deadline = kwargs.pop("_deadline", None)
         role_finish_reason = kwargs.pop("_role_finish_reason", None)
@@ -1359,13 +1294,10 @@ class LLMManager:
                         if mode == 'economy' and priority != 'essential':
                             if _task == LLMTask.REPORT_SUMMARY.value:
                                 _model = self._get_model(provider, 'light')
-                                supported = (_OPENAI_EFFORTS if provider == LLMProvider.OPENAI else _GEMINI_LEVELS)
+                                supported = _OPENAI_EFFORTS
                                 if 'low' not in supported.get(_model, set()):
                                     raise BudgetBlocked('unsupported_economy_controls')
-                                if provider == LLMProvider.OPENAI:
-                                    kwargs['reasoning_effort'] = 'low'
-                                else:
-                                    kwargs['thinking_level'] = 'low'
+                                kwargs['reasoning_effort'] = 'low'
                             if _task in {t.value for t in (
                                     LLMTask.REPORT_SUMMARY, LLMTask.NEWS_SUMMARY,
                                     LLMTask.QUICK_CLASSIFY, LLMTask.QUICK_ANALYSIS,
@@ -1381,10 +1313,7 @@ class LLMManager:
                         token = self.monthly_budget.reserve(
                             _model, _prompt, _system, output_limit, policy_priority=priority,
                             expected_policy_mode=policy['policy_mode'] if policy else None,
-                            task=_task, role=_role,
-                            timeout_hold_contract=(GEMINI_TIMEOUT_CONTRACT
-                                if type(_client) is GeminiClient and _model == "gemini-3.1-flash-lite"
-                                else None))
+                            task=_task, role=_role)
                         break
                     except BudgetBlocked as exc:
                         if exc.reason != 'budget_profile_changed' or selection == 2:

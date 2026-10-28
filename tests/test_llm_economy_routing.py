@@ -72,8 +72,8 @@ async def test_essential_models_provider_controls_preserved(tmp_path, monkeypatc
     assert heavy.success and heavy.model == 'gpt-5.6-sol'
     assert m.openai.complete.call_args.kwargs['reasoning_effort'] == 'high'
     explicit = await m.complete_with('bear', LLMProvider.GEMINI, budget_priority='essential', temperature=0)
-    assert explicit.success and explicit.provider == LLMProvider.GEMINI
-    assert m.gemini.complete.call_args.kwargs['temperature'] == 0
+    assert not explicit.success and explicit.provider_error_code == 'provider_disabled'
+    m.gemini.complete.assert_not_called()
     await m.close()
 
 

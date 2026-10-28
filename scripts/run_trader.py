@@ -2399,8 +2399,7 @@ def configure_llm_from_app(config):
     set_llm_config(configured)
     logger.info(
         f"[LLM] 월 예산 ${configured.monthly_budget_usd:g} (KST), "
-        f"OpenAI heavy={configured.openai_model_heavy}, light={configured.openai_model_light}, "
-        f"Gemini heavy={configured.gemini_model_heavy}, light={configured.gemini_model_light}"
+        f"OpenAI heavy={configured.openai_model_heavy}, light={configured.openai_model_light}"
     )
     return configured
 

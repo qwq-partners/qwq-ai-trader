@@ -98,7 +98,8 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
     return {
         "bull": role(LLMProvider.OPENAI, "light", av.MAX_TOKENS, "minimal", 0.3, av.VERDICT_SEED, av.LLM_TIMEOUT),
         "bear": role(LLMProvider.GEMINI, "light", av.MAX_TOKENS, None, 0.0, None, av.LLM_TIMEOUT),
-        "fallback_chain": [role(p, w, 100, None, 0.3, None, fallback_timeout)
+        "fallback_chain": [role(p, w, 100, LLMManager._task_controls(model(p, w), w, {}).get("reasoning_effort"),
+                                0.3, None, fallback_timeout)
                            for p, w in (route["primary"], route["fallback"])],
         # 운영 SINGLE_FALLBACK_TIMEOUT 은 primary→fallback 체인 전체 시한이다(시도별 timeout_seconds 와 별개).
         "fallback_chain_timeout_seconds": float(fallback_timeout),

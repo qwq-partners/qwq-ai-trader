@@ -13,10 +13,10 @@ llm:
   # 보고/한 줄 설명/후속 복기는 src/utils/llm_roles.py의 고정 역할 프로필을 사용한다.
   # 아래 heavy/light 슬롯은 기존 진입·팀·시장 분석 등 task 경로에 계속 적용한다.
   # 월 예산 원장은 두 경로가 공유하며 역할 실패에 자동 유료 승격은 없다.
-  primary: gemini_flash_lite
-  fallback: openai_gpt5_mini
+  primary: openai_gpt5_mini
+  fallback: none  # Light: none; heavy: one distinct OpenAI light attempt.
   daily_budget: 5.0
-  # OpenAI + Gemini combined, KST calendar month. First activation starts at $0
+  # Shared ledger preserves historical provider spend, KST calendar month. Initial $0
   # by user instruction; persisted state must never be removed to reset spend.
   monthly_budget: 100.0
   budget_state_path: "~/.local/state/qwq-ai-trader/llm-budget.sqlite3"
@@ -34,9 +34,7 @@ llm:
   openai_model_heavy: "gpt-5.6-sol"    # 거래 복기, 전략 진화, 시장 분석 (heavy)
   # light는 그대로 둔다 — Bull/Bear 토론이 종목당 2~4회씩 부르므로 호출량이 크다.
   # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
-  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, Bull/Bear 토론 (light)
-  gemini_model_heavy: "gemini-3.1-pro-preview"
-  gemini_model_light: "gemini-3.1-flash-lite"  # Stable; retired preview must not receive new calls.
+  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, 일반 경량 작업 (light)
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl
@@ -55,7 +53,7 @@ llm:
   #      Bull/Bear 토론이나 cross_validator 2차 검증에는 맞지 않는다.
   #      아래 tasks에 quick_*/theme_* 계열을 넣지 말 것.
   # 2026-08-19 비활성화: Manus 구독 해지 — 배치 작업은 기존 API 경로로 회귀
-  #   (trade_review/strategy_analysis → OpenAI gpt-5.6-sol primary, Gemini 3.1 Pro 폴백).
+  #   (trade_review/strategy_analysis → OpenAI gpt-5.6-sol primary, OpenAI light 폴백).
   #   재구독 시 enabled: true만 되돌리면 라우팅 복원.
   manus:
     enabled: false
