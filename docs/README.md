@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **현재 통합 상태:** [10/28 운영 적용·다음 손익비 대조기](operations/execution-roadmap.md#deploy-and-order-rr-20261028). 운영`0b82af5d`·기동 인수 완료, 자연 모델 호출/순수익은 별도다. 아래 공급자·비용 작업의 미적용 표기는 당시 이력이다.
+
 > **2026-10-28 체결 비용 후속:** [E02-PNL-COST 결과/한계](reviews/cash-and-sepa-rr-2026-10-28.md#e02-pnl-cost) · [원장 상태/NEXT](operations/execution-roadmap.md#e02-pnl-cost-20261028). 비용 계산 실패 전에 회계 상태를 보존하고 실제 체결·대사 보류를 유지한다. 정상 부분/전량 SELL·정상0은 그대로다. 전체검증/통합과 운영 미적용을 구분한다.
 
 > **2026-10-28 비용 계약 후속:** [E02-COST 검토](reviews/cash-and-sepa-rr-2026-10-28.md#e02-cost) · [상태/NEXT](operations/execution-roadmap.md#e02-cost-20261028). 비용 계산 실패는0 가정 대신 진입 보류하며 정상 계산/문턱은 유지한다. 매도가·수량 비용 비교와 실제 체결 성과를 구분한다. 운영 미적용이며 아래 E02-RR은 이전 단계의 기록이다.
