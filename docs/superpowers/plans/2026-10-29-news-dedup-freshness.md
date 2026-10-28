@@ -45,3 +45,7 @@ Terra/high 구현 뒤 coordinator 관련104검사/3.52초·격리0를 확인했�
 비차단 P3는 범위를 넓히지 않고 남긴다. sklearn은 requirements.txt의 명시 의존성이므로 이번 검증에서 임의 skip으로 바꾸지 않는다. 잘못된 객체의 best-effort 정리, 반환/마지막 정리 사이 시계 경계, 기존 발행시각 기반TTL에 의한 오래된 기사 재통과는 유지한다. coordinator는 새 private helper 이름이 유일하고 기본 ThemeInfo 시각이 naive이며 현재5개 수집 경로가 기본 now 또는 명시 tz 제거를 사용함을 소스로 대조했다. 이는 과거 DB/모든 외부 객체의 시각을 실자료로 보증하는 검사가 아니다. 감정 getter는 새 dict를 만들며 새 helper는 await 없이 기존 만료 규칙만 적용한다. 정상 운영의 실제 절감이나 선정 성과는 별도 자료로 판단한다.
 
 최종 로컬 전체 verify:9,675passed/2skipped/2xfailed/8warnings·782.07초·rc0·격리0·문법/비밀PASS. 문서 날짜/현재 예약표P2 두 곳 수정 후 독립 최종APPROVE/P0~P2 0. 최종CI/병합·새 운영 인수는 이번 PR의 완료 영수증으로 확정한다.
+
+## 최종 마감
+
+[PR #294 운영 완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/294#issuecomment-6474809303). 운영 고정 `9c187307`·PID3771021, 10/29 01:36:10 KST 인수·164.6초/20항목 전부PASS. 운영 전체9,675passed·2skipped·2xfailed/783.28초, 보호48파일/cron 동일·복구ready·미체결0·NRestarts0·시작 오류0. 매수 중지·월USD100/log_and_continue·GPT/Claude 계약 유지. PR/main CI9,675검사 PASS. 위 구현 인수 진행 중의 상태는 당시 이력이며 구현·검증·독립 리뷰·배포는 DONE이다. 다음 작업은 단일 원장의 자연 입력/기한 조건만 따른다. 이 문서 마감은 제품 변경/재배포 대상이 아니다.
