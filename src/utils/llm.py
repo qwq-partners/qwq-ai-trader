@@ -711,6 +711,11 @@ class LLMManager:
             f"LLMManager 초기화: OpenAI={'설정됨' if self.config.openai_api_key else '없음'}"
         )
 
+    @staticmethod
+    def provider_policy_block_reason(provider: LLMProvider) -> Optional[str]:
+        """Pure policy preflight: independent of credentials, spend and HTTP."""
+        return "provider_disabled" if provider == LLMProvider.GEMINI else None
+
     def _get_client(self, provider: LLMProvider) -> BaseLLMClient:
         """제공자별 클라이언트 반환"""
         if provider == LLMProvider.OPENAI:
@@ -1092,7 +1097,7 @@ class LLMManager:
                 재현성이 중요한 경로에서만 1 이상을 준다. 기본 0 = 기존 동작 유지.
         """
         self.stats["total_requests"] += 1
-        if provider == LLMProvider.GEMINI:
+        if self.provider_policy_block_reason(provider) == "provider_disabled":
             response = _disabled_gemini_response(self._get_model(provider, weight))
             self._account_attempt(response, "complete_with", "primary")
             self.stats["error_count"] += 1
@@ -1266,7 +1271,7 @@ class LLMManager:
     async def _run_complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
         provider = LLMProvider.OPENAI if _client is self.openai else LLMProvider.GEMINI
-        if provider == LLMProvider.GEMINI:
+        if self.provider_policy_block_reason(provider) == "provider_disabled":
             response = _disabled_gemini_response(_model)
             self._account_attempt(response, _task, _role)
             return response

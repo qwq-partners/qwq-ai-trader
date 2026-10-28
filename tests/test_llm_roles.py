@@ -267,17 +267,18 @@ async def test_morning_brief_uses_no_llm_role_or_transport(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_argon_qualification_controls_and_reported_usage_without_role(tmp_path):
+async def test_legacy_argon_qualification_cannot_reactivate_retired_provider(tmp_path):
     from src.utils.llm_roles import ROLE_PROFILES
     assert all(p.model != 'gemini-4-argon' for p in ROLE_PROFILES.values())
     m = manager(tmp_path, monthly=False)
     m.config.gemini_model_light = 'gemini-4-argon'
     m.gemini._session = Session(gemini_reply(modelVersion='gemini-4-argon'))
     result = await m.complete_with('p', provider=LLMProvider.GEMINI, max_tokens=2048, thinking_level='low')
-    payload = m.gemini._session.payloads[0]['generationConfig']
-    assert payload == {'maxOutputTokens': 2048, 'thinkingConfig': {'thinkingLevel': 'low'}}
-    assert result.resolved_model == 'gemini-4-argon'
-    assert result.output_tokens == 50 and result.reasoning_tokens == 30 and result.visible_output_tokens == 20
+    assert m.gemini._session.payloads == []
+    assert result.success is False and result.request_sent is False
+    assert result.provider_error_code == 'provider_disabled'
+    assert result.requested_model == 'gemini-4-argon'
+    assert result.resolved_model is None and result.usage_known is False
 
 
 @pytest.mark.asyncio
@@ -331,10 +332,10 @@ async def test_role_incomplete_or_refused_output_is_not_usable_but_billed_once(
 @pytest.mark.asyncio
 async def test_legacy_complete_with_keeps_truncation_contract(tmp_path):
     m = manager(tmp_path)
-    reply = gemini_reply('기존 부분본문')
-    reply.data['candidates'][0]['finishReason'] = 'MAX_TOKENS'
-    m.gemini._session = Session(reply)
-    result = await m.complete_with('p', provider=LLMProvider.GEMINI)
+    reply = openai_reply('기존 부분본문')
+    reply.data['choices'][0]['finish_reason'] = 'length'
+    m.openai._session = Session(reply)
+    result = await m.complete_with('p', provider=LLMProvider.OPENAI)
     assert result.success and result.content == '기존 부분본문'
 
 

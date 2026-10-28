@@ -712,18 +712,20 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 ## LLM 모델 선택
 
-역할별 고정 정책은 `src/utils/llm_roles.py`의 `engine-roles-v1`이다. 모델·추론·출력·기한을 함께 고정하며, 기존 슬롯을 바꾸어 모든 호출을 일괄 승격하지 않는다.
+**10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래는 개발 코드의 계약이며 운영`c4bc4f0e`는 아직 전환하지 않았다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. Claude API/구독 CLI 선택은 답변 대기이며 연결 완료로 표시하지 않는다.
+
+고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v2-openai`다. 일반 task와 고정 보고/복기 역할을 구분한다.
 
 | 작업 | Primary | Fallback / 한도 |
 |------|---------|----------|
-| 기존 테마 탐지·뉴스 요약 | Gemini 3.1 Flash-Lite 정식(운영 기본값) | OpenAI gpt-5-mini; 검증된 timeout 비용 보류 후 별도 예약, 기존unknown 차단은 별도 |
-| 거시·한국경제·글로벌미시 한 줄 설명 | Gemini 3.1 Flash-Lite 정식 / minimal | 없음; 출력512·20초 |
-| 아침 보고 | Gemini 3.1 Flash-Lite 정식 / minimal | 없음; 출력1600·45초 |
+| 테마·뉴스·일반 경량 분석·위키 생성 | GPT-5 mini / minimal | 일반 fallback 없음; 기존 JSON 형식 복구 유지 |
+| 거시·한국경제·글로벌미시 한 줄 설명 | GPT-5 mini / minimal | 없음; 출력512·20초 |
+| 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
 | 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
-| 기존 거래 복기·전략 진화 | OpenAI gpt-5.6-sol | Gemini 3.1 Pro Preview; 기존 설정 |
-| 실시간 Bull/Bear·진입·시장 국면 | 공용Gemini light는 stable 운영 기본값; 나머지 기존 설정 | 기존unknown으로 현재 유료 호출 차단·실전 영향은 응답 뒤 가격/비용으로 별도 비교 |
+| 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
+| Bull / 독립 Bear | Bull GPT 유지; Gemini Bear 미전송 | Claude 연결 대기. 금지된 공급자를 단독 승인·일일 한도·timeout으로 우회하지 않음 |
 
-월 USD100의 기존 원장을 공유한다. 80% 절약·95% 필수 호출만·100% 유료 중지 및 KST 월 전환 정책을 유지한다. Argon은 제한 비교 후보이고 Claude는 엔진 API 연결 미구현으로 운영 배정하지 않았다. 새 보고/복기 경로는 실패·빈 응답·거절·길이 중단을 성공으로 채택하지 않는다. 상세 근거는 [모델 배분 정본](docs/research/engine-model-allocation-2026-10-15.md)을 따른다.
+월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지이며 현재 raw 비교 경로는 새 독립 공급자가 검증될 때까지 사용 불가다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
 
 ---
 

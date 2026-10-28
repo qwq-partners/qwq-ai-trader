@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-28 — Gemini 전송 차단·GPT 일반 분석 전환
+
+- 사용자 지시로 Google 복구 대신 GPT 일반 분석·Claude 독립 위험 검토 전환을 우선한다. [E04-D2 실행 원장](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)에 연결 선택·구현·검증·운영 상태를 구분한다.
+- 일반 task와 보고 역할을 GPT로 옮기고 Gemini를 직접 client·공통 경계·비교 작업에서 미전송 처리한다. light의 일반 fallback은 없고 heavy 실패는 별도 GPT light만 사용한다. 기존 JSON/명시적 빈 응답 복구와 역사 비용 원장은 보존한다.
+- 사용 중지한 공급자를 GPT 단독 승인·peer timeout·일일 한도로 우회하지 않도록 진입 검증을 보완했다. 통합 관련131검사·독립 중요 재리뷰 통과, 최종 전체/CI는 해당 PR 영수증을 따른다. 월USD100·매수 중지 유지. Claude 연결과 운영 적용은 아직이다.
+
 ## 2026-10-28 — 팀 심의 실패 처리·미송신 집계·오전 인수
 
 - 장전 채널1건/원천 날짜와 새 KIS 인증의 실제 WS 수신을 확인했다. E02 배치7→SEPA 점수 통과1→비용 후 RR 차단1을 판독하고, 현 설정에서 도달할 수 없는 비활성 RSI2 충돌을 자연 대기 조건에서 제외했다.
