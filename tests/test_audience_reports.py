@@ -16,7 +16,7 @@ def quote(**updates):
 
 
 def test_midday_requires_same_day_source_time_not_just_receipt():
-    assert render_market_report('midday', MarketSnapshot(indices=(quote(source_observed_at=None),)), NOW) is None
+    assert 'KIS 응답 참고' in render_market_report('midday', MarketSnapshot(indices=(quote(source_observed_at=None),)), NOW)
     assert render_market_report('midday', MarketSnapshot(indices=(quote(source_observed_at=(NOW-timedelta(minutes=6)).isoformat()),)), NOW) is None
     assert render_market_report('midday', MarketSnapshot(indices=(quote(change_pct=float('nan')),)), NOW) is None
     text = render_market_report('midday', MarketSnapshot(indices=(quote(),)), NOW)

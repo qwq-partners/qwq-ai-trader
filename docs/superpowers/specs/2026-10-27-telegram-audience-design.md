@@ -128,7 +128,7 @@
 <a id="intraday-source-followthrough-20261028"></a>
 ## 10/28 R02 후속 설계 — 장중 자료와 참고값 분리
 
-**상태: 설계 검토, 구현/운영 적용 전.** 순서는 [단일 실행 원장](../../operations/execution-roadmap.md#e02-rr-compare-20261028)을 따른다. source-only Sol/high 분석(실제metadata 미노출)과 coordinator 소스/공식 자료 대조를 수행했다. 새로운 KIS 인증 호출이나 LLM 호출은 하지 않았다.
+**상태: 아래는 설계 근거이며 사용자 승인 후 R02-INDICATIVE 구현으로 진행했다.** 현재 검증/배포 상태는 [단일 실행 원장](../../operations/execution-roadmap.md#r02-indicative-20261028), 상세 실행은 [구현 계획](../plans/2026-10-28-midday-provider-reference.md)을 따른다. source-only Sol/high 분석(실제metadata 미노출)과 coordinator 소스/공식 자료 대조를 수행했다. 새로운 KIS 인증 호출이나 LLM 호출은 하지 않았다.
 
 현재 `current_indices`는 같은 응답의 양수 지수·유효 등락률·원천시각/수신시각과 장중5분 이내 조건을 요구한다. 기존2분 모니터의 `fetch_index_price`는 가격/등락률을 같은 output에서 읽지만 원천시각이 없다. 따라서13:10 생략은 전송 장애가 아니다. 최근 수신시각을 거래소 시각으로 바꾸면 이 문제를 숨기게 된다. 장후 minute 경로는 날짜/시각이 있는 output2 가격만 읽으며, output1의 시각 없는 등락률을 붙이지 않는다.
 

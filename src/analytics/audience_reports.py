@@ -85,6 +85,31 @@ def indicative_indices(snapshot: MarketSnapshot, now: datetime):
     return result
 
 
+def _midday_provider_references(snapshot: MarketSnapshot, now: datetime):
+    """Use recent KIS receipts only as provider references, not source freshness."""
+    if now.weekday() >= 5 or not (9 * 60 <= now.hour * 60 + now.minute < 15 * 60 + 30):
+        return []
+    rows = [row for row in snapshot.indices if isinstance(row, dict)]
+    groups = {label: [row for row in rows if row.get("label") == label]
+              for label in ("KOSPI", "KOSDAQ")}
+    result = []
+    for label, group in groups.items():
+        if not group or any(row != group[0] for row in group[1:]):
+            continue
+        row = group[0]
+        if row.get("source") != "kis":
+            continue
+        if "source_observed_at" not in row or row["source_observed_at"] is not None:
+            continue
+        price, pct = number(row.get("price")), number(row.get("change_pct"))
+        received = timestamp(row.get("received_at"))
+        if (price is None or price <= 0 or pct is None or not received
+                or received.date() != now.date() or not 0 <= (now - received).total_seconds() <= 300):
+            continue
+        result.append((label, price, pct, received))
+    return result
+
+
 def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> str | None:
     """No bot/account argument. Missing source time is never filled from receipt."""
     now = now.astimezone(KST)
@@ -92,7 +117,8 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     if kind not in labels:
         raise ValueError("unknown market slot")
     indices = current_indices(snapshot, now, midday=kind == "midday")
-    if kind == "midday" and not indices:
+    references = _midday_provider_references(snapshot, now) if kind == "midday" and not indices else []
+    if kind == "midday" and not indices and not references:
         return None
     lines = [f"🇰🇷 <b>한국시장 · {labels[kind]}</b>", f"{now:%m/%d %H:%M} KST", ""]
     if indices:
@@ -101,6 +127,13 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         lines.extend([f"<b>핵심</b> 확인된 지수 {len(indices)}개는 {direction} 흐름입니다.", "전체 시장 폭·수급과는 구분해 보세요.", "", "<b>국내 지수 · 전일 종가 대비</b>"])
         for row, price, pct, observed in indices[:2]:
             lines.append(f"• {_text(row.get('label'), 20)} {price:,.2f} ({pct:+.2f}%) · {observed:%m/%d %H:%M}")
+
+    if references:
+        lines += ["<b>핵심</b> 검증된 시장 방향 자료는 미확보입니다.",
+                  "", "<b>KIS 응답 참고 · 제공기관 대비율</b>"]
+        lines += [f"• {label} {price:,.2f} ({pct:+.2f}%) · 수신 {received:%H:%M} KST"
+                  for label, price, pct, received in references]
+        lines += ["원천시각 미제공 · 전일 기준 거래일 미확인"]
 
     observations = indicative_indices(snapshot, now) if kind == "after" and not indices else []
     if observations:
@@ -121,7 +154,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         selected = sectors[:2] + (sectors[-2:] if len(sectors) > 3 else sectors[2:])
         for row, pct in selected:
             lines.append(f"• {_text(row.get('name'), 24)} {pct:+.2f}%")
-        if not indices and not observations:
+        if not indices and not observations and not references:
             lines[3:3] = ["<b>핵심</b> 국내 섹터 ETF의 확인된 최근 움직임부터 살펴봅니다.", "당일 시장 전체 방향은 지수·수급 확인 뒤 판단하세요."]
 
     us = []
@@ -135,9 +168,12 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
             if not indices and not sectors:
                 lines += ["<b>핵심</b> 밤사이 확인된 미국 지수 변화입니다.", "한국 시가·섹터 강세를 예측하는 수치는 아닙니다."]
             lines += ["", f"<b>국내 개장 전 참고 · 미국 {snapshot.us_basis_date}</b>", *us]
-    if not indices and not observations and not sectors and not us:
+    if not indices and not observations and not references and not sectors and not us:
         return None
-    lines += ["", "<b>다음 확인</b>", "• 지수 방향이 개별 종목 거래대금·수급과 함께 이어지는지 확인", "• 반도체 대형주와 그 외 업종의 움직임을 나눠 확인", "", "자료 범위: 확인 시점이 있는 값만 표시. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 지수 / 한국 상장 ETF 일봉 / Yahoo 미국 지수 중 표시 자료"]
+    if references:
+        lines += ["", "<b>다음 확인</b>", "• 원천시각과 전일 기준 거래일을 확인", "• 개별 종목 거래대금·수급과 업종 움직임을 나눠 확인", "", "자료 범위: 지수는 수신시각 기준 참고값. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 응답 / 한국 상장 ETF 일봉 중 표시 자료"]
+    else:
+        lines += ["", "<b>다음 확인</b>", "• 지수 방향이 개별 종목 거래대금·수급과 함께 이어지는지 확인", "• 반도체 대형주와 그 외 업종의 움직임을 나눠 확인", "", "자료 범위: 확인 시점이 있는 값만 표시. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 지수 / 한국 상장 ETF 일봉 / Yahoo 미국 지수 중 표시 자료"]
     return "\n".join(lines)
 
 
@@ -152,7 +188,7 @@ def render_engine_digest(records: list[dict], context: str, now: datetime, *, de
     lines = [f"⚙️ <b>엔진 {'주간·일일' if weekly else '일일'} 요약</b>", f"{now:%m/%d %H:%M} KST", "", "<b>현재 대응</b>"]
     lines.extend(_excerpt(line, 100) for line in context.splitlines()[:3])
     if deliveries:
-        status_labels = {"attempted": "처리 중단·결과 미확인", "unknown": "접수 여부 미확인", "rejected": "발송 거절", "failed_validation": "본문 검증 실패", "failed_configuration": "발송 설정 누락", "skipped_missing_current_market_basis": "장중 원천시각 미확보", "skipped_missing_market_basis": "시장 기준자료 미확보"}
+        status_labels = {"attempted": "처리 중단·결과 미확인", "unknown": "접수 여부 미확인", "rejected": "발송 거절", "failed_validation": "본문 검증 실패", "failed_configuration": "발송 설정 누락", "skipped_missing_current_market_basis": "장중 유효 지수·참고자료 미확보", "skipped_missing_market_basis": "시장 기준자료 미확보"}
         slot_labels = {"morning": "장전", "midday": "장중", "after": "장후", "daily": "개인 요약"}
         lines += ["", "<b>보고 상태 · 최근 2일</b>"]
         for row in deliveries[:4]:
