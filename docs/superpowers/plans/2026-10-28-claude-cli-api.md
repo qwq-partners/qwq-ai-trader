@@ -34,9 +34,9 @@
 **Files:** 새 `src/utils/claude_transport.py`, `tests/test_claude_transport.py`.
 **Interfaces:** `ClaudeCLIClient(config)`와 `AnthropicAPIClient(config)`는 `provider=LLMProvider.ANTHROPIC`, `transport`와 `billing_channel`을 가진다. `async complete(prompt, system='', *, model, max_tokens=400, reasoning_effort='low', deadline=None, **kwargs) -> LLMResponse`, `async close()`를 제공한다. llm 모듈의 타입을 사용하되 manager는 client를 생성 시 지연 import해 순환을 피한다. `_session`은 API 테스트용 기존 HTTP 주입 패턴을 따른다. 각 client는 한 전송만 담당하며 fallback/예산을 소유하지 않는다. 취소 예외에는 해당 전송의 `_llm_response`를 붙인다.
 
-- [ ] argv/env·terminal/identity·usage/cache·무송신/timeout/cancel·실제 자식 회수·HTTP 오류/미확인 사용량/키파일 보호 RED.
-- [ ] 위 경계 구현; API `output_config.effort=low`, `thinking.type=disabled`, 명시 max_tokens. 성공은 정확한 모델·end_turn·비어 있지 않은 text뿐.
-- [ ] 관련 격리 검사·보고·독립 검토.
+- [x] argv/env·terminal/identity·usage/cache·무송신/timeout/cancel·실제 자식 회수·HTTP 오류/미확인 사용량/키파일 보호 RED.
+- [x] 위 경계 구현; API `output_config.effort=low`, `thinking.type=adaptive` (실제400/공식 모델 계약으로 정정), 명시 max_tokens. 성공은 정확한 모델·end_turn·비어 있지 않은 text뿐.
+- [x] 관련 격리 검사·보고·독립 검토.
 
 ### Task 2: manager 순차 라우팅·비용 분리
 
@@ -44,25 +44,43 @@
 **Interfaces:** ANTHROPIC complete_with에서만 CLI→API, `call_timeout_seconds` 기본12·상한20. CLI최대min(8,total/2), API실제남은시한, 각 `_complete_attempt` 독립 lifecycle·trail. API는 기존예산게이트를 통과해야 하며 CLI는 API예산 소진과 독립이다. CLI의 billing channel은 client identity에서 정하며 응답이 임의로 비용 면제를 지정할 수 없다. Claude config keyfile 기본은 환경변수 또는 `~/.config/qwq-ai-trader/anthropic-api-key`(지연 읽기), API 직접key는 repr 제외. 모델명/CLI enable 값은 엄격히 검증한다.
 
 - [x] 공통 필드/정확한 provider/API 가격상한 RED4→GREEN4, commit765594bf. API가격은Opus 입력4/출력20달러/MTok; 예산 견적은1시간 캐시 쓰기 상한입력8을 보수적으로 사용한다.
-- [ ] CLI 성공 API0·CLI가용성실패 API1·API예산부족0·거절/불일치0·취소/정산·구독비용null·기간합산 RED→GREEN.
-- [ ] from_env/config와 두 공급자 가정 제거, 종료·감사·판단 기록 연결. 기존 OpenAI/Gemini 역사/한도 검사 유지.
+- [x] CLI 성공 API0·CLI가용성실패 API1·API예산부족0·거절/불일치0·취소/정산·구독비용null·기간합산 RED→GREEN.
+- [x] from_env/config와 두 공급자 가정 제거, 종료·감사·판단 기록 연결. 기존 OpenAI/Gemini 역사/한도 검사 유지.
 
 ### Task 3: 두 Bear·판단 보류·재현성 원장
 
 **Files:** `src/agents/researchers.py`, `src/agents/reproducibility.py`, `src/core/adversarial_validator.py`, `src/core/cross_validator.py`, 관련 테스트.
 **Interfaces:** 두 Bear는 ANTHROPIC/low·retry_on_empty0·call_timeout_seconds=외부시한-0.5를 사용한다. 실제 response의 transport/billing_channel/attempt_trail/resolved_model을 원장에 보존한다. timeout에서도 완료한 sibling/취소된 호출의 trail을 기록한다. 새로운 Claude 경로에서 독립 검토 실패를 `independent_review_status=unavailable`로 명시하고 approved=False/failed=False로 단독 GPT fallback을 막는다. 기존 manager없는/레짐·점수 부적격 경로는 유지한다. 실 manager의 Claude 요구는 한도 소진에도 보류하며 legacy fake의 예산 단독 계약과 구분한다.
 
-- [ ] Bull/Bear실패·일일한도·구독/API두시도·timeout sibling 보존·불명/거절 회귀 RED→GREEN.
-- [ ] 둘 다 유효할 때만 판정 사용, 과거 원장 하위호환 유지.
+- [x] Bull/Bear실패·일일한도·구독/API두시도·timeout sibling 보존·불명/거절 회귀 RED→GREEN.
+- [x] 둘 다 유효할 때만 판정 사용, 과거 원장 하위호환 유지.
 
 ### Task 4: 통합·실측·기록
 
-- [ ] 관련/전체 verify·비밀 검사·독립 중요 리뷰·최종 CI·PR 통합.
-- [ ] 외부 실제 연결은 짧은 합성자료만 사용하고 시각/모델/시간/토큰/과금 의미를 비공개 영수증에 기록한다. 일반 테스트와 구분한다.
-- [ ] 원장·CHANGELOG·CLAUDE/연동 문서에 선택·구현·검증·실측·운영을 분리. 고정 SHA 적용은 별도 운영 단계다.
+- [x] 관련266검사·문법723파일·비밀 검사·독립 중요 리뷰(최종source0e6b36d0 승인). 최종 전체CI/병합은 [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284)의 HEAD별 check·완료 영수증을 따른다. 초기 로컬 전체 실패와 최종CI 성공을 혼동하지 않는다.
+- [x] 외부 실제 연결은 짧은 합성자료만 사용하고 시각/모델/시간/토큰/과금 의미를 비공개 영수증에 기록한다. 일반 테스트와 구분한다.
+- [x] 원장·CHANGELOG·CLAUDE/연동 문서에 선택·구현·검증·실측·운영을 분리. 고정 SHA 적용은 별도 운영 단계다.
 
 ## 초기 확인
 
 - API 모델 목록GET200, 목록에정확한Opus5.5 확인. 생성/매매 요청이 아니다.
 - 로그인CLI2.1.310의 합성1turn: 실제Opus5.5/도구0/MCP0/apiKeySource none,4.524초. 표시list cost0.004808달러는 실제 추가 청구가 아니다. 대표 거래지연/성능 근거로 일반화하지 않는다.
 - [공식 API](https://platform.claude.com/docs/en/api/messages/create), [effort](https://platform.claude.com/docs/en/build-with-claude/effort), [가격](https://platform.claude.com/docs/en/about-claude/pricing), [CLI](https://code.claude.com/docs/en/headless), [출력/재시도 환경변수](https://code.claude.com/docs/ko/env-vars).
+
+
+## 실제 연결 보완·후속 검증
+
+- CLI 두 번째 제어:3.440초·정확한Opus5.5·assistant stop_reason=null·delta/terminal=end_turn. 실제 형식에 맞춰 파서를 검증했다. 요청 옵션은 low·출력400·CLI내부재시도0이며 실효 추론 설정은 별도 미노출이다.
+- API 최초2회는HTTP400/invalid_request_error였다. `thinking.disabled` 미지원이 원인이며 [Opus5.5 공식 마이그레이션](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide)에 맞춰 adaptive/low로 정정했다. 동일 입력을 새 지원 계약으로 호출해HTTP200·정확한모델·end_turn·입력47/출력8·1.053초를 확인했다. API 예산 원장에 실제 예약/정산했고 보수적 요율 추정액은USD0.000536이다. 청구서 확정액이 아니며 이전400의 금액 미확인 기록은 보존한다.
+- CLI와API의 단순 제어 성공은 대표 거래판단 정확도/지연/순수익을 증명하지 않는다. 전체12초/20초·출력400은 그대로이며 잘린/시간초과응답은 승인이 아니다.
+- 독립Astra/xhigh 소스 리뷰에서 과다stdout의 파이프 backpressure 때문에 자식 회수가 멈추는P1을 재현했다. 16MiB stdout/stderr ×상한/timeout/취소6사례를 재현해 kill 뒤 pipe drain과 회수를 결합했다. 다른P1인 연구R1의 거절/모델·정책 위반 뒤 R2 재시도도 양측 원장 보존 후 중단하도록 수정했다. 독립 재현2건·관련132검사·격리0으로 재승인받았다. 최종 전체/CI 결과는 실행 원장을 따른다.
+
+- 실제 manager CLI 첫 시험은 init의 내장플러그인3개 때문에 정책 검사를 통과하지 못했다. [공식 built-in mods 설명](https://code.claude.com/docs/en/plugins/mods/overview)과 설치된2.1.310 help로 safe mode의 범위를 대조했다. `--settings`로 agents-md/telemetry/plugin-authoring 세 항목만 해당 호출에서 false로 지정하고, tools/MCP/skills/plugins빈값·구독인증·권한 검사는 유지한다. 관리자 보안 플러그인이나 사용자 전역 설정은 변경하지 않았다. RED1→관련128검사·독립추가3검사·격리0; 최종source `f7deacd7` 독립 승인(P0/P1/P2미해결0).
+- 수정 후 실제 manager→CLI→파서→시도 원장 제어는3.997초·정확한Opus5.5/end_turn·1시도/API0으로 완료했다. 입력584(캐시포함)/출력8·listestimateUSD0.004824·실제 추가 청구액null이다. 원본/실측은 비공개0600 receipt로 보관한다.
+- 코디네이터와 구현자요청모델 Astra/high, 독립리뷰 Astra/xhigh. native실제모델/실효effort metadata는미노출이며 교차공급자검토로 표기하지 않는다. 실제CLI연결시험의 응답모델확인과 개발리뷰모델확인은별개다.
+
+- 초기 전체 로컬 검사는30failed/9,381passed/2skipped/2xfailed·격리0으로 실패했다. 현재 Claude 제어값을 과거 Gemini 비교 시험이 동적으로 읽던29회귀를 당시 literal 계약으로 분리했다. 실제 현재 Claude 계약은 옛 manifest에서 거부해야 한다는 음성 검사와 합성 전용 dryrun 표기를 추가했다. heartbeat1건은 단독/관련24검사에서 재현되지 않아 최종 전체CI 결과까지 보류한다. 실패 실행을 전체 통과로 표기하지 않는다.
+
+- 최종 비교/heartbeat/Claude 관련 통합266검사:27.53초·exit0·운영 상태/외부 네트워크 접근0. fixture 작성자는요청Terra/high(실제metadata미노출)이며 드라이런 도구는 coordinator가 정비했다. 전체CI/PR 통합은 해당 PR의 정확한HEAD·실행결과를 확인한 후 기록한다.
+
+- 마지막 소스0e6b36d0 추가 독립 검토46passed/14.82초·격리0·P0/P1/P2없음, APPROVE. 최종 전체CI·병합 결과는 [PR #284](https://github.com/qwq-partners/qwq-ai-trader/pull/284)의 정확한HEAD와 완료 코멘트에 기록하며 verify 성공·MERGED 이후 NEXT는 운영 적용/인수다. 이 구현 문서의 완료는 운영 전환을 뜻하지 않는다.
