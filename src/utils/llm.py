@@ -39,6 +39,7 @@ class LLMProvider(str, Enum):
     """LLM 제공자"""
     OPENAI = "openai"
     GEMINI = "gemini"
+    ANTHROPIC = "anthropic"
 
 
 # Manus로 보내도 되는 태스크 (2026-08-03 Codex용 추가 → 2026-08-05 Manus 전환)
@@ -71,6 +72,11 @@ class LLMConfig:
     """LLM 설정"""
     openai_api_key: str = ""
     gemini_api_key: str = ""  # Deprecated, ignored by the disabled client.
+    anthropic_api_key: str = field(default="", repr=False)
+    anthropic_api_key_file: str = ""
+    claude_model: str = "claude-opus-5-5"
+    claude_cli_enabled: bool = True
+    claude_cli_command: str = "claude"
 
     # 모델 선택
     # Heavy: 깊은 분석, 거래 복기에 사용 (GPT-5.4 최신 모델)
@@ -253,6 +259,11 @@ class LLMResponse:
     uncertain_cost_ceiling_usd: Optional[float] = None  # Durable hold, never actual spend.
     missing_cost_policy: str = "block"
     cost_accounting_skipped: bool = False
+    transport: Optional[str] = None
+    billing_channel: str = "api"
+    model_identity_status: Optional[str] = None
+    subscription_estimated_cost_usd: Optional[float] = None
+    actual_incremental_cost_usd: Optional[float] = None
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
