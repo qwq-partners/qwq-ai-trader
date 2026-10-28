@@ -83,7 +83,8 @@ def summarize_roles(rows, now):
                     and r.get('refusal_detected') is False
                     and r.get('role_policy_version') == 'engine-roles-v2-openai'
                     and r.get('requested_model') == 'gpt-5-mini'
-                    and r.get('resolved_model') in RECOGNIZED_OPENAI_MODELS
+                    and isinstance(r.get('resolved_model'), str)
+                    and r['resolved_model'] in RECOGNIZED_OPENAI_MODELS
                     and r.get('requested_reasoning_effort') == 'minimal' and r.get('outcome') == 'success'
                     and r.get('usage_known') is True and r.get('finish_reason') == 'stop'
                     and all(finite(r.get(k)) for k in ('input_tokens', 'output_tokens', 'elapsed_ms', 'estimated_cost_usd'))]

@@ -57,6 +57,13 @@ def test_resolved_model_must_exactly_match_recognized_v2_openai_id(resolved_mode
     assert result['morning_brief']['status'] == 'review_required'
 
 
+@pytest.mark.parametrize('resolved_model', [[], {}])
+def test_non_string_resolved_model_requires_review_without_crashing(resolved_model):
+    a = api()
+    result = a.summarize_roles([row(resolved_model=resolved_model)], datetime.fromisoformat('2026-10-16T07:35:00+09:00'))
+    assert result['morning_brief']['status'] == 'review_required'
+
+
 def test_recognized_v2_openai_snapshot_id_satisfies_audit():
     a = api()
     result = a.summarize_roles([row(resolved_model='gpt-5-mini-2025-08-07')],
