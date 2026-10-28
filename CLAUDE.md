@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **10/29 현재:** [R02 운영 인수·도래 판독·NEXT](docs/operations/execution-roadmap.md#r02-live-followthrough-20261029). PR #293 고정`9a193331`·00:28:45/PID3761592 배포,169초/20항목·보호48파일/cron 보존을 확인했다. 10/28 장후/개인 API수락·T04 후보0·기존22시자료 포함 판독 DONE. E04-NEWS-DEDUP은 빈 유사도cache/오래된 반환값 결함을 수정하고 관련104/전체9,675검사·독립 중요 리뷰를 통과했다. 최종CI/새 운영 적용은 원장에 연결할 PR 영수증을 따른다. 실제 비용 절감/순수익·Claude 자연 호출·새13:10/모바일은 별도다. 아래 준비/운영 버전은 당시 이력이다.
+> **10/29 현재:** [단일 작업 원장](docs/operations/execution-roadmap.md#e04-news-dedup-20261029). RR 자료 판독 준비·R02 장중 참고란·E04-NEWS-DEDUP 구현/검증/독립 리뷰/운영 인수 DONE. 운영 고정 `9c187307`·PID3771021, 10/29 01:36:10 KST 인수·164.6초/20항목 전부PASS. 운영 전체9,675passed·2skipped·2xfailed/783.28초, 보호48파일/cron 동일·복구ready·미체결0·NRestarts0·시작 오류0. 매수 중지·월USD100/log_and_continue·GPT/Claude 계약 유지. [PR #294 운영 완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/294#issuecomment-6474809303). NEXT는 10/29 13:10/21시 자연 보고, 유효 신호 시 RR 판독·해당 Claude 자연 호출 기록이 생기면 경로 인수,10/30 16:06 T04 종료·기존 O02 기한이다. 실제 비용 절감/신규 거래 순수익은 미측정이다. 문서 마감을 위한 재배포는 하지 않으며 아래 과거 운영 버전은 당시 이력이다.
 
 > **현재 작업:** [R02 장중 참고란·실자료 판독 준비 통합](docs/operations/execution-roadmap.md#r02-indicative-20261028). PR #292의 자료 추출/첫 판독은 재사용하고, 최근 KIS 응답을 원천시각/전일 기준 미확인 참고란으로 연결한다. 사용자 운영배포 승인으로 검증·독립 리뷰·고정SHA 인수를 진행한다. 작성 시 운영은 `fcb3a71e`이며 최종 적용/다음 작업은 원장과 PR 완료 영수증을 따른다. 아래 미배포·NEXT는 각 시점 이력이다.
 
