@@ -458,7 +458,7 @@ class AnthropicAPIClient(_Client):
                 session = await self._get_session()
                 body = {"model": model, "max_tokens": max_tokens,
                         "messages": [{"role": "user", "content": prompt}],
-                        "output_config": {"effort": reasoning_effort}, "thinking": {"type": "disabled"}}
+                        "output_config": {"effort": reasoning_effort}, "thinking": {"type": "adaptive"}}
                 if system:
                     body["system"] = system
                 response.request_sent = True

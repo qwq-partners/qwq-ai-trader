@@ -252,7 +252,7 @@ async def test_api_request_and_cache_usage(transport):
     assert len(client._session.calls) == 1 and url == "https://api.anthropic.com/v1/messages"
     assert request["json"] == {"model": MODEL, "max_tokens": 400, "system": "rules",
         "messages": [{"role": "user", "content": "question"}],
-        "output_config": {"effort": "low"}, "thinking": {"type": "disabled"}}
+        "output_config": {"effort": "low"}, "thinking": {"type": "adaptive"}}
     assert request["headers"]["x-api-key"] == "synthetic-key"
     assert request["allow_redirects"] is False
     await client.close()
