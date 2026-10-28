@@ -525,3 +525,49 @@ async def test_cli_stop_and_permissions_must_be_consistent(transport, tmp_path, 
     assert not response.success
     assert response.transport_error_kind == ("policy_violation" if mode == "denied_tool" else "cli_incomplete")
     assert response.usage_known and response.input_tokens == 602
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("mode", ["cap", "timeout", "cancel"])
+async def test_cli_flooded_pipe_cleanup_finishes_and_reaps(transport, tmp_path, monkeypatch, stream, mode):
+    config, observed = fake_cli(tmp_path, delay=30, extra=(
+        f"sys.{stream}.buffer.write(b'x' * (16 * 1024 * 1024)); sys.{stream}.flush()"))
+    client = transport.ClaudeCLIClient(config)
+    real_spawn = asyncio.create_subprocess_exec
+    children = []
+
+    async def track_spawn(*args, **kwargs):
+        proc = await real_spawn(*args, **kwargs)
+        children.append(proc)
+        return proc
+
+    monkeypatch.setattr(transport.asyncio, "create_subprocess_exec", track_spawn)
+    if mode != "cap":
+        # 파이프가 실제 pause 상태일 때 timeout/cancel 경로를 검사한다.
+        async def stalled_reader(*args):
+            await asyncio.Event().wait()
+        monkeypatch.setattr(client, "_read", stalled_reader)
+    task = asyncio.create_task(client.complete("q", model=MODEL, deadline=deadline(.4)))
+    if mode == "cancel":
+        for _ in range(100):
+            if children and getattr(children[0], stream)._transport.is_reading() is False:
+                break
+            await asyncio.sleep(.002)
+        else:
+            pytest.fail("synthetic child pipe did not enter paused state")
+        task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=1.0)
+    completed = bool(done)
+    if not completed:
+        # RED 실행도 자식/파이프를 방치하지 않도록 테스트 자체가 구조한다.
+        for proc in children:
+            for pipe in (proc.stdout, proc.stderr):
+                pipe._transport.close()
+    result = (await asyncio.gather(task, return_exceptions=True))[0]
+    assert completed, "flooded pipe prevented cleanup/reaping beyond the total deadline"
+    if mode == "cancel":
+        assert isinstance(result, asyncio.CancelledError)
+    else:
+        assert result.transport_error_kind == ("cli_incomplete" if mode == "cap" else "cli_timeout")
+    assert_reaped(json.loads(observed.read_text())["pid"])

@@ -223,9 +223,19 @@ class ClaudeCLIClient(_Client):
         for task in io_tasks:
             if not task.done():
                 task.cancel()
-        await proc.wait()
         if io_tasks:
             await asyncio.gather(*io_tasks, return_exceptions=True)
+        if proc.stdin is not None:
+            proc.stdin.close()
+
+        async def discard(stream):
+            # 상한 초과로 reader가 끝나면 asyncio 파이프는 pause 상태일 수 있다.
+            # kill 이후 남은 바이트를 저장 없이 소비해 EOF/transport 종료를 진행한다.
+            if stream is not None:
+                while await stream.read(65536):
+                    pass
+
+        await asyncio.gather(discard(proc.stdout), discard(proc.stderr), proc.wait())
 
     async def _run(self, data, response, model, effort, max_tokens):
         proc = None
