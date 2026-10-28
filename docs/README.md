@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-> **현재 우선 작업:** [선정/현재 조건 비교·실자료 첫 판독](operations/execution-roadmap.md#e02-rr-compare-20261028). PR #291 운영 인수는 완료했으며 새 오프라인 비교의 검증 상태와 NEXT는 이 원장 절을 따른다.
+> **현재 우선 작업:** [선정/현재 조건 비교·실자료 첫 판독](operations/execution-roadmap.md#e02-rr-compare-20261028). PR #291 운영 인수는 완료했으며 새 오프라인 비교는 전체9,618검사·독립 리뷰를 완료했다. 최종 통합과 NEXT는 이 원장 절 및 PR #292 영수증을 따른다.
 
 > **현재 우선 작업:** [RR 배포 복구](operations/execution-roadmap.md#e02-rr-deploy-recovery-20261028). 소스 PR #290 완료와 운영 롤백을 구분한다. 테스트 보완·로컬9,601검사·독립 리뷰 완료. 최종 운영 인수는 [PR #291](https://github.com/qwq-partners/qwq-ai-trader/pull/291) 완료 영수증으로 확인한다.
 

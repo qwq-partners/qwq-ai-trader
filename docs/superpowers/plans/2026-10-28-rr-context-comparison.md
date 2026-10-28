@@ -33,7 +33,7 @@
 - [x] 구현: selection_observed 원형 필드, current_reference, 각 quantity lane의 selected_prices/current_prices 계산과 사유를 반환한다. 원래 gate 진단·가격 변화율·입력/기록 출처·범위 제한·분모를 포함한다. 원문 metadata 전체를 출력하지 않는다. 기존 `copy_rr_selection`과 `compare_order_rr`를 재사용하되 실제 필드의 제약을 소스와 대조한다.
 - [x] 경계: missing/0/conflicting quantities, identity/source/version conflict, unsupported/legacy/SELL, fee0/unknown, 불완전 가격, Decimal28 대 snapshot128 범위, 반복 신호 행, empty list를 검증한다.
 - [x] CLI: 명시 파일만 읽고 중복 키/비유한수/과대 입력/읽는 중 변경을 거부한다. 입력 SHA256와 actual/synthetic 선언을 결과에 붙인다. 실패 rc2·짧은 분류 메시지이며 raw payload/비밀값을 포함하지 않는다. JSON/Markdown을 실제 subprocess로 검증한다.
-- [ ] 관련 검사/문법/diff → coordinator 전체 verify·비밀검사 → 독립 코드/계약 리뷰 → 통합.
+- [x] 관련 검사/문법/diff → coordinator 전체 verify·비밀검사 → 독립 코드/계약 리뷰 → 통합.
 
 ### Task 2: 실제 자료 추출·첫 판독 준비
 
@@ -46,7 +46,7 @@
 
 **Owner:** coordinator; 독립 source-only 분석 병행 가능. **Files:** 실행 원장의 R02 절과 관련 보고 설계 문서.
 - [x] 기존 지수 자료의 원천 날짜/시각·전일 비교·호출 부담을 검토하고 최소 입력 연결안을 설계한다. 이번 단계는 설계이며 매매 정책 변경이 아니다.
-- [ ] 독립 리뷰·전체 검사 근거, 실제 판독 한계, 운영fcb3a71e 유지·예약 보존, NEXT를 원장/CLAUDE/CHANGELOG/docs 인덱스에 반영한다.
+- [x] 독립 리뷰·전체 검사 근거, 실제 판독 한계, 운영fcb3a71e 유지·예약 보존, NEXT를 원장/CLAUDE/CHANGELOG/docs 인덱스에 반영한다.
 - [ ] commit/push/PR CI·병합을 완료한다. 오프라인 도구/문서만이면 운영 재시작·배포는 하지 않는다.
 
 ## Pre-flight / rulings
@@ -58,3 +58,7 @@
 | Task1 ↔ Task3 | 공유 제품 파일 없음. 원장/문서는 coordinator 단독 작성 |
 
 기존 상세 설계/사용자 실행 승인을 재사용한다. 새 매매정책이나 유료 비교 승인을 요청하는 작업이 아니다. 최종 리뷰는 구현자와 분리하고 완료 근거를 실행 원장에 남긴다.
+
+## 실행 결과
+
+Task1 관련147검사·전체9,618검사·격리0·독립 최종 APPROVE, P2 1건은 재현 후 수정·재리뷰로 닫았다. Task2 실자료0행/무비교 판독, Task3 R02설계/통합 문서 검토는 완료했다. 마지막 commit/push/CI/병합 항목은 [PR #292 최종 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/292)으로 닫으며 이 체크박스를 위한 별도 배포/상태 PR은 만들지 않는다. 운영fcb3a71e 유지, 새 유료 호출·재시작·예약·매매 변경0.
