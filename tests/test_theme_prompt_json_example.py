@@ -37,6 +37,7 @@ async def test_theme_prompt_example_is_valid_json_with_numeric_fields():
         assert set(theme) == {"theme", "news_count", "score", "reason", "stocks"}
         assert type(theme["news_count"]) is int and theme["news_count"] >= 2
         assert type(theme["score"]) in (int, float) and 0 <= theme["score"] <= 100
+        assert len(theme["reason"]) <= 20
         assert 1 <= len(theme["stocks"]) <= 5
         for stock in theme["stocks"]:
             assert set(stock) == {"symbol", "name", "impact", "direction"}
@@ -45,9 +46,11 @@ async def test_theme_prompt_example_is_valid_json_with_numeric_fields():
     for stock in payload["stock_impacts"]:
         assert set(stock) == {"symbol", "name", "impact", "direction", "catalyst_phase", "reason"}
         assert stock["catalyst_phase"] in {"rumor", "confirmed", "unknown"}
+        assert len(stock["reason"]) <= 30
         stocks.append(stock)
 
     for stock in stocks:
+        assert stock["symbol"] == ""
         impact = stock["impact"]
         assert type(impact) in (int, float) and -10 <= impact <= 10
         assert impact != 0

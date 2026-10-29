@@ -1159,14 +1159,14 @@ class ThemeDetector:
 {{
   "themes": [
     {{
-      "theme": "AI/반도체",
+      "theme": "위 목록의 테마명 그대로",
       "news_count": 2,
       "score": 50,
       "reason": "테마 선정 이유 예시",
       "stocks": [
         {{
-          "symbol": "000001",
-          "name": "예시 종목",
+          "symbol": "",
+          "name": "종목명",
           "impact": 6,
           "direction": "bullish"
         }}
@@ -1175,8 +1175,8 @@ class ThemeDetector:
   ],
   "stock_impacts": [
     {{
-      "symbol": "000002",
-      "name": "예시 종목",
+      "symbol": "",
+      "name": "종목명",
       "impact": -3,
       "direction": "bearish",
       "catalyst_phase": "unknown",
@@ -1186,7 +1186,7 @@ class ThemeDetector:
 }}
 
 규칙:
-위 값과 종목은 형식 예시일 뿐이며, 실제 값과 방향은 뉴스에 근거해 판단하세요.
+위 값과 종목명은 형식을 보여주는 자리표시자이며 기본 답변이 아닙니다. 실제 값과 방향은 뉴스에 근거해 판단하세요.
 news_count는 관련 뉴스 수, score는 0~100 사이의 테마 강도 점수입니다.
 symbol은 6자리 종목코드, name은 종목명입니다.
 reason은 테마에서 20자 이내, stock_impacts에서 30자 이내입니다.
@@ -1194,7 +1194,7 @@ reason은 테마에서 20자 이내, stock_impacts에서 30자 이내입니다.
 themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세요.
 1. themes: 최대 5개 테마, 뉴스 2개 이상인 테마만, 각 테마별 stocks는 최대 5개
 2. stock_impacts: 테마 무관하게 뉴스에 직접 언급된 개별 종목 (최대 10개)
-3. impact 스케일: -10(극단적 악재) ~ 0(무관) ~ +10(극단적 호재). 양수=bullish, 음수=bearish
+3. impact 스케일: -10(극단적 악재) ~ 0(무관) ~ 10(극단적 호재). 양수=bullish, 음수=bearish
 4. direction: impact 부호와 일치시킬 것 (양수→bullish, 음수→bearish)
 5. theme 필드는 반드시 위 허용 목록의 테마명을 정확히 사용
 6. symbol은 위 종목코드 힌트 참고, 모르면 빈 문자열
