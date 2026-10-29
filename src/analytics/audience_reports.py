@@ -1,6 +1,7 @@
 """Small audience-specific reports from existing, source-dated inputs only."""
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from html import escape, unescape
 import math
 import re
@@ -161,7 +162,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     lines = [f"🇰🇷 <b>{labels[kind]}</b>", f"{now:%m/%d %H:%M} KST", "", "<b>시장 판단</b>"]
     if indices:
         if kind == "morning":
-            lines.append(f"국내 지수 전 거래일 기준 {indices[0][3]:%Y-%m-%d} 관측입니다.")
+            lines.append(f"국내 지수 기준일 {indices[0][3]:%Y-%m-%d} 관측입니다.")
         if len(indices) == 1:
             row, _, pct, _ = indices[0]
             lines.append(f"확인된 지수 {_text(row.get('label'), 20)} {pct:+.2f}%입니다.")
@@ -173,7 +174,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         lines.append("시점이 확인된 지수 참고 가격입니다. 전일 대비 등락·시장 방향 판단자료는 미확보입니다.")
     elif us:
         if len(us) == 1:
-            lines.append(f"미국 {us[0][1]} {us[0][2]:+.2f}%가 관측됐습니다.")
+            lines.append(f"미국 {_text(us[0][1])} {us[0][2]:+.2f}%가 관측됐습니다.")
         else:
             lines.append(f"미국 관측 {len(us)}개 지수 {_direction([v[2] for v in us])}입니다.")
     else:
@@ -185,8 +186,8 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     if us:
         values = {symbol: pct for symbol, _, pct in us}
         if '^SOX' in values and '^IXIC' in values:
-            difference = values['^SOX'] - values['^IXIC']
-            if float(f"{abs(difference):.2f}") > 0:
+            difference = Decimal(f"{values['^SOX']:.2f}") - Decimal(f"{values['^IXIC']:.2f}")
+            if difference != 0:
                 relation = "웃돌아" if difference > 0 else "밑돌아"
                 lines.append(f"SOX는 나스닥 등락률을 {relation} {abs(difference):.2f}%p 차이를 보였습니다.")
     sources = []
@@ -211,7 +212,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         add_source('KIS/FHKUP03500200')
     if us:
         lines += ["", f"<b>주요 지표 · 미국 {snapshot.us_basis_date}</b>"]
-        lines += [f"• {label} {pct:+.2f}%" for _, label, pct in us]
+        lines += [f"• {_text(label)} {pct:+.2f}%" for _, label, pct in us]
         sources.append('Yahoo Finance')
     pair = len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}")
     sector_only_pair = pair and not (indices or references or observations or us)
@@ -228,7 +229,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         if any(symbol == '^SOX' for symbol, _, _ in us):
             lines.append("• 개장 후 삼성전자·SK하이닉스 방향이 SOX와 일치하는지 확인합니다.")
         elif us:
-            labels_us = '·'.join(label for _, label, _ in us)
+            labels_us = '·'.join(_text(label) for _, label, _ in us)
             lines.append(f"• 개장 후 코스피·코스닥과 {labels_us} 방향을 대조합니다.")
         else:
             lines.append("• 개장 후 코스피·코스닥의 방향을 확인합니다.")
