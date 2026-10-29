@@ -110,70 +110,119 @@ def _midday_provider_references(snapshot: MarketSnapshot, now: datetime):
     return result
 
 
+def _direction(values):
+    values = [float(f"{value:.2f}") for value in values]
+    if all(value > 0 for value in values):
+        return "동반 상승"
+    if all(value < 0 for value in values):
+        return "동반 하락"
+    return "혼조·보합"
+
+
+def _provider(source):
+    source = str(source)
+    if source.lower() == "kis" or source.upper().startswith(("KIS/", "KIS:")):
+        return "KIS"
+    return _text(source, 36) + " (제공처 미확인)"
+
+
 def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> str | None:
-    """No bot/account argument. Missing source time is never filled from receipt."""
+    """Describe only eligible displayed observations, without inferring missing data."""
     now = now.astimezone(KST)
-    labels = {"morning": "장전 체크", "midday": "장중 핵심 변화", "after": "장후 점검"}
+    labels = {"morning": "한국증시 모닝브리프", "midday": "한국증시 장중시황", "after": "한국증시 마감점검"}
     if kind not in labels:
         raise ValueError("unknown market slot")
-    indices = current_indices(snapshot, now, midday=kind == "midday")
+    indices = current_indices(snapshot, now, midday=kind == "midday")[:2]
     references = _midday_provider_references(snapshot, now) if kind == "midday" and not indices else []
     if kind == "midday" and not indices and not references:
         return None
-    lines = [f"🇰🇷 <b>한국시장 · {labels[kind]}</b>", f"{now:%m/%d %H:%M} KST", ""]
-    if indices:
-        positive = sum(pct > 0 for _, _, pct, _ in indices)
-        direction = "상승" if positive == len(indices) else "하락" if all(pct < 0 for _, _, pct, _ in indices) else "혼조·보합"
-        lines.extend([f"<b>핵심</b> 확인된 지수 {len(indices)}개는 {direction} 흐름입니다.", "전체 시장 폭·수급과는 구분해 보세요.", "", "<b>국내 지수 · 전일 종가 대비</b>"])
-        for row, price, pct, observed in indices[:2]:
-            lines.append(f"• {_text(row.get('label'), 20)} {price:,.2f} ({pct:+.2f}%) · {observed:%m/%d %H:%M}")
-
-    if references:
-        lines += ["<b>핵심</b> 검증된 시장 방향 자료는 미확보입니다.",
-                  "", "<b>KIS 응답 참고 · 제공기관 대비율</b>"]
-        lines += [f"• {label} {price:,.2f} ({pct:+.2f}%) · 수신 {received:%H:%M} KST"
-                  for label, price, pct, received in references]
-        lines += ["원천시각 미제공 · 전일 기준 거래일 미확인"]
-
     observations = indicative_indices(snapshot, now) if kind == "after" and not indices else []
-    if observations:
-        if not indices:
-            lines += ["<b>핵심</b> 시점이 확인된 지수 참고 가격입니다.", "전일 대비 등락·시장 방향 판단자료는 미확보입니다."]
-        lines += ["", "<b>국내 지수 · 분 단위 참고 관측</b>"]
-        lines += [f"• {label} {price:,.2f} · {observed:%m/%d %H:%M} KST" for label, price, observed in observations]
-        lines += ["확정 종가 아님 · 해당 분 관측값이며 봉 완료 여부 미확인"]
-
+    try:
+        basis = datetime.strptime(snapshot.kr_basis_date, "%Y-%m-%d").date()
+        valid_sector_date = basis.isoformat() == snapshot.kr_basis_date and basis <= now.date()
+    except (TypeError, ValueError):
+        valid_sector_date = False
     sectors = []
     for row in snapshot.sectors:
         pct = number(row.get("r1"))
-        if pct is not None and row.get("as_of") == snapshot.kr_basis_date and row.get("source") not in (None, "", "unknown"):
+        if valid_sector_date and pct is not None and row.get("as_of") == snapshot.kr_basis_date and row.get("source") not in (None, "", "unknown"):
             sectors.append((row, pct))
-    if sectors:
-        sectors.sort(key=lambda pair: pair[1], reverse=True)
-        lines.extend(["", f"<b>한국 상장 섹터 ETF · {snapshot.kr_basis_date}</b>", f"확인 {len(sectors)}개 중 최근 1세션 등락 (전체 업종 순위 아님)"])
-        selected = sectors[:2] + (sectors[-2:] if len(sectors) > 3 else sectors[2:])
-        for row, pct in selected:
-            lines.append(f"• {_text(row.get('name'), 24)} {pct:+.2f}%")
-        if not indices and not observations and not references:
-            lines[3:3] = ["<b>핵심</b> 국내 섹터 ETF의 확인된 최근 움직임부터 살펴봅니다.", "당일 시장 전체 방향은 지수·수급 확인 뒤 판단하세요."]
-
+    sectors.sort(key=lambda pair: pair[1], reverse=True)
+    selected = sectors[:2] + (sectors[-2:] if len(sectors) > 3 else sectors[2:])
     us = []
     if kind == "morning" and snapshot.us_basis_date:
         from .us_report_data import observe_us_quote
         for symbol, label in (("^GSPC", "S&P500"), ("^IXIC", "나스닥"), ("^SOX", "미 반도체 SOX")):
             value = observe_us_quote(snapshot.us_quotes.get(symbol), now=now)
             if value and (value.get("date") or "").replace(".", "-") == snapshot.us_basis_date:
-                us.append(f"• {label} {value['pct']:+.2f}%")
-        if us:
-            if not indices and not sectors:
-                lines += ["<b>핵심</b> 밤사이 확인된 미국 지수 변화입니다.", "한국 시가·섹터 강세를 예측하는 수치는 아닙니다."]
-            lines += ["", f"<b>국내 개장 전 참고 · 미국 {snapshot.us_basis_date}</b>", *us]
+                us.append((symbol, label, value['pct']))
     if not indices and not observations and not references and not sectors and not us:
         return None
-    if references:
-        lines += ["", "<b>다음 확인</b>", "• 원천시각과 전일 기준 거래일을 확인", "• 개별 종목 거래대금·수급과 업종 움직임을 나눠 확인", "", "자료 범위: 지수는 수신시각 기준 참고값. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 응답 / 한국 상장 ETF 일봉 중 표시 자료"]
+    lines = [f"🇰🇷 <b>{labels[kind]}</b>", f"{now:%m/%d %H:%M} KST", "", "<b>시장 판단</b>"]
+    if indices:
+        if len(indices) == 1:
+            row, _, pct, _ = indices[0]
+            lines.append(f"확인된 지수 {_text(row.get('label'), 20)} {pct:+.2f}%입니다.")
+        else:
+            lines.append(f"확인된 지수 {len(indices)}개는 {_direction([v[2] for v in indices])}입니다.")
+    elif references:
+        lines.append("검증된 시장 방향 자료는 미확보입니다.")
+    elif observations:
+        lines.append("시점이 확인된 지수 참고 가격입니다. 전일 대비 등락·시장 방향 판단자료는 미확보입니다.")
+    elif us:
+        if len(us) == 1:
+            lines.append(f"미국 {us[0][1]} {us[0][2]:+.2f}%가 관측됐습니다.")
+        else:
+            lines.append(f"미국 관측 {len(us)}개 지수 {_direction([v[2] for v in us])}입니다.")
     else:
-        lines += ["", "<b>다음 확인</b>", "• 지수 방향이 개별 종목 거래대금·수급과 함께 이어지는지 확인", "• 반도체 대형주와 그 외 업종의 움직임을 나눠 확인", "", "자료 범위: 확인 시점이 있는 값만 표시. 시장 전체 상승·하락 종목 수와 당일 누적 수급은 미확보.", "출처: KIS 지수 / 한국 상장 ETF 일봉 / Yahoo 미국 지수 중 표시 자료"]
+        lines.append("국내 섹터 ETF의 최근 1세션 관측 표본을 확인합니다.")
+    if us:
+        values = {symbol: pct for symbol, _, pct in us}
+        if '^SOX' in values and '^IXIC' in values:
+            difference = values['^SOX'] - values['^IXIC']
+            if float(f"{abs(difference):.2f}") > 0:
+                relation = "웃돌아" if difference > 0 else "밑돌아"
+                lines.append(f"SOX는 나스닥 등락률을 {relation} {abs(difference):.2f}%p 차이를 보였습니다.")
+    sources = []
+    def add_source(source):
+        provider = _provider(source)
+        if provider not in sources:
+            sources.append(provider)
+    if indices:
+        lines += ["", "<b>주요 지표 · 국내 지수 전일 종가 대비</b>"]
+        for row, price, pct, observed in indices:
+            lines.append(f"• {_text(row.get('label'), 20)} {price:,.2f} ({pct:+.2f}%) · {observed:%m/%d %H:%M}")
+            add_source(row['source'])
+    if references:
+        lines += ["", "<b>주요 지표 · KIS 응답 참고 · 제공기관 대비율</b>"]
+        lines += [f"• {label} {price:,.2f} ({pct:+.2f}%) · 수신 {received:%H:%M} KST" for label, price, pct, received in references]
+        lines += ["원천시각 미제공 · 전일 기준 거래일 미확인"]
+        add_source('kis')
+    if observations:
+        lines += ["", "<b>주요 지표 · 국내 지수 분 단위 참고 관측</b>"]
+        lines += [f"• {label} {price:,.2f} · {observed:%m/%d %H:%M} KST" for label, price, observed in observations]
+        lines += ["확정 종가 아님 · 해당 분 관측값이며 봉 완료 여부 미확인"]
+        add_source('KIS/FHKUP03500200')
+    if us:
+        lines += ["", f"<b>주요 지표 · 미국 {snapshot.us_basis_date}</b>"]
+        lines += [f"• {label} {pct:+.2f}%" for _, label, pct in us]
+        sources.append('Yahoo Finance')
+    if sectors:
+        lines += ["", f"<b>업종 흐름 · 한국 상장 섹터 ETF {snapshot.kr_basis_date}</b>", f"확인 {len(sectors)}개 중 최근 1세션 등락 (전체 업종 순위 아님)"]
+        if len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}"):
+            lines.append(f"관측 표본 상대 상위: {_text(sectors[0][0].get('name'), 24)} {sectors[0][1]:+.2f}%")
+        for row, pct in selected:
+            lines.append(f"• {_text(row.get('name'), 24)} {pct:+.2f}%")
+            add_source(row['source'])
+    watch = {
+        'morning': '개장 후 국내 지수와 반도체·다른 업종의 움직임이 이어지는지 확인합니다.',
+        'midday': '이후 국내 지수와 업종 움직임, 개별 종목 거래대금·수급을 함께 확인합니다.',
+        'after': '다음 거래일 국내 지수와 업종 움직임의 지속 여부를 확인합니다.',
+    }
+    lines += ["", "<b>국내 관전 포인트</b>", watch[kind]]
+    if references:
+        lines.append("원천시각과 전일 기준 거래일을 추가 확인합니다.")
+    lines += ["", "자료 범위: 표시된 관측 표본; 시장 전체 종목 수·당일 누적 수급은 미확보.", "출처: " + " / ".join(sources)]
     return "\n".join(lines)
 
 
