@@ -426,6 +426,10 @@ def _gemini_usage(data: dict, usage: dict) -> dict:
 def _extract_json(text: str) -> dict:
     """LLM 응답에서 JSON을 robust하게 추출"""
     text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
     # 1. 마크다운 코드 블록 처리
     if "```" in text:
         blocks = re.findall(r'```(?:json)?\s*([\s\S]*?)```', text)
