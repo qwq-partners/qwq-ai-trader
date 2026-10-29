@@ -20,7 +20,7 @@ def test_morning_uses_actual_us_quote_session_date():
     quote = {'price': 6000, 'change_pct': 1.25,
              'market_time': datetime(2026, 10, 26, 16, tzinfo=ZoneInfo('America/New_York')).timestamp()}
     text = render_market_report('morning', MarketSnapshot(us_quotes={'^GSPC': quote}, us_basis_date='2026-10-26'), now)
-    assert text and 'S&P500 +1.25%' in text
+    assert text and 'S&amp;P500 +1.25%' in text
     assert render_market_report('morning', MarketSnapshot(us_quotes={'^GSPC': quote}, us_basis_date='2026-10-23'), now) is None
 
 

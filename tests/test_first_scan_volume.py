@@ -186,7 +186,7 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_facto
         counts = Counter(r['kind'] for r in runtime.buffer._records)
         clock[0] = plan.end_at
         await runtime.close()
-        assert runtime.result['sealed']
+        assert runtime.result['sealed'], runtime.result
         observed = read_observation_journal(plan.settings['journal_path'], max_bytes=256 * 1024 * 1024,
                                              expected_study_sha256=plan.study_sha256)
         return plan, study, observed, retained, counts, runtime.buffer, clock[0]
