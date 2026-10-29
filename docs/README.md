@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-> **10/29 본문 개선 진행:** [R02 증권 리포트형 브리프](operations/execution-roadmap.md#r02-securities-brief-20261029). 장전·장중·장후를 핵심 판단·지표·업종·국내 관전 포인트로 재구성했다. 관련91검사·독립 실제 Claude Opus5.5 재리뷰 PASS, 전체검증·통합·배포 인수는 진행 중이다. 운영40714a19/PID3817842·기존 일정 유지, 다음 자연 보고의 모바일 내용 수락은 별도다. 최종 검증/운영 결과는 [PR #300](https://github.com/qwq-partners/qwq-ai-trader/pull/300) 완료 영수증을 따른다. 아래 상태는 당시 이력이다.
+> **10/29 21:50 현재:** [R02 증권 리포트형 브리프](operations/execution-roadmap.md#r02-securities-brief-20261029) 구현·검증·운영 인수 DONE. 고정e5f781d3/PID3846093·전체9,737검사·166.3초/24항목PASS·보호48파일/기존cron 보존·복구ready/미체결0/NRestarts0. [최종 운영 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/300#issuecomment-6497157250). NEXT는 새 본문 자연 발송/실제 모바일 내용 수락·10/30 T04 만료·기존 O02 기한이다. 원인 미확정 대량 기록 검사1회 실패는 진단 이력으로 보존하며 최종 로컬/PR/main/운영 검증은 통과했다. 문서 마감용 재배포는 없다. 아래 상태는 당시 이력이다.
 
 > **10/29 20:20 현재:** [단일 원장·장전 모바일 피드백](operations/execution-roadmap.md#r02-mobile-feedback-20261029). 고정40714a19의17시 운영배포/22인수는 DONE.07:40 실제 수신은 사용자 확인 완료, 내용·가독성은 미수락이다. 다음은 사실 요약·국내 개장 후 확인 조건·실제 표시 자료 출처의 본문 개선이며, 이번 문서는 구현/추가 배포 완료를 뜻하지 않는다.
 
