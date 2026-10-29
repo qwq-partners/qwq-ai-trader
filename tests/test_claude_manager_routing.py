@@ -65,6 +65,7 @@ async def test_api_fallback_is_separate_attempt_with_real_budget_reservation(tmp
     m = manager(tmp_path, reply(success=False, kind='cli_timeout'), reply(channel='subscription'))
     result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=400)
     assert result.success and len(m.anthropic.calls) == 1
+    assert m.anthropic.calls[0]['max_tokens'] == 400
     assert result.billing_channel == 'api' and result.transport == 'anthropic_messages'
     assert result.budget_reservation_token
     assert [r['transport'] for r in result.attempt_trail] == ['claude_cli','anthropic_messages']
@@ -187,4 +188,51 @@ async def test_subscription_quota_cooldown_preserves_api_fallback(tmp_path):
     m._claude_transport_cooldowns.clear()
     await m.complete_with('synthetic', LLMProvider.ANTHROPIC)
     assert len(m.claude_cli.calls) == 2
+    await m.close()
+
+@pytest.mark.asyncio
+async def test_team_api_cap_reaches_reservation_and_attempt_trail(tmp_path, monkeypatch):
+    failed = reply(success=False, kind='api_incomplete')
+    failed.finish_reason = 'max_tokens'
+    m = manager(tmp_path, reply(success=False, kind='cli_timeout'), failed)
+    reserved = []
+    reserve = m.monthly_budget.reserve
+    def capture(*args, **kwargs):
+        reserved.append(args[3])
+        return reserve(*args, **kwargs)
+    monkeypatch.setattr(m.monthly_budget, 'reserve', capture)
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC,
+                                   max_tokens=400, api_max_tokens=800)
+    assert m.claude_cli.calls[0]['max_tokens'] == 400
+    assert m.anthropic.calls[0]['max_tokens'] == 800
+    assert reserved == [800]
+    assert [row['requested_max_tokens'] for row in result.attempt_trail] == [400, 800]
+    assert result.attempt_trail[-1]['finish_reason'] == 'max_tokens'
+    await m.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cap', [True, False, 0, 801, 1.5, '800', None])
+async def test_invalid_api_cap_rejected_before_any_attempt(tmp_path, cap):
+    m = manager(tmp_path, reply(), reply())
+    with pytest.raises(ValueError):
+        await m.complete_with('synthetic', LLMProvider.ANTHROPIC, api_max_tokens=cap)
+    assert not m.claude_cli.calls and not m.anthropic.calls
+    await m.close()
+
+
+@pytest.mark.asyncio
+async def test_attempt_finish_reason_is_bounded(tmp_path):
+    failure = reply(success=False, kind='api_incomplete')
+    failure.finish_reason = 'untrusted free text'
+    m = manager(tmp_path, reply(success=False, kind='cli_timeout'), failure)
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC, api_max_tokens=800)
+    assert result.attempt_trail[-1]['finish_reason'] is None
+    await m.close()
+
+@pytest.mark.asyncio
+async def test_default_api_fallback_preserves_requested_cap(tmp_path):
+    m = manager(tmp_path, reply(success=False, kind='cli_timeout'), reply())
+    await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=123)
+    assert m.anthropic.calls[0]['max_tokens'] == 123
     await m.close()

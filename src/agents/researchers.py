@@ -210,7 +210,7 @@ class ResearchTeam:
             }
         failure_generation = self._provider_failures.get(provider_name, 0)
         if provider == LLMProvider.ANTHROPIC:
-            controls = {"reasoning_effort": "low",
+            controls = {"reasoning_effort": "low", "api_max_tokens": 800,
                         "call_timeout_seconds": max(0.001, ROUND_TIMEOUT - 0.5)}
         elif provider == LLMProvider.OPENAI:
             controls = {"reasoning_effort": REASONING_EFFORT, "seed": DEBATE_SEED}

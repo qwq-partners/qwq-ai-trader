@@ -90,6 +90,8 @@ async def test_both_bears_request_claude_with_bounded_low_effort():
     bears = [kwargs for provider, kwargs in manager.calls if provider == LLMProvider.ANTHROPIC]
     assert len(bears) == 2
     assert [call["call_timeout_seconds"] for call in bears] == [11.5, 19.5]
+    assert "api_max_tokens" not in bears[0]
+    assert bears[1]["api_max_tokens"] == 800
     for call in bears:
         assert call["reasoning_effort"] == "low" and call["retry_on_empty"] == 0
         assert call["max_tokens"] == 400
