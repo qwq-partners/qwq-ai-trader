@@ -144,7 +144,9 @@ class _FakeLLM:
         self._idx: Dict[LLMProvider, int] = {}
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
-                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None, call_timeout_seconds=None):
+                            reasoning_effort, retry_on_empty=0, seed=None, temperature=None, budget_priority=None,
+                            call_timeout_seconds=None, api_max_tokens=None):
+        assert api_max_tokens == (800 if provider == LLMProvider.ANTHROPIC else None)
         assert budget_priority == "essential"
         i = self._idx.get(provider, 0)
         items = self._script[provider]
