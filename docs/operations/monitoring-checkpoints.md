@@ -1,5 +1,7 @@
 # 모니터링 체크포인트
 
+> **10/29 마감:** [현재 원장](execution-roadmap.md#e04-team-cap-20261029).13:10 참고란 API수락/본문 DONE·모바일 WAIT. Claude 완료·JSON 보완/전체9,715검사/독립 리뷰 DONE, 소스 통합은[PR #297](https://github.com/qwq-partners/qwq-ai-trader/pull/297) 영수증을 따른다. 운영9c187307/PID3771021·배포 WAIT:16:45 이후16:40 보고 종료·Toss starts 미소비/helper 부재 확인. 소비 시10/30 승인 종료까지 보류.16시/16:40/21시·10/30 16:06 만료·retention 기한 유지; 새 자동 배포 예약 없음. 아래 과거 운영 상태는 당시 이력이다.
+
 > **10월28일 현재:** [통합 배포·다음 작업 원장](execution-roadmap.md#deploy-and-order-rr-20261028)을 따른다. 운영0b82af5d/PID3705216·기동 인수 완료이며 후속 오프라인 대조기는 별도다. 이 문서의 미래 점검 시각은 별도 AI 예약이 아니다.
 
 ## 10월28일 E04-D2 공급자 전환

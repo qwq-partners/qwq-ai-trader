@@ -744,3 +744,54 @@ async def test_unspecified_block_reason_does_not_prove_zero_generation(reason):
     from src.utils.llm import _gemini_usage
     payload = {'usageMetadata': {'promptTokenCount': 10}, 'promptFeedback': {'blockReason': reason}}
     assert not _gemini_usage(payload, payload['usageMetadata'])['usage_known']
+
+@pytest.mark.parametrize('value', [
+    {'x': '```ok```'},
+    {'x': '```null```'},
+    ['```null```', {'x': 'escaped "quote" and \\ slash ```ok```'}],
+])
+def test_valid_json_preserves_fences_inside_strings(value):
+    from src.utils.llm import _extract_json
+    assert _extract_json(json.dumps(value)) == value
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('```json\n{"x": 1}\n```', {'x': 1}),
+    ('```json\n[1, 2]\n```', [1, 2]),
+    ('Here is the result: {"x": 1}', {'x': 1}),
+    ('Result: [1, 2]', [1, 2]),
+    ('```json\n{"x": 1}\n``` then ```json\n{"x": 2}\n```', {'x': 1}),
+    ('null', None), ('42', 42), ('"value"', 'value'), ('false', False),
+])
+def test_json_fallback_and_scalar_contract(text, expected):
+    from src.utils.llm import _extract_json
+    assert _extract_json(text) == expected
+
+
+@pytest.mark.parametrize('text', ['', '{"x":', '{"x": 1} trailing',
+    '```json\nnot json\n``` then ```json\n{"x": 2}\n```'])
+def test_invalid_json_does_not_recover_or_skip_first_block(text):
+    from src.utils.llm import _extract_json
+    with pytest.raises(json.JSONDecodeError):
+        _extract_json(text)
+
+
+@pytest.mark.asyncio
+async def test_manager_valid_json_with_internal_fence_needs_one_request(tmp_path):
+    manager = LLMManager(LLMConfig(openai_api_key='synthetic'), audit_dir=tmp_path / 'audit')
+    manager._LLM_LOG_DIR = tmp_path / 'raw'
+    manager.openai._session = Session(openai_reply('{"x":"```null```"}'))
+    assert await manager.complete_json('prompt', task=LLMTask.MARKET_ANALYSIS) == {'x': '```null```'}
+    assert len(manager.openai._session.payloads) == 1
+    assert manager.daily_usage.input_tokens == 100
+    rows = [json.loads(line) for path in (tmp_path / 'audit').glob('*.jsonl')
+            for line in path.read_text().splitlines()]
+    assert [row['attempt_role'] for row in rows] == ['primary']
+
+
+@pytest.mark.asyncio
+async def test_direct_openai_json_with_internal_fence_needs_one_request():
+    client = OpenAIClient(LLMConfig(openai_api_key='synthetic'))
+    client._session = Session(openai_reply('{"x":"```ok```"}'))
+    assert await client.complete_json('prompt') == {'x': '```ok```'}
+    assert len(client._session.payloads) == 1

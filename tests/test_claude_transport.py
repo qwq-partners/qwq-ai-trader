@@ -614,3 +614,28 @@ async def test_cli_flooded_pipe_cleanup_finishes_and_reaps(transport, tmp_path, 
     else:
         assert result.transport_error_kind == ("cli_incomplete" if mode == "cap" else "cli_timeout")
     assert_reaped(json.loads(observed.read_text())["pid"])
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stop,content', [('max_tokens', [{'type': 'text', 'text': 'ACCEPT'}]),
+                                          ('end_turn', [])])
+async def test_api_800_incomplete_is_rejected_with_known_usage(transport, stop, content):
+    body = api_body()
+    body['stop_reason'], body['content'] = stop, content
+    body['usage']['output_tokens'] = 800
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key='synthetic'))
+    client._session = Session(body)
+    response = await client.complete('q', model=MODEL, max_tokens=800, deadline=deadline())
+    assert client._session.calls[0][1]['json']['max_tokens'] == 800
+    assert not response.success and response.content == ''
+    assert response.transport_error_kind == 'api_incomplete'
+    assert response.usage_known and response.output_tokens == 800
+    assert response.finish_reason == stop
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('cap', [True, 0, 801])
+async def test_api_output_cap_is_bounded(transport, cap):
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key='synthetic'))
+    client._session = Session()
+    response = await client.complete('q', model=MODEL, max_tokens=cap, deadline=deadline())
+    assert not response.success and not response.request_sent and not client._session.calls

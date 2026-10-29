@@ -281,6 +281,14 @@ class LLMResponse:
     model_identity_status: Optional[str] = None
     subscription_estimated_cost_usd: Optional[float] = None
     actual_incremental_cost_usd: Optional[float] = None
+    requested_max_tokens: Optional[int] = None
+
+
+_AUDIT_FINISH_REASONS = frozenset({
+    "end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal",
+    "stop", "length", "content_filter", "STOP", "MAX_TOKENS", "SAFETY",
+    "RECITATION", "OTHER",
+})
 
 
 def _billing_status(data: dict, status: int, usage_known: bool) -> str:
@@ -418,6 +426,10 @@ def _gemini_usage(data: dict, usage: dict) -> dict:
 def _extract_json(text: str) -> dict:
     """LLM 응답에서 JSON을 robust하게 추출"""
     text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
     # 1. 마크다운 코드 블록 처리
     if "```" in text:
         blocks = re.findall(r'```(?:json)?\s*([\s\S]*?)```', text)
@@ -1222,6 +1234,10 @@ class LLMManager:
 
     async def _complete_claude(self, prompt: str, system: str, **kwargs) -> LLMResponse:
         """One subscription attempt, then at most one separately admitted API call."""
+        has_api_cap = "api_max_tokens" in kwargs
+        api_cap = kwargs.pop("api_max_tokens", None)
+        if has_api_cap and (type(api_cap) is not int or not 1 <= api_cap <= 800):
+            raise ValueError("Claude api_max_tokens must be an integer from 1 to 800")
         total = kwargs.pop("call_timeout_seconds", 12.0)
         if (isinstance(total, bool) or not isinstance(total, (int, float))
                 or not math.isfinite(total) or not 0 < total <= 20):
@@ -1264,6 +1280,18 @@ class LLMManager:
         if cooldown is not None:
             self._account_attempt(cooldown, "complete_with", "fallback")
             return cooldown
+        # Without an explicit API-only cap, preserve the original 400-token
+        # transport boundary even when the CLI was skipped by configuration/cooldown.
+        base_cap = kwargs.get("max_tokens")
+        if not has_api_cap and type(base_cap) is int and base_cap > 400:
+            response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
+                                   error="invalid_request", requested_model=model,
+                                   requested_max_tokens=base_cap if base_cap <= 1000000 else None,
+                                   request_sent=False, usage_known=False, billing_status="not_sent",
+                                   transport_error_kind="invalid_request")
+            self._stamp_transport(response, self.anthropic)
+            self._account_attempt(response, "complete_with", "fallback")
+            return response
         if not self._check_budget():
             response = self._monthly_blocked_response(
                 LLMProvider.ANTHROPIC, model,
@@ -1272,9 +1300,12 @@ class LLMManager:
             self._account_attempt(response, "complete_with", "fallback")
             return response
         self.stats["fallback_count"] += 1
+        api_kwargs = dict(kwargs)
+        if has_api_cap:
+            api_kwargs["max_tokens"] = api_cap
         response = await self._complete_attempt(
             self.anthropic, prompt, system, model, "complete_with", "fallback",
-            _deadline=deadline, **kwargs)
+            _deadline=deadline, **api_kwargs)
         if not response.success and response.http_status in {401, 402, 403, 429}:
             self._claude_transport_cooldowns["anthropic_messages"] = (
                 loop.time() + 300.0, "transport_cooldown")
@@ -1335,6 +1366,10 @@ class LLMManager:
                 "task": task, "role": role,
                 "requested_model": response.requested_model if response.requested_model is not None else response.model,
                 "resolved_model": response.resolved_model,
+                "requested_max_tokens": response.requested_max_tokens,
+                "finish_reason": (response.finish_reason
+                                  if isinstance(response.finish_reason, str)
+                                  and response.finish_reason in _AUDIT_FINISH_REASONS else None),
                 "request_sent": response.request_sent, "success": response.success,
                 "billing_status": response.billing_status, "usage_known": response.usage_known,
                 # 사용량이 보고된 시도만 토큰 수를 적는다 — 미확인(usage_known=False)은 None (4차 리뷰 P2)
@@ -1427,11 +1462,16 @@ class LLMManager:
 
     async def _run_complete_attempt(self, _client: BaseLLMClient, _prompt: str, _system: str,
                                     _model: str, _task: str, _role: str, **kwargs) -> LLMResponse:
+        def account(response):
+            cap = kwargs.get("max_tokens")
+            response.requested_max_tokens = cap if type(cap) is int and 1 <= cap <= 1000000 else None
+            self._account_attempt(response, _task, _role)
+
         provider = self._client_provider(_client)
         subscription = _client is self.claude_cli
         if self.provider_policy_block_reason(provider) == "provider_disabled":
             response = _disabled_gemini_response(_model)
-            self._account_attempt(response, _task, _role)
+            account(response)
             return response
         token = None
         deadline = kwargs.pop("_deadline", None)
@@ -1485,7 +1525,7 @@ class LLMManager:
                 response = self._monthly_blocked_response(provider, _model, exc.reason)
                 self._stamp_transport(response, _client)
                 self._annotate_budget(response, policy, priority)
-                self._account_attempt(response, _task, _role)
+                account(response)
                 return response
         # 원장의 동기 입장 검사가 시한을 넘겼으면 HTTP 진입 전에 예약을 해제한다.
         # 이벤트 루프의 timeout callback만으로는 동기 검사 직후 전송을 막을 수 없다.
@@ -1497,7 +1537,7 @@ class LLMManager:
             self._stamp_transport(response, _client)
             self._annotate_budget(response, policy, priority)
             self._settle_monthly(token, response, _model)
-            self._account_attempt(response, _task, _role)
+            account(response)
             return response
         try:
             if provider == LLMProvider.ANTHROPIC:
@@ -1514,7 +1554,7 @@ class LLMManager:
                 self._stamp_transport(response, _client)
                 self._annotate_budget(response, policy, priority)
                 self._settle_monthly(token, response, _model)
-                self._account_attempt(response, _task, _role)
+                account(response)
             exc._llm_response = response
             raise
         except ValueError as exc:
@@ -1524,7 +1564,7 @@ class LLMManager:
             self._stamp_transport(unsent, _client)
             self._annotate_budget(unsent, policy, priority)
             self._settle_monthly(token, unsent, _model)
-            self._account_attempt(unsent, _task, _role)
+            account(unsent)
             exc._llm_response = unsent
             raise
         except Exception as exc:
@@ -1533,7 +1573,7 @@ class LLMManager:
             self._stamp_transport(unknown, _client)
             self._annotate_budget(unknown, policy, priority)
             self._settle_monthly(token, unknown, _model)
-            self._account_attempt(unknown, _task, _role)
+            account(unknown)
             exc._llm_response = unknown
             raise
         self._stamp_transport(response, _client)
@@ -1550,7 +1590,7 @@ class LLMManager:
             response.error = "Role completion incomplete, refused or empty"
         self._annotate_budget(response, policy, priority)
         self._settle_monthly(token, response, _model)
-        self._account_attempt(response, _task, _role)
+        account(response)
         return response
 
     @staticmethod

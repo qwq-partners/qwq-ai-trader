@@ -381,7 +381,8 @@ class _ScriptedLLM:
 
     async def complete_with(self, prompt, *, provider, weight, system, max_tokens,
                             reasoning_effort, retry_on_empty, seed=None, temperature=None, budget_priority=None,
-                            call_timeout_seconds=None):
+                            call_timeout_seconds=None, api_max_tokens=None):
+        assert api_max_tokens == (800 if provider == LLMProvider.ANTHROPIC else None)
         assert budget_priority == "essential"
         pv = getattr(provider, "value", str(provider))
         i = self._idx.get(pv, 0)

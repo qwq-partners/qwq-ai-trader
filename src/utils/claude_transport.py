@@ -50,10 +50,10 @@ def _usage(response, usage):
     response.billing_status = "reported_usage"
 
 
-def _controls(prompt, system, model, effort, max_tokens):
+def _controls(prompt, system, model, effort, max_tokens, *, output_limit=400):
     return (isinstance(prompt, str) and isinstance(system, str)
             and bool(prompt.strip()) and model == _MODEL and effort == "low"
-            and type(max_tokens) is int and 1 <= max_tokens <= 400
+            and type(max_tokens) is int and 1 <= max_tokens <= output_limit
             and len(prompt.encode("utf-8")) + len(system.encode("utf-8")) <= _INPUT_LIMIT)
 
 
@@ -460,7 +460,7 @@ class AnthropicAPIClient(_Client):
         started = loop.time()
         if self._closed:
             return _reject(response, "client_closed")
-        if not _controls(prompt, system, model, reasoning_effort, max_tokens):
+        if not _controls(prompt, system, model, reasoning_effort, max_tokens, output_limit=800):
             return _reject(response, "invalid_request")
         deadline = started + 12 if deadline is None else deadline
         if not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
