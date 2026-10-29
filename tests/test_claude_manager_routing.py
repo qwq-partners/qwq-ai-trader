@@ -236,3 +236,35 @@ async def test_default_api_fallback_preserves_requested_cap(tmp_path):
     await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=123)
     assert m.anthropic.calls[0]['max_tokens'] == 123
     await m.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('primary', ['disabled', 'cooldown'])
+async def test_non_opt_in_cap_above_400_never_reaches_api(tmp_path, primary):
+    m = manager(tmp_path, reply(), reply())
+    if primary == 'disabled':
+        m.config.claude_cli_enabled = False
+    else:
+        m._claude_transport_cooldowns['claude_cli'] = (
+            asyncio.get_running_loop().time() + 300, 'cli_rate_limited')
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=800)
+    assert not m.claude_cli.calls and not m.anthropic.calls
+    assert not result.success and not result.request_sent
+    assert result.transport_error_kind == 'invalid_request'
+    assert result.attempt_trail[-1]['requested_max_tokens'] == 800
+    await m.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('primary', ['disabled', 'cooldown'])
+async def test_explicit_api_cap_works_when_cli_unavailable(tmp_path, primary):
+    m = manager(tmp_path, reply(), reply())
+    if primary == 'disabled':
+        m.config.claude_cli_enabled = False
+    else:
+        m._claude_transport_cooldowns['claude_cli'] = (
+            asyncio.get_running_loop().time() + 300, 'cli_rate_limited')
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC,
+                                   max_tokens=400, api_max_tokens=800)
+    assert result.success and not m.claude_cli.calls
+    assert m.anthropic.calls[0]['max_tokens'] == 800
+    await m.close()

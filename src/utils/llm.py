@@ -1276,6 +1276,18 @@ class LLMManager:
         if cooldown is not None:
             self._account_attempt(cooldown, "complete_with", "fallback")
             return cooldown
+        # Without an explicit API-only cap, preserve the original 400-token
+        # transport boundary even when the CLI was skipped by configuration/cooldown.
+        base_cap = kwargs.get("max_tokens")
+        if not has_api_cap and type(base_cap) is int and base_cap > 400:
+            response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
+                                   error="invalid_request", requested_model=model,
+                                   requested_max_tokens=base_cap if base_cap <= 1000000 else None,
+                                   request_sent=False, usage_known=False, billing_status="not_sent",
+                                   transport_error_kind="invalid_request")
+            self._stamp_transport(response, self.anthropic)
+            self._account_attempt(response, "complete_with", "fallback")
+            return response
         if not self._check_budget():
             response = self._monthly_blocked_response(
                 LLMProvider.ANTHROPIC, model,
