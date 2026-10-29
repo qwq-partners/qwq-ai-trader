@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10/29 장중 현재:** [단일 원장](operations/execution-roadmap.md#e04-team-cap-20261029). R02 13:10 판독 DONE·RR 새226행 비교쌍0. Claude 팀 자연 API미완료27건의 출력 상한과 유효JSON 파싱 보완을 진행하며 운영 반영은 별도다. 이전 미관측·NEXT는 당시 이력이다.
+
 > **현재 상태와 NEXT:** [단일 원장](operations/execution-roadmap.md#e04-news-dedup-20261029). RR 자료 판독 준비·R02 장중 참고란·뉴스 중복/만료 반환 수정의 운영 인수 DONE(`9c187307`, 전체9,675검사/20인수). [PR #294 운영 완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/294#issuecomment-6474809303). 다음은 10/29 13:10/21시 보고·실제 신호/Claude 호출의 조건부 판독·10/30 T04 종료·기존 정리 기한이며, 완료된 구현/배포를 반복하지 않는다. 비용 절감·순수익은 미측정이고 이 문서 마감은 재배포 대상이 아니다. 아래 과거 우선 작업은 당시 이력이다.
 
 > **현재 우선 작업:** [R02 장중 참고란·기존 실제 자료 판독 준비](operations/execution-roadmap.md#r02-indicative-20261028). 최근 수신값과 검증된 현재 지수를 구분해 장중 보고를 보완하고 기존 RR 도구와 묶어 검증/배포한다. 최종 인수·도래 예약 결과·NEXT는 단일 원장을 따른다. 아래 우선 작업은 당시 이력이다.
