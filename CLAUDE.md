@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10/29 본문 개선 진행:** [R02 증권 리포트형 브리프](docs/operations/execution-roadmap.md#r02-securities-brief-20261029). 장전·장중·장후를 핵심 판단·지표·업종·국내 관전 포인트로 재구성했다. 관련91검사·독립 실제 Claude Opus5.5 재리뷰 PASS, 전체검증·통합·배포 인수는 진행 중이다. 운영40714a19/PID3817842·기존 일정 유지, 다음 자연 보고의 모바일 내용 수락은 별도다. 아래 상태는 당시 이력이다.
+
 > **10/29 20:20 현재:** [단일 원장·R02 모바일 내용 개선](docs/operations/execution-roadmap.md#r02-mobile-feedback-20261029). 17시 예약 배포는 고정40714a19·17:16:15 인수 완료(운영9,715검사·22항목PASS·보호48파일/기존cron 보존), PID3817842·복구ready/미체결0. 사용자가07:40 장전 보고 수신을 확인했으나 내용·가독성은 개선 필요라고 답했다. 수신 DONE과 품질 미수락을 구분하며 다음 개발은 R02-MOBILE-CONTENT의 핵심 요약·개장 후 확인 항목·표시 자료별 출처다. 이번 후속은 피드백/실행 결과 기록이며 보고 본문 구현·추가 배포는 하지 않았다.21시 개인 요약·10/30 T04 만료·기존 정리 기한을 유지한다. 아래 이전 상태는 당시 이력이다.
 
 > **10/29 현재:** [단일 작업 원장](docs/operations/execution-roadmap.md#e04-news-dedup-20261029). RR 자료 판독 준비·R02 장중 참고란·E04-NEWS-DEDUP 구현/검증/독립 리뷰/운영 인수 DONE. 운영 고정 `9c187307`·PID3771021, 10/29 01:36:10 KST 인수·164.6초/20항목 전부PASS. 운영 전체9,675passed·2skipped·2xfailed/783.28초, 보호48파일/cron 동일·복구ready·미체결0·NRestarts0·시작 오류0. 매수 중지·월USD100/log_and_continue·GPT/Claude 계약 유지. [PR #294 운영 완료 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/294#issuecomment-6474809303). [10/29 07:40 장전 판독](docs/operations/execution-roadmap.md#morning-followthrough-20261029)은 API수락·본문 대조 DONE이며 모바일/당시 원천 진위는 별도다. NEXT는 10/29 13:10/16:40/21시 자연 보고, 유효 신호 시 RR 판독·해당 Claude 자연 호출 기록이 생기면 경로 인수,10/30 16:06 T04 종료·기존 O02 기한이다. 실제 비용 절감/신규 거래 순수익은 미측정이다. 문서 마감을 위한 재배포는 하지 않으며 아래 과거 운영 버전은 당시 이력이다.
