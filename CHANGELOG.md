@@ -3,7 +3,7 @@
 ## 2026-10-29 — 테마 JSON 예시의 숫자 문법
 
 - 새 자연 응답의 선행 `+` 숫자 문법 오류를 확인해 테마 프롬프트 예시를 유효한 JSON 숫자로 정리했다. 기존 impact 스케일·선정 규칙과 엄격 파서·재시도/모델/비용 정책은 유지한다.
-- [E04-JSON 하위 수정·검증·운영/NEXT](docs/operations/execution-roadmap.md#e04-theme-json-example-20261029). 프롬프트 예시 검증과 실제 자연 성공률·비용/순수익 효과는 구분한다.
+- [E04-JSON 하위 수정·검증·운영/NEXT](docs/operations/execution-roadmap.md#e04-theme-json-example-20261029). 로컬/PR/main/운영9,738검사·독립 실제Opus5.5 승인·PR302/고정1f70ff8a·23:20 기동173.3초/24인수PASS·보호48파일/cron 보존 완료. 자연 성공률·비용/순수익 효과는 별도이며 완료 문서로 재배포하지 않는다.
 
 ## 2026-10-29 — 한국증시 증권 리포트형 브리프
 
