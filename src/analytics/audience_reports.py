@@ -160,6 +160,8 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         return None
     lines = [f"🇰🇷 <b>{labels[kind]}</b>", f"{now:%m/%d %H:%M} KST", "", "<b>시장 판단</b>"]
     if indices:
+        if kind == "morning":
+            lines.append(f"국내 지수 전 거래일 기준 {indices[0][3]:%Y-%m-%d} 관측입니다.")
         if len(indices) == 1:
             row, _, pct, _ = indices[0]
             lines.append(f"확인된 지수 {_text(row.get('label'), 20)} {pct:+.2f}%입니다.")
@@ -175,7 +177,11 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         else:
             lines.append(f"미국 관측 {len(us)}개 지수 {_direction([v[2] for v in us])}입니다.")
     else:
-        lines.append("국내 섹터 ETF의 최근 1세션 관측 표본을 확인합니다.")
+        if len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}"):
+            top, bottom = sectors[0], sectors[-1]
+            lines.append(f"최근 1세션 관측 표본 상대 상위 {_text(top[0].get('name'), 24)} {top[1]:+.2f}%, 하위 {_text(bottom[0].get('name'), 24)} {bottom[1]:+.2f}%입니다.")
+        else:
+            lines.append("국내 섹터 ETF의 최근 1세션 관측 표본을 확인합니다.")
     if us:
         values = {symbol: pct for symbol, _, pct in us}
         if '^SOX' in values and '^IXIC' in values:
@@ -207,21 +213,49 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         lines += ["", f"<b>주요 지표 · 미국 {snapshot.us_basis_date}</b>"]
         lines += [f"• {label} {pct:+.2f}%" for _, label, pct in us]
         sources.append('Yahoo Finance')
+    pair = len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}")
+    sector_only_pair = pair and not (indices or references or observations or us)
     if sectors:
         lines += ["", f"<b>업종 흐름 · 한국 상장 섹터 ETF {snapshot.kr_basis_date}</b>", f"확인 {len(sectors)}개 중 최근 1세션 등락 (전체 업종 순위 아님)"]
-        if len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}"):
-            lines.append(f"관측 표본 상대 상위: {_text(sectors[0][0].get('name'), 24)} {sectors[0][1]:+.2f}%")
-        for row, pct in selected:
+        if sector_only_pair:
+            add_source(sectors[0][0]['source'])
+            add_source(sectors[-1][0]['source'])
+        for row, pct in (selected[1:-1] if sector_only_pair else selected):
             lines.append(f"• {_text(row.get('name'), 24)} {pct:+.2f}%")
             add_source(row['source'])
-    watch = {
-        'morning': '개장 후 국내 지수와 반도체·다른 업종의 움직임이 이어지는지 확인합니다.',
-        'midday': '이후 국내 지수와 업종 움직임, 개별 종목 거래대금·수급을 함께 확인합니다.',
-        'after': '다음 거래일 국내 지수와 업종 움직임의 지속 여부를 확인합니다.',
-    }
-    lines += ["", "<b>국내 관전 포인트</b>", watch[kind]]
-    if references:
-        lines.append("원천시각과 전일 기준 거래일을 추가 확인합니다.")
+    lines += ["", "<b>국내 관전 포인트</b>"]
+    if kind == 'morning':
+        if any(symbol == '^SOX' for symbol, _, _ in us):
+            lines.append("• 개장 후 삼성전자·SK하이닉스 방향이 SOX와 일치하는지 확인합니다.")
+        elif us:
+            labels_us = '·'.join(label for _, label, _ in us)
+            lines.append(f"• 개장 후 코스피·코스닥과 {labels_us} 방향을 대조합니다.")
+        else:
+            lines.append("• 개장 후 코스피·코스닥의 방향을 확인합니다.")
+    elif kind == 'midday':
+        if references:
+            lines.append("• 원천시각과 전일 기준 거래일 확인이 우선입니다.")
+        elif len(indices) > 1 and all(float(f'{v[2]:.2f}') == 0 for v in indices):
+            lines.append("• 확인된 지수의 보합 유지 여부를 지켜봅니다.")
+        elif len(indices) > 1 and _direction([v[2] for v in indices]) == '혼조·보합':
+            lines.append("• 확인된 지수 간 방향 차이의 축소·확대를 지켜봅니다.")
+        elif len(indices) > 1:
+            lines.append("• 확인된 지수의 동행 유지 여부를 지켜봅니다.")
+        else:
+            lines.append("• 확인된 지수의 이후 방향을 지켜봅니다.")
+    elif observations:
+        lines.append("• 확정 종가와 전일 종가를 대조한 뒤 방향을 판단합니다.")
+    elif indices:
+        lines.append("• 다음 거래일 확인된 지수 방향의 유지·역전을 지켜봅니다.")
+    else:
+        lines.append("• 다음 거래일 국내 지수 방향을 확인합니다.")
+    if pair:
+        top_name = _text(sectors[0][0].get('name'), 24)
+        bottom_name = _text(sectors[-1][0].get('name'), 24)
+        suffix = " 및 반도체 외 업종·코스닥 확산" if kind == 'morning' and any(symbol == '^SOX' for symbol, _, _ in us) else ""
+        lines.append(f"• ETF {top_name}·{bottom_name}의 상대 순위 유지·역전{suffix} 여부를 확인합니다.")
+    elif kind == 'morning' and any(symbol == '^SOX' for symbol, _, _ in us):
+        lines.append("• 반도체 외 업종·코스닥으로 움직임이 확산되는지 확인합니다.")
     lines += ["", "자료 범위: 표시된 관측 표본; 시장 전체 종목 수·당일 누적 수급은 미확보.", "출처: " + " / ".join(sources)]
     return "\n".join(lines)
 

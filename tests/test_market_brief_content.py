@@ -42,7 +42,7 @@ def test_partial_and_tiny_relative_difference_do_not_overstate():
     text = render_market_report('morning', us_snapshot((.28,)), NOW)
     assert 'S&P500' in text and '1개 지수 동반' not in text
     text = render_market_report('morning', us_snapshot((.28, .2701, .2702)), NOW)
-    assert '웃돌아 +0.00%p' not in text and '밑돌아 -0.00%p' not in text
+    assert '0.00%p' not in text and '웃돌아' not in text and '밑돌아' not in text
 
 
 def test_sector_subset_relative_weakness_and_actual_provider():
@@ -96,7 +96,8 @@ def test_domestic_indices_and_mixed_data_summarize_displayed_values():
 def test_mixed_max_length_labels_and_sources_stay_safe_and_bounded():
     now = NOW.replace(hour=16, minute=40)
     indices = tuple({'label': '<' + '&' * 400, 'price': 3000, 'change_pct': pct,
-                     'source': source, 'source_observed_at': now.isoformat(), 'received_at': now.isoformat()}
+                     'source': source, 'source_observed_at': now.isoformat(), 'received_at': now.isoformat(),
+                     'engine_cash': 'PRIVATE_CANARY'}
                     for pct, source in [(1, 'kis'), (-1, '<foreign&>')])
     sectors = tuple({'name': '<' + '&' * 400, 'r1': pct, 'source': f'<provider{pct}&>', 'as_of': '2026-10-29'}
                     for pct in range(20))
@@ -110,3 +111,76 @@ def test_missing_and_mismatched_sector_dates_are_excluded():
     sector = {'name': '반도체', 'r1': 1, 'source': 'KIS:123', 'as_of': '2026-10-27'}
     for basis in (None, '2026-10-28', 'invalid'):
         assert render_market_report('morning', MarketSnapshot(sectors=(sector,), kr_basis_date=basis), NOW) is None
+
+
+def test_morning_watch_uses_only_available_us_indices():
+    text = render_market_report('morning', us_snapshot((.28, .27, 1.75)), NOW)
+    assert '삼성전자' in text and 'SK하이닉스' in text and 'SOX' in text
+    assert '개장 후' in text and '일치' in text and '확산' in text
+    text = render_market_report('morning', us_snapshot((.28,)), NOW)
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert 'S&P500' in watch and '코스피' in watch and '코스닥' in watch
+    assert 'SOX' not in watch and '반도체' not in watch
+
+
+def test_sector_only_summary_names_both_ends_without_repeating_values():
+    sectors = tuple({'name': name, 'r1': value, 'source': 'KIS:123', 'as_of': '2026-10-28'}
+                    for name, value in [('반도체', -1), ('은행', -2)])
+    text = render_market_report('morning', MarketSnapshot(sectors=sectors, kr_basis_date='2026-10-28'), NOW)
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>업종 흐름')[0]
+    assert '반도체 -1.00%' in summary and '은행 -2.00%' in summary
+    assert text.count('반도체 -1.00%') == 1 and text.count('은행 -2.00%') == 1
+    assert '강세' not in text
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert '반도체' in watch and '은행' in watch and '역전' in watch
+
+
+def test_midday_and_after_watch_reflect_the_available_basis():
+    now = NOW.replace(hour=13, minute=10)
+    def row(label, pct, observed):
+        return {'label': label, 'price': 3000, 'change_pct': pct, 'source': 'kis',
+                'source_observed_at': observed, 'received_at': now.isoformat()}
+    rows = (row('KOSPI', 1, now.isoformat()), row('KOSDAQ', -1, now.isoformat()))
+    text = render_market_report('midday', MarketSnapshot(indices=rows), now)
+    assert '방향 차이' in text and '축소' in text and '확대' in text
+    rows = (rows[0], row('KOSDAQ', 1, now.isoformat()))
+    assert '동행' in render_market_report('midday', MarketSnapshot(indices=rows), now)
+    text = render_market_report('midday', MarketSnapshot(indices=(row('KOSPI', 1, None),)), now)
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert '원천시각' in watch and '전일 기준 거래일' in watch and '우선' in watch
+    assert '동행' not in watch and '방향 차이' not in watch
+    after = now.replace(hour=16, minute=40)
+    obs = {'code': '0001', 'price': 3000, 'source': 'KIS/FHKUP03500200',
+           'source_observed_at': after.replace(hour=15, minute=32).isoformat(),
+           'received_at': after.isoformat(), 'observation_kind': 'historical_minute', 'finality': 'unverified'}
+    text = render_market_report('after', MarketSnapshot(index_observations=(obs,), kr_basis_date='2026-10-29'), after)
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert '확정 종가' in watch and '전일 종가' in watch and '방향' in watch
+    assert '%' not in text
+
+
+def test_mixed_morning_marks_kr_basis_and_stays_mobile():
+    previous = NOW.replace(day=28, hour=15, minute=35)
+    indices = tuple({'label': label, 'price': 3000, 'change_pct': pct, 'source': 'kis',
+                     'source_observed_at': previous.isoformat(), 'received_at': previous.isoformat()}
+                    for label, pct in [('KOSPI', 1), ('KOSDAQ', -1)])
+    sectors = tuple({'name': '<' + '&' * 100 + str(i), 'r1': i, 'source': 'KIS:123', 'as_of': '2026-10-28'} for i in range(4))
+    us = us_snapshot((.28, .27, 1.75))
+    snapshot = MarketSnapshot(indices=indices, sectors=sectors, kr_basis_date='2026-10-28',
+                              us_quotes=us.us_quotes, us_basis_date=us.us_basis_date)
+    text = render_market_report('morning', snapshot, NOW)
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert '전 거래일' in summary and '2026-10-28' in summary
+    assert '&lt;' in text and len(text) <= 1800 and len(text.splitlines()) <= 35
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert '&lt;' in watch and '역전' in watch
+
+
+def test_midday_both_flat_does_not_claim_direction_gap():
+    now = NOW.replace(hour=13, minute=10)
+    rows = tuple({'label': label, 'price': 3000, 'change_pct': 0, 'source': 'kis',
+                  'source_observed_at': now.isoformat(), 'received_at': now.isoformat()}
+                 for label in ('KOSPI', 'KOSDAQ'))
+    text = render_market_report('midday', MarketSnapshot(indices=rows), now)
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert '방향 차이' not in watch and '보합' in watch
