@@ -2,6 +2,33 @@
 
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
+<a id="r02-llm-analysis-20261030"></a>
+### R02-LLM — 그날의 근거로 판단·관전 조건을 쓰는 시장 보고 (구현 DONE / 운영 WAIT)
+
+**최종 인수 연결:** [PR #309](https://github.com/qwq-partners/qwq-ai-trader/pull/309)의 검증·병합 영수증을 이 작업의 최종 근거로 따른다. 10/31 00:46 문서 작성 시 구현·관련 검사·독립 리뷰는 완료, 정식 전체 검사와 PR CI는 진행 중이며 통과 전 병합하지 않는다. 아래 중간 실패/진행 기록은 각 시점 이력이다. 운영은72c88c07 유지이며 기존 Git SSH `publickey` 인증 실패로 정상 배포 fetch가 막혀 있다. 인증·권한·원격 설정 변경이나 소비된 실행기 재사용은 없다. 실제 LLM 자연 보고·모바일 내용 수락은 WAIT다.
+
+**Plan/요청:** 사용자가 시각 보고의 관전 포인트를 부적절하다고 지적하고 LLM 기반 분석을 요구했다. 기존 그림/전송은 유지하며 고정 문구를 보고 전용 분석으로 교체한다. 원천 숫자·날짜·출처는 코드가 보존하고 LLM은 핵심 판단·왜 중요한지·확인/반증 조건을 작성한다. 기존 전문가 문장 단순 재사용은 당일 슬롯 완결/원천시각을 보장하지 않으며 expert_quality는 본문이 아닌 품질 집계다. 모든 raw_evidence를 새 입력으로 확대하는 방안도 원천날짜 누락 때문에 이번 범위에서 제외한다. **선택: 기존 적격 시장 사실만을 입력으로 정기 슬롯당 분석 최대1회.** 기존 no-new-LLM은 이전 구현의 계약이며 이번 명시 요청에 따라 정기 보고 분석을 추가한다. 새 시장API/시험Telegram/유료 모델 비교·전략/매수재개는없고월USD100/log_and_continue를유지한다.
+
+**설계/인터페이스:** 새순수모듈`market_report_analysis.py`는기존`render_market_report`본문에서정적관전문장을제외한근거봉투/ID를만든다. headline에만있는sector-only상하위값도사실표에보존한다. 출력schema는`judgment(text,evidence_ids)`, `importance(text,evidence_ids)`, `watchpoints[focus,why,confirm,invalidate,evidence_ids]`(최대2개)이며빈항목/알수없는근거/새수치/제어문자·HTML/대표고정양자택일문구를거부한다. 근거연결/형식검증이자유문장진실을보증한다고주장하지않는다. 모든수치·한계·출처를보존한HTML에분석을끼워기존이미지렌더러/동일caption전송으로연결한다. 길이초과/생성실패/예산보류는수정재호출없이사실표+분석미확보다. 1,800자/35줄·PNG상한은유지하며해석을잘라성공으로채택하지않는다.
+
+**고정 호출/상태 계약:** 기존`complete_role`의단일시도·예산정산·deadline·metadata감사를재사용하는`MARKET_BRIEF`역할을추가한다(기존보고역할과같은OpenAI/gpt-5-mini/minimal,출력1600token·45초·입력64KiB·standard). 이역할만nativeJSONobject를요청하고기존role의제어값은유지한다. complete_json재시도·fallback·shadow는없다. 실제HTTP전송상한은전송계층근거와구분하고논리manager호출1회로검증한다. `report_analyses`의slot별durable claim이먼저원본문/지문/버전/owner를저장한뒤모델을호출한다. 모든시장슬롯guard가수집→생성→저장→렌더→발송을소유하며장후기존잠금inode/2GET계약을보존한다. 경합자는선발송하지않고,재시작의attempted는중단/불명으로종결해재호출0이다. ready는당시저장원본문+완성본문을함께재사용해새시세와혼합하지않는다. 전송slot소비후생성/재발송0,취소시기존정산/상태쓰기drain을유지한다.
+
+**Do 계획/분담:** coordinator는설계/통합/문서를소유한다. 같은base089fdfac(main1c8f6b20와tree동일)의분리worktree에서Terra6.1/high가순수입력·프롬프트·schema검증·본문합성/합성검사를맡고,Astra/high가역할/단일호출adapter·분석원장·스케줄배선/경합·취소검사를맡는다. 파일중복쓰기/fanout0,운영원문/자격/API실호출0이다. 관련RED→GREEN·전체정식verify·비밀검사·실제Opus5.5 critical리뷰와Sol내용리뷰를거쳐PR/CI인수한다. 선언적상하위/혼조/미확정지수/근거부족/왜곡·주입/기각/시간초과/재시작/두프로세스/기존이미지·장후회귀를포함한다. 실제LLM본문의자연수신·내용수락은코드검사와구분한다.
+
+**Do/내용 인수:** Terra6.1/high의 순수 내용 모듈을 `2f262ba6/55884b0c/3bfda382/6da77ddf`로 통합했다. 최초 예시의 공허한 확인 문구, 프롬프트와 검사 제약의 불일치, 장중 확인 시점과 관전 라벨을 보완했다. 독립 Sol6.1/high가 발견한 두 P2(장후 비교기준 결측 고지 유실, F 근거별 날짜·범위 소속 미연결)는 구체 회귀로 수정했다. 대표 합성 예시의 잘못된 근거 ID도 바로잡았다. Sol 재리뷰는 APPROVE·P0/P1/P2 없음, 직접 내용 검사 19 passed/2.31초·격리0이다. worker 관련 검사 66 passed, coordinator의 실제 모델 전송→본문→PNG→아카이브 통합 검사는 배선 전 RED 2건을 확인했다. 소스·발송 경계의 최종 인수와 전체 검증은 진행 중이며, 요청 모델/effort와 달리 native actual/effective metadata는 미노출이다. 합성 예시를 실제 모델 품질 성공으로 세지 않는다.
+
+**See/중요 경계 재검토:** Astra/high의 상태·역할·스케줄 배선을 `272d1907`로 통합했다. worker 관련252검사/15.68초와 coordinator 실제role전송→JSON검증→본문→PNG→아카이브→재시작 관련126검사/12.62초·격리0을 확인했다. 실제 Claude Opus5.5/high(assistant/terminal 신원확인,도구/MCP0,268.385초,rc0)의 첫 중요 리뷰는 REQUEST_CHANGES(P1: 대체 본문 검증 실패가 attempted를 남기는 경계; P2: 공급자 ValueError 오분류, U+2028/U+2029 줄바꿈 누락)다. 형식이 잘못된 입력의 경계이며 실제 운영에서 발생했다고 주장하지 않는다. 중요 수정과 재리뷰를 진행하며, 최초 전체 검사는 수정 필요가 확인되어 소유 개발 검증 프로세스만 중단했다(4,078passed/2skipped·339.73초·격리0·KeyboardInterrupt/rc2, 전체성공 아님). Unicode 두 사례 RED2→관련23PASS/4.08초와 실제전송 E2E는 `bf752ae0`로 보완했다. 표시USD0.7126418은 구독 증분 청구액이 아니며 실제 증분비용은미확정이다.
+
+**See/최종 소스 인수:** 후속 `7164dabb/04e4d74b`는 사실 본문 검증 실패와 선택적 분석 준비 실패를 분리했다. 무효 사실 본문은 분석 claim/호출 없이 발송 슬롯의 failed_validation·품질 기록1건을 원자 저장한다. prompt/profile 실패는 분석 failed/prompt_unavailable과 유효 사실 보고1회로 끝내며, orphan은 prompt를 다시 만들지 않는다. 공급자·출력 예외와 사용량 불명을 구분하고 정산 metadata를 보존한다. 재리뷰의 저장 snapshot 유실 지적은 실제 선행 대입과 장후 회귀가 수정 전부터 통과해 철회됐다. 두 번째 전체 실행도 수정 반영을 위해 중단했다(4,078passed/2skipped·284.07초·격리0·KeyboardInterrupt/rc2, 전체 성공 아님). 중간 RED의 이미지 대역 누락은 격리에서 차단됐고 대역 보완 후 RED/GREEN 모두 격리0을 확인했다.
+
+최종 worker 관련285검사/19.06초, coordinator 통합161검사/15.76초·격리0이다. 실제 Claude Opus5.5/high 최종 재리뷰는187.268초·rc0·assistant/terminal 신원 확인·APPROVE(P0/P1없음, 비차단P2두개)다. 호환 영문/숫자의 우회는 NFKC 검사로 RED4→관련80PASS/9.20초로 보완했고(`dfd18bca`), 취소 unknown은 분석 완료 불명이며 알려진 비용은 metadata에 별도로 보존한다는 기존 의미를 주석으로 명확히 했다. 작은 후속의 독립Sol6.1/high 리뷰는APPROVE·직접25검사/2.14초·격리0이다(actual/effective metadata미노출). CLI 최종 표시USD0.5498758 및 앞선 재리뷰USD0.4397358은 구독 증분청구액이 아니다. 정식 전체/PR/main CI의 최종 실행 결과·통합 SHA는 위 PR 영수증에서 확인한다. 로컬 dfd18bca의 소스 tree와 GitHub연결로 게시한4baf3138의 tree는 `0af3aecf7c6c593e9d5270ab964423baf5ae6c46`으로 동일하다. SSH 경로를 재시도하거나 인증 설정을 바꾸지 않았다.
+
+**NEXT:** R02-LLM 최종 전체/CI 인수·PR 통합 → 기존 Git 인증 복구 후 일정·보호 상태를 재대조한 정상 고정SHA 배포 → 다음 자연 보고의 LLM 결과/수신/내용 수락. O02 기존 기한과 E02/E01/E04의 새 유효 입력 판독은 유지하며 자동 연장·새 장기 관측·가상 거래를 시작하지 않는다.
+
+**10/31 도래 일정 읽기 인수:** 00:17 KST 운영은 같은72c88c07/PID3911040·active/running·NRestarts0이며 미커밋은 evolved 파일뿐이다. 00:00:26 주간 리밸런싱은 skipped·2026-W44 상태 저장, FN 분석은 원천 조회 실패 표식1건 뒤 Wiki Lint 완료(00:00:27)로 이어졌다. FN 분석 성공으로 세지 않는다. 00:05:26 원칙 보고는 `principles_weekly`1행 저장과 주차 시도 영수증을 확인했으며 로그/캐시 정리도 완료했다. 당시10/31 발송 슬롯은없으므로 저장/구형 전송완료로그를 추가Telegram수락으로바꾸지않는다. 해당 내용의 개인21시 포함은 자연발송대기다. O02의10/31 18시사전점검과기존11/1·5·6정리일정은유지한다. 새실행/예약/범위확대는없다. 비공개집계근거는 `~/.local/state/qwq-task-audit/20261031/llm-report/weekly-readonly.json`이다.
+
+**착수 시 운영/통합 경계(이력):**23:46 KST 운영72c88c07/PID3911040·active/NRestarts0·evolved미커밋보존. 원격main1c8f6b20는API로확인했고개발089fdfac와tree동일하다. 직전SSH fetch인증실패경로는재시도/인증설정변경하지않는다. 별도GitHub연결은정상이며검토가능한소스/PR준비를먼저진행한다. 자정주간작업·O02기존예약/T04만료는유지하고기존소비된배포실행기는재사용하지않는다. **NEXT:R02-LLM 구현/내용·비용중복검증→통합/운영조건→다음자연보고수락→E02/E01/E04 새유효입력.**
+
 <a id="r02-visual-report-20261030"></a>
 ### R02-VISUAL — 한 장 시각 보고서 (구현·운영 DONE / 자연 수신·내용 수락 WAIT)
 
