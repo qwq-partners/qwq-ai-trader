@@ -1204,7 +1204,9 @@ themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세
    - "unknown": 판단 불가
    - 한국 시장에서 "confirmed" 뉴스는 재료 소멸(Buy the rumor, Sell the news) 위험이 높음"""
 
-        result = await self.llm.complete_json(prompt, task=LLMTask.THEME_DETECTION)
+        result = await self.llm.complete_json(
+            prompt, task=LLMTask.THEME_DETECTION, response_format={"type": "json_object"}
+        )
 
         if "error" in result:
             logger.error(f"테마 추출 LLM 오류: {result.get('error')}")

@@ -477,9 +477,14 @@ class OpenAIClient(BaseLLMClient):
         model: Optional[str] = None,
         temperature: float = 0.3,
         max_tokens: Optional[int] = None,
+        response_format: Optional[dict] = None,
         **kwargs
     ) -> LLMResponse:
         """Construct the actual request; reject unsupported explicit controls locally."""
+        if response_format is not None and (
+            type(response_format) is not dict or response_format != {"type": "json_object"}
+        ):
+            raise ValueError("Unsupported response_format")
         model = model if model is not None else self.config.openai_model_light
         effort = kwargs.get("reasoning_effort")
         _validate_controls(model, LLMProvider.OPENAI, kwargs)
@@ -490,6 +495,8 @@ class OpenAIClient(BaseLLMClient):
                                error="OpenAI API key not configured", **metadata)
         body = {"model": model, "messages": [],
                 "max_completion_tokens": max_tokens if max_tokens is not None else self.config.max_output_tokens}
+        if response_format is not None:
+            body["response_format"] = response_format
         if system:
             body["messages"].append({"role": "system", "content": system})
         body["messages"].append({"role": "user", "content": prompt})
@@ -537,13 +544,19 @@ class OpenAIClient(BaseLLMClient):
                 if not isinstance(content, str):
                     raise ValueError("Provider content must be text")
                 success = resp.status == 200 and bool(choices)
+                if response_format is not None:
+                    success = (success and not metadata["refusal_detected"]
+                               and metadata["finish_reason"] == "stop" and bool(content.strip()))
+                error = None if success else f"OpenAI HTTP {resp.status} or missing choices"
+                if not success and response_format is not None and resp.status == 200 and choices:
+                    error = "Invalid JSON mode response"
                 return LLMResponse(
                     content, model, LLMProvider.OPENAI,
                     input_tokens=_token_count(usage.get("prompt_tokens")),
                     output_tokens=_token_count(usage.get("completion_tokens")),
                     latency_ms=(time.perf_counter() - start_time) * 1000,
                     success=success,
-                    error=None if success else f"OpenAI HTTP {resp.status} or missing choices",
+                    error=error,
                     **metadata,
                 )
         except asyncio.CancelledError as exc:
@@ -1018,6 +1031,11 @@ class LLMManager:
         if response.budget_block_reason:
             self.stats["error_count"] += 1
             self.stats["fallback_skipped_monthly_budget"] = self.stats.get("fallback_skipped_monthly_budget", 0) + 1
+            return response
+
+        if kwargs.get("response_format") is not None:
+            # Explicit format requests must never fall back to an unguaranteed provider.
+            self.stats["error_count"] += 1
             return response
 
         # Missing cost during repair ends this logical call instead of creating

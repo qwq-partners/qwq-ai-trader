@@ -10,8 +10,9 @@ class CapturingLLM:
     def __init__(self):
         self.prompt = None
 
-    async def complete_json(self, prompt, *, task):
+    async def complete_json(self, prompt, *, task, response_format):
         assert task == LLMTask.THEME_DETECTION
+        assert response_format == {"type": "json_object"}
         self.prompt = prompt
         return {"themes": [], "stock_impacts": []}
 
