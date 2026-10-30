@@ -10,28 +10,24 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from ..analytics.audience_reports import MarketSnapshot, render_engine_digest, render_market_report
-from ..analytics.report_delivery import ReportStore
+from ..analytics.report_delivery import ReportStore, durable_thread as _durable_thread
 
 KST = ZoneInfo("Asia/Seoul")
 SLOTS = {"morning": (7, 40), "midday": (13, 10), "after": (16, 40), "daily": (21, 0)}
 
 
-async def _durable_thread(function, *args):
-    """Drain a started SQLite writer before releasing the surrounding file lock."""
-    task = asyncio.create_task(asyncio.to_thread(function, *args))
+def _render_market_image(text):
+    """Keep optional image imports and bounded render failures off the text path."""
     try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        if not task.cancelled():
-            task.exception()  # retrieve any failure; cancellation remains the caller outcome
-        raise
+        from ..analytics.market_report_image import render_market_report_image
+        image = render_market_report_image(text)
+        if image is not None:
+            # Access the optional interface inside the fallback boundary too.
+            image.png, image.caption
+        return image
+    except Exception as error:
+        logger.warning("[대상별 보고] 이미지 생성 실패: {}", type(error).__name__)
+        return None
 
 
 class ReportSchedule:
@@ -87,18 +83,34 @@ class ReportSchedule:
             text = render_engine_digest(records, engine_context, now, deliveries=deliveries)
             snapshot_id = hashlib.sha256((json.dumps([records, deliveries], sort_keys=True)+engine_context).encode()).hexdigest()
         if status:
-            if not await asyncio.to_thread(self.store.claim, audience, kind, day, snapshot_id):
+            if not await _durable_thread(self.store.claim, audience, kind, day, snapshot_id):
                 return "already_consumed"
-            await asyncio.to_thread(self.store.finish, audience, kind, day, status)
+            await _durable_thread(self.store.finish, audience, kind, day, status)
             if status != "skipped_holiday":
                 reason = ("유효한 지수 또는 참고자료 없음. 수신시각을 원천시각으로 대체하지 않음."
                           if kind == "midday" else "원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.")
                 await asyncio.to_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
             return status
-        result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store)
+        media = {}
+        if audience == "market":
+            image = await _durable_thread(_render_market_image, text)
+            if image is not None:
+                media = {"photo": image.png, "caption": image.caption}
+        result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store, **media)
         if kind == "morning" and result == "accepted" and self.dispatch_recorder:
-            await asyncio.to_thread(self.dispatch_recorder, kr_date=day, sent_text=text,
-                                    expert_consensus=None, status="sent", dispatched_brief_text=None)
+            receipt = await asyncio.to_thread(self.store.receipt, audience, kind, day)
+            # Read what the notifier actually chose, including preflight fallback.
+            # Legacy test/notifier adapters without receipts retain text semantics.
+            archive = {}
+            sent_text = text
+            if receipt:
+                sent_text = receipt["body"]
+                if receipt.get("media_type") == "image/png":
+                    sent_text = receipt["caption"]
+                    archive = {"media_type": "image/png", "image_sha256": receipt["image_sha256"],
+                               "semantic_report_body": receipt["body"]}
+            await _durable_thread(self.dispatch_recorder, kr_date=day, sent_text=sent_text,
+                                  expert_consensus=None, status="sent", dispatched_brief_text=None, **archive)
         return result
 
 

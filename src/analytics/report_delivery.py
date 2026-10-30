@@ -4,7 +4,10 @@ This is not Telegram server idempotency. An interrupted attempt remains consumed
 API acceptance is not proof of delivery to the reader. Urgent alerts bypass it.
 """
 from contextlib import contextmanager
+import asyncio
 from datetime import date, datetime, timedelta
+import hashlib
+from io import BytesIO
 import os
 import fcntl
 import json
@@ -15,6 +18,44 @@ from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
 KINDS = {"market": {"morning", "midday", "after"}, "engine": {"daily"}}
+MAX_REPORT_PHOTO_BYTES = 4 * 1024 * 1024
+
+
+async def durable_thread(function, *args, **kwargs):
+    """Drain a started worker before cancellation releases an enclosing lock."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
+
+
+def validate_report_photo(photo: bytes, caption: str) -> None:
+    """Reject unsupported media before the slot or transport is attempted."""
+    if not isinstance(photo, bytes) or not 0 < len(photo) <= MAX_REPORT_PHOTO_BYTES:
+        raise ValueError("report photo must be bounded immutable bytes")
+    if not photo.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("report photo must be PNG")
+    if not isinstance(caption, str) or not caption.strip() or len(caption.encode("utf-16-le")) // 2 > 900:
+        raise ValueError("report caption exceeds plain-text budget")
+    # Optional image dependency is never imported by the ordinary text path.
+    from PIL import Image
+    with Image.open(BytesIO(photo)) as image:
+        width, height = image.size
+        if (image.format != "PNG" or width < 1 or height < 1
+                or width * height > 16_000_000 or width + height > 10000
+                or max(width, height) > 20 * min(width, height)):
+            raise ValueError("unsupported report image dimensions")
+        image.verify()
 
 
 def default_store_path() -> Path:
@@ -47,6 +88,7 @@ class ReportStore:
             db.execute("CREATE INDEX IF NOT EXISTS report_events_day ON report_events(report_date)")
             db.execute("CREATE TABLE IF NOT EXISTS slots (audience TEXT, kind TEXT, report_date TEXT, source_snapshot_id TEXT, status TEXT, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
+            db.execute("CREATE TABLE IF NOT EXISTS media_payloads (audience TEXT, kind TEXT, report_date TEXT, media_type TEXT, caption TEXT, image_sha256 TEXT, png BLOB, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS market_inputs (report_date TEXT PRIMARY KEY, owner TEXT, status TEXT, rows_json TEXT)")
             with db:
                 yield db
@@ -78,14 +120,22 @@ class ReportStore:
         with self._db() as db:
             return [dict(r) for r in db.execute("SELECT audience,kind,report_date,status FROM slots WHERE report_date BETWEEN ? AND ? AND status NOT IN ('accepted','skipped_holiday') ORDER BY CASE WHEN status LIKE 'skipped_%' THEN 1 ELSE 0 END,report_date DESC,kind", (previous, report_date))]
 
-    def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None) -> bool:
+    def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None, *, photo: bytes | None = None, caption: str | None = None) -> bool:
         validate_slot(audience, kind, report_date)
         if not source_snapshot_id:
             raise ValueError("source_snapshot_id required")
+        if photo is not None:
+            if audience != "market" or text is None:
+                raise ValueError("report photos require a market report body")
+            validate_report_photo(photo, caption)
+        elif caption is not None:
+            raise ValueError("caption requires report photo")
         with self._db() as db:
             claimed = db.execute("INSERT OR IGNORE INTO slots VALUES (?,?,?,?,?)", (audience, kind, report_date, source_snapshot_id, "attempted")).rowcount == 1
             if claimed and text is not None:
                 db.execute("INSERT INTO payloads VALUES (?,?,?,?)", (audience, kind, report_date, text))
+            if claimed and photo is not None:
+                db.execute("INSERT INTO media_payloads VALUES (?,?,?,?,?,?,?)", (audience, kind, report_date, "image/png", caption, hashlib.sha256(photo).hexdigest(), photo))
             return claimed
 
     def finish(self, audience: str, kind: str, report_date: str, status: str) -> None:
@@ -97,8 +147,15 @@ class ReportStore:
 
     def receipt(self, audience: str, kind: str, report_date: str) -> dict | None:
         with self._db() as db:
-            row = db.execute("SELECT slots.*,payloads.body FROM slots LEFT JOIN payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+            row = db.execute("SELECT slots.*,payloads.body,COALESCE(media_payloads.media_type,'text/html') AS media_type,media_payloads.caption,media_payloads.image_sha256 FROM slots LEFT JOIN payloads USING(audience,kind,report_date) LEFT JOIN media_payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
             return dict(row) if row else None
+
+    def archived_photo(self, audience: str, kind: str, report_date: str) -> bytes | None:
+        """Explicitly load the immutable image; ordinary receipts omit the blob."""
+        validate_slot(audience, kind, report_date)
+        with self._db() as db:
+            row = db.execute("SELECT png FROM media_payloads WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+            return bytes(row["png"]) if row else None
 
     @contextmanager
     def input_guard(self, report_date: str):

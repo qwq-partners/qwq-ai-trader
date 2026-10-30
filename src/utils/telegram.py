@@ -55,12 +55,24 @@ class TelegramNotifier:
     async def publish_report(
         self, audience: str, kind: str, report_date: str,
         source_snapshot_id: str, text: str, *, store=None,
+        photo: bytes | None = None, caption: str | None = None,
     ) -> str:
         """Publish a bounded routine report once; urgent send_alert is separate."""
-        from ..analytics.report_delivery import ReportStore, validate_slot
+        from ..analytics.report_delivery import ReportStore, durable_thread, validate_report_photo, validate_slot
         validate_slot(audience, kind, report_date)
         store = store if store is not None else ReportStore()
-        if not await asyncio.to_thread(store.claim, audience, kind, report_date, source_snapshot_id, text[:30000]):
+        # Choose the representation before claiming or attempting transport.
+        # Media errors may fall back here only; sendPhoto outcomes never do.
+        if photo is not None and audience == "market":
+            try:
+                await durable_thread(validate_report_photo, photo, caption)
+            except Exception as error:
+                logger.warning("정기 보고 이미지 검증 실패: {}", type(error).__name__)
+                photo, caption = None, None
+        else:
+            photo, caption = None, None
+        media = {"photo": photo, "caption": caption} if photo is not None else {}
+        if not await durable_thread(store.claim, audience, kind, report_date, source_snapshot_id, text[:30000], **media):
             return "already_consumed"
         target = self.report_chat_id if audience == "market" else self.alert_chat_id
         if not text.strip() or len(text) > 1800 or len(text.splitlines()) > 35:
@@ -69,12 +81,39 @@ class TelegramNotifier:
             status = "failed_configuration"
         else:
             try:
-                status = await self._send_report_once(target, text)
+                if photo is not None:
+                    status = await self._send_report_photo_once(target, photo, caption)
+                else:
+                    status = await self._send_report_once(target, text)
             except Exception:
                 status = "unknown"
-        await asyncio.to_thread(store.finish, audience, kind, report_date, status)
+        await durable_thread(store.finish, audience, kind, report_date, status)
         logger.info("정기 보고 audience={} kind={} date={} status={}", audience, kind, report_date, status)
         return status
+
+    async def _send_report_photo_once(self, target: str, photo: bytes, caption: str) -> str:
+        """One multipart photo+plain caption attempt; never retry or send text."""
+        try:
+            if not self._session or self._session.closed:
+                self._session = aiohttp.ClientSession()
+            form = aiohttp.FormData()
+            form.add_field("chat_id", target)
+            form.add_field("caption", caption)
+            form.add_field("disable_notification", "false")
+            form.add_field("photo", photo, filename="market-report.png", content_type="image/png")
+            async with self._session.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendPhoto",
+                data=form, timeout=aiohttp.ClientTimeout(total=30), allow_redirects=False,
+            ) as response:
+                data = await response.json()
+                if isinstance(data, dict):
+                    if response.status == 200 and data.get("ok") is True:
+                        return "accepted"
+                    if data.get("ok") is False:
+                        return "rejected"
+                return "unknown"
+        except Exception:
+            return "unknown"
 
     async def _send_report_once(self, target: str, text: str) -> str:
         """One HTTP attempt. Acceptance is not proof a reader received it."""

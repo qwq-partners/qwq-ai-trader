@@ -38,5 +38,22 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Install Korean font for real image verification
+        run: |
+          python - <<'PYFONT'
+          from src.analytics.us_market_chart import _font
+          font = _font()
+          print({"korean_font_before_install": font.get_file() if font else None})
+          PYFONT
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-wqy-zenhei
+          test -r /usr/share/fonts/truetype/wqy/wqy-zenhei.ttc
+          python - <<'PYFONT'
+          from src.analytics.us_market_chart import _font
+          font = _font()
+          assert font is not None, "Korean rendering font is required for image tests"
+          print({"korean_font_after_install": font.get_file()})
+          PYFONT
+
       - name: Verify
         run: QWQ_VERIFY_PYTHON="$(command -v python)" bash scripts/dev/verify.sh
