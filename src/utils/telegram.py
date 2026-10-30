@@ -58,7 +58,7 @@ class TelegramNotifier:
         photo: bytes | None = None, caption: str | None = None,
     ) -> str:
         """Publish a bounded routine report once; urgent send_alert is separate."""
-        from ..analytics.report_delivery import ReportStore, durable_thread, validate_report_photo, validate_slot
+        from ..analytics.report_delivery import ReportStore, durable_thread, validate_report_photo, validate_report_body, validate_slot
         validate_slot(audience, kind, report_date)
         store = store if store is not None else ReportStore()
         # Choose the representation before claiming or attempting transport.
@@ -75,7 +75,13 @@ class TelegramNotifier:
         if not await durable_thread(store.claim, audience, kind, report_date, source_snapshot_id, text[:30000], **media):
             return "already_consumed"
         target = self.report_chat_id if audience == "market" else self.alert_chat_id
-        if not text.strip() or len(text) > 1800 or len(text.splitlines()) > 35:
+        try:
+            validate_report_body(text, source=audience == "engine")
+        except ValueError:
+            valid_body = False
+        else:
+            valid_body = True
+        if not valid_body:
             status = "failed_validation"
         elif not self.bot_token or not target:
             status = "failed_configuration"

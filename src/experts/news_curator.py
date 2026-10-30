@@ -13,7 +13,8 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiohttp
@@ -25,6 +26,16 @@ from .types import ExpertOpinion, RegimeBias
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _TOKEN_RE = re.compile(r"[가-힣A-Za-z0-9]+")
+
+
+def _publication_time(value: Any) -> Optional[datetime]:
+    try:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return datetime.fromtimestamp(value, timezone.utc)
+        parsed = parsedate_to_datetime(value) if isinstance(value, str) else None
+        return parsed if parsed and parsed.tzinfo else None
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
 
 
 @dataclass
@@ -41,6 +52,7 @@ class NewsItem:
     # two states separate so aggregate confidence follows completed work.
     classified: bool = False
     classification_status: str = "unclassified"
+    published_at: Optional[datetime] = None
 
     def fingerprint_tokens(self) -> Set[str]:
         text = f"{self.title} {self.summary}".lower()
@@ -177,9 +189,12 @@ class NewsCurator(ExpertAgent):
 
     @staticmethod
     def _article_evidence(item: NewsItem) -> Dict[str, Any]:
-        """Bounded source evidence; source APIs did not provide publication time."""
+        """Bounded source evidence with source-supplied publication time."""
         return {
             "title": item.title[:120],
+            "summary": item.summary[:600],
+            "published_at": item.published_at.isoformat() if item.published_at else None,
+            "publication_status": "provided" if item.published_at else "unknown",
             "source": item.source[:40],
             "url": item.url[:1000],
             "fetched_at": item.fetched_at.isoformat(),
@@ -271,6 +286,7 @@ class NewsCurator(ExpertAgent):
                             summary=_HTML_TAG_RE.sub("", it.get("description", "")),
                             url=it.get("link", ""),
                             source="naver",
+                            published_at=_publication_time(it.get("pubDate")),
                         ))
             except Exception as e:
                 logger.debug(f"[뉴스큐레이터] 네이버 '{query}' 실패: {e}")
@@ -308,6 +324,7 @@ class NewsCurator(ExpertAgent):
                         summary=_HTML_TAG_RE.sub("", it.get("description", "")),
                         url=it.get("link", ""),
                         source="naver",
+                        published_at=_publication_time(it.get("pubDate")),
                         related_symbols=[code],
                     )
                     for it in data.get("items", [])
@@ -341,6 +358,7 @@ class NewsCurator(ExpertAgent):
                         summary=it.get("summary", "")[:300],
                         url=it.get("url", ""),
                         source="finnhub",
+                        published_at=_publication_time(it.get("datetime")),
                         related_symbols=[symbol],
                     )
                     for it in (data or [])[:10]

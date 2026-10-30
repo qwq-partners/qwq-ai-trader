@@ -32,13 +32,14 @@ def _render_market_image(text):
 
 class ReportSchedule:
     def __init__(self, store, notifier, dispatch_recorder=None, *, index_fetcher=None, clock=None,
-                 analysis_manager=None, analysis_manager_factory=None):
+                 analysis_manager=None, analysis_manager_factory=None, public_evidence_factory=None):
         self.store, self.notifier = store, notifier
         self.dispatch_recorder = dispatch_recorder
         self.index_fetcher = index_fetcher
         self.clock = clock or (lambda: datetime.now(KST))
         self.analysis_manager = analysis_manager
         self.analysis_manager_factory = analysis_manager_factory
+        self.public_evidence_factory = public_evidence_factory
 
     async def tick(self, now, trading_day, market, engine_context):
         now = now.astimezone(KST)
@@ -109,7 +110,8 @@ class ReportSchedule:
                 analysis = await prepare_market_report(
                     self.store, kind=kind, day=day, source_snapshot_id=snapshot_id,
                     source_body=text, manager=self.analysis_manager,
-                    manager_factory=self.analysis_manager_factory)
+                    manager_factory=self.analysis_manager_factory,
+                    public_evidence_factory=self.public_evidence_factory, now=now)
             except InvalidMarketReport:
                 consumed = await _durable_thread(self.store.record_validation_failure,
                                                  audience, kind, day, snapshot_id, now)
@@ -186,9 +188,13 @@ async def run_audience_reports(bot):
     from ..analytics.report_context import render_runtime_context
     from ..analytics.daily_report import record_morning_brief_dispatch
     from ..utils import loop_heartbeat as heartbeat
+    async def public_evidence_factory(*, now):
+        from ..analytics.market_research_sources import capture_public_research
+        return await capture_public_research(bot, now=now)
     fetcher = getattr(getattr(bot, "kis_market_data", None), "fetch_report_index_observations", None)
     schedule = ReportSchedule(ReportStore(), get_telegram_notifier(), record_morning_brief_dispatch,
-                              index_fetcher=fetcher, analysis_manager_factory=get_llm_manager)
+                              index_fetcher=fetcher, analysis_manager_factory=get_llm_manager,
+                              public_evidence_factory=public_evidence_factory)
     while bot.running:
         try:
             now = datetime.now(KST)

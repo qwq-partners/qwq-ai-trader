@@ -21,6 +21,32 @@ KINDS = {"market": {"morning", "midday", "after"}, "engine": {"daily"}}
 MAX_REPORT_PHOTO_BYTES = 4 * 1024 * 1024
 
 
+def validate_report_body(body: str, *, source: bool = False) -> None:
+    """Bound complete messages, including Telegram's UTF-16 transport limit."""
+    if (not isinstance(body, str) or not body.strip()
+            or len(body) > (1800 if source else 3000)
+            or len(body.splitlines()) > (35 if source else 60)):
+        raise ValueError("invalid report body")
+    try:
+        size = len(body.encode("utf-16-le")) // 2
+    except UnicodeError:
+        raise ValueError("invalid report encoding") from None
+    if size > 4096:
+        raise ValueError("report exceeds transport limit")
+
+
+def encode_public_evidence(bundle: dict) -> tuple[str, str]:
+    """Canonical storage encoding of an already allowlisted public DTO."""
+    if not isinstance(bundle, dict):
+        raise ValueError("invalid public evidence")
+    encoded = json.dumps(bundle, sort_keys=True, ensure_ascii=False,
+                         separators=(",", ":"), allow_nan=False)
+    raw = encoded.encode("utf-8")
+    if len(raw) > 48 * 1024:
+        raise ValueError("public evidence exceeds input limit")
+    return encoded, hashlib.sha256(raw).hexdigest()
+
+
 async def durable_thread(function, *args, **kwargs):
     """Drain a started worker before cancellation releases an enclosing lock."""
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
@@ -91,6 +117,7 @@ class ReportStore:
             db.execute("CREATE TABLE IF NOT EXISTS media_payloads (audience TEXT, kind TEXT, report_date TEXT, media_type TEXT, caption TEXT, image_sha256 TEXT, png BLOB, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS market_inputs (report_date TEXT PRIMARY KEY, owner TEXT, status TEXT, rows_json TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS report_analyses (audience TEXT, kind TEXT, report_date TEXT, owner TEXT NOT NULL, source_snapshot_id TEXT NOT NULL, source_body TEXT NOT NULL, source_sha256 TEXT NOT NULL, prompt_version TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, final_body TEXT, metadata_json TEXT, PRIMARY KEY(audience,kind,report_date))")
+            db.execute("CREATE TABLE IF NOT EXISTS report_analysis_sources (audience TEXT, kind TEXT, report_date TEXT, evidence_json TEXT NOT NULL, evidence_sha256 TEXT NOT NULL, PRIMARY KEY(audience,kind,report_date))")
             with db:
                 yield db
         finally:
@@ -190,7 +217,7 @@ class ReportStore:
 
     def claim_analysis(self, audience: str, kind: str, report_date: str,
                        source_snapshot_id: str, source_body: str,
-                       prompt_version: str, *, owner: str) -> bool:
+                       prompt_version: str, *, owner: str, public_evidence: dict | None = None) -> bool:
         """Spend the logical analysis once, durably, before any manager call."""
         validate_slot(audience, kind, report_date)
         if audience != "market":
@@ -201,12 +228,16 @@ class ReportStore:
         if not isinstance(source_body, str) or not source_body.strip() or len(source_body) > 6000:
             raise ValueError("invalid analysis source")
         digest = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+        evidence = encode_public_evidence(public_evidence) if public_evidence is not None else None
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             if db.execute("SELECT 1 FROM slots WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone():
                 return False
-            return db.execute("INSERT OR IGNORE INTO report_analyses (audience,kind,report_date,owner,source_snapshot_id,source_body,source_sha256,prompt_version,status) VALUES (?,?,?,?,?,?,?,?, 'attempted')",
-                              (audience, kind, report_date, owner, source_snapshot_id, source_body, digest, prompt_version)).rowcount == 1
+            claimed = db.execute("INSERT OR IGNORE INTO report_analyses (audience,kind,report_date,owner,source_snapshot_id,source_body,source_sha256,prompt_version,status) VALUES (?,?,?,?,?,?,?,?, 'attempted')",
+                                 (audience, kind, report_date, owner, source_snapshot_id, source_body, digest, prompt_version)).rowcount == 1
+            if claimed and evidence is not None:
+                db.execute("INSERT INTO report_analysis_sources VALUES (?,?,?,?,?)", (audience, kind, report_date, *evidence))
+            return claimed
 
     def complete_analysis(self, audience: str, kind: str, report_date: str, *,
                           owner: str, status: str, final_body: str,
@@ -215,8 +246,7 @@ class ReportStore:
         validate_slot(audience, kind, report_date)
         if audience != "market" or status not in {"ready", "failed", "unknown", "abandoned"}:
             raise ValueError("invalid analysis outcome")
-        if not isinstance(final_body, str) or not final_body.strip() or len(final_body) > 1800 or len(final_body.splitlines()) > 35:
-            raise ValueError("analysis body exceeds report budget")
+        validate_report_body(final_body)
         if (status == "ready" and not isinstance(result, dict)) or (status != "ready" and result is not None):
             raise ValueError("invalid analysis result")
         result_json = json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None
@@ -230,12 +260,13 @@ class ReportStore:
     def analysis_receipt(self, audience: str, kind: str, report_date: str) -> dict | None:
         validate_slot(audience, kind, report_date)
         with self._db() as db:
-            row = db.execute("SELECT * FROM report_analyses WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+            row = db.execute("SELECT report_analyses.*, report_analysis_sources.evidence_json, report_analysis_sources.evidence_sha256 FROM report_analyses LEFT JOIN report_analysis_sources USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
         if row is None:
             return None
         result = dict(row)
         result["result"] = json.loads(result.pop("result_json") or "null")
         result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
+        result["public_evidence"] = json.loads(result.pop("evidence_json") or "null")
         return result
 
     def record_validation_failure(self, audience: str, kind: str, report_date: str,

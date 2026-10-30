@@ -31,11 +31,16 @@ _SESSION_KO = {"pre_open": "장전", "intraday": "장중", "after_close": "장�
 _symbol_cache: Dict[str, List[Dict[str, Any]]] = {}
 _cache_at: datetime | None = None
 _CACHE_TTL_H = 6
+_report_events: List[Dict[str, Any]] = []
+_report_attempt_at: datetime | None = None
+_report_status = "not_ready"
 
 
 async def _fetch_events() -> List[Dict[str, Any]]:
     """공시 이벤트 조회 + 종목별 캐시 갱신 (실패는 호출자가 구분하여 처리)"""
-    global _cache_at
+    global _cache_at, _report_events, _report_attempt_at, _report_status
+    _report_attempt_at = datetime.now()
+    _report_status = "failed"
     timeout = aiohttp.ClientTimeout(total=15)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(_URL) as resp:
@@ -45,6 +50,8 @@ async def _fetch_events() -> List[Dict[str, Any]]:
     if not isinstance(data, dict) or not isinstance(data.get("events"), list):
         raise ValueError("공시 피드 형식 불일치")
     events: List[Dict[str, Any]] = [e for e in data["events"] if isinstance(e, dict)]
+    _report_events = [dict(e) for e in events]
+    _report_status = "ok" if events else "empty"
     if events:
         _symbol_cache.clear()
         for e in events:
@@ -53,6 +60,12 @@ async def _fetch_events() -> List[Dict[str, Any]]:
                 _symbol_cache.setdefault(code, []).append(e)
         _cache_at = datetime.now()
     return events
+
+
+def peek_report_snapshot() -> Dict[str, Any]:
+    """Copy the last feed attempt without triggering a refresh."""
+    return {"status": _report_status, "attempt_at": _report_attempt_at,
+            "events": [dict(event) for event in _report_events] if _report_status == "ok" else []}
 
 
 async def refresh_disclosure_cache() -> int:

@@ -1,30 +1,37 @@
-"""One durable logical report analysis, using only the existing public body.
+"""One durable logical report analysis from frozen public facts and research.
 
 The caller owns ReportStore.slot_guard from collection through delivery. An
 interrupted claim is never reopened, including after unknown provider charges.
 """
 import asyncio
+from datetime import datetime
+import hashlib
+import json
 import re
 import uuid
+from loguru import logger
 
-from .report_delivery import durable_thread
+from .report_delivery import durable_thread, encode_public_evidence, validate_report_body
 from ..utils.llm_roles import LLMRole, get_role_profile
+
+CAPTURE_TIMEOUT_SECONDS = 30.0
 
 
 class InvalidMarketReport(ValueError):
     """Source/prepared content cannot safely enter the delivery pipeline."""
 
 
-def _validate_body(body):
-    if (not isinstance(body, str) or not body.strip() or len(body) > 1800
-            or len(body.splitlines()) > 35):
-        raise InvalidMarketReport("invalid report body")
+def _validate_body(body, *, source=False):
+    try:
+        validate_report_body(body, source=source)
+    except ValueError:
+        raise InvalidMarketReport("invalid report body") from None
 
 
 def _prepare_fallback(source_body, factual_fallback):
     """Only an unusable factual report prevents delivery."""
     try:
-        _validate_body(source_body)
+        _validate_body(source_body, source=True)
         fallback = factual_fallback(source_body)
         _validate_body(fallback)
         return fallback
@@ -32,10 +39,23 @@ def _prepare_fallback(source_body, factual_fallback):
         raise InvalidMarketReport("report input validation failed") from None
 
 
-def _prepare_prompt(source_body, *, kind, day, build_analysis_prompt):
+def _research_fallback(source_body, fallback, public_evidence, factual_fallback):
+    """Optional research formatting cannot invalidate the verified base facts."""
+    if public_evidence is not None:
+        try:
+            prepared = factual_fallback(source_body, public_evidence=public_evidence)
+            _validate_body(prepared)
+            return prepared
+        except Exception:
+            pass
+    return fallback
+
+
+def _prepare_prompt(source_body, *, kind, day, build_analysis_prompt, public_evidence=None):
     """Optional analysis preparation must not suppress a safe factual report."""
     try:
-        prompt, system = build_analysis_prompt(source_body, kind=kind, day=day)
+        evidence = {"public_evidence": public_evidence} if public_evidence is not None else {}
+        prompt, system = build_analysis_prompt(source_body, kind=kind, day=day, **evidence)
         if not isinstance(prompt, str) or not prompt.strip() or not isinstance(system, str) or not system.strip():
             raise ValueError("invalid prompt")
         _, profile = get_role_profile(LLMRole.MARKET_BRIEF)
@@ -44,6 +64,68 @@ def _prepare_prompt(source_body, *, kind, day, build_analysis_prompt):
         return prompt, system
     except Exception:
         return None
+
+
+async def _drain_capture(task):
+    """Observe cleanup without sending a second cancellation to the reader."""
+    interrupted = False
+    while not task.done():
+        try:
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            interrupted = True
+    if not task.cancelled():
+        task.exception()
+    return interrupted
+
+
+async def _capture_once(factory, now):
+    """One bounded capture; timeout cleanup still owns the enclosing slot."""
+    task = asyncio.create_task(factory(now=now))
+    try:
+        # wait does not turn cancellation of the child into caller cancellation.
+        await asyncio.wait({task}, timeout=CAPTURE_TIMEOUT_SECONDS)
+    except asyncio.CancelledError:
+        task.cancel()
+        await _drain_capture(task)
+        raise
+    if not task.done():
+        task.cancel()
+        if await _drain_capture(task):
+            raise asyncio.CancelledError
+        raise TimeoutError("public evidence capture deadline")
+    if task.cancelled():
+        raise RuntimeError("public evidence capture cancelled internally")
+    return task.result()
+
+
+async def _prepare_research(bundle, factory, now):
+    """Optional imports, capture and validation all stay off the factual path."""
+    try:
+        from .market_research_sources import normalize_public_research, empty_public_research
+    except Exception as error:
+        logger.warning("공개 조사 준비 실패 import: {}", type(error).__name__)
+        return None, "research_capture_failed"
+    stage = "capture" if factory is not None else "normalize"
+    try:
+        if factory is not None:
+            bundle = await _capture_once(factory, now)
+        stage = "normalize"
+        prepared = normalize_public_research(bundle)
+        captured = datetime.fromisoformat(prepared["captured_at"])
+        if now is not None and (captured.tzinfo is None or captured > now):
+            raise ValueError("future research cutoff")
+        encoded, _ = encode_public_evidence(prepared)
+        return json.loads(encoded), None
+    except Exception as error:
+        logger.warning("공개 조사 준비 실패 {}: {}", stage, type(error).__name__)
+        try:
+            prepared = normalize_public_research(empty_public_research(now, "unavailable"))
+            encoded, _ = encode_public_evidence(prepared)
+            return json.loads(encoded), "research_capture_failed"
+        except Exception as fallback_error:
+            logger.warning("공개 조사 준비 실패 fallback: {}", type(fallback_error).__name__)
+            return None, "research_capture_failed"
 
 
 def _failure_status(response, *, provider_exception=False, invocation_started=False):
@@ -91,7 +173,7 @@ async def _complete_once(manager, prompt, system):
     """Propagate cancellation once, then drain provider cleanup and settlement."""
     task = asyncio.create_task(manager.complete_role(prompt, role=LLMRole.MARKET_BRIEF, system=system))
     try:
-        return await asyncio.shield(task)
+        await asyncio.wait({task})
     except asyncio.CancelledError as cancelled:
         task.cancel()
         while not task.done():
@@ -107,10 +189,19 @@ async def _complete_once(manager, prompt, system):
             response = getattr(error, "_llm_response", None)
         cancelled._llm_response = response
         raise
+    try:
+        return task.result()
+    except asyncio.CancelledError as cancelled:
+        # The caller was not cancelled. Preserve any completed settlement while
+        # allowing the ordinary provider-failure path to send the factual report.
+        failure = RuntimeError("market brief cancelled internally")
+        failure._llm_response = getattr(cancelled, "_llm_response", None)
+        raise failure from None
 
 
 async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
-                                source_body=None, manager=None, manager_factory=None):
+                                source_body=None, manager=None, manager_factory=None,
+                                public_evidence=None, public_evidence_factory=None, now=None):
     """Resolve under the exclusive slot guard; reuse an exact frozen result."""
     from .market_report_analysis import (
         PROMPT_VERSION, build_analysis_prompt, compose_analysis, factual_fallback,
@@ -135,24 +226,41 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
                                  final_body="분석 미확보 — 저장된 보고 입력 검증 실패.",
                                  metadata={"reason": "invalid_source"})
             raise
+        fallback = _research_fallback(row["source_body"], fallback, row.get("public_evidence"), factual_fallback)
         await durable_thread(store.complete_analysis, "market", kind, day,
                              owner=row["owner"], status="abandoned", final_body=fallback,
                              metadata={"reason": "interrupted"})
         return await durable_thread(store.analysis_receipt, "market", kind, day)
 
     fallback = _prepare_fallback(source_body, factual_fallback)
+    if not isinstance(source_snapshot_id, str) or not source_snapshot_id or len(source_snapshot_id) > 128:
+        raise InvalidMarketReport("invalid market snapshot identity")
+    research_requested = public_evidence is not None or public_evidence_factory is not None
+    research_failure = None
+    if research_requested:
+        public_evidence, research_failure = await _prepare_research(public_evidence, public_evidence_factory, now)
+        fallback = _research_fallback(source_body, fallback, public_evidence, factual_fallback)
+    if public_evidence is not None:
+        _, evidence_hash = encode_public_evidence(public_evidence)
+        source_snapshot_id = hashlib.sha256(json.dumps([
+            source_snapshot_id, hashlib.sha256(source_body.encode()).hexdigest(), evidence_hash,
+        ], separators=(",", ":")).encode()).hexdigest()
     prepared_prompt = _prepare_prompt(source_body, kind=kind, day=day,
-                                       build_analysis_prompt=build_analysis_prompt)
+                                       build_analysis_prompt=build_analysis_prompt, public_evidence=public_evidence)
     owner = uuid.uuid4().hex
     if not await durable_thread(store.claim_analysis, "market", kind, day,
-                                source_snapshot_id, source_body, PROMPT_VERSION, owner=owner):
+                                source_snapshot_id, source_body, PROMPT_VERSION, owner=owner,
+                                public_evidence=public_evidence):
         # A delivery claim or unsupported competing caller consumed the slot.
         # Do not guess that an existing attempted analysis is abandoned here.
         return None
-    if prepared_prompt is None:
+    has_events = public_evidence is not None and any(
+        row.get("kind") in {"news", "disclosure", "calendar"} for row in public_evidence.get("records", []))
+    if research_failure or prepared_prompt is None or (research_requested and not has_events):
+        reason = research_failure or ("research_evidence_missing" if research_requested and not has_events else "prompt_unavailable")
         await durable_thread(store.complete_analysis, "market", kind, day, owner=owner,
                              status="failed", final_body=fallback,
-                             metadata={"reason": "prompt_unavailable"})
+                             metadata={"reason": reason})
         return await durable_thread(store.analysis_receipt, "market", kind, day)
     prompt, system = prepared_prompt
     response, result, status, reason = None, None, "failed", "manager_unavailable"
@@ -173,7 +281,8 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
                 reason = "incomplete"
             else:
                 try:
-                    final_body, result = compose_analysis(source_body, response.content, kind=kind, day=day)
+                    evidence = {"public_evidence": public_evidence} if public_evidence is not None else {}
+                    final_body, result = compose_analysis(source_body, response.content, kind=kind, day=day, **evidence)
                     _validate_body(final_body)
                 except Exception:
                     final_body, result, reason = fallback, None, "invalid_output"

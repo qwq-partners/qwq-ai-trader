@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
 import asyncpg
@@ -185,6 +186,25 @@ class NewsStorage:
                     pass
                 self._pool = None
             return saved_count
+
+    async def get_report_news(self, *, now: datetime) -> Dict[str, Any]:
+        """Read only the already connected pool; do not open or repair it."""
+        pool = self._pool
+        if pool is None or pool.is_closing():
+            return {"status": "not_ready", "rows": []}
+        async def read():
+            async with pool.acquire() as conn:
+                cutoff = (now.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None) if now.tzinfo else now) - timedelta(hours=24)
+                return await conn.fetch("""
+                    SELECT title, content, url, source, collected_at
+                    FROM news_articles WHERE collected_at >= $1 AND collected_at <= $2
+                    ORDER BY collected_at DESC LIMIT 80
+                """, cutoff, cutoff + timedelta(hours=24))
+        try:
+            rows = await asyncio.wait_for(read(), timeout=2)
+            return {"status": "ok" if rows else "empty", "rows": [dict(row) for row in rows]}
+        except Exception as exc:
+            return {"status": "failed", "rows": [], "detail": type(exc).__name__}
 
     async def get_recent_news(
         self,

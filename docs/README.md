@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10/31 현재 작업:** [R02-RESEARCH](operations/execution-roadmap.md#r02-research-evidence-20261031)는 사용자 피드백에 따라 뉴스·공시·거시의 기존 수집 근거를 시장 조사 분석에 연결한다. 앞선 가격 전용 PR309는 내용 수락이 아니며 새 구현의 검증·통합은 원장 영수증을 따른다. 보고 역할만 GPT-6.1 Sol/medium·4096token/90초로 변경하고 월USD100/log_and_continue·거래 설정은 유지한다. 운영72c88c07은 기존 Git 인증 복구 대기이며 자연 출력·모바일 수락은 별도다.
+
 > **10/31 R02-LLM 소스 인수:** [현재 원장](operations/execution-roadmap.md#r02-llm-analysis-20261030). 고정 관전 문구를 공개 근거 기반 LLM 판단·확인/반증 조건으로 교체했다. 구현·관련 검사·독립 리뷰 완료이며 정식 전체/CI·병합의 최종 상태는 [PR #309](https://github.com/qwq-partners/qwq-ai-trader/pull/309)의 영수증을 따른다. 운영72c88c07은 기존 Git 인증 복구 대기로 유지하며 실제 자연 출력·모바일 수락은 WAIT다. 아래는 이전 시점 이력이다.
 
 > **10/30 23:10 현재:** [R02 시각 보고서](operations/execution-roadmap.md#r02-visual-report-20261030) 구현·검증·운영 인수 DONE. 고정72c88c07/PID3911040·전체9,816검사·기동161.2초/37항목PASS·보호48파일/기존cron/매수중지·월USD100/log_and_continue 보존이다. 시장 보고는 한 장 이미지+동일요청캡션, 개인21시는텍스트다. T04는만료·무표본종료,새예약0. NEXT는다음자연이미지수신/내용수락·기존O02기한·새유효E02/E01/E04입력이다. 실제모바일수락/신규거래순수익은미확정이며문서마감용재배포는없다. 아래는당시이력이다.

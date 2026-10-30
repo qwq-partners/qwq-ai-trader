@@ -75,21 +75,24 @@ def _parse(text):
     if rebuilt != text:
         return None
     lines = text.split('\n')
-    if len(lines) > 50 or len(lines) < 8:
+    research = '<b>핵심 이슈와 영향</b>' in lines
+    if len(lines) > (60 if research else 50) or len(lines) < 8:
         return None
     titles = ('한국증시 모닝브리프', '한국증시 장중시황', '한국증시 마감점검')
     if lines[0] not in [f'🇰🇷 <b>{title}</b>' for title in titles]:
         return None
     if not re.fullmatch(r'\d{2}/\d{2} \d{2}:\d{2} KST', lines[1]):
         return None
-    if lines[3] != '<b>시장 판단</b>' or '<b>국내 관전 포인트</b>' not in lines:
+    if lines[3] != '<b>시장 판단</b>' or (not research and '<b>국내 관전 포인트</b>' not in lines):
         return None
     if not lines[-2].startswith('자료 범위: ') or not lines[-1].startswith('출처: '):
         return None
     headings = [line[3:-4] for line in lines[3:] if line.startswith('<b>') and line.endswith('</b>')]
-    if any(not (h in ('시장 판단', '국내 관전 포인트') or h.startswith('주요 지표 · ') or h.startswith('업종 흐름 · ')) for h in headings):
+    if any(not (h in ('시장 판단', '국내 관전 포인트', '핵심 이슈와 영향', '근거 / 출처') or h.startswith('주요 지표 · ') or h.startswith('업종 흐름 · ')) for h in headings):
         return None
-    if headings.count('시장 판단') != 1 or headings.count('국내 관전 포인트') != 1:
+    if (headings.count('시장 판단') != 1 or
+            (research and (headings.count('핵심 이슈와 영향') != 1 or headings.count('근거 / 출처') != 1)) or
+            (not research and (headings.count('국내 관전 포인트') != 1 or '근거 / 출처' in headings))):
         return None
     # Bold is exclusively used for complete headings.
     if any(('<b>' in line or '</b>' in line) and not (line.startswith('<b>') and line.endswith('</b>')) for line in lines[1:]):
@@ -124,6 +127,22 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
         if not judgment:
             return None
         caption = '\n'.join([lines[0], lines[1], *judgment])
+        research = '핵심 이슈와 영향' in lines
+        caption_urls = []
+        if research:
+            urls = []
+            source_id = ''
+            for line in lines:
+                match = re.match(r'• (E[0-9]+) · ', line)
+                if match:
+                    source_id = match.group(1)
+                elif line.startswith('원문: ') and source_id:
+                    urls.append((source_id, line.removeprefix('원문: ')))
+            for source_id, url in urls[:2]:
+                candidate = caption + '\n' + source_id + ' · ' + url
+                if len(candidate.encode('utf-16-le')) // 2 <= 900:
+                    caption = candidate
+                    caption_urls.append(url)
         if len(caption.encode('utf-16-le')) // 2 > 900:
             return None
         fig = Figure(figsize=(7.2, 1), dpi=100)
@@ -144,10 +163,22 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                 if measure(candidate, px) <= available:
                     current = candidate
                 else:
-                    if not current or measure(word, px) > available:
-                        return None
-                    out.append(current)
-                    current = word
+                    if measure(word, px) > available:
+                        if not research or not word.startswith(('http://', 'https://')):
+                            return None
+                        if current:
+                            out.append(current)
+                            current = ''
+                        for char in word:
+                            if measure(current + char, px) > available:
+                                out.append(current)
+                                current = char
+                            else:
+                                current += char
+                    else:
+                        if current:
+                            out.append(current)
+                        current = word
             if current:
                 out.append(current)
             return out
@@ -164,7 +195,7 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                 kind, size, x, color = 'title', 40, 42, '#ffffff'
             elif i == 1:
                 kind, size, x, color = 'date', 28, 42, '#d5e5f0'
-            elif line == '시장 판단' or line == '국내 관전 포인트' or line.startswith(('주요 지표 · ', '업종 흐름 · ')):
+            elif line in ('시장 판단', '국내 관전 포인트', '핵심 이슈와 영향', '근거 / 출처') or line.startswith(('주요 지표 · ', '업종 흐름 · ')):
                 kind, size, x, color = 'heading', 30, 42, '#194b71'
                 section = line
                 y += 12
@@ -177,6 +208,8 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                     x = 88
             bullet = line.startswith('• ')
             display_line = line[2:] if bullet else line
+            if research and line.startswith('원문: ') and line.removeprefix('원문: ') in caption_urls:
+                display_line = '원문: 캡션 링크'
             metric = None
             if bullet and section.startswith(('주요 지표 · ', '업종 흐름 · ')):
                 # Split only a complete known numeric row. Unknown labels/values remain
@@ -205,7 +238,7 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                             metric, row_height))
             y += row_height
         height = y + 35
-        if height > 3000:
+        if height > (4500 if research else 3000):
             return None
         fig.set_size_inches(7.2, height / 100)
         ax = fig.add_axes([0, 0, 1, 1], xlim=(0, 720), ylim=(height, 0))

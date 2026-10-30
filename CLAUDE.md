@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10/31 현재 작업:** [R02-RESEARCH](docs/operations/execution-roadmap.md#r02-research-evidence-20261031)는 사용자 피드백에 따라 뉴스·공시·거시의 기존 수집 근거를 시장 조사 분석에 연결한다. 앞선 가격 전용 PR309는 내용 수락이 아니며 새 구현의 검증·통합은 원장 영수증을 따른다. 보고 역할만 GPT-6.1 Sol/medium·4096token/90초로 변경하고 월USD100/log_and_continue·거래 설정은 유지한다. 운영72c88c07은 기존 Git 인증 복구 대기이며 자연 출력·모바일 수락은 별도다.
+
 > **10/31 R02-LLM 소스 인수:** [현재 원장](docs/operations/execution-roadmap.md#r02-llm-analysis-20261030). 고정 관전 문구를 공개 근거 기반 LLM 판단·확인/반증 조건으로 교체했다. 구현·관련 검사·독립 리뷰 완료이며 정식 전체/CI·병합의 최종 상태는 [PR #309](https://github.com/qwq-partners/qwq-ai-trader/pull/309)의 영수증을 따른다. 운영72c88c07은 기존 Git 인증 복구 대기로 유지하며 실제 자연 출력·모바일 수락은 WAIT다. 아래는 이전 시점 이력이다.
 
 > **10/30 23:10 현재:** [R02 시각 보고서](docs/operations/execution-roadmap.md#r02-visual-report-20261030) 구현·검증·운영 인수 DONE. 고정72c88c07/PID3911040·전체9,816검사·기동161.2초/37항목PASS·보호48파일/기존cron/매수중지·월USD100/log_and_continue 보존이다. 시장 보고는 한 장 이미지+동일요청캡션, 개인21시는텍스트다. T04는만료·무표본종료,새예약0. NEXT는다음자연이미지수신/내용수락·기존O02기한·새유효E02/E01/E04입력이다. 실제모바일수락/신규거래순수익은미확정이며문서마감용재배포는없다. 아래는당시이력이다.
@@ -742,13 +744,14 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 **10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래 계약은10/28 17:40 운영 인수로 적용했다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 사용자 선택은 구독 CLI 우선·API 대체이며 PR #284에 연결/실측/검증을 완료했다. 운영 적용은 완료했으며 실제 서비스의 자연 호출 결과는 별도 인수한다.
 
-고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v2-openai`다. 일반 task와 고정 보고/복기 역할을 구분한다.
+고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v4-market-research`다(소스 계약이며 운영 적용은 원장 참조). 일반 task와 고정 보고/복기 역할을 구분한다.
 
 | 작업 | Primary | Fallback / 한도 |
 |------|---------|----------|
 | 테마·뉴스·일반 경량 분석·위키 생성 | GPT-5 mini / minimal | 일반 fallback 없음; 기존 JSON 형식 복구 유지 |
 | 거시·한국경제·글로벌미시 한 줄 설명 | GPT-5 mini / minimal | 없음; 출력512·20초 |
 | 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
+| 시장 조사 보고 고정 역할 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·입력64KiB·standard·JSON; 기존 공개 뉴스/공시/시장 근거 |
 | 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
 | 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
 | Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | 구독 CLI 우선·예산 내 API1회 대체. 소스/운영 적용 완료·자연 호출 인수 별도. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
