@@ -1,6 +1,6 @@
 # QWQ AI Trader - CLAUDE.md
 
-> **10/30 현재:** [R02 모바일 피드백 후속](docs/operations/execution-roadmap.md#r02-mobile-revision-20261030). 새 장전본문은 사용자 수신DONE/내용·가독성 미수락이다. 지수 방향·표시 수치의 비교·국내 확인 항목을 한정 보완하고 관련76·전체9,774검사/격리0·독립 실제Opus5.5 후속승인을 마쳤다. 최종CI/병합은 PR영수증을 따른다. [E04 JSON 모드](docs/operations/execution-roadmap.md#e04-theme-json-mode-20261030)는 PR #304/main911d3183에 병합했다. 운영1f70ff8a/PID3859797·장중재시작0이며 두 후속 소스의 운영 적용은T04마지막슬롯/16:06종료·장후보고/보호상태 대조 뒤 별도다. NEXT는 기존T04/O02기한·16:40/21시자연보고와 새 유효 E02/E01/E04 입력이다. 실제 모바일 내용수락·신규거래 순수익·계좌TWR은 미확정이다. 아래는 당시 이력이다.
+> **10/30 현재:** [R02 main CI 대량기록 종료 실패 후속](docs/operations/execution-roadmap.md#r02-volume-close-20261030). R02 표현 수정은 PR #305/main dc37991b에 병합했으나 main CI의 기존 대량기록 검사가 journal_close_timeout/저장77,071·미봉인으로 재발했다. 로컬/PR CI9,774 통과와 main 인수 실패를 분리하고, 운영 승격을 보류하고 합성 생산 조절을 공유하는 테스트만 보완했다. 관련85·감시집중4·전체9,778검사/격리0·동일지연조건 봉인과 독립 실제Opus5.5 후속승인을 확인했다. 최종CI/통합은 PR영수증을 따른다. JSON 모드 PR #304/main CI는 통과했다. 운영1f70ff8a/PID3859797·보호파일/예약 유지, 모바일 내용수락·신규거래 순수익·TWR은 미확정이다. NEXT는 실패 인수→T04 마지막슬롯/16:06종료·장후보고/보호상태 대조다. 아래는 당시 이력이다.
 
 > **10/29 21:50 현재:** [R02 증권 리포트형 브리프](docs/operations/execution-roadmap.md#r02-securities-brief-20261029) 구현·검증·운영 인수 DONE. 고정e5f781d3/PID3846093·전체9,737검사·166.3초/24항목PASS·보호48파일/기존cron 보존·복구ready/미체결0/NRestarts0. [최종 운영 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/300#issuecomment-6497157250). NEXT는 새 본문 자연 발송/실제 모바일 내용 수락·10/30 T04 만료·기존 O02 기한이다. 원인 미확정 대량 기록 검사1회 실패는 진단 이력으로 보존하며 최종 로컬/PR/main/운영 검증은 통과했다. 문서 마감용 재배포는 없다. 아래 상태는 당시 이력이다.
 
