@@ -103,7 +103,9 @@ async def test_cached_receipt_through_scheduler_and_real_notifier_once(tmp_path,
     a = ReportSchedule(ReportStore(path), notifier, index_fetcher=fetch)
     b = ReportSchedule(ReportStore(path), notifier, index_fetcher=fetch)
     results = await asyncio.gather(a.tick(NOW, True, snapshot, ''), b.tick(NOW, True, snapshot, ''))
-    assert sorted(results) == ['accepted', 'already_consumed']
+    assert results.count('accepted') == 1
+    # The new analysis guard may reject the contender before the delivery claim.
+    assert next(result for result in results if result != 'accepted') in {'analysis_collecting', 'already_consumed'}
     assert await ReportSchedule(ReportStore(path), notifier, index_fetcher=fetch).tick(NOW, True, snapshot, '') == 'already_consumed'
     assert notifier._send_report_once.await_count == 1
     args = notifier._send_report_once.call_args.args

@@ -4,12 +4,13 @@ from enum import Enum
 from types import MappingProxyType
 
 
-ROLE_POLICY_VERSION = 'engine-roles-v2-openai'
+ROLE_POLICY_VERSION = 'engine-roles-v3-market-brief'
 
 
 class LLMRole(str, Enum):
     REPORT_ONE_LINE = 'report_one_line'
     MORNING_BRIEF = 'morning_brief'
+    MARKET_BRIEF = 'market_brief'
     POST_EXIT_RESEARCH = 'post_exit_research'
 
 
@@ -23,6 +24,7 @@ class RoleProfile:
     budget_priority: str
     reasoning_effort: str | None = None
     thinking_level: str | None = None
+    response_format: str | None = None
 
     def controls(self) -> dict:
         result = {'max_tokens': self.max_output_tokens}
@@ -30,6 +32,8 @@ class RoleProfile:
             result['reasoning_effort'] = self.reasoning_effort
         if self.thinking_level is not None:
             result['thinking_level'] = self.thinking_level
+        if self.response_format is not None:
+            result['response_format'] = {'type': self.response_format}
         return result
 
 
@@ -42,6 +46,9 @@ ROLE_PROFILES = MappingProxyType({
     LLMRole.MORNING_BRIEF: RoleProfile(
         'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
         reasoning_effort='minimal'),
+    LLMRole.MARKET_BRIEF: RoleProfile(
+        'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
+        reasoning_effort='minimal', response_format='json_object'),
     LLMRole.POST_EXIT_RESEARCH: RoleProfile(
         'openai', 'gpt-6.1-sol', 4096, 90.0, 128 * 1024, 'research',
         reasoning_effort='medium'),

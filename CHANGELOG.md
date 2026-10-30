@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-31 — 시장 보고의 근거 기반 LLM 분석
+
+- 시장 판단과 국내 관전 포인트를 공개 관측 사실에 근거한 LLM 해석으로 연결한다. 각 근거에 날짜·관찰 범위·참고 한계를 붙이고, 수치·출처는 코드가 보존한다. 대상의 의미와 확인·재검토 조건을 최대 두 개 제시한다.
+- 보고 전용 `MARKET_BRIEF` 역할은 JSON 형식의 단일 분석을 수행하며 기존 공통 예산·정산·감사를 따른다. 생성 claim을 호출 전에 보존해 경합·재시작 시 중복 생성을 막고, 준비된 결과는 원본문과 함께 재사용한다. 생성 실패 시 사실표와 분석 미확보를 표시한다.
+- 관련 파일: `market_report_analysis.py`, `market_report_runner.py`, `report_delivery.py`, `report_scheduler.py`, `llm_roles.py` 및 관련 검사. [Plan→Do→See·독립 리뷰·운영/NEXT](docs/operations/execution-roadmap.md#r02-llm-analysis-20261030). 최종 검증·통합은 [PR #309](https://github.com/qwq-partners/qwq-ai-trader/pull/309) 영수증을 따르며 운영은 기존 Git 인증 복구 대기다. 실제 자연 출력의 내용 수락과 순수익 개선은 별도다.
+
 ## 2026-10-30 — 시장 브리프의 한 장 시각 보고서
 
 - 기존 검증 본문을 판단 영역·지표 비교 행·ETF 흐름·번호별 관전 포인트로 배치한다. 날짜·출처·참고값 한계·상대순위를 보존하고 새 시장/모델 호출 없이 로컬에서 그린다.
