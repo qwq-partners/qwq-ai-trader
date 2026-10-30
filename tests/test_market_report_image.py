@@ -154,3 +154,28 @@ def test_height_and_transport_byte_limits_are_fail_closed(monkeypatch):
         target.write(b'x' * (4 * 1024 * 1024 + 1))
     monkeypatch.setattr(FigureCanvasAgg, 'print_png', oversized_png)
     assert render_market_report_image(sample()) is None
+
+
+def test_missing_font_selects_text_fallback(monkeypatch):
+    from src.analytics import market_report_image
+    monkeypatch.setattr(market_report_image, '_font', lambda: None)
+    assert render_market_report_image(sample()) is None
+
+
+def test_literal_market_text_is_not_interpreted_as_math(monkeypatch):
+    from matplotlib.axes import Axes
+    drawn = []
+    original = Axes.text
+    def capture(ax, *args, **kwargs):
+        artist = original(ax, *args, **kwargs)
+        drawn.append(artist)
+        return artist
+    monkeypatch.setattr(Axes, 'text', capture)
+    source = sample().replace('반도체', '$ETF$')
+    result = render_market_report_image(source)
+    assert result is not None
+    assert any('$ETF$' in artist.get_text() for artist in drawn)
+    assert all(not artist.get_parse_math() for artist in drawn)
+    rendered = ''.join(''.join(artist.get_text().split()) for artist in drawn)
+    for line in result.plain_text.splitlines():
+        assert ''.join(line.removeprefix('• ').split()) in rendered

@@ -237,19 +237,19 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                 label, value, detail = metric
                 ax.scatter([57], [top + 13], s=15, color=color)
                 ax.plot([340, 340], [top + 3, top + row_height - 13], color='#d4e1e9', linewidth=1)
-                ax.text(69, top, label, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top')
-                ax.text(355, top, value, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top')
+                ax.text(69, top, label, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top', parse_math=False)
+                ax.text(355, top, value, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top', parse_math=False)
                 if detail:
                     ax.text(355, top + size + 10, detail, fontsize=size * 72 / 100,
-                            fontproperties=prop, color='#465c6c', va='top')
+                            fontproperties=prop, color='#465c6c', va='top', parse_math=False)
                 continue
             if bullet and not number:
                 ax.scatter([x - 11], [top + 13], s=15, color=color)
             if number:
-                ax.text(52, top, str(number), fontsize=28 * 72 / 100, fontproperties=prop, color='#257f95', va='top')
+                ax.text(52, top, str(number), fontsize=28 * 72 / 100, fontproperties=prop, color='#257f95', va='top', parse_math=False)
             for j, part in enumerate(wrapped):
                 ax.text(x, top + j * (size + 10), part, fontsize=size * 72 / 100,
-                        fontproperties=prop, color=color, va='top')
+                        fontproperties=prop, color=color, va='top', parse_math=False)
         buffer = BytesIO()
         canvas.print_png(buffer)
         png = buffer.getvalue()
