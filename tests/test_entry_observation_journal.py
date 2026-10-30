@@ -360,7 +360,8 @@ async def test_close_timeout_returns_incomplete_without_waiting_on_stalled_disk(
         buffer.publish(record())
         while not entered.is_set(): await asyncio.sleep(0.001)
         result = await journal.close(timeout_seconds=0.02)
-        assert not result["sealed"] and result["error"] == "journal_close_timeout"
+        assert not result["sealed"] and not result["fsync_confirmed"]
+        assert result["error"] == "journal_close_timeout"
         assert not buffer.export()["complete"]
     finally:
         release.set()
