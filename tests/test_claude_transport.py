@@ -1,9 +1,11 @@
 """합성 CLI 자식/HTTP 응답만 사용하는 Claude 전송 경계 검사."""
 import asyncio
+import errno
 import importlib
 import json
 import os
 import signal
+import subprocess
 from pathlib import Path
 import sys
 
@@ -87,7 +89,7 @@ async def assert_descendant_stopped(pid, *, timeout=0.5):
     while True:
         try:
             state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             return
         if state == "Z":
             return
@@ -452,6 +454,50 @@ async def test_descendant_check_rejects_a_real_surviving_process():
             pass
         await proc.wait()
     await assert_descendant_stopped(proc.pid)
+
+
+@pytest.mark.asyncio
+async def test_descendant_check_accepts_reaped_process_after_proc_stat_open(monkeypatch):
+    proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],
+                            env={}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    path = Path(f'/proc/{proc.pid}/stat')
+    original = Path.read_text
+    errors = []
+    try:
+        with path.open() as held:
+            def raced_read(target, *args, **kwargs):
+                if target != path:
+                    return original(target, *args, **kwargs)
+                proc.kill()
+                proc.wait(timeout=3)
+                try:
+                    return held.read()
+                except ProcessLookupError as exc:
+                    errors.append(exc.errno)
+                    raise
+            monkeypatch.setattr(Path, 'read_text', raced_read)
+            await assert_descendant_stopped(proc.pid)
+        assert errors == [errno.ESRCH]
+        assert proc.returncode == -signal.SIGKILL
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [PermissionError(errno.EACCES, 'denied'), OSError(errno.EIO, 'I/O error')])
+async def test_descendant_check_propagates_other_proc_read_errors(monkeypatch, error):
+    path = Path('/proc/123456789/stat')
+    original = Path.read_text
+    def failed_read(target, *args, **kwargs):
+        if target == path:
+            raise error
+        return original(target, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', failed_read)
+    with pytest.raises(type(error)) as caught:
+        await assert_descendant_stopped(123456789)
+    assert caught.value is error
 
 
 @pytest.mark.asyncio

@@ -37,6 +37,69 @@ METADATA_ALLOCATION = 201
 BUFFER_CAPACITY = 100713
 
 
+def synthetic_producer_pacing():
+    """Bound the fake-clock producer backlog without changing the real writer."""
+    pacing = {'checkpoints': 0, 'wait_seconds': 0.0, 'queue_peak': 0}
+
+    async def checkpoint(runtime, tick):
+        journal = runtime.journal
+        pending = journal._queue.qsize()
+        pacing['queue_peak'] = max(pacing['queue_peak'], pending)
+        if pending < 1000:
+            return
+        pacing['checkpoints'] += 1
+        started = monotonic()
+        while journal._queue.qsize() > 100:
+            assert not journal._failed.is_set(), 'writer failed during synthetic pacing'
+            assert journal._thread.is_alive(), 'writer stopped during synthetic pacing'
+            elapsed = monotonic() - started
+            assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
+            await asyncio.sleep(0.01)
+        elapsed = monotonic() - started
+        assert not journal._failed.is_set() and journal._thread.is_alive(), 'synthetic writer failed'
+        assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
+        pacing['wait_seconds'] += elapsed
+
+    return checkpoint, pacing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('writer_alive', 'expected'), [
+    (False, 'writer stopped during synthetic pacing'),
+    (True, 'synthetic writer stalled'),
+])
+async def test_synthetic_pacing_rejects_stopped_or_stalled_writer(monkeypatch, writer_alive, expected):
+    checkpoint, pacing = synthetic_producer_pacing()
+    journal = SimpleNamespace(_queue=SimpleNamespace(qsize=lambda: 1000),
+        _failed=SimpleNamespace(is_set=lambda: False),
+        _thread=SimpleNamespace(is_alive=lambda: writer_alive))
+    clock = iter((0, 3, 6, 9))
+    monkeypatch.setitem(globals(), 'monotonic', lambda: next(clock))
+    with pytest.raises(AssertionError) as exc:
+        await checkpoint(SimpleNamespace(journal=journal), 0)
+    assert str(exc.value).splitlines()[0] == expected
+    assert pacing['checkpoints'] == 1 and pacing['queue_peak'] == 1000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('failed', 'prior_wait', 'expected'), [
+    (True, 0, 'writer failed during synthetic pacing'),
+    (False, 28, 'synthetic writer stalled'),
+])
+async def test_synthetic_pacing_rejects_failed_writer_or_cumulative_timeout(monkeypatch, failed, prior_wait, expected):
+    checkpoint, pacing = synthetic_producer_pacing()
+    pacing['wait_seconds'] = prior_wait
+    journal = SimpleNamespace(_queue=SimpleNamespace(qsize=lambda: 1000),
+        _failed=SimpleNamespace(is_set=lambda: failed),
+        _thread=SimpleNamespace(is_alive=lambda: True))
+    clock = iter((0, 3))
+    monkeypatch.setitem(globals(), 'monotonic', lambda: next(clock))
+    with pytest.raises(AssertionError) as exc:
+        await checkpoint(SimpleNamespace(journal=journal), 0)
+    assert str(exc.value).splitlines()[0] == expected
+    assert pacing['wait_seconds'] == prior_wait
+
+
 def price_batch(symbol, count):
     """Make parser-conformant raw CNT frames without bypassing the feed."""
     rows = []
@@ -186,7 +249,9 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_facto
         counts = Counter(r['kind'] for r in runtime.buffer._records)
         clock[0] = plan.end_at
         await runtime.close()
-        assert runtime.result['sealed'], runtime.result
+        assert runtime.result['sealed'] and runtime.result['fsync_confirmed'], runtime.result
+        assert runtime.result['error'] is None, runtime.result
+        assert runtime.result['persisted_records'] == len(runtime.buffer._records), runtime.result
         observed = read_observation_journal(plan.settings['journal_path'], max_bytes=256 * 1024 * 1024,
                                              expected_study_sha256=plan.study_sha256)
         return plan, study, observed, retained, counts, runtime.buffer, clock[0]
@@ -231,14 +296,31 @@ async def test_guarded_pilot_scaled_synthetic_stream_seals_and_reads(tmp_path, m
 @pytest.mark.asyncio
 async def test_high_volume_raw_candidate_stream_seals_reads_and_preserves_regular_flow(tmp_path, monkeypatch):
     """Dropping, sampling, or deduplicating raw state events must fail this exact-count stream."""
+    from src.analytics import entry_observation_runtime
+    close_receipt = {}
+    original_close = entry_observation_runtime.ObservationJournal.close
+    async def measured_close(journal, *, timeout_seconds=5.0):
+        close_receipt['pending_before'] = journal._queue.qsize()
+        close_receipt['persisted_before'] = journal._persisted
+        started = monotonic()
+        result = await original_close(journal, timeout_seconds=timeout_seconds)
+        close_receipt.update(result, duration_seconds=monotonic() - started,
+                             timeout_seconds=timeout_seconds, pending_after=journal._queue.qsize(),
+                             persisted_after=journal._persisted, accepted_records=journal._final_count)
+        return result
+    monkeypatch.setattr(entry_observation_runtime.ObservationJournal, 'close', measured_close)
+    # Fake-clock pacing preserves the workload; it is not a throughput benchmark.
+    checkpoint, pacing = synthetic_producer_pacing()
     started = monotonic()
     plan, study, observed, retained, counts, buffer, now = await collect_volume(
-        tmp_path, monkeypatch, cycles=CAPTURE_SECONDS, high_volume=True)
+        tmp_path, monkeypatch, cycles=CAPTURE_SECONDS, high_volume=True, producer_checkpoint=checkpoint)
     duration = monotonic() - started
     expected_states = CAPTURE_SECONDS * CANDIDATE_PRICE_PER_SECOND + (BURST_STATES - CANDIDATE_PRICE_PER_SECOND) + 10
     expected_books = (CAPTURE_SECONDS * CANDIDATE_BOOK_PER_SECOND + (BURST_BOOKS - CANDIDATE_BOOK_PER_SECOND)
                       + CAPTURE_SECONDS)
     assert observed['complete'] and observed['dropped_records'] == 0
+    assert close_receipt['sealed'] and close_receipt['fsync_confirmed'] and close_receipt['error'] is None
+    assert close_receipt['persisted_after'] == close_receipt['accepted_records'] == len(observed['records'])
     assert counts['ws_quote'] == expected_books and counts['market_state'] == expected_states
     state_seconds = Counter(row['received_at'][:19] for row in observed['records']
                             if row.get('kind') == 'market_state' and row.get('tr_id') == PRICE)
@@ -288,7 +370,8 @@ async def test_high_volume_raw_candidate_stream_seals_reads_and_preserves_regula
         'configured_journal_max_bytes': plan.settings['max_bytes'], 'reader_limit_bytes': 256 * 1024 * 1024,
         'duration_seconds': duration,
         'process_peak_rss_kib': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-        'live_volume_qualified': False, 'installation_ready': False}, sort_keys=True))
+        'live_volume_qualified': False, 'installation_ready': False,
+        'synthetic_producer_pacing': pacing, 'close': close_receipt}, sort_keys=True))
 
 
 @pytest.mark.asyncio

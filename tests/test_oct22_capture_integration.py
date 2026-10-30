@@ -1,6 +1,5 @@
 """Exact Oct. 22 high-volume study; runs the parser, writer, strict reader and observed flow."""
 from datetime import datetime, timedelta, timezone
-import asyncio
 import json
 from pathlib import Path
 from time import monotonic
@@ -58,7 +57,8 @@ async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_obser
         close_receipt.update(result, duration_seconds=monotonic() - started,
                              timeout_seconds=timeout_seconds,
                              pending_after=journal._queue.qsize(),
-                             persisted_after=journal._persisted)
+                             persisted_after=journal._persisted,
+                             accepted_records=journal._final_count)
         print('OCT22_CLOSE_RECEIPT=' + json.dumps(close_receipt, sort_keys=True))
         return result
     monkeypatch.setattr(entry_observation_runtime.ObservationJournal, 'close', measured_close)
@@ -66,25 +66,7 @@ async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_obser
     # A 21-minute fake clock must not leave ~64k queued records for the real
     # 10-second close deadline. Pace only the synthetic producer; keep the real
     # writer, fsync, raw burst, logical clock and production limits unchanged.
-    pacing = {'checkpoints': 0, 'wait_seconds': 0.0, 'queue_peak': 0}
-    async def producer_checkpoint(runtime, tick):
-        journal = runtime.journal
-        pending = journal._queue.qsize()
-        pacing['queue_peak'] = max(pacing['queue_peak'], pending)
-        if pending < 1000:
-            return
-        pacing['checkpoints'] += 1
-        started = monotonic()
-        while journal._queue.qsize() > 100:
-            assert not journal._failed.is_set(), 'writer failed during synthetic pacing'
-            assert journal._thread.is_alive(), 'writer stopped during synthetic pacing'
-            elapsed = monotonic() - started
-            assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
-            await asyncio.sleep(0.01)
-        elapsed = monotonic() - started
-        assert not journal._failed.is_set() and journal._thread.is_alive(), 'synthetic writer failed'
-        assert elapsed < 5 and pacing['wait_seconds'] + elapsed < 30, 'synthetic writer stalled'
-        pacing['wait_seconds'] += elapsed
+    producer_checkpoint, pacing = volume.synthetic_producer_pacing()
     plan, study, observed, retained, counts, buffer, now = await volume.collect_volume(
         tmp_path, monkeypatch, plan_factory=plan_factory, cycles=1257, high_volume=True,
         producer_checkpoint=producer_checkpoint)
@@ -107,8 +89,9 @@ async def test_exact_oct22_high_volume_envelope_study_preserves_strict_and_obser
     assert len(strict['candidates']) == 7
     assert observed_flow['strict_report'] == strict
     assert observed_flow['counts'] == {'denominator': 7, 'eligible_pairs': 5}
-    assert close_receipt['sealed'] and close_receipt['pending_after'] == 0
-    assert close_receipt['persisted_after'] == len(observed['records'])
+    assert close_receipt['sealed'] and close_receipt['fsync_confirmed'] and close_receipt['error'] is None
+    assert close_receipt['pending_after'] == 0
+    assert close_receipt['persisted_after'] == close_receipt['accepted_records'] == len(observed['records'])
     print('OCT22_SYNTHETIC_VOLUME_RECEIPT=' + json.dumps({
         'records': len(observed['records']), 'counts': dict(counts),
         'retained_record_bytes': retained,
