@@ -31,6 +31,7 @@ def manager(tmp_path, *, spent=0, monthly=True):
 @pytest.mark.parametrize('role,model,cap,control', [
     ('report_one_line', 'gpt-5-mini', 512, 'minimal'),
     ('morning_brief', 'gpt-5-mini', 1600, 'minimal'),
+    ('market_brief', 'gpt-5-mini', 1600, 'minimal'),
     ('post_exit_research', 'gpt-6.1-sol', 4096, 'medium'),
 ])
 @pytest.mark.parametrize('spent', [0, 80])
@@ -44,6 +45,7 @@ async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model,
     payload = m.openai._session.payloads[0]
     assert payload['model'] == model and payload['max_completion_tokens'] == cap
     assert payload['reasoning_effort'] == control and 'temperature' not in payload
+    assert payload.get('response_format') == ({'type': 'json_object'} if role == 'market_brief' else None)
     assert len(result.attempt_trail) == 1
     assert result.attempt_trail[0]['task'] == role
     with sqlite3.connect(m.monthly_budget.path) as db:
@@ -58,7 +60,7 @@ async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('role', ['report_one_line', 'morning_brief', 'post_exit_research'])
+@pytest.mark.parametrize('role', ['report_one_line', 'morning_brief', 'market_brief', 'post_exit_research'])
 @pytest.mark.parametrize('spent,reason', [(95, 'essential_budget_reserved'), (100, 'monthly_limit_exceeded')])
 async def test_role_monthly_stop_never_sends(tmp_path, role, spent, reason):
     m = manager(tmp_path, spent=spent)
@@ -109,6 +111,7 @@ async def test_unknown_role_rejected_before_admission(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,bound', [('report_one_line', 32768), ('morning_brief', 65536),
+                                       ('market_brief', 65536),
                                        ('post_exit_research', 131072)])
 async def test_utf8_limit_counts_system_and_prompt_before_admission(tmp_path, role, bound):
     m = manager(tmp_path)
@@ -209,7 +212,7 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
 
 def test_role_table_is_versioned_and_immutable():
     from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
-    assert ROLE_POLICY_VERSION == 'engine-roles-v2-openai'
+    assert ROLE_POLICY_VERSION == 'engine-roles-v3-market-brief'
     with pytest.raises(TypeError):
         ROLE_PROFILES[LLMRole.REPORT_ONE_LINE] = None
     with pytest.raises(FrozenInstanceError):
@@ -353,7 +356,7 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
     files = list(audit_dir.glob('llm-audit-*.jsonl'))
     assert len(files) == 1
     row = json.loads(files[0].read_text())
-    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v2-openai'
+    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v3-market-brief'
     assert row['requested_reasoning_effort'] == 'minimal'
     assert row['resolved_model'] == 'provider-reported-version'
     assert row['outcome'] == 'error' and row['elapsed_ms'] >= 0
@@ -396,3 +399,25 @@ async def test_implicit_role_audit_never_follows_directory_symlink_for_retention
     assert response.success and historical.read_text() == 'must remain'
     assert list(other.iterdir()) == [historical]
     assert m.monthly_budget.status()['settled_count'] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', ['malformed', 'refusal', 'length', 'timeout', 'valid'])
+async def test_market_role_json_mode_never_repairs_falls_back_or_shadows(tmp_path, fault):
+    m = manager(tmp_path)
+    m.config.openai_model_light_shadow = 'gpt-6.1-sol'
+    reply = openai_reply('{bad' if fault == 'malformed' else '{"ok":true}')
+    if fault == 'refusal': reply.data['choices'][0]['message']['refusal'] = 'refused'
+    if fault == 'length': reply.data['choices'][0]['finish_reason'] = 'length'
+    if fault == 'timeout':
+        class TimeoutReply(Reply):
+            async def json(self): raise TimeoutError()
+        reply = TimeoutReply({})
+    m.openai._session = Session(reply)
+    response = await m.complete_role('JSON report', role='market_brief')
+    await asyncio.sleep(0)
+    assert len(m.openai._session.payloads) == 1
+    assert m.openai._session.payloads[0]['response_format'] == {'type': 'json_object'}
+    assert len(response.attempt_trail) == 1
+    assert not m._shadow_tasks and m.stats['fallback_count'] == 0
+    assert response.success is (fault in {'malformed', 'valid'})

@@ -31,11 +31,14 @@ def _render_market_image(text):
 
 
 class ReportSchedule:
-    def __init__(self, store, notifier, dispatch_recorder=None, *, index_fetcher=None, clock=None):
+    def __init__(self, store, notifier, dispatch_recorder=None, *, index_fetcher=None, clock=None,
+                 analysis_manager=None, analysis_manager_factory=None):
         self.store, self.notifier = store, notifier
         self.dispatch_recorder = dispatch_recorder
         self.index_fetcher = index_fetcher
         self.clock = clock or (lambda: datetime.now(KST))
+        self.analysis_manager = analysis_manager
+        self.analysis_manager_factory = analysis_manager_factory
 
     async def tick(self, now, trading_day, market, engine_context):
         now = now.astimezone(KST)
@@ -44,33 +47,41 @@ class ReportSchedule:
             return None
         audience = "engine" if kind == "daily" else "market"
         day = now.date().isoformat()
-        if await asyncio.to_thread(self.store.receipt, audience, kind, day):
+        if await _durable_thread(self.store.receipt, audience, kind, day):
             return "already_consumed"
-        if kind == "after" and trading_day:
-            with self.store.input_guard(day) as acquired:
+        if audience == "market":
+            with self.store.slot_guard(audience, kind, day) as acquired:
                 if not acquired:
-                    return "input_collecting"
-                if await asyncio.to_thread(self.store.receipt, audience, kind, day):
+                    return "input_collecting" if kind == "after" else "analysis_collecting"
+                if await _durable_thread(self.store.receipt, audience, kind, day):
                     return "already_consumed"
-                owner = uuid.uuid4().hex
-                if self.index_fetcher is not None and await _durable_thread(self.store.claim_inputs, day, owner):
-                    try:
-                        rows = await self.index_fetcher(now.date())
-                    except Exception as error:
-                        logger.warning("[대상별 보고] 지수 참고 관측 미확보: {}", type(error).__name__)
-                        rows = ()
-                    await _durable_thread(self.store.complete_inputs, day, owner, rows)
-                    now = self.clock().astimezone(KST)
-                rows = await asyncio.to_thread(self.store.load_inputs, day)
-                market = replace(market, index_observations=rows)
-                return await self._publish(now, trading_day, market, engine_context, kind, audience, day)
+                saved_analysis = await _durable_thread(self.store.analysis_receipt, audience, kind, day)
+                # A prepared report owns its original inputs. Never fetch or combine
+                # current prices/timestamps with a previously paid analysis.
+                if kind == "after" and trading_day and saved_analysis is None:
+                    owner = uuid.uuid4().hex
+                    if self.index_fetcher is not None and await _durable_thread(self.store.claim_inputs, day, owner):
+                        try:
+                            rows = await self.index_fetcher(now.date())
+                        except Exception as error:
+                            logger.warning("[대상별 보고] 지수 참고 관측 미확보: {}", type(error).__name__)
+                            rows = ()
+                        await _durable_thread(self.store.complete_inputs, day, owner, rows)
+                        now = self.clock().astimezone(KST)
+                    rows = await _durable_thread(self.store.load_inputs, day)
+                    market = replace(market, index_observations=rows)
+                return await self._publish(now, trading_day, market, engine_context, kind, audience, day,
+                                           saved_analysis=saved_analysis)
         return await self._publish(now, trading_day, market, engine_context, kind, audience, day)
 
-    async def _publish(self, now, trading_day, market, engine_context, kind, audience, day):
+    async def _publish(self, now, trading_day, market, engine_context, kind, audience, day, *, saved_analysis=None):
         snapshot_id = hashlib.sha256(json.dumps(asdict(market), sort_keys=True, default=str, ensure_ascii=False).encode()).hexdigest()
         status = None
         if audience == "market":
-            if not trading_day:
+            if saved_analysis is not None:
+                text = saved_analysis["source_body"]
+                snapshot_id = saved_analysis["source_snapshot_id"]
+            elif not trading_day:
                 status = "skipped_holiday"
                 text = None
             else:
@@ -78,8 +89,8 @@ class ReportSchedule:
                 if text is None:
                     status = "skipped_missing_current_market_basis" if kind == "midday" else "skipped_missing_market_basis"
         else:
-            records = await asyncio.to_thread(self.store.records, day)
-            deliveries = await asyncio.to_thread(self.store.delivery_issues, day)
+            records = await _durable_thread(self.store.records, day)
+            deliveries = await _durable_thread(self.store.delivery_issues, day)
             text = render_engine_digest(records, engine_context, now, deliveries=deliveries)
             snapshot_id = hashlib.sha256((json.dumps([records, deliveries], sort_keys=True)+engine_context).encode()).hexdigest()
         if status:
@@ -89,16 +100,29 @@ class ReportSchedule:
             if status != "skipped_holiday":
                 reason = ("유효한 지수 또는 참고자료 없음. 수신시각을 원천시각으로 대체하지 않음."
                           if kind == "midday" else "원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.")
-                await asyncio.to_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
+                await _durable_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
             return status
         media = {}
         if audience == "market":
+            from ..analytics.market_report_runner import InvalidMarketReport, prepare_market_report
+            try:
+                analysis = await prepare_market_report(
+                    self.store, kind=kind, day=day, source_snapshot_id=snapshot_id,
+                    source_body=text, manager=self.analysis_manager,
+                    manager_factory=self.analysis_manager_factory)
+            except InvalidMarketReport:
+                consumed = await _durable_thread(self.store.record_validation_failure,
+                                                 audience, kind, day, snapshot_id, now)
+                return "failed_validation" if consumed else "already_consumed"
+            if analysis is None:
+                return "already_consumed"
+            text, snapshot_id = analysis["final_body"], analysis["source_snapshot_id"]
             image = await _durable_thread(_render_market_image, text)
             if image is not None:
                 media = {"photo": image.png, "caption": image.caption}
         result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store, **media)
         if kind == "morning" and result == "accepted" and self.dispatch_recorder:
-            receipt = await asyncio.to_thread(self.store.receipt, audience, kind, day)
+            receipt = await _durable_thread(self.store.receipt, audience, kind, day)
             # Read what the notifier actually chose, including preflight fallback.
             # Legacy test/notifier adapters without receipts retain text semantics.
             archive = {}
@@ -158,12 +182,13 @@ def market_snapshot(bot, now, is_holiday, *, us_basis_date=None):
 async def run_audience_reports(bot):
     from ..core.engine import is_kr_market_holiday
     from ..utils.telegram import get_telegram_notifier
+    from ..utils.llm import get_llm_manager
     from ..analytics.report_context import render_runtime_context
     from ..analytics.daily_report import record_morning_brief_dispatch
     from ..utils import loop_heartbeat as heartbeat
     fetcher = getattr(getattr(bot, "kis_market_data", None), "fetch_report_index_observations", None)
     schedule = ReportSchedule(ReportStore(), get_telegram_notifier(), record_morning_brief_dispatch,
-                              index_fetcher=fetcher)
+                              index_fetcher=fetcher, analysis_manager_factory=get_llm_manager)
     while bot.running:
         try:
             now = datetime.now(KST)

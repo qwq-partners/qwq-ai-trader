@@ -90,6 +90,7 @@ class ReportStore:
             db.execute("CREATE TABLE IF NOT EXISTS payloads (audience TEXT, kind TEXT, report_date TEXT, body TEXT, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS media_payloads (audience TEXT, kind TEXT, report_date TEXT, media_type TEXT, caption TEXT, image_sha256 TEXT, png BLOB, PRIMARY KEY(audience,kind,report_date))")
             db.execute("CREATE TABLE IF NOT EXISTS market_inputs (report_date TEXT PRIMARY KEY, owner TEXT, status TEXT, rows_json TEXT)")
+            db.execute("CREATE TABLE IF NOT EXISTS report_analyses (audience TEXT, kind TEXT, report_date TEXT, owner TEXT NOT NULL, source_snapshot_id TEXT NOT NULL, source_body TEXT NOT NULL, source_sha256 TEXT NOT NULL, prompt_version TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, final_body TEXT, metadata_json TEXT, PRIMARY KEY(audience,kind,report_date))")
             with db:
                 yield db
         finally:
@@ -159,11 +160,20 @@ class ReportStore:
 
     @contextmanager
     def input_guard(self, report_date: str):
+        """Compatibility entrypoint: the after-slot guard keeps its original inode."""
+        with self.slot_guard("market", "after", report_date) as acquired:
+            yield acquired
+
+    @contextmanager
+    def slot_guard(self, audience: str, kind: str, report_date: str):
         """Nonblocking cross-process ownership; never unlink an inode with waiters."""
-        validate_slot("market", "after", report_date)
+        validate_slot(audience, kind, report_date)
+        if audience != "market":
+            raise ValueError("analysis guard is market-only")
         canonical = self.path.resolve()
         canonical.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        lock = canonical.with_name(f"{canonical.name}.after-{report_date}.lock")
+        # Keep the established after lock name for old/new process contention.
+        lock = canonical.with_name(f"{canonical.name}.{kind}-{report_date}.lock")
         fd = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             try:
@@ -177,6 +187,71 @@ class ReportStore:
                     fcntl.flock(fd, fcntl.LOCK_UN)
         finally:
             os.close(fd)
+
+    def claim_analysis(self, audience: str, kind: str, report_date: str,
+                       source_snapshot_id: str, source_body: str,
+                       prompt_version: str, *, owner: str) -> bool:
+        """Spend the logical analysis once, durably, before any manager call."""
+        validate_slot(audience, kind, report_date)
+        if audience != "market":
+            raise ValueError("analysis is market-only")
+        if any(not isinstance(value, str) or not value or len(value) > 128
+               for value in (source_snapshot_id, prompt_version, owner)):
+            raise ValueError("invalid analysis identity")
+        if not isinstance(source_body, str) or not source_body.strip() or len(source_body) > 6000:
+            raise ValueError("invalid analysis source")
+        digest = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM slots WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone():
+                return False
+            return db.execute("INSERT OR IGNORE INTO report_analyses (audience,kind,report_date,owner,source_snapshot_id,source_body,source_sha256,prompt_version,status) VALUES (?,?,?,?,?,?,?,?, 'attempted')",
+                              (audience, kind, report_date, owner, source_snapshot_id, source_body, digest, prompt_version)).rowcount == 1
+
+    def complete_analysis(self, audience: str, kind: str, report_date: str, *,
+                          owner: str, status: str, final_body: str,
+                          result: dict | None = None, metadata: dict | None = None) -> bool:
+        """Atomically freeze validated content and safe metadata; never overwrite."""
+        validate_slot(audience, kind, report_date)
+        if audience != "market" or status not in {"ready", "failed", "unknown", "abandoned"}:
+            raise ValueError("invalid analysis outcome")
+        if not isinstance(final_body, str) or not final_body.strip() or len(final_body) > 1800 or len(final_body.splitlines()) > 35:
+            raise ValueError("analysis body exceeds report budget")
+        if (status == "ready" and not isinstance(result, dict)) or (status != "ready" and result is not None):
+            raise ValueError("invalid analysis result")
+        result_json = json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None
+        metadata_json = json.dumps(metadata or {}, ensure_ascii=False, allow_nan=False)
+        if (result_json is not None and len(result_json.encode()) > 16384) or len(metadata_json.encode()) > 16384:
+            raise ValueError("analysis record too large")
+        with self._db() as db:
+            return db.execute("UPDATE report_analyses SET status=?,result_json=?,final_body=?,metadata_json=? WHERE audience=? AND kind=? AND report_date=? AND owner=? AND status='attempted'",
+                              (status, result_json, final_body, metadata_json, audience, kind, report_date, owner)).rowcount == 1
+
+    def analysis_receipt(self, audience: str, kind: str, report_date: str) -> dict | None:
+        validate_slot(audience, kind, report_date)
+        with self._db() as db:
+            row = db.execute("SELECT * FROM report_analyses WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["result"] = json.loads(result.pop("result_json") or "null")
+        result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
+        return result
+
+    def record_validation_failure(self, audience: str, kind: str, report_date: str,
+                                  source_snapshot_id: str, now: datetime) -> bool:
+        """Consume invalid delivery and append its quality event atomically once."""
+        validate_slot(audience, kind, report_date)
+        if audience != "market" or not source_snapshot_id or now.tzinfo is None:
+            raise ValueError("invalid report validation failure")
+        message = f"시장 {kind} 보고 보류: 보고 입력 또는 저장된 분석의 형식·분량 검증 실패."
+        with self._db() as db:
+            claimed = db.execute("INSERT OR IGNORE INTO slots VALUES (?,?,?,?,?)",
+                                 (audience, kind, report_date, source_snapshot_id, "failed_validation")).rowcount == 1
+            if claimed:
+                db.execute("INSERT INTO report_events (report_date,kind,text,recorded_at) VALUES (?,?,?,?)",
+                           (report_date, "report_quality", message, now.astimezone(KST).isoformat()))
+            return claimed
 
     def claim_inputs(self, report_date: str, owner: str) -> bool:
         """Spend the entire day's report GET allowance before network activity."""
