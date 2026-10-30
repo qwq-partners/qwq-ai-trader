@@ -33,6 +33,8 @@
 
 **See/최종 리뷰:** 실제 Claude Opus5.5/high 재리뷰는106.643초·rc0·assistant/terminal 신원확인·도구/MCP0·APPROVE다. 현재runner/후속diff/합성취소검사/실제저장직렬화를검토했고 최종전체verify통과를별도병합gate로남겼다. 표시USD0.3350158은구독증분청구액이아니다. 독립Sol6.1/high 문서리뷰의 본문상한과이미지상한대체경로 혼동P2도 수정한뒤APPROVE·남은P0/P1/P2없음이다. 본문상한초과는분석미채택/사실보고,채택본문의이미지상한초과는전체text이며캡션은길이허용시최대2링크다. 최종제품소스97865366에서정식전체검증진행중이며이후문서만보완한다. 최종통합·CI/전체영수증은연결PR에서인수하고실패시병합하지않는다. 운영은72c88c07/WAIT_AUTH_REPAIR,새배포·재시작·시험발송·예약추가0이다.
 
+**See/첫 전체 실패와 수정:** 로컬 정식검증은1failed/9985passed/2skipped/2xfailed·814.91초·격리0, PR CI(run41094959504)는같은1failed/9985passed·323.24초·격리0이었다. `test_report_review_regressions::test_invalid_body_is_terminal_and_delivery_issues_reach_digest`가 시장의과거상한1800을전제로1801자본문을무효로기대했다. 새승인계약은시장3000/개인1800이므로입력이정상범위에들어가전송대역의unknown이반환됐다. 해당시장fixture만실제상한초과3001자로바꾸고 terminal·재발송금지·개인요약오류표시·HTTP호출0단언을보존한다. 제품소스/시간/검증가드는변경하지않는다. 개인1801기각과시장본문/줄수/UTF16경계검사는기존회귀에서유지한다. 관련3파일60PASS/9.65초·격리0, 독립Sol6.1/high는APPROVE·P0/P1/P2없음(actual/effective미노출)이다. 최초실패를전체성공으로세지않으며수정후정식전체·CI를다시인수한다.
+
 **NEXT:** R02-RESEARCH 최종전체·CI/PR 인수 → Git 인증 복구 확인 후 기존 고정SHA 정상배포 → 다음 자연 보고 내용 수락. 기존 O02 기한 및 새 유효 E02/E01/E04 입력 판독은 유지한다.
 
 <a id="r02-llm-analysis-20261030"></a>

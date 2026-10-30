@@ -66,7 +66,7 @@ async def test_invalid_body_is_terminal_and_delivery_issues_reach_digest(tmp_pat
     store = ReportStore(tmp_path/'r.sqlite3')
     notifier = TelegramNotifier(bot_token='fake')
     notifier._session = Mock(closed=False)
-    assert await notifier.publish_report('market', 'morning', '2026-10-27', 'a', 'x'*1801, store=store) == 'failed_validation'
+    assert await notifier.publish_report('market', 'morning', '2026-10-27', 'a', 'x'*3001, store=store) == 'failed_validation'
     assert await notifier.publish_report('market', 'morning', '2026-10-27', 'b', 'fixed', store=store) == 'already_consumed'
     store.claim('market', 'midday', '2026-10-27', 'b')  # Simulated interrupted process.
     store.claim('market', 'after', '2026-10-27', 'c')
