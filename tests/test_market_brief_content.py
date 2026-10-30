@@ -21,7 +21,9 @@ def test_us_three_index_morning_has_observed_takeaway_and_actual_source():
     text = render_market_report('morning', us_snapshot((.28, .27, 1.75)), NOW)
     assert '한국증시 모닝브리프' in text and '시장 판단' in text
     summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
-    assert all(value in summary for value in ('S&amp;P500 +0.28%', '나스닥 +0.27%', 'SOX +1.75%'))
+    assert all(name in summary for name in ('S&amp;P500', '나스닥', 'SOX'))
+    assert '모두 올랐습니다' in summary and '%' not in summary
+    assert all(value in text for value in ('S&amp;P500 +0.28%', '나스닥 +0.27%', 'SOX +1.75%'))
     assert '1.48%p' in text and '나스닥' in text
     assert '개장 후' in text and 'Yahoo Finance' in text
     assert '출처: Yahoo Finance' in text and '출처: KIS' not in text
@@ -31,8 +33,15 @@ def test_us_three_index_morning_has_observed_takeaway_and_actual_source():
 def test_us_directions_remain_within_observed_subset(values):
     text = render_market_report('morning', us_snapshot(values), NOW)
     summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert all(label in summary for label in ('S&amp;P500', '나스닥', 'SOX'))
     for label, value in zip(('S&amp;P500', '나스닥', 'SOX'), values):
-        assert f'{label} {value:+.2f}%' in summary
+        assert f'{label} {value:+.2f}%' in text
+    if all(value < 0 for value in values):
+        assert '모두 내렸습니다' in summary and '%' not in summary
+    elif all(value == 0 for value in values):
+        assert '보합' in summary and '%' not in summary
+    else:
+        assert all(f'{value:+.2f}%' in summary for value in values)
     assert '보다 컸습니다' not in summary
 
 
@@ -69,11 +78,22 @@ def test_us_missing_future_and_mismatched_dates_remain_ineligible():
 
 def test_displayed_rounding_does_not_claim_rise_or_relative_leader():
     text = render_market_report('morning', us_snapshot((.0001, .0002, .0003)), NOW)
-    assert '동반 상승' not in text
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert '보합' in summary and '올랐습니다' not in summary
     sectors = tuple({'name': name, 'r1': pct, 'source': 'KIS:123', 'as_of': '2026-10-28'}
                     for name, pct in [('반도체', -1.0001), ('은행', -1.0002)])
     text = render_market_report('morning', MarketSnapshot(sectors=sectors, kr_basis_date='2026-10-28'), NOW)
     assert '상대 상위' not in text
+
+
+def test_single_sox_uses_singular_direction_and_no_missing_index_claim():
+    snapshot = us_snapshot((.2, .3, -.4))
+    snapshot = MarketSnapshot(us_basis_date=snapshot.us_basis_date,
+                              us_quotes={'^SOX': snapshot.us_quotes['^SOX']})
+    text = render_market_report('morning', snapshot, NOW)
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert 'SOX는 내렸습니다' in summary
+    assert '모두' not in summary and '나스닥' not in summary and 'S&amp;P500' not in summary
 
 
 def test_future_sector_date_cannot_be_presented():
@@ -234,7 +254,13 @@ def test_partial_mixed_and_flat_us_headlines_name_only_observed_values(values):
     text = render_market_report('morning', us_snapshot(values), NOW)
     headline = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
     for label, value in zip(('S&amp;P500', '나스닥', 'SOX'), values):
-        assert label in headline and f'{value:+.2f}%' in headline
+        assert label in headline and f'{value:+.2f}%' in text
+    if len(values) == 1:
+        assert '올랐습니다' in headline and '%' not in headline
+    elif all(value == 0 for value in values):
+        assert '보합' in headline and '%' not in headline
+    else:
+        assert all(f'{value:+.2f}%' in headline for value in values)
     assert '보다 컸습니다' not in headline
     if len(values) < 3:
         assert 'SOX' not in headline
