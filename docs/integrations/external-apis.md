@@ -328,7 +328,13 @@
   (T+1 데이터). 출처 표기 조건부 라이선스 — 브리핑에 출처 명시함
 
 
-## 테마 JSON 출력 예시 — 2026-10-29
+## KR 테마 JSON 출력 계약 — 2026-10-30
+
+KR `ThemeDetector._extract_themes_from_news`만 `response_format={"type":"json_object"}`를 명시한다. `LLMManager`를 거쳐 실제 OpenAI Chat Completions 요청에 전달하며, 정확한 JSON-object 옵션 외의 명시값은 HTTP 전송 전에 거부한다. 작업 유형 전체에 적용하지 않아 KR 스크리너·US 테마·다른 JSON/텍스트 소비자의 기존 요청은 그대로다. 공급자 거절/비정상 종료/빈 출력은 실패이며, JSON 형식을 제거하거나 다른 공급자로 자동 대체하지 않는다. 완료 응답의 문법 오류는 기존 조건 아래 최대1회만 재시도하고 동일 출력 형식·비용 기록을 보존한다. 비옵트인 호출의 기존 종료 판정은 이 변경의 범위 밖이다.
+
+공식 [Chat Completions 출력 형식](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)과 [JSON mode의 한계](https://developers.openai.com/api/docs/guides/structured-outputs#json-mode)를 따른다. 프롬프트의 명시 JSON 지시·엄격 해석을 유지하며 숫자 선행 `+`를 자동 제거하지 않는다. JSON 모드는 테마 필드 스키마·종목 정확성·판단 품질을 보증하지 않는다. [개발·검증·운영 적용·자연 인수](../operations/execution-roadmap.md#e04-theme-json-mode-20261030)를 각각 구분한다.
+
+### 기존 출력 예시 — 2026-10-29
 
 테마/종목 임팩트 프롬프트의 예시는 실제 JSON 숫자를 사용하고, 필드 범위·설명은 객체 밖에 둔다. `impact`는 기존 -10~10이며 양수는 `6`처럼 선행 `+` 없이 출력하도록 명시한다. 예시 값은 형식 설명이며 실제 뉴스 판단값을 고정하지 않는다. 엄격 JSON 해석과 최대1회 재시도·모델/비용 계약은 그대로다. [자연 실패 근거·검증/운영 상태](../operations/execution-roadmap.md#e04-theme-json-example-20261029)를 따르며 새 유료 시험 호출은 추가하지 않는다.
 
