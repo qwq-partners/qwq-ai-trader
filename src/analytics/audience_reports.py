@@ -172,24 +172,39 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
         lines.append("검증된 시장 방향 자료는 미확보입니다.")
     elif observations:
         lines.append("시점이 확인된 지수 참고 가격입니다. 전일 대비 등락·시장 방향 판단자료는 미확보입니다.")
-    elif us:
-        if len(us) == 1:
-            lines.append(f"미국 {_text(us[0][1])} {us[0][2]:+.2f}%가 관측됐습니다.")
-        else:
-            lines.append(f"미국 관측 {len(us)}개 지수 {_direction([v[2] for v in us])}입니다.")
-    else:
+    elif not us:
         if len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}"):
             top, bottom = sectors[0], sectors[-1]
             lines.append(f"최근 1세션 관측 표본 상대 상위 {_text(top[0].get('name'), 24)} {top[1]:+.2f}%, 하위 {_text(bottom[0].get('name'), 24)} {bottom[1]:+.2f}%입니다.")
         else:
             lines.append("국내 섹터 ETF의 최근 1세션 관측 표본을 확인합니다.")
     if us:
-        values = {symbol: pct for symbol, _, pct in us}
-        if '^SOX' in values and '^IXIC' in values:
-            difference = Decimal(f"{values['^SOX']:.2f}") - Decimal(f"{values['^IXIC']:.2f}")
-            if difference != 0:
-                relation = "웃돌아" if difference > 0 else "밑돌아"
-                lines.append(f"SOX는 나스닥 등락률을 {relation} {abs(difference):.2f}%p 차이를 보였습니다.")
+        values = {symbol: Decimal(f"{pct:.2f}") for symbol, _, pct in us}
+        rounded = list(values.values())
+        if all(value > 0 for value in rounded):
+            direction = "올랐습니다"
+        elif all(value < 0 for value in rounded):
+            direction = "내렸습니다"
+        elif all(value == 0 for value in rounded):
+            direction = "보합이었습니다"
+        else:
+            direction = None
+        headline_labels = [(symbol, '반도체(SOX)' if symbol == '^SOX' else label, pct)
+                           for symbol, label, pct in us]
+        if direction:
+            names = '·'.join(_text(label) for _, label, _ in headline_labels)
+            particle = '는' if us[-1][0] == '^SOX' else '은'
+            qualifier = '모두 ' if len(us) > 1 else ''
+            lines.append(f"미국 {names}{particle} {qualifier}{direction}.")
+        else:
+            moves = '·'.join(f"{_text(label)} {pct:+.2f}%" for _, label, pct in headline_labels)
+            lines.append(f"미국 지수 등락률은 {moves}입니다.")
+        if len(values) == 3:
+            sp, nasdaq, sox = (values[symbol] for symbol in ('^GSPC', '^IXIC', '^SOX'))
+            if sp < 0 and nasdaq < sp and sox < sp:
+                lines.append("나스닥과 SOX의 하락폭이 S&amp;P500보다 컸습니다.")
+            elif sp > 0 and nasdaq > sp and sox > sp:
+                lines.append("나스닥과 SOX의 상승폭이 S&amp;P500보다 컸습니다.")
     sources = []
     def add_source(source):
         provider = _provider(source)
@@ -213,6 +228,10 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     if us:
         lines += ["", f"<b>주요 지표 · 미국 {snapshot.us_basis_date}</b>"]
         lines += [f"• {_text(label)} {pct:+.2f}%" for _, label, pct in us]
+        if '^SOX' in values and '^IXIC' in values:
+            difference = values['^SOX'] - values['^IXIC']
+            if difference != 0:
+                lines.append(f"SOX−나스닥: {difference:+.2f}%p")
         sources.append('Yahoo Finance')
     pair = len(sectors) > 1 and float(f"{sectors[0][1]:.2f}") > float(f"{sectors[-1][1]:.2f}")
     sector_only_pair = pair and not (indices or references or observations or us)
@@ -227,7 +246,8 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     lines += ["", "<b>국내 관전 포인트</b>"]
     if kind == 'morning':
         if any(symbol == '^SOX' for symbol, _, _ in us):
-            lines.append("• 개장 후 삼성전자·SK하이닉스 방향이 SOX와 일치하는지 확인합니다.")
+            lines.append("• 개장 후 삼성전자·SK하이닉스가 SOX 방향과 일치할지, 다르게 움직일지 지켜봅니다.")
+            lines.append("• 움직임이 반도체에 머물지, 다른 업종·코스닥으로 확산될지도 살펴봅니다.")
         elif us:
             labels_us = '·'.join(_text(label) for _, label, _ in us)
             lines.append(f"• 개장 후 코스피·코스닥과 {labels_us} 방향을 대조합니다.")
@@ -253,10 +273,7 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
     if pair:
         top_name = _text(sectors[0][0].get('name'), 24)
         bottom_name = _text(sectors[-1][0].get('name'), 24)
-        suffix = " 및 반도체 외 업종·코스닥 확산" if kind == 'morning' and any(symbol == '^SOX' for symbol, _, _ in us) else ""
-        lines.append(f"• ETF {top_name}·{bottom_name}의 상대 순위 유지·역전{suffix} 여부를 확인합니다.")
-    elif kind == 'morning' and any(symbol == '^SOX' for symbol, _, _ in us):
-        lines.append("• 반도체 외 업종·코스닥으로 움직임이 확산되는지 확인합니다.")
+        lines.append(f"• ETF {top_name}·{bottom_name}의 상대 순위가 유지될지 역전될지도 살펴봅니다.")
     lines += ["", "자료 범위: 표시된 관측 표본; 시장 전체 종목 수·당일 누적 수급은 미확보.", "출처: " + " / ".join(sources)]
     return "\n".join(lines)
 
