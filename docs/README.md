@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **10/31 03:04 운영 인수 DONE:** [R02-RESEARCH 배포](operations/execution-roadmap.md#r02-research-deploy-20261031)는 고정356470c4/PID3945959·운영9986검사·기동160.2초/42항목PASS로 완료했다. 기존 Git SSH 경로의 조회/fetch가 정상임을 확인했으며 키/인증설정 변경은0이다(과거 실패 원인 미확정). 보호48파일/기존cron/매수중지·월USD100/log_and_continue·GPT/Claude 설정을 유지했다. NEXT는 자연 조사보고의 내용 수락, 오늘18시 O02 기존사전점검, 새유효 E02/E01/E04 입력이다. 완료문서는 재배포하지 않으며 아래 미배포 표기는 당시 이력이다.
+
 > **10/31 현재 작업:** [R02-RESEARCH](operations/execution-roadmap.md#r02-research-evidence-20261031)는 사용자 피드백에 따라 뉴스·공시·거시의 기존 수집 근거를 시장 조사 분석에 연결한다. 앞선 가격 전용 PR309는 내용 수락이 아니며 새 구현의 검증·통합은 원장 영수증을 따른다. 보고 역할만 GPT-6.1 Sol/medium·4096token/90초로 변경하고 월USD100/log_and_continue·거래 설정은 유지한다. 운영72c88c07은 기존 Git 인증 복구 대기이며 자연 출력·모바일 수락은 별도다.
 
 > **10/31 R02-LLM 소스 인수:** [현재 원장](operations/execution-roadmap.md#r02-llm-analysis-20261030). 고정 관전 문구를 공개 근거 기반 LLM 판단·확인/반증 조건으로 교체했다. 구현·관련 검사·독립 리뷰 완료이며 정식 전체/CI·병합의 최종 상태는 [PR #309](https://github.com/qwq-partners/qwq-ai-trader/pull/309)의 영수증을 따른다. 운영72c88c07은 기존 Git 인증 복구 대기로 유지하며 실제 자연 출력·모바일 수락은 WAIT다. 아래는 이전 시점 이력이다.
