@@ -2,6 +2,41 @@
 
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
+<a id="r02-research-evidence-20261031"></a>
+### R02-RESEARCH — 뉴스·공시와 시장 자료를 연결한 조사 보고 (구현·독립 리뷰 DONE / 전체·CI 인수 진행 / 운영 WAIT)
+
+**최종 인수 연결:** [PR #310](https://github.com/qwq-partners/qwq-ai-trader/pull/310)의 최종 전체·PR/main CI와 통합 영수증을 이 작업의 완료 근거로 따른다. 10/31 02:00 문서 작성 시 구현·독립 리뷰 DONE, 정식 전체/CI 진행 중이며 통과 전 병합하지 않는다. 아래 중간 결과는 각 시점 이력이다. 운영72c88c07/WAIT_AUTH_REPAIR와 자연 내용 수락 WAIT는 소스 인수와 별개다.
+
+**사용자 교정:** 가격표만 LLM으로 해석한 이전 R02-LLM 설계는 내용 수락을 받지 못했다. 최근 수집 뉴스·공시·실적·거시 자료로 핵심 사건과 시장·업종·기업 영향을 분석해야 한다. PR #309의 상태·중복 방지 구현은 재사용하되 가격 전용 입력과 고유명사/숫자 일괄 금지 계약을 대체한다. 연구의 목적은 종목 선정·진입 판단에 도움이 되는 근거 제공이며 보고 변경만으로 엔진 수익 개선을 주장하지 않는다.
+
+**시작 대조:** 10/31 01:15 KST 확인 main `75d092be`/tree `c9520f47`, 개발 `84b90c0e`와 전체 tree 동일. SSH 인증 실패 경로를 재시도/변경하지 않고 이미 연결된 GitHub 도구를 사용한다. 기존 개발 worktree의 새 `feature/r02-research-evidence-20261031`에서 작업한다. 운영은 별도72c88c07이며 evolved 미커밋 보존, PR309 미배포·정상배포 WAIT_AUTH_REPAIR. 완료된 T04·이전 발송을 재실행하지 않는다. O02 10/31 18시·11/1 기존 정리 시각은 유지한다.
+
+**설계 근거:** [하나증권 실적 리뷰](https://www.hanaw.com/download/research/FileServer/WEB/industry/enterprise/2026/02/18/LIGN_260219_4Q25Re.pdf)는 실제/예상 실적 차이·사업 구성·비용·수주와 투자 판단을 연결한다. [미래에셋 시장 브리핑](https://securities.miraeasset.com/bbs/download/2143406.pdf?attachmentId=2143406)은 사건·지수/업종·특징주·금리/환율/원자재를 함께 다룬다. 해당 과거 자료는 구성 연구용이며 현재 시장 사실이나 복제 본문으로 사용하지 않는다. 기존 뉴스 저장소의 공개 제목/발췌/URL과 NewsCurator·EarningsExpert·거시의 출처 있는 수치가 실제 재사용 대상이다. 기존 전문가 snapshot은 완료 배치가 아니며 각각의 수집/발행/관측 시각을 보존한다.
+
+**접근 선택:** 매 보고마다 새 뉴스/공시/API 조회를 붙이는 방식은 수집 중복과 지연을 늘린다. 가격 전용 해석은 사용자 목적에 부족하다. 따라서 **기존 수집 자료를 보고 시점에 제한적으로 읽어 동결하고 단일 LLM이 사건·전달 경로·상충 근거·촉매를 분석**한다. 현재 연결된 뉴스 DB의 제한 SELECT만 사용하고 새 연결/재시도/refresh는 없다. NewsCurator가 버리던 발췌, EarningsExpert가 버리던 공시 접수일/번호는 기존 응답에서 보존한다. 과거 뉴스의 발행시각은 미검증으로 남기며 수집시각을 발행시각으로 승격하지 않는다. 공시 색인/유형 설명은 원문 금액·효력·실적 방향 근거가 아니다. 보유 종목 경보·계좌/현금/주문 문맥은 입력에서 제외한다.
+
+**공개 자료 인터페이스:** `market_research_sources.capture_public_research(bot, *, now)`는 async이며 공개 DTO만 반환한다. DTO는 `version=public-research-v1`, `captured_at`, `coverage[{source,status,detail}]`, `records[{id,kind,title,excerpt,source,url,published_at,publication_status,collected_at,observed_at,event_date,content_kind,limitations}]`다. 종류는 news/disclosure/macro/calendar, ID는 E1부터다. 기간은 뉴스 수집24시간·공시 접수3달력일·거시 실제 기준일을 보존한 최근7달력일, 최대 뉴스24·공시8·거시8·일정6개, 본문 발췌600자·전체UTF8 48KiB다. 기사 제목/URL 중복을 제거하고 제공처 한 곳만으로 도배되지 않게 선택한다. 오래됨/실패/빈 결과/미준비를 구별한다. `normalize_public_research(bundle)`는 공개 필드만 복사·검증하고 byte상한을 지킨다. `empty_public_research(now, status)`는 결측 봉투다. 개별 원천 자료와 조회 범위를 명시하며 전체 시장/전체 DART 수집을 주장하지 않는다.
+
+**분석·표시 계약:** `build_analysis_prompt(..., public_evidence=None)`와 `compose_analysis(..., public_evidence=None)`로 순수 내용 모듈을 확장한다. 공개 봉투가 있으면 연구형 schema를 사용하고 과거 호출 호환은 유지한다. 연구형 응답은 `thesis{text,evidence_ids}`, `issues[{title,event,impact,counterpoint,watch,evidence_ids}]` 최대2개다. 사건은 어떤 새 사실인지, 영향은 수요/가격/비용/실적/할인율 경로, 반대 근거는 기대 선반영/상충 자료/자료 한계, 관찰은 시점·후속 촉매 또는 판단을 바꿀 구체 조건이다. 뉴스 목록만 나열하거나 모든 결과에 맞는 고정 관전 문구를 쓰지 않는다. 최소1개 사건 근거(news/disclosure/calendar)를 연결한 항목이 있어야 연구 완료로 인정한다. 사건 근거가 없으면 사실 보고+조사자료 미확보로 내려가며 가격만으로 새 사건을 만들지 않는다. ID·필드·길이·통제문자·허용 URL을 검증하고 고유명사/기존 수치를 허용하되 입력 밖 목표가·수익확률·실적 수치를 만들지 않도록 지시한다. 형식 검사는 의미 진위를 보증하지 않는다.
+
+보고는 시장 판단→핵심 이슈와 영향→시장 자료→근거/출처로 구성한다. 본문3000자/60줄 초과는 분석을 채택하지 않고 사실 보고로 대체한다. 채택 본문의 PNG가 높이4500px/기존4MiB상한을 넘으면 글자 크기를 줄이지 않고 전체 텍스트로 대체한다. 캡션 길이가 허용하는 최대2개의 대표 원문 링크를 같은 사진 캡션에 표시하며 추가 Telegram 호출은 없다. HTML 본문에도 source URL을 보존한다. 과거 본문/이미지 계약은 호환한다.
+
+**호출·상태 계약:** 보고 역할만 기존 연구용으로 검증된 OpenAI `gpt-6.1-sol`/medium·4096출력token·90초·64KiB입력·standard·JSON으로 변경한다. 월USD100/log_and_continue와 기존 budget 정산을 유지하고 정기슬롯당 manager1회·수정/다른모델/shadow0이다. 이는 사용자 요청에 따른 실제 정기 분석 설정이며 유료 비교 실험을 실행하지 않는다. 공식 모델 문서와 기존 역할/전송 지원을 대조했다. 분석 claim과 같은 트랜잭션에 정확한 봉투 JSON/해시를 원본문과 함께 고정한다. 저장 ready/orphan/발송소비 뒤 새자료 읽기·모델 호출0, 취소/정산/장후2GET 경계를 보존한다. 신규선택적자료 실패는 유효 사실 보고를 막지 않는다. DB 읽기는 claim전 중단 후 반복될 수 있어 유료 호출 상한과 구분한다.
+
+**Do 분담/검증:** coordinator가 설계·통합·문서·실제 PNG 확인을 맡는다. 같은 base의 분리 worktree에서 Terra6.1/high 두 명이 공개자료 추출/기존 응답보존과 순수 분석/표시를 각각 소유하고, Astra/high가 상태/스케줄/역할/발송 상한을 맡는다. 각 파일 단일 작성, fanout0, native actual/effective 미노출. 새 뉴스/공시 입력·비공개 canary 제외·중복/미래/결측 날짜·공시 원문 미확인·주입/알수없는ID·상충근거·기사 없는 경우·동결/재시작/취소·이미지/원문 링크를 합성 RED→GREEN으로 검증한다. 독립 Sol 내용/출처 리뷰와 실제 Opus5.5 중요 경계 리뷰 후 정식 전체 verify·비밀 검사·PR/main CI를 인수한다. 소스/CI 성공, 실제 자연 분석, API수락, 모바일 내용 수락은 별도다.
+
+**Do/통합:** 같은base8a73d6c5에서 source Terra6.1/high의5ed95067/e85122b5/9ca212af, content Terra6.1/high의8f7ead14/1c34600d, critical Astra/high의dd02c3ba를 분리 작업 후 통합했다. 최초 source검토에서 미래 시각/발행·수집 구분, 거시 단위, 더 나은 중복 기사 근거, 종류별 byte 여유를 보완했다. 독립Sol6.1/high는 실제형태의 2이슈/4출처가1751자지만61줄로 탈락하는P2, Unicode 서식 문자로 전체prompt가 실패하는P2, 필터 후0건인데확보로표시하는P2를 재현했다. 수집상태 최대2줄/고유공개출처4개·출처압축, 공개문자정규화, 필터 후partial/반영0건으로 고쳤다. 실제 PNG 합성회귀는1604자/53줄·720×3458이며 저장본문의전체URL과캡션의두대표URL을보존한다. 그림에있는합성수치/기사를현재시장이나실제모델결과로사용하지않는다.
+
+**See/관련검사:** root의 새 실제 코드 경로·응답 대역 E2E는 미구현factory에서RED2를 확인했다. 실제 source→normalize→compose 통합의1failed/68passed는 시험 공시에 접수일이 없어 정상 제외됐으나 응답 대역이 그ID를 인용한 결과다. 원래 검사·가드를 완화하지 않고 fixture에실제형식접수일을넣어 관련46passed/11.59초로 확인했다. 원인 진단의 시스템python은pytest가없어중단됐고정식venv에서E1/E2만남아E3기각을확인했다. 수집 timeout 후속 수정 전 관련19파일342passed/28.09초·격리0이며, 단일role요청/JSON→기사반대근거→PNG/같은caption/정확아카이브/원천불변/재시작추가0을확인했다. 독립Sol6.1/high 재리뷰는APPROVE·P0/P1/P2없음, 직접37검사/6.22초·격리0이다. 요청model/effort 외 native actual/effective는미노출이며, 실제Opus 중요경계·정식전체/CI는진행중이다.
+
+**See/중요 경계:** 실제 Claude Opus5.5/high 첫 리뷰(264.371초·rc0·assistant/terminal 신원 확인·도구/MCP0)는 수집 전체 마감 누락을 P1로 지적했다. Astra/high의 `0e4ecd18`을 `8eda70de`로 통합해 30초 취소와 정리 완료까지 guard 유지, 내부 취소의 일반 실패 처리, 수집 실패/사건0건 구분과 단계·예외종류 경고를 보완했다. 협조적 cleanup까지 포함한 벽시계30초를 보장하지 않는다. worker RED9/2PASS→관련16파일284PASS/28.48초·격리0이다. 두 번째 실제 Opus5.5/high 리뷰(173.764초·rc0·신원확인)는 이 세 항목 해소를 확인했고, 동일한 내부 취소 분류가 모델 호출 경로에도 남은P2와 최종 전체 검사 필요를 지적했다. Astra/high 후속216461a5를97865366으로 통합해 내부 모델 취소만 일반 공급자 실패/사실 보고로 바꾸고 외부 취소·반복 취소·알려진 정산 정보를 보존했다. 내부 취소 RED2 후 관련7파일171PASS/19.48초·격리0이며 최종 소스에서 전체 정식 verify를 시작했다. 이전342와 후속284/171은 각 단계의 부분 검사이고 전체 성공으로 합산하지 않는다. 결과16KiB 지적은 현 제한 스키마와 실제 `ensure_ascii=False` 직렬화의 최대5845byte로 도달하지 않음을 대조했다. 각 CLI 표시USD0.7306438/0.4765238은 구독 증분 청구액이 아니며 실제 증분비용은미확정이다.
+
+**See/최종 리뷰:** 실제 Claude Opus5.5/high 재리뷰는106.643초·rc0·assistant/terminal 신원확인·도구/MCP0·APPROVE다. 현재runner/후속diff/합성취소검사/실제저장직렬화를검토했고 최종전체verify통과를별도병합gate로남겼다. 표시USD0.3350158은구독증분청구액이아니다. 독립Sol6.1/high 문서리뷰의 본문상한과이미지상한대체경로 혼동P2도 수정한뒤APPROVE·남은P0/P1/P2없음이다. 본문상한초과는분석미채택/사실보고,채택본문의이미지상한초과는전체text이며캡션은길이허용시최대2링크다. 최종제품소스97865366에서정식전체검증진행중이며이후문서만보완한다. 최종통합·CI/전체영수증은연결PR에서인수하고실패시병합하지않는다. 운영은72c88c07/WAIT_AUTH_REPAIR,새배포·재시작·시험발송·예약추가0이다.
+
+**See/첫 전체 실패와 수정:** 로컬 정식검증은1failed/9985passed/2skipped/2xfailed·814.91초·격리0, PR CI(run41094959504)는같은1failed/9985passed·323.24초·격리0이었다. `test_report_review_regressions::test_invalid_body_is_terminal_and_delivery_issues_reach_digest`가 시장의과거상한1800을전제로1801자본문을무효로기대했다. 새승인계약은시장3000/개인1800이므로입력이정상범위에들어가전송대역의unknown이반환됐다. 해당시장fixture만실제상한초과3001자로바꾸고 terminal·재발송금지·개인요약오류표시·HTTP호출0단언을보존한다. 제품소스/시간/검증가드는변경하지않는다. 개인1801기각과시장본문/줄수/UTF16경계검사는기존회귀에서유지한다. 관련3파일60PASS/9.65초·격리0, 독립Sol6.1/high는APPROVE·P0/P1/P2없음(actual/effective미노출)이다. 최초실패를전체성공으로세지않으며수정후정식전체·CI를다시인수한다.
+
+**NEXT:** R02-RESEARCH 최종전체·CI/PR 인수 → Git 인증 복구 확인 후 기존 고정SHA 정상배포 → 다음 자연 보고 내용 수락. 기존 O02 기한 및 새 유효 E02/E01/E04 입력 판독은 유지한다.
+
 <a id="r02-llm-analysis-20261030"></a>
 ### R02-LLM — 그날의 근거로 판단·관전 조건을 쓰는 시장 보고 (구현 DONE / 운영 WAIT)
 

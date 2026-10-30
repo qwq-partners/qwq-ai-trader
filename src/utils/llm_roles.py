@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 
 
-ROLE_POLICY_VERSION = 'engine-roles-v3-market-brief'
+ROLE_POLICY_VERSION = 'engine-roles-v4-market-research'
 
 
 class LLMRole(str, Enum):
@@ -47,8 +47,8 @@ ROLE_PROFILES = MappingProxyType({
         'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
         reasoning_effort='minimal'),
     LLMRole.MARKET_BRIEF: RoleProfile(
-        'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
-        reasoning_effort='minimal', response_format='json_object'),
+        'openai', 'gpt-6.1-sol', 4096, 90.0, 64 * 1024, 'standard',
+        reasoning_effort='medium', response_format='json_object'),
     LLMRole.POST_EXIT_RESEARCH: RoleProfile(
         'openai', 'gpt-6.1-sol', 4096, 90.0, 128 * 1024, 'research',
         reasoning_effort='medium'),

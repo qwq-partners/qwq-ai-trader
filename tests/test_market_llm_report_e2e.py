@@ -51,7 +51,7 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         assert len(session.payloads) == 1
         payload = session.payloads[0]
         assert payload['response_format'] == {'type': 'json_object'}
-        assert payload['model'] == 'gpt-5-mini'
+        assert payload['model'] == 'gpt-6.1-sol'
         assert 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(payload)
         assert llm.monthly_budget.status()['settled_count'] == 1
         photo = store.archived_photo('market', 'morning', DAY)

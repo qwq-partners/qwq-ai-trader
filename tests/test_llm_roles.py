@@ -31,7 +31,7 @@ def manager(tmp_path, *, spent=0, monthly=True):
 @pytest.mark.parametrize('role,model,cap,control', [
     ('report_one_line', 'gpt-5-mini', 512, 'minimal'),
     ('morning_brief', 'gpt-5-mini', 1600, 'minimal'),
-    ('market_brief', 'gpt-5-mini', 1600, 'minimal'),
+    ('market_brief', 'gpt-6.1-sol', 4096, 'medium'),
     ('post_exit_research', 'gpt-6.1-sol', 4096, 'medium'),
 ])
 @pytest.mark.parametrize('spent', [0, 80])
@@ -212,7 +212,10 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
 
 def test_role_table_is_versioned_and_immutable():
     from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
-    assert ROLE_POLICY_VERSION == 'engine-roles-v3-market-brief'
+    assert ROLE_POLICY_VERSION == 'engine-roles-v4-market-research'
+    research = ROLE_PROFILES[LLMRole.MARKET_BRIEF]
+    assert research.timeout_seconds == 90.0 and research.max_input_bytes == 64 * 1024
+    assert research.budget_priority == 'standard'
     with pytest.raises(TypeError):
         ROLE_PROFILES[LLMRole.REPORT_ONE_LINE] = None
     with pytest.raises(FrozenInstanceError):
@@ -356,7 +359,7 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
     files = list(audit_dir.glob('llm-audit-*.jsonl'))
     assert len(files) == 1
     row = json.loads(files[0].read_text())
-    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v3-market-brief'
+    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v4-market-research'
     assert row['requested_reasoning_effort'] == 'minimal'
     assert row['resolved_model'] == 'provider-reported-version'
     assert row['outcome'] == 'error' and row['elapsed_ms'] >= 0

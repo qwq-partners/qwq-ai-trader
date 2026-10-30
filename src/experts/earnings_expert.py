@@ -110,7 +110,7 @@ class EarningsExpert(ExpertAgent):
     # ─────────────────────────────────────────
     async def _fetch_us_upcoming_earnings(self, days_ahead: int = 5) -> Dict[str, Any]:
         if not self._finnhub_key:
-            return {"symbols": []}
+            return {"symbols": [], "status": "not_ready"}
         try:
             today = datetime.now().date()
             end = today + timedelta(days=days_ahead)
@@ -125,15 +125,18 @@ class EarningsExpert(ExpertAgent):
                     },
                 ) as resp:
                     if resp.status != 200:
-                        return {"symbols": []}
+                        return {"symbols": [], "status": "failed"}
                     data = await resp.json()
             calendar = data.get("earningsCalendar", []) or []
             # 시총 큰 종목 위주 (Finnhub 안 줌 → 임의 정렬)
             symbols = list({it.get("symbol", "") for it in calendar if it.get("symbol")})[:20]
-            return {"symbols": symbols, "count": len(calendar)}
+            return {"symbols": symbols, "count": len(calendar), "status": "ok" if calendar else "empty",
+                    "collected_at": datetime.now().isoformat(),
+                    "events": [{"symbol": it.get("symbol"), "date": it.get("date")}
+                               for it in calendar[:20] if isinstance(it, dict)]}
         except Exception as e:
             logger.debug(f"[실적] upcoming 실패: {e}")
-            return {"symbols": []}
+            return {"symbols": [], "status": "failed"}
 
     # ─────────────────────────────────────────
     # KR 잠정실적 공시 (DART, P1-10 추가)
@@ -141,7 +144,7 @@ class EarningsExpert(ExpertAgent):
     async def _fetch_kr_recent_disclosures(self, days_back: int = 3) -> Dict[str, Any]:
         """DART 공시검색 — 잠정실적 키워드"""
         if not self._dart_key:
-            return {"count": 0}
+            return {"count": 0, "status": "not_ready"}
         try:
             end = datetime.now().date()
             start = end - timedelta(days=days_back)
@@ -159,10 +162,12 @@ class EarningsExpert(ExpertAgent):
                     },
                 ) as resp:
                     if resp.status != 200:
-                        return {"count": 0}
+                        return {"count": 0, "status": "failed"}
                     data = await resp.json()
+            if data.get("status") == "013":
+                return {"count": 0, "status": "empty", "scope": "DART regular filings, first page, selected report titles"}
             if data.get("status") != "000":
-                return {"count": 0}
+                return {"count": 0, "status": "failed"}
             items = data.get("list", []) or []
             # 잠정실적/연결재무 키워드 필터
             relevant = [
@@ -172,14 +177,18 @@ class EarningsExpert(ExpertAgent):
             return {
                 "count": len(relevant),
                 "total": len(items),
+                "status": "ok" if relevant else "empty",
+                "scope": "DART regular filings, first page, selected report titles",
+                "collected_at": datetime.now().isoformat(),
                 "sample": [
-                    {"corp": it.get("corp_name"), "report": it.get("report_nm")}
-                    for it in relevant[:5]
+                    {"corp": it.get("corp_name"), "report": it.get("report_nm"),
+                     "rcept_dt": it.get("rcept_dt"), "rcept_no": it.get("rcept_no")}
+                    for it in relevant[:8]
                 ],
             }
         except Exception as e:
             logger.debug(f"[실적] DART 실패: {e}")
-            return {"count": 0}
+            return {"count": 0, "status": "failed"}
 
     # ─────────────────────────────────────────
     # 최근 surprise (US)
