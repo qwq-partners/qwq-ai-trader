@@ -23,7 +23,7 @@
 
 보호48파일지문변경0·`.env`/로드된기존자격·evolved미커밋·cron·매수중지·월USD100/log_and_continue·GPT/Claude및Gemini비활성을보존했다. 직전발송슬롯/본문/미디어메타·입력영수증digest동일,당일새발송슬롯/분석시도0,T04만료/starts·tokens0/helper·원장없음이다. 사후`ops_check.sh`도rc0·HTTP500/EGW00201/EGW00215/토큰오류0·정체/실패누적없음을확인했다. 배포실행기상태는deployed_accepted/rc0이며롤백은필요하지않았다. 새주문·매수재개·시험발송·예약추가/연장0이다. Git인증은기존경로정상확인으로해소됐고키/인증설정변경0이며과거실패원인은미확정으로남긴다.
 
-비공개영수증은`~/.local/state/qwq-deploy/research-report-20261031/{plan,preflight,deploy-result,result,acceptance-public,review}.json`,인증/독립리뷰/사후요약은`~/.local/state/qwq-task-audit/20261031/git-auth-deploy/`에보존한다. 이번수동시도는소비됐으므로재사용하지않는다. [소스PR #310](https://github.com/qwq-partners/qwq-ai-trader/pull/310)의운영영수증과연결하며완료문서만을위한추가배포는없다. 실제새분석의자연호출품질·모바일내용수락·거래순수익은이기동인수로확정하지않는다.
+비공개영수증은`~/.local/state/qwq-deploy/research-report-20261031/{plan,preflight,deploy-result,result,acceptance-public,review}.json`,인증/독립리뷰/사후요약은`~/.local/state/qwq-task-audit/20261031/git-auth-deploy/`에보존한다. 이번수동시도는소비됐으므로재사용하지않는다. [소스PR #310](https://github.com/qwq-partners/qwq-ai-trader/pull/310)의운영영수증과연결하며완료문서만을위한추가배포는없다. 실제새분석의자연호출품질·모바일내용수락·거래순수익은이기동인수로확정하지않는다. 완료문서4개는독립Sol6.1/high가허용된집계영수증과전체diff를대조해APPROVE·P0/P1/P2없음으로판정했다(native actual/effective미노출).
 
 **NEXT:** R02-RESEARCH 자연보고의분석/API수락/모바일내용수락 구분 → O02 오늘10/31 18시 기존사전점검과11/1·5·6기존정리영수증 → 새유효E02/E01/E04입력판독. 자동관측연장/가상거래/문서마감용추가재배포는없다.
 
