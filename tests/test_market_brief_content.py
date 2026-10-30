@@ -92,7 +92,7 @@ def test_single_sox_uses_singular_direction_and_no_missing_index_claim():
                               us_quotes={'^SOX': snapshot.us_quotes['^SOX']})
     text = render_market_report('morning', snapshot, NOW)
     summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
-    assert 'SOX는 내렸습니다' in summary
+    assert summary.strip() == '미국 반도체(SOX)는 내렸습니다.'
     assert '모두' not in summary and '나스닥' not in summary and 'S&amp;P500' not in summary
 
 
@@ -270,6 +270,30 @@ def test_sox_watch_names_both_divergence_and_breadth_as_questions():
     text = render_market_report('morning', us_snapshot((-.2, -1.3, -2.1)), NOW)
     watch = text.split('<b>국내 관전 포인트</b>')[1]
     assert all(word in watch for word in ('삼성전자', 'SK하이닉스', 'SOX', '일치', '다르게', '반도체', '다른 업종', '코스닥'))
+
+
+def test_synthetic_headline_wording_and_comparison_refer_to_sox():
+    negative = render_market_report('morning', us_snapshot((-.2, -1.3, -2.1)), NOW)
+    headline = negative.split('<b>시장 판단</b>\n')[1].split('\n\n')[0].splitlines()
+    assert headline == [
+        '미국 S&amp;P500·나스닥·반도체(SOX)는 모두 내렸습니다.',
+        '나스닥과 SOX의 하락폭이 S&amp;P500보다 컸습니다.',
+    ]
+    mixed = render_market_report('morning', us_snapshot((.2, -.4, 0)), NOW)
+    headline = mixed.split('<b>시장 판단</b>\n')[1].split('\n\n')[0]
+    assert headline == '미국 지수 등락률은 S&amp;P500 +0.20%·나스닥 -0.40%·반도체(SOX) +0.00%입니다.'
+
+
+def test_mixed_domestic_and_us_headline_preserves_prior_basis_order():
+    previous = NOW.replace(day=28, hour=15, minute=35)
+    indices = tuple({'label': label, 'price': 3000, 'change_pct': pct, 'source': 'kis',
+                     'source_observed_at': previous.isoformat(), 'received_at': previous.isoformat()}
+                    for label, pct in [('KOSPI', 1), ('KOSDAQ', -1)])
+    us = us_snapshot((-.2, -1.3, -2.1))
+    text = render_market_report('morning', MarketSnapshot(indices=indices, kr_basis_date='2026-10-28',
+        us_quotes=us.us_quotes, us_basis_date=us.us_basis_date), NOW)
+    headline = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert headline.index('기준일 2026-10-28') < headline.index('혼조·보합') < headline.index('미국 S&amp;P500')
 
 
 def test_displayed_tie_with_sp_does_not_claim_both_exceed_it():

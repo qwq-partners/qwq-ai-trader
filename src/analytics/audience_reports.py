@@ -189,20 +189,22 @@ def render_market_report(kind: str, snapshot: MarketSnapshot, now: datetime) -> 
             direction = "보합이었습니다"
         else:
             direction = None
+        headline_labels = [(symbol, '반도체(SOX)' if symbol == '^SOX' else label, pct)
+                           for symbol, label, pct in us]
         if direction:
-            names = '·'.join(_text(label) for _, label, _ in us)
+            names = '·'.join(_text(label) for _, label, _ in headline_labels)
             particle = '는' if us[-1][0] == '^SOX' else '은'
             qualifier = '모두 ' if len(us) > 1 else ''
             lines.append(f"미국 {names}{particle} {qualifier}{direction}.")
         else:
-            moves = '·'.join(f"{_text(label)} {pct:+.2f}%" for _, label, pct in us)
+            moves = '·'.join(f"{_text(label)} {pct:+.2f}%" for _, label, pct in headline_labels)
             lines.append(f"미국 지수 등락률은 {moves}입니다.")
         if len(values) == 3:
             sp, nasdaq, sox = (values[symbol] for symbol in ('^GSPC', '^IXIC', '^SOX'))
             if sp < 0 and nasdaq < sp and sox < sp:
-                lines.append("나스닥과 반도체의 하락폭이 S&amp;P500보다 컸습니다.")
+                lines.append("나스닥과 SOX의 하락폭이 S&amp;P500보다 컸습니다.")
             elif sp > 0 and nasdaq > sp and sox > sp:
-                lines.append("나스닥과 반도체의 상승폭이 S&amp;P500보다 컸습니다.")
+                lines.append("나스닥과 SOX의 상승폭이 S&amp;P500보다 컸습니다.")
     sources = []
     def add_source(source):
         provider = _provider(source)
