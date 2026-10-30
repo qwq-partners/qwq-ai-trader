@@ -161,30 +161,49 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
                 y += 15
                 continue
             if i == 0:
-                kind, size, x, color = 'title', 40, 42, '#142943'
+                kind, size, x, color = 'title', 40, 42, '#ffffff'
             elif i == 1:
-                kind, size, x, color = 'date', 28, 42, '#52677d'
+                kind, size, x, color = 'date', 28, 42, '#d5e5f0'
             elif line == '시장 판단' or line == '국내 관전 포인트' or line.startswith(('주요 지표 · ', '업종 흐름 · ')):
                 kind, size, x, color = 'heading', 30, 42, '#194b71'
                 section = line
                 y += 12
             else:
                 kind, size, x, color = 'body', 28, 52, '#172c40'
-                if section == '국내 관전 포인트' and line.startswith('• '):
-                    check_number += 1
-                    x = 80
                 if line.startswith(('자료 범위:', '출처:')):
-                    color = '#465c6c'
+                    kind, color = 'footer', '#465c6c'
+                elif section == '국내 관전 포인트' and line.startswith('• '):
+                    check_number += 1
+                    x = 88
             bullet = line.startswith('• ')
             display_line = line[2:] if bullet else line
-            if bullet:
-                x += 17
-            wrapped = wrap(display_line, size, 720 - x - 42)
-            if wrapped is None:
-                return None
-            height = len(wrapped) * (size + 10) + (12 if kind == 'heading' else 8)
-            entries.append((kind, x, y, size, color, wrapped, bullet, section, check_number if section == '국내 관전 포인트' and line.startswith('• ') else 0))
-            y += height
+            metric = None
+            if bullet and section.startswith(('주요 지표 · ', '업종 흐름 · ')):
+                # Split only a complete known numeric row. Unknown labels/values remain
+                # an intact wrapped sentence, and timestamps retain their original text.
+                domestic = re.fullmatch(r'(.+?) ([0-9][0-9,]*\.\d{2}(?: \([+-]\d+\.\d{2}%\))?) (· .+)', display_line)
+                change = re.fullmatch(r'(.+?) ([+-]\d+\.\d{2}%)', display_line)
+                match = domestic or change
+                if match:
+                    label, value = match.group(1), match.group(2)
+                    detail = match.group(3) if domestic else None
+                    if (measure(label, size) <= 260 and measure(value, size) <= 306
+                            and (detail is None or measure(detail, size) <= 306)):
+                        metric = (label, value, detail)
+            if metric:
+                wrapped = []
+                row_height = 2 * (size + 10) + 10 if metric[2] else size + 18
+            else:
+                if bullet and section != '국내 관전 포인트':
+                    x += 17
+                wrapped = wrap(display_line, size, 720 - x - 42)
+                if wrapped is None:
+                    return None
+                row_height = len(wrapped) * (size + 10) + (12 if kind == 'heading' else 12)
+            entries.append((kind, x, y, size, color, wrapped, bullet, section,
+                            check_number if section == '국내 관전 포인트' and bullet else 0,
+                            metric, row_height))
+            y += row_height
         height = y + 35
         if height > 3000:
             return None
@@ -193,26 +212,48 @@ def render_market_report_image(text: str) -> MarketReportImage | None:
         ax.axis('off')
         fig.patch.set_facecolor('#f5f8fa')
         ax.add_patch(FancyBboxPatch((18, 18), 684, height - 36, boxstyle='round,pad=0,rounding_size=16', facecolor='white', edgecolor='#dce6ec', linewidth=1))
-        for kind, x, top, size, color, wrapped, bullet, section, number in entries:
-            if kind == 'body' and (bullet or section == '시장 판단'):
-                box_height = len(wrapped) * (size + 10) + 4
-                ax.add_patch(FancyBboxPatch((40, top - 4), 640, box_height,
-                    boxstyle='round,pad=0,rounding_size=7',
-                    facecolor='#f1f7fa' if section == '시장 판단' else '#f7fafc',
-                    edgecolor='none'))
-            if kind == 'heading':
+        ax.add_patch(FancyBboxPatch((18, 18), 684, 140, boxstyle='round,pad=0,rounding_size=16', facecolor='#163850', edgecolor='none'))
+        judgment_entries = [e for e in entries if e[7] == '시장 판단']
+        if judgment_entries:
+            top = judgment_entries[0][2] - 8
+            last = judgment_entries[-1]
+            bottom = last[2] + last[10] - 4
+            ax.add_patch(FancyBboxPatch((30, top), 660, bottom - top,
+                boxstyle='round,pad=0,rounding_size=10', facecolor='#eaf4f7', edgecolor='none'))
+        footer_entries = [e for e in entries if e[0] == 'footer']
+        if footer_entries:
+            top = footer_entries[0][2] - 7
+            last = footer_entries[-1]
+            bottom = last[2] + last[10] - 4
+            ax.add_patch(FancyBboxPatch((30, top), 660, bottom - top,
+                boxstyle='round,pad=0,rounding_size=8', facecolor='#f2f5f6', edgecolor='none'))
+        for kind, x, top, size, color, wrapped, bullet, section, number, metric, row_height in entries:
+            if kind == 'body' and (bullet or section == '시장 판단') and section != '시장 판단':
+                ax.add_patch(FancyBboxPatch((40, top - 4), 640, row_height - 4,
+                    boxstyle='round,pad=0,rounding_size=7', facecolor='#f6f9fb', edgecolor='none'))
+            if kind == 'heading' and section != '시장 판단':
                 ax.plot([42, 678], [top - 5, top - 5], color='#dae6ed', linewidth=1)
-            if bullet:
+            if metric:
+                label, value, detail = metric
+                ax.scatter([57], [top + 13], s=15, color=color)
+                ax.plot([340, 340], [top + 3, top + row_height - 13], color='#d4e1e9', linewidth=1)
+                ax.text(69, top, label, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top')
+                ax.text(355, top, value, fontsize=size * 72 / 100, fontproperties=prop, color=color, va='top')
+                if detail:
+                    ax.text(355, top + size + 10, detail, fontsize=size * 72 / 100,
+                            fontproperties=prop, color='#465c6c', va='top')
+                continue
+            if bullet and not number:
                 ax.scatter([x - 11], [top + 13], s=15, color=color)
             if number:
-                ax.text(47, top, str(number), fontsize=20 * 72 / 100, fontproperties=prop, color='#257f95', va='top')
+                ax.text(52, top, str(number), fontsize=28 * 72 / 100, fontproperties=prop, color='#257f95', va='top')
             for j, part in enumerate(wrapped):
                 ax.text(x, top + j * (size + 10), part, fontsize=size * 72 / 100,
                         fontproperties=prop, color=color, va='top')
         buffer = BytesIO()
         canvas.print_png(buffer)
         png = buffer.getvalue()
-        if len(png) > 5_000_000:
+        if len(png) > 4 * 1024 * 1024:
             return None
         return MarketReportImage(png, caption, 720, height, plain)
     except (OSError, RuntimeError, ValueError, OverflowError):

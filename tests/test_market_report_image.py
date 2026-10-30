@@ -78,6 +78,11 @@ def test_rendered_text_is_inside_image_and_preserves_source_words(monkeypatch):
         bounds = artist.get_window_extent(renderer)
         assert 0 <= bounds.x0 < bounds.x1 <= result.width
         assert 0 <= bounds.y0 < bounds.y1 <= result.height
+    bounds = [artist.get_window_extent(renderer) for artist in artists]
+    for i, left in enumerate(bounds):
+        for right in bounds[i + 1:]:
+            assert not (min(left.x1, right.x1) > max(left.x0, right.x0) + 0.5
+                        and min(left.y1, right.y1) > max(left.y0, right.y0) + 0.5)
     drawn = ' '.join(a.get_text() for a in artists)
     for phrase in ('KOSPI 3,000.00 (+1.20%)', '원천시각 미제공', '전체 업종 순위', '출처: KIS'):
         assert phrase in drawn
@@ -101,3 +106,51 @@ def test_height_overflow_and_invalid_entities_fall_back():
     text = text.replace('자료 범위:', ('• 확인할 사항입니다.\n' * 48) + '자료 범위:')
     assert render_market_report_image(text) is None
     assert render_market_report_image(sample().replace('KOSPI', '&bogus;')) is None
+
+
+def test_metric_values_align_and_domestic_receipt_times_remain_visible(monkeypatch):
+    from matplotlib.axes import Axes
+    drawn = []
+    original = Axes.text
+    def capture(ax, x, y, text, *args, **kwargs):
+        artist = original(ax, x, y, text, *args, **kwargs)
+        drawn.append((text, x, y, artist))
+        return artist
+    monkeypatch.setattr(Axes, 'text', capture)
+    result = render_market_report_image(sample())
+    assert result is not None
+    by_text = {text: (x, y, artist) for text, x, y, artist in drawn}
+    for text in ('KOSPI', 'KOSDAQ', '반도체', '은행', '3,000.00 (+1.20%)',
+                 '3,000.00 (-0.50%)', '+1.00%', '-2.00%', '· 수신 13:10 KST'):
+        assert text in by_text
+    assert by_text['KOSPI'][0] == by_text['KOSDAQ'][0] == by_text['반도체'][0]
+    assert by_text['3,000.00 (+1.20%)'][0] == by_text['3,000.00 (-0.50%)'][0] == by_text['+1.00%'][0]
+    assert by_text['3,000.00 (+1.20%)'][0] > by_text['KOSPI'][0]
+    renderer = by_text['KOSPI'][2].figure.canvas.get_renderer()
+    assert by_text['KOSPI'][2].get_window_extent(renderer).x1 < by_text['3,000.00 (+1.20%)'][2].get_window_extent(renderer).x0
+
+
+def test_unrecognized_metric_row_stays_a_complete_wrapped_row(monkeypatch):
+    from matplotlib.axes import Axes
+    drawn = []
+    original = Axes.text
+    def capture(ax, x, y, text, *args, **kwargs):
+        drawn.append(text)
+        return original(ax, x, y, text, *args, **kwargs)
+    monkeypatch.setattr(Axes, 'text', capture)
+    source = sample().replace('KOSPI 3,000.00 (+1.20%) · 수신 13:10 KST', 'KOSPI 확인 불가')
+    result = render_market_report_image(source)
+    assert result is not None
+    assert 'KOSPI 확인 불가' in drawn
+
+
+def test_height_and_transport_byte_limits_are_fail_closed(monkeypatch):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    long_line = '• 관측 자료의 기준과 제한을 확인하는 반복 표본 문장입니다.\n'
+    source = sample().replace('자료 범위:', long_line * 27 + '자료 범위:')
+    assert len(source.splitlines()) < 50
+    assert render_market_report_image(source) is None
+    def oversized_png(canvas, target, *args, **kwargs):
+        target.write(b'x' * (4 * 1024 * 1024 + 1))
+    monkeypatch.setattr(FigureCanvasAgg, 'print_png', oversized_png)
+    assert render_market_report_image(sample()) is None
