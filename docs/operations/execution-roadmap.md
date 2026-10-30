@@ -3,7 +3,7 @@
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
 <a id="r02-research-deploy-20261031"></a>
-### R02-RESEARCH-DEPLOY — 기존 Git 인증 경로 확인과 운영 적용 (Plan / 진행)
+### R02-RESEARCH-DEPLOY — 기존 Git 인증 경로 확인과 운영 적용 (DONE / 자연 내용 수락 WAIT)
 
 **승인·목표:** 사용자가10/31 Git 인증 오류 해결과 운영배포를 명시적으로 요청했고 기존 설정과 매수 중지 유지를 조건으로 정했다. 소스PR #310을 다시 구현하지 않고 검증된 고정SHA를 기존 배포·롤백·150초기동 인수 절차로 적용한다. 새로운 키/권한·매수 재개·실주문·시험Telegram·예약/관측기간 변경은 범위가 아니다.
 
@@ -15,10 +15,20 @@
 
 **일정·독립 검토:** 읽기전용Sol6.1/high는설정·의존성·주문/사이징경로변경없음과T04만료/무표본종료·O02오늘18시사전점검및11/1 09:46:10,11/5·6 09:34:10정리를확인했다. 현재장외진입과충돌없으며토요일09:30매도후속복기를유지한다. 요청model/effort외native실효metadata는미노출이다. Astra/high는새비공개수동실행기만작성·합성검사하고coordinator가실제운영호출을소유한다. 실제Opus5.5 중요검토후준비·적용한다.
 
-**NEXT:** R02-RESEARCH-DEPLOY 고정SHA 인수 → 다음자연보고의분석/API수락/모바일내용수락 구분 → 기존O02기한·새유효E02/E01/E04입력판독. 문서마감용추가재배포는없다.
+**Do/진입 인수:** 새비공개`~/.local/state/qwq-deploy/research-report-20261031/`의Astra/high 실행기 합성9검사PASS(직접0.014초), source문법PASS다. 실제Claude Opus5.5/high 중요리뷰는232.836초·rc0·assistant/terminal신원확인·도구/MCP0·조건부READY(P0/P1없음)였다. 요청된스키마조건은대상6테이블의report_date·ALTER부재·실제구버전→대상DDL전환/반복시동일영수증digest로검증했다. 기동시과거행backfill없음과보호48경로/승인diff교집합0도확인했다. 호출중단위험은새세션의분리된실행기로조치하며서비스를직접nohup기동하는방식이아니다. 표시USD0.6581238은구독증분청구액이아니다.
+
+02:47:21 실제사전28항목전부PASS·보호48현재지문/cron/최근발송영수증기준확인뒤고정SHA수동apply를시작했다. 실행기는parent반환후별도session으로계속동작하며기존전체verify/재시작/rollback흐름에강제종료시한을걸지않는다. 실제검증·기동인수결과는완료후기록하며이단계는운영완료가아니다.
+
+**See/운영 인수 DONE — 03:04:20 KST:** 고정`356470c4e4fe79a3414484a300d53c139a145e4a`를정상적용했다. 운영정식검증은9986passed/2skipped/2xfailed/8warnings·807.58초·rc0·격리0·문법/비밀정보검사PASS다. 종료뒤pytest의임시`/tmp`디렉터리정리경고는별도보존했으며검사성공이나운영기동오류와혼동하지않는다(임의삭제0). 03:01:39 재기동PID3945959,기동160.2초뒤**42항목전부PASS**·active/running·NRestarts0·브로커연결/복구ready·미체결/대사미완료0이다.
+
+보호48파일지문변경0·`.env`/로드된기존자격·evolved미커밋·cron·매수중지·월USD100/log_and_continue·GPT/Claude및Gemini비활성을보존했다. 직전발송슬롯/본문/미디어메타·입력영수증digest동일,당일새발송슬롯/분석시도0,T04만료/starts·tokens0/helper·원장없음이다. 사후`ops_check.sh`도rc0·HTTP500/EGW00201/EGW00215/토큰오류0·정체/실패누적없음을확인했다. 배포실행기상태는deployed_accepted/rc0이며롤백은필요하지않았다. 새주문·매수재개·시험발송·예약추가/연장0이다. Git인증은기존경로정상확인으로해소됐고키/인증설정변경0이며과거실패원인은미확정으로남긴다.
+
+비공개영수증은`~/.local/state/qwq-deploy/research-report-20261031/{plan,preflight,deploy-result,result,acceptance-public,review}.json`,인증/독립리뷰/사후요약은`~/.local/state/qwq-task-audit/20261031/git-auth-deploy/`에보존한다. 이번수동시도는소비됐으므로재사용하지않는다. [소스PR #310](https://github.com/qwq-partners/qwq-ai-trader/pull/310)의운영영수증과연결하며완료문서만을위한추가배포는없다. 실제새분석의자연호출품질·모바일내용수락·거래순수익은이기동인수로확정하지않는다.
+
+**NEXT:** R02-RESEARCH 자연보고의분석/API수락/모바일내용수락 구분 → O02 오늘10/31 18시 기존사전점검과11/1·5·6기존정리영수증 → 새유효E02/E01/E04입력판독. 자동관측연장/가상거래/문서마감용추가재배포는없다.
 
 <a id="r02-research-evidence-20261031"></a>
-### R02-RESEARCH — 뉴스·공시와 시장 자료를 연결한 조사 보고 (구현·독립 리뷰 DONE / 전체·CI 인수 진행 / 운영 WAIT)
+### R02-RESEARCH — 뉴스·공시와 시장 자료를 연결한 조사 보고 (구현·검증·운영 DONE / 자연 내용 수락 WAIT)
 
 **최종 인수 연결:** [PR #310](https://github.com/qwq-partners/qwq-ai-trader/pull/310)의 최종 전체·PR/main CI와 통합 영수증을 이 작업의 완료 근거로 따른다. 10/31 02:00 문서 작성 시 구현·독립 리뷰 DONE, 정식 전체/CI 진행 중이며 통과 전 병합하지 않는다. 아래 중간 결과는 각 시점 이력이다. 운영72c88c07/WAIT_AUTH_REPAIR와 자연 내용 수락 WAIT는 소스 인수와 별개다.
 
@@ -50,7 +60,7 @@
 
 **See/첫 전체 실패와 수정:** 로컬 정식검증은1failed/9985passed/2skipped/2xfailed·814.91초·격리0, PR CI(run41094959504)는같은1failed/9985passed·323.24초·격리0이었다. `test_report_review_regressions::test_invalid_body_is_terminal_and_delivery_issues_reach_digest`가 시장의과거상한1800을전제로1801자본문을무효로기대했다. 새승인계약은시장3000/개인1800이므로입력이정상범위에들어가전송대역의unknown이반환됐다. 해당시장fixture만실제상한초과3001자로바꾸고 terminal·재발송금지·개인요약오류표시·HTTP호출0단언을보존한다. 제품소스/시간/검증가드는변경하지않는다. 개인1801기각과시장본문/줄수/UTF16경계검사는기존회귀에서유지한다. 관련3파일60PASS/9.65초·격리0, 독립Sol6.1/high는APPROVE·P0/P1/P2없음(actual/effective미노출)이다. 최초실패를전체성공으로세지않으며수정후정식전체·CI를다시인수한다.
 
-**NEXT:** R02-RESEARCH 최종전체·CI/PR 인수 → Git 인증 복구 확인 후 기존 고정SHA 정상배포 → 다음 자연 보고 내용 수락. 기존 O02 기한 및 새 유효 E02/E01/E04 입력 판독은 유지한다.
+**NEXT:** 소스PR310과 [운영 인수](#r02-research-deploy-20261031)는DONE다. 다음 자연 보고 내용 수락·기존 O02 기한·새 유효 E02/E01/E04 입력 판독을 유지한다.
 
 <a id="r02-llm-analysis-20261030"></a>
 ### R02-LLM — 그날의 근거로 판단·관전 조건을 쓰는 시장 보고 (구현 DONE / 운영 WAIT)
