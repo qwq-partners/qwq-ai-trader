@@ -20,22 +20,20 @@ def us_snapshot(values):
 def test_us_three_index_morning_has_observed_takeaway_and_actual_source():
     text = render_market_report('morning', us_snapshot((.28, .27, 1.75)), NOW)
     assert '한국증시 모닝브리프' in text and '시장 판단' in text
-    assert '미국' in text and '3개 지수 동반 상승' in text
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert all(value in summary for value in ('S&amp;P500 +0.28%', '나스닥 +0.27%', 'SOX +1.75%'))
     assert '1.48%p' in text and '나스닥' in text
     assert '개장 후' in text and 'Yahoo Finance' in text
     assert '출처: Yahoo Finance' in text and '출처: KIS' not in text
 
 
-@pytest.mark.parametrize(('values', 'phrase'), [
-    ((-.2, -.4, -.1), '3개 지수 동반 하락'),
-    ((.2, -.4, 0), '혼조·보합'),
-    ((0, 0, 0), '혼조·보합'),
-])
-def test_us_directions_remain_within_observed_subset(values, phrase):
+@pytest.mark.parametrize('values', [(-.2, -.4, -.1), (.2, -.4, 0), (0, 0, 0)])
+def test_us_directions_remain_within_observed_subset(values):
     text = render_market_report('morning', us_snapshot(values), NOW)
-    assert phrase in text
-    if all(value < 0 for value in values):
-        assert '동반 상승' not in text
+    summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    for label, value in zip(('S&amp;P500', '나스닥', 'SOX'), values):
+        assert f'{label} {value:+.2f}%' in summary
+    assert '보다 컸습니다' not in summary
 
 
 def test_partial_and_tiny_relative_difference_do_not_overstate():
@@ -208,3 +206,64 @@ def test_us_names_escape_ampersand_in_summary_rows_and_watch():
             assert text.count('S&amp;P500') == 3
         if len(values) == 2:
             assert 'S&amp;P500' in text.split('<b>국내 관전 포인트</b>')[1]
+
+
+@pytest.mark.parametrize(('values', 'comparison'), [
+    ((-.2, -1.3, -1.3), '하락폭'),
+    ((-.2, -1.3, -2.1), '하락폭'),
+    ((.2, 1.3, 2.1), '상승폭'),
+])
+def test_morning_headline_names_displayed_us_moves_and_supported_comparison(values, comparison):
+    text = render_market_report('morning', us_snapshot(values), NOW)
+    headline = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    assert all(name in headline for name in ('S&amp;P500', '나스닥', 'SOX'))
+    assert comparison in headline and '보다 컸습니다' in headline
+    assert '%p' not in headline
+
+
+def test_small_displayed_difference_is_neutral_annotation_not_headline():
+    text = render_market_report('morning', us_snapshot((-.2, -1.3, -1.34)), NOW)
+    headline, indicators = text.split('<b>주요 지표 · 미국')
+    assert '%p' not in headline
+    assert 'SOX−나스닥: -0.04%p' in indicators
+    assert all(word not in text for word in ('큰 차이', '유의미', '크게 웃돌'))
+
+
+@pytest.mark.parametrize('values', [(.2, -.4, 0), (0, 0, 0), (.2,), (.2, -.4)])
+def test_partial_mixed_and_flat_us_headlines_name_only_observed_values(values):
+    text = render_market_report('morning', us_snapshot(values), NOW)
+    headline = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+    for label, value in zip(('S&amp;P500', '나스닥', 'SOX'), values):
+        assert label in headline and f'{value:+.2f}%' in headline
+    assert '보다 컸습니다' not in headline
+    if len(values) < 3:
+        assert 'SOX' not in headline
+
+
+def test_sox_watch_names_both_divergence_and_breadth_as_questions():
+    text = render_market_report('morning', us_snapshot((-.2, -1.3, -2.1)), NOW)
+    watch = text.split('<b>국내 관전 포인트</b>')[1]
+    assert all(word in watch for word in ('삼성전자', 'SK하이닉스', 'SOX', '일치', '다르게', '반도체', '다른 업종', '코스닥'))
+
+
+def test_displayed_tie_with_sp_does_not_claim_both_exceed_it():
+    for values in ((-.2, -.204, -1), (.2, .204, 1)):
+        text = render_market_report('morning', us_snapshot(values), NOW)
+        summary = text.split('<b>시장 판단</b>')[1].split('<b>주요 지표')[0]
+        assert '보다 컸습니다' not in summary
+
+
+def test_combined_morning_maximum_labels_sources_and_private_context():
+    previous = NOW.replace(day=28, hour=15, minute=35)
+    indices = tuple({'label': '<' + '&' * 300, 'price': 3000, 'change_pct': pct,
+                     'source': f'<index{pct}&>', 'source_observed_at': previous.isoformat(),
+                     'received_at': previous.isoformat(), 'engine_cash': 'PRIVATE_CANARY'}
+                    for pct in (1, -1))
+    sectors = tuple({'name': '<' + '&' * 300, 'r1': i, 'source': f'<provider{i}&>',
+                     'as_of': '2026-10-28'} for i in range(20))
+    us = us_snapshot((-.2, -1.3, -2.1))
+    text = render_market_report('morning', MarketSnapshot(indices=indices, sectors=sectors,
+        kr_basis_date='2026-10-28', us_quotes=us.us_quotes, us_basis_date=us.us_basis_date), NOW)
+    assert len(text) <= 1800 and len(text.splitlines()) <= 35
+    assert '&lt;' in text and '<provider' not in text and 'PRIVATE_CANARY' not in text
+    assert '기준일 2026-10-28' in text and 'Yahoo Finance' in text
