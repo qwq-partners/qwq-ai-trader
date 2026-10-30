@@ -64,17 +64,40 @@ def synthetic_producer_pacing():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('writer_alive', [False, True])
-async def test_synthetic_pacing_rejects_stopped_or_stalled_writer(monkeypatch, writer_alive):
+@pytest.mark.parametrize(('writer_alive', 'expected'), [
+    (False, 'writer stopped during synthetic pacing'),
+    (True, 'synthetic writer stalled'),
+])
+async def test_synthetic_pacing_rejects_stopped_or_stalled_writer(monkeypatch, writer_alive, expected):
     checkpoint, pacing = synthetic_producer_pacing()
     journal = SimpleNamespace(_queue=SimpleNamespace(qsize=lambda: 1000),
         _failed=SimpleNamespace(is_set=lambda: False),
         _thread=SimpleNamespace(is_alive=lambda: writer_alive))
     clock = iter((0, 3, 6, 9))
-    monkeypatch.setattr(__import__(__name__), 'monotonic', lambda: next(clock))
-    with pytest.raises(AssertionError, match='writer stopped|writer stalled'):
+    monkeypatch.setitem(globals(), 'monotonic', lambda: next(clock))
+    with pytest.raises(AssertionError) as exc:
         await checkpoint(SimpleNamespace(journal=journal), 0)
+    assert str(exc.value).splitlines()[0] == expected
     assert pacing['checkpoints'] == 1 and pacing['queue_peak'] == 1000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('failed', 'prior_wait', 'expected'), [
+    (True, 0, 'writer failed during synthetic pacing'),
+    (False, 28, 'synthetic writer stalled'),
+])
+async def test_synthetic_pacing_rejects_failed_writer_or_cumulative_timeout(monkeypatch, failed, prior_wait, expected):
+    checkpoint, pacing = synthetic_producer_pacing()
+    pacing['wait_seconds'] = prior_wait
+    journal = SimpleNamespace(_queue=SimpleNamespace(qsize=lambda: 1000),
+        _failed=SimpleNamespace(is_set=lambda: failed),
+        _thread=SimpleNamespace(is_alive=lambda: True))
+    clock = iter((0, 3))
+    monkeypatch.setitem(globals(), 'monotonic', lambda: next(clock))
+    with pytest.raises(AssertionError) as exc:
+        await checkpoint(SimpleNamespace(journal=journal), 0)
+    assert str(exc.value).splitlines()[0] == expected
+    assert pacing['wait_seconds'] == prior_wait
 
 
 def price_batch(symbol, count):
@@ -286,6 +309,7 @@ async def test_high_volume_raw_candidate_stream_seals_reads_and_preserves_regula
                              persisted_after=journal._persisted, accepted_records=journal._final_count)
         return result
     monkeypatch.setattr(entry_observation_runtime.ObservationJournal, 'close', measured_close)
+    # Fake-clock pacing preserves the workload; it is not a throughput benchmark.
     checkpoint, pacing = synthetic_producer_pacing()
     started = monotonic()
     plan, study, observed, retained, counts, buffer, now = await collect_volume(
