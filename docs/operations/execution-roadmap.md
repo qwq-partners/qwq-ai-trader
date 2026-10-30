@@ -3,7 +3,7 @@
 > **엔진 변경·개선·결함 수정·운영 및 예약·남은 작업을 관리하는 단일 원장.** 새 세션은 이 문서부터 읽고 모든 작업을 ID·우선순위·상태·근거·NEXT에 연결한다. 개별 계획·PR·운영 영수증은 이 원장에 연결하는 상세 근거이며, 별도 문서에 독립된 우선순위 목록을 만들지 않는다. 과거 문서의 미완료 체크박스를 모두 새 작업으로 되살리지 않는다. 이 문서의 날짜 도래나 체크 완료가 주문·배포·새 구독의 승인을 대신하지 않는다.
 
 <a id="r02-volume-close-20261030"></a>
-### R02 인수 하위 수정 — 대량 기록 종료 실패 재발
+### R02 인수 하위 수정 — 대량 기록 종료·프로세스 소멸 검사
 
 **Plan — 기존 main CI 실패 인수:** R02 [PR #305](https://github.com/qwq-partners/qwq-ai-trader/pull/305)는 로컬9,774검사/790.72초·PR CI9,774검사/442.52초·독립 실제Opus5.5 승인 후 main`dc37991b`으로 병합했다. 그러나 [main CI run41005921010](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/41005921010)는1failed/9,773passed/2skipped/2xfailed·440.97초·격리0이다. 이전에도 간헐 실패한 `test_first_scan_volume.py::test_high_volume_raw_candidate_stream_seals_reads_and_preserves_regular_flow`의 실제 결과는 `journal_close_timeout`, 저장77,071건, sealed/fsync_confirmed=false였다. 원본 CI 로그와 오류/저장 건수를 보존했으며, 이전10/29 실패 원인을 이번 결과로 소급 확정하지 않는다.
 
@@ -20,6 +20,8 @@
 **See — 관련 검사·독립 리뷰:** helper 부재 RED2실패 뒤 관련85검사/261.19초·격리0이다. 최종 봉인/fsync/오류 없음/저장=수락 건수를 함께 검사하고, 실제 close timeout은 미봉인/fsync 거짓으로 남긴다. 중지·실패·정체·누적 감시를 구별하는 후속은 coordinator 집중4검사/0.29초·격리0이다. 공유 helper와 대량 경로는 지연 조건 GREEN본과 동일하며 추가 변경은 단언과 설명뿐이다. 독립 실제Opus5.5/high 첫121.671초 리뷰의 비차단P2는 검사 판별력 보강과 한계 기록으로 처리했다. 최종52.582초 후속은 APPROVE·남은P0/P1/P2 없음이며, 두 실행 모두 assistant/terminal 모델 확인·도구/MCP0·effective미노출이다. 표시 추정비 합USD0.799778은 구독 증분 청구액이 아니다. 최종 정식 verify는9,778passed/2skipped/2xfailed/8warnings·788.39초·rc0, 문법/비밀정보PASS·격리0이다. 검토한 테스트 파일과 동일하며 최종 PR/CI·통합은 이 변경의 GitHub 영수증을 따른다. 독립 Sol6.1/high의4개 문서/근거 검토도 APPROVE·P0/P1/P2 없음이며 actual/effective미노출이다.
 
 **리뷰 잔여 한계:** 다른 저용량/고갈 음성검사는 기존 unpaced 상태이며 이번에 실패를 관측한 대상이 아니다. 자동 확대하지 않고 새 실패가 생기면 실제 오류/저장량으로 구분한다. 공유5초/30초 감시도 호스트 속도에 의존하며 정체 시 실패하는 것이 계약이다. 일반 수정 검사에서 조절 대기8.691초/69checkpoint, 지연 검사에서23.776초/71checkpoint·큐 최대1,075였다. 이 여유를 보편적 CI 성능이나 간헐 실패 제거 보장으로 확대하지 않는다. 큐0이나 저장 건수만으로 fsync를 인정하지 않으며, 실운영 처리량·설치 적격·순수익을 입증하지 않는다.
+
+**CI 후속 — 프로세스 종료 검사 재현/수정·로컬 인수 DONE:** [PR #306 run41010022326](https://github.com/qwq-partners/qwq-ai-trader/actions/runs/41010022326)는1failed/9,777passed/2skipped/2xfailed·510.84초·격리0이다. 대량 기록 검사는 통과했으나 기존 `test_cli_timeout_kills_owned_descendant`에서 직접 자식 회수 확인 뒤 `/proc/<pid>/stat`의 실제 read가 `ProcessLookupError(ESRCH)`로 실패했다. 별도 Terra6.1/high는 직접 소유한 합성 Python 자식의 stat FD를 연 뒤 종료/회수하고 읽어 실제ESRCH를 재현했다(RED1failed/3passed). `tests/test_claude_transport.py`의 헬퍼만 기존FileNotFoundError와ProcessLookupError를 소멸로 처리하며 실제 생존 거부·권한/EIO 전파·기존 시한·운영 cleanup은 유지한다. 통합`90b75b68`, 전체 해당파일86검사/3.68초·집중5검사/0.72초·격리0이다. worker 요청 모델/effort 외 actual/effective는 미노출이다. 독립 실제Opus5.5/high73.109초 리뷰는 APPROVE·P0/P1 없음이다. assistant/terminal 모델 확인·도구/MCP0·effective미노출이며 표시USD0.241973은 구독 증분 청구액이 아니다. 비차단P2인 빈환경/PATH 일관성·child watcher 가정·따옴표 스타일은 동작 변경 없이 수용했다. 절대 Python 경로를 사용하고 실제 SIGKILL 종료 코드를 단언하며, 프로젝트의 별도 child watcher 설정은 없다. 오류를 재실행 성공으로 덮지 않으며 별도 Sol6.1/high의4개 문서 diff 검토도 APPROVE·P0/P1/P2 없음이며 actual/effective미노출이다. 수정 후 최종 정식verify는9,781passed/2skipped/2xfailed/8warnings·785.71초·rc0, 문법/비밀정보PASS·격리0이다. 이 수치를 이번 최종본 근거로 사용하며 위9,778검사는 proc/stat 수정 전 이력이다. 새HEAD CI 인수 전 운영 승격을 보류한다.
 
 **운영/NEXT:** 운영1f70ff8a/PID3859797·미커밋evolved_overrides와 기존 예약을 보존하고 배포하지 않았다. NEXT는 이 실패 인수→T04 마지막16:00~16:05 실제 결과/16:06 승인 종료→16:40 자연 보고·보호 상태 대조 후 E04/R02 고정SHA 운영 적용 검토다. O02 기존 기한·21시 개인 보고를 유지하며 새 관측 기간·배포/삭제 예약은 만들지 않는다.
 
