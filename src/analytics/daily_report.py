@@ -588,6 +588,9 @@ def record_morning_brief_dispatch(
     conflict_note: Optional[str] = None,
     dispatched_brief_text: Any = _DISPATCH_BRIEF_UNSET,
     archive_dir=None,
+    media_type: str = "text/html",
+    image_sha256: Optional[str] = None,
+    semantic_report_body: Optional[str] = None,
 ) -> Path:
     """07:30 발송 결과를 날짜별 아카이브에 기록한다 (2026-09-15 T10 F19 C→A 배선 계약).
 
@@ -601,6 +604,10 @@ def record_morning_brief_dispatch(
         conflict_note: build_expert_conflict_note() 결과(있으면).
         dispatched_brief_text: 실제 표시한 캐시 본문. None은 브리프 없이 발송,
             생략은 구버전 호출 호환을 위해 최신 생성본을 가리킨다.
+        media_type: 기존 텍스트는 text/html, 이미지 발송은 image/png.
+        image_sha256: 실제 API에 제출한 이미지의 원장 지문.
+        semantic_report_body: 이미지에 표현한 원래 보고 본문. sent_text는
+            같은 요청으로 제출한 실제 캡션이며 본문/예측 표본과 구분한다.
     """
     if status not in ("sent", "failed"):
         raise ValueError(f"[모닝브리프] 알 수 없는 발송 status: {status!r} (sent/failed만 허용)")
@@ -643,6 +650,9 @@ def record_morning_brief_dispatch(
         "conflict_note": conflict_note,
         "brief_ref": brief_ref,
         "brief_match": brief_match,
+        "media_type": media_type,
+        "image_sha256": image_sha256,
+        "semantic_report_body": semantic_report_body,
     }
     archive.setdefault("dispatch", []).append(dispatch_entry)
     return _save_brief_archive(kr_date, archive, archive_dir)
