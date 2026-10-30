@@ -186,6 +186,41 @@ async def test_market_photo_archive_is_actual_caption_and_not_forecast(tmp_path,
 
 
 @pytest.mark.asyncio
+async def test_real_rendered_page_is_the_archived_and_submitted_photo(tmp_path):
+    n = notifier()
+    response = AsyncMock(status=200)
+    response.__aenter__.return_value = response
+    response.json.return_value = {'ok': True}
+    n._session = Mock(closed=False)
+    n._session.post.return_value = response
+    store = ReportStore(tmp_path/'r.db')
+    def record(**kwargs):
+        return record_morning_brief_dispatch(**kwargs, archive_dir=tmp_path/'archive')
+    schedule = ReportSchedule(store, n, record)
+    assert await schedule.tick(NOW, True, MARKET, '') == 'accepted'
+    receipt = store.receipt('market', 'morning', DAY)
+    photo = store.archived_photo('market', 'morning', DAY)
+    assert receipt['media_type'] == 'image/png'
+    with Image.open(BytesIO(photo)) as image:
+        assert image.format == 'PNG' and image.width == 720
+    assert hashlib.sha256(photo).hexdigest() == receipt['image_sha256']
+    payload = n._session.post.call_args.kwargs['data']()
+    class Writer:
+        def __init__(self): self.parts = []
+        async def write(self, value): self.parts.append(value)
+    writer = Writer()
+    await payload.write(writer)
+    wire = b''.join(writer.parts)
+    assert photo in wire and receipt['caption'].encode() in wire
+    dispatch = json.loads(next((tmp_path/'archive').glob('*.json')).read_text())['dispatch'][0]
+    assert dispatch['sent_text'] == receipt['caption']
+    assert dispatch['semantic_report_body'] == receipt['body']
+    assert dispatch['image_sha256'] == receipt['image_sha256']
+    assert await ReportSchedule(ReportStore(store.path), n, record).tick(NOW, True, MARKET, '') == 'already_consumed'
+    n._session.post.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_cancelled_renderer_drains_before_after_lock_release(tmp_path, monkeypatch):
     entered, release = Event(), Event()
     def render(text):
