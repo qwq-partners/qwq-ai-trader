@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-> **11/1 현재 작업:** [R02-VALIDATE](operations/execution-roadmap.md#r02-validation-rejection-20261101)는 정상 ETF 분석의 검증 거절을 재현·수정한다. 실제 원응답의 무수정 통과와 새 모델 호출의 ready/validated를 확인했으며, 전체 검사·CI·배포·명시 승인 단발 발송의 최종 근거는 원장에 기록한다. 과거 완료 작업과 자연 내용 수락 WAIT는 구분한다.
+> **11/1 현재 작업:** [R02-VALIDATE 완료·NEXT](operations/execution-roadmap.md#r02-validation-rejection-20261101). 실제 WSL/PR/main/서버10,040검사·운영cfc9bc20 인수32/32PASS·04:35 정상 분석 텍스트 단발 API 수락 DONE. 설정/매수중지/기존예약 유지, 모바일 내용 수락·11/2 자연 출력 WAIT. O02는 기존11/1 09:46:10 실행 후 영수증을 확인하며 문서 마감 재배포는 없다.
 
 > **10/31 분석 문장 반영 완료:** [R02-INSIGHT](operations/execution-roadmap.md#r02-analyst-prose-20261031)는 근거/출처 복잡성과 인사이트 부족 피드백을 반영했다. PR #315의 관련317·전체9,990검사와 독립 리뷰/CI를 통과했고, 통합 운영5af43e48에 동일 소스가 포함됨을22:24의42항목 읽기 점검으로 인수했다. 기존 설정·매수중지는 유지하며 추가 시험 발송0, 자연 LLM/모바일 내용 수락은 WAIT다. 완료 문서만으로 재배포하지 않는다.
 
