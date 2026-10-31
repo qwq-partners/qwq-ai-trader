@@ -1,5 +1,4 @@
-"""Public research → one model request → source-linked image; all IO synthetic."""
-import hashlib
+"""Public research → one model request → source-linked text; all IO synthetic."""
 import json
 from unittest.mock import AsyncMock, Mock
 from types import SimpleNamespace
@@ -43,7 +42,7 @@ def research_response():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('invalid, capture', [(False, False), (True, False), (False, True)])
-async def test_public_events_reach_real_role_and_same_photo_receipt(tmp_path, monkeypatch, invalid, capture):
+async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, monkeypatch, invalid, capture):
     llm = manager(tmp_path)
     output = research_response()
     if invalid:
@@ -104,12 +103,14 @@ async def test_public_events_reach_real_role_and_same_photo_receipt(tmp_path, mo
             assert '서버 공급 확대의 이익 전환 여부' in receipt['body']
             assert '투자 비용 부담' in receipt['body']
             assert 'https://example.com/research/server-supply' in receipt['body']
-            assert 'https://example.com/research/server-supply' in receipt['caption']
-        photo = store.archived_photo('market', 'morning', DAY)
-        assert photo.startswith(b'\x89PNG\r\n\x1a\n')
-        assert hashlib.sha256(photo).hexdigest() == receipt['image_sha256']
+        assert store.archived_photo('market', 'morning', DAY) is None
+        assert receipt['media_type'] == 'text/html' and receipt['caption'] is None
         telegram._session.post.assert_called_once()
-        assert telegram._session.post.call_args.args[0].endswith('/sendPhoto')
+        call = telegram._session.post.call_args
+        assert call.args[0].endswith('/sendMessage')
+        assert call.kwargs['json'] == {'chat_id': 'channel', 'text': analysis['final_body'],
+                                       'parse_mode': 'HTML', 'disable_notification': False,
+                                       'link_preview_options': {'is_disabled': True}}
         bundle['records'][0]['title'] = 'MUTATED_AFTER_FREEZE'
         assert 'MUTATED_AFTER_FREEZE' not in json.dumps(store.analysis_receipt('market', 'morning', DAY))
         assert await ReportSchedule(store, telegram, analysis_manager=llm,

@@ -91,7 +91,6 @@ def test_verified_indices_take_precedence_and_reference_with_sector_is_honest():
 
 @pytest.mark.asyncio
 async def test_cached_receipt_through_scheduler_and_real_notifier_once(tmp_path, monkeypatch):
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda text: None)
     provider = KISMarketData(token_manager=Mock())
     provider._cache['index_price_0001'] = {'source': 'kis', 'report_values': {'price': 3000, 'change_pct': 0}, 'received_at': NOW.isoformat()}
     bot = SimpleNamespace(kis_market_data=provider, us_market_data=SimpleNamespace(_cache={}))

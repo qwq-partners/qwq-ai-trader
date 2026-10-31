@@ -16,20 +16,6 @@ KST = ZoneInfo("Asia/Seoul")
 SLOTS = {"morning": (7, 40), "midday": (13, 10), "after": (16, 40), "daily": (21, 0)}
 
 
-def _render_market_image(text):
-    """Keep optional image imports and bounded render failures off the text path."""
-    try:
-        from ..analytics.market_report_image import render_market_report_image
-        image = render_market_report_image(text)
-        if image is not None:
-            # Access the optional interface inside the fallback boundary too.
-            image.png, image.caption
-        return image
-    except Exception as error:
-        logger.warning("[대상별 보고] 이미지 생성 실패: {}", type(error).__name__)
-        return None
-
-
 class ReportSchedule:
     def __init__(self, store, notifier, dispatch_recorder=None, *, index_fetcher=None, clock=None,
                  analysis_manager=None, analysis_manager_factory=None, public_evidence_factory=None):
@@ -103,7 +89,6 @@ class ReportSchedule:
                           if kind == "midday" else "원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.")
                 await _durable_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
             return status
-        media = {}
         if audience == "market":
             from ..analytics.market_report_runner import InvalidMarketReport, prepare_market_report
             try:
@@ -119,10 +104,7 @@ class ReportSchedule:
             if analysis is None:
                 return "already_consumed"
             text, snapshot_id = analysis["final_body"], analysis["source_snapshot_id"]
-            image = await _durable_thread(_render_market_image, text)
-            if image is not None:
-                media = {"photo": image.png, "caption": image.caption}
-        result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store, **media)
+        result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store)
         if kind == "morning" and result == "accepted" and self.dispatch_recorder:
             receipt = await _durable_thread(self.store.receipt, audience, kind, day)
             # Read what the notifier actually chose, including preflight fallback.
