@@ -11,7 +11,7 @@
 
 ## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 22:18 운영 인수 DONE)
 
-- 운영 인수: PR #314를 main `5af43e48`로 병합(PR #315 재합병 포함) 뒤 `local_deploy.sh` 1차는 대량 기록 검사 1건(`journal_close_timeout`)으로 자동 롤백 — 같은 호스트에서 동시 실행한 pytest의 2 vCPU 부하 플레이크(단독 재실행 통과·테스트 파일 동일). 2차는 호스트 유휴 상태에서 같은 SHA로 rc0: 서버 10,013 passed / 2 skipped / 2 xfailed, PID 4116785, 189초 인수 PASS(보호 48파일·cron·킬스위치·스토어 보존, `/reports` 404 정상). 실제 Astra 출력·링크·페이지는 11/2 07:40 첫 자연 발송에서 확인. [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031).
+- 운영 인수: PR #314를 main `5af43e48`로 병합(PR #315 재합병 포함) 뒤 `local_deploy.sh` 1차는 대량 기록 검사 1건(`journal_close_timeout`)으로 자동 롤백 — 해당 세션은 동시 pytest 부하를 원인 후보로 보고했다. 단독 재실행 통과·테스트 파일 동일만으로 최초 host 지연의 원인이 확정되지는 않는다. 2차는 호스트 유휴 상태에서 같은 SHA로 rc0: 서버 10,013 passed / 2 skipped / 2 xfailed, PID 4116785, 189초 인수 PASS(보호 48파일·cron·킬스위치·스토어 보존, `/reports` 404 정상). 실제 Astra 출력·링크·페이지는 11/2 07:40 첫 자연 발송에서 확인. [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031).
 - 사용자 교정: P1 거울형 페이지(텔레그램 본문 재표현)는 내용이 비어 거부됐고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. 웹은 자체 생성 리포트로 바꾸고 텔레그램 본문은 링크 한 줄만 유지한다.
 - 새 `src/analytics/web_report.py`: 스냅샷 적격 관측 사실 M#(지수 basis 구분·미국·섹터 ETF 전체) + 동결 공개 근거 E#로 고정 역할 `WEB_REPORT`(사용자 요청으로 상위 모델 GPT-6 Astra/medium, 출력12288·180초·JSON) 1회 호출. 스키마 `web-report-v1`(스탠스·제목·요약·시장 판단·이슈 1~4·업종/거시 해석·전망 기본/상방/하방·체크리스트), 숫자·날짜는 인용 근거만, 영문은 입력 표기만, 사건 E 인용 필수.
 - `report_analyses`에 audience `web` 허용(`claim/complete_analysis`), 웹 행은 실패에도 `result_json={facts, analysis|null, reason}` 보존·64KiB 한도. `ROLE_POLICY_VERSION` → `engine-roles-v5-web-report`.
@@ -22,7 +22,7 @@
 
 - 내부 E/F 근거 연결을 유지하면서 독자용 번호·LLM 라벨·반복 수집 상태를 제거하고, 핵심 쟁점·조건부 실적 경로·다음 확인 조건을 문단으로 연결한다.
 - 원문은 제목 링크로, 시각과 자료 범위는 간결한 표기로 제공한다. 알려진 중복 안내만 묶고 공시 원문/잠정가격 구분과 별도의 한계는 보존한다. 분석 대체는 시장 지표 요약으로 명시한다.
-- 모델·호출·예산·스케줄·주문 설정 변경0. 관련138검사·독립 리뷰 통과, [전체/운영 인수와 NEXT](docs/operations/execution-roadmap.md#r02-analyst-prose-20261031)는 최종 원장을 따른다. 자연 LLM/모바일 내용 수락은 별도다.
+- 이 변경의 모델·호출·예산·스케줄·주문 설정 변경0. 테스트의50ms 합성 deadline 가정을 요청 후 명시적 TimeoutError로 고쳤고 관련317·정식 전체9,990검사/격리0·독립 리뷰·PR/main CI를 통과했다. [PR #315](https://github.com/qwq-partners/qwq-ai-trader/pull/315)는 통합 운영5af43e48에 동일 소스로 포함됐으며22:24에352.8초/42항목으로 인수했다. 보호48파일은22:03 기준 동일, 설정/매수중지/cron 유지·추가 시험 발송0이다. [실패 근거·운영 인수·NEXT](docs/operations/execution-roadmap.md#r02-analyst-prose-20261031). 자연 LLM/모바일 내용 수락은 WAIT이며 문서 마감 재배포는 없다.
 
 
 ## 2026-10-31 — 시장 보고 본문을 Telegram 텍스트로 전환
