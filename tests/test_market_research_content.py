@@ -50,6 +50,8 @@ def test_research_prompt_and_render_preserve_sources_and_market():
     assert all(x in body for x in ('반도체 -1.00%', '전체 업종 순위 아님', '공시 원문 미확인', '다음 확인'))
     assert all(x not in body for x in ('LLM 해석', 'E1', 'F2', '사건:', '영향:', '반대:', '관찰:', '수집 범위:', '발행시각 미확인'))
     assert '수집 기준' in body and '2026/10/29 06:00 KST' in body
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '시장 전체 종목 수·당일 누적 수급은 미확보' not in body
     assert all(record['url'] in body for record in evidence()['records'])
     assert len(body) <= 3000 and len(body.splitlines()) <= 60
     assert len(body.encode('utf-16-le')) // 2 <= 4096
@@ -89,10 +91,11 @@ def test_research_fallback_preserves_facts_when_no_public_event():
     bundle = evidence()
     bundle['records'] = []
     body = factual_fallback(market(), public_evidence=bundle)
-    assert '사실 요약' in body and '조사 분석 미확보' not in body
+    assert '시장 지표 요약' in body and '추가 해석 없이' in body
+    assert '확인된 시장 관측' not in body
     assert '반도체 -1.00%' in body and '전체 업종 순위 아님' in body
     malformed = factual_fallback(market(), public_evidence={'records': 'bad'})
-    assert '사실 요약' in malformed
+    assert '시장 지표 요약' in malformed
 
 
 def test_valid_source_numbers_allowed_but_unsupported_numbers_rejected():
@@ -243,5 +246,21 @@ def test_no_url_source_keeps_provider_title_and_actual_clocks():
     bundle['records'][0].update(url=None, published_at='2026-10-28T11:00:00+09:00', publication_status='unverified')
     body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
     assert '가상 통신 · 반도체 수요 회복 전망' in body
-    assert '발행 2026/10/28 11:00 KST (검증 전 제공 표기)' in body
+    assert '제공처 표기 2026/10/28 11:00 KST' in body
     assert '수집 2026/10/29 06:00 KST' in body
+
+
+def test_shared_provenance_notes_and_counterpoint_remain_readable():
+    bundle = evidence()
+    bundle['records'][0]['limitations'] = 'Legacy publication time unverified'
+    bundle['records'][1]['limitations'] = 'collected within 24h; publication time unverified'
+    bundle['records'][2]['limitations'] = 'Selected first-page regular filings; original content and earnings direction unverified'
+    obj = analysis()
+    body, _ = compose_analysis(market(), json.dumps(obj, ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '기사 발행시각 미확인' not in body
+    assert '공시 색인' in body and '원문' in body and '실적' in body
+    assert obj['issues'][0]['impact'] + '\n' + obj['issues'][0]['counterpoint'] in body
+    assert '표시된 관측 표본' in body and '시장 전체 종목 수' in body and '당일 누적 수급' in body
+    prompt, system = build_analysis_prompt(market(), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert '출처와 시각은 코드가 표시' in prompt + system

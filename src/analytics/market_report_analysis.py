@@ -218,8 +218,8 @@ def factual_fallback(source_body: str, *, public_evidence=None) -> str:
     prefix, sections, limits, _ = _extract(source_body)
     if public_evidence is None:
         return _render(prefix, sections, limits, ['분석 미확보'], ['• 분석 미확보'])
-    return _research_body(prefix + [_HEAD, '사실 요약: 아래는 확인된 시장 관측입니다.', '']
-                          + _market_observations(sections) + ['', *limits])
+    return _research_body(prefix + [_HEAD, '시장 지표 요약: 추가 해석 없이 아래 자료를 제시합니다.', '']
+                          + _market_observations(sections) + ['', *_market_observations(limits)])
 
 
 
@@ -304,8 +304,8 @@ def _research_prompt(source_body, *, kind, day, public_evidence):
               '사건이 수요, 가격, 비용, 실적 또는 할인율에 전달되는 경로와 반대 근거, 구체적인 후속 촉매를 설명하세요. '
               '공시 색인 제목·유형은 원문 실적이나 금액의 증거가 아닙니다. content_kind와 limitations에 맞춰 '
               '제목·유형만 있는 공시는 독립적인 영향 분석으로 채우지 말고 원문 확인 과제나 자료 한계로 다루세요. '
-              '근거가 부족하면 영향을 알 수 없다고 쓰세요. 발행 미확인·부분 수집·관측 시각을 보존하세요. '
-              'ETF 표본은 전체 업종이 아니고 미확인 지수 참고값은 확정 종가가 아닙니다. '
+              '근거가 부족하면 영향을 알 수 없다고 쓰세요. 출처와 시각은 코드가 표시하므로 자료의 경계를 지키되 '
+              '본문에는 해석에 영향을 주는 한계만 자연스럽게 쓰고 수집 진단을 반복하지 마세요. ETF 표본은 전체 업종이 아니고 미확인 지수 참고값은 확정 종가가 아닙니다. '
               '수치는 인용한 관측 사실이나 기사 제목·발췌에 있는 숫자만 쓰고, 날짜는 인용 근거에 있는 연-월-일 전체로 쓰세요. '
               '입력에 없는 숫자, 목표가, 확률, 인과관계와 출처를 만들지 마세요. URL은 쓰지 마세요. '
               '중복 기사는 독립적인 교차 확인이 아닙니다. 가격 하락만으로 원인을 단정하거나 근거 없는 기술적 가격 수준을 만들지 마세요.')
@@ -397,6 +397,10 @@ def _market_observations(sections):
     replacements = {
         '전일 대비 등락·시장 방향 판단자료는 미확보입니다.': '전일 대비 등락과 시장 방향은 이 참고 가격으로 판단할 수 없습니다.',
         '검증된 시장 방향 자료는 미확보입니다.': '시장 방향은 이 참고값만으로 판단할 수 없습니다.',
+        '자료 범위: 표시된 관측 표본; 시장 전체 종목 수·당일 누적 수급은 미확보.':
+            '자료 범위: 표시된 관측 표본에 한정하며 시장 전체 종목 수와 당일 누적 수급은 포함하지 않습니다.',
+        '원천시각 미제공 · 전일 기준 거래일 미확인': '원천시각과 전일 기준 거래일은 제공 자료에서 확인되지 않았습니다.',
+        '확정 종가 아님 · 해당 분 관측값이며 봉 완료 여부 미확인': '해당 분의 참고 관측값으로 확정 종가가 아니며 봉 완료 여부는 확인되지 않았습니다.',
     }
     return [replacements.get(line, line) for line in sections]
 
@@ -407,9 +411,12 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
     obj = _research_validate(response_text, facts, bundle)
     lines = prefix + [_HEAD, escape(obj['thesis']['text'], quote=False), '', '<b>핵심 이슈와 영향</b>']
     cited = []
-    for issue in obj['issues']:
+    for i, issue in enumerate(obj['issues']):
+        if i:
+            lines.append('')
         lines += ['• <b>' + escape(issue['title'], quote=False) + '</b>',
-                  ' '.join(escape(issue[key], quote=False) for key in ('event', 'impact', 'counterpoint')),
+                  ' '.join(escape(issue[key], quote=False) for key in ('event', 'impact')),
+                  escape(issue['counterpoint'], quote=False),
                   '다음 확인: ' + escape(issue['watch'], quote=False)]
     for item in [obj['thesis'], *obj['issues']]:
         for ref in item['evidence_ids']:
@@ -422,6 +429,9 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
              'filing_type_description': '공시 유형 설명', 'article_excerpt': '기사 발췌',
              'earnings_calendar': '실적 일정', 'indicator_value': '지표 관측',
              'macro': '거시 관측', 'calendar': '일정'}
+    unknown_publication = False
+    unverified_publication = False
+    filing_scope = False
     for ref in cited:
         row = records[ref]
         provider = row['source']
@@ -432,13 +442,16 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
             label = '<a href="' + escape(row['url'], quote=True) + '">' + label + '</a>'
         metadata = []
         if row['published_at']:
-            publication = '발행 ' + _display_time(row['published_at'])
-            if row['publication_status'] != 'verified':
-                publication += ' (검증 전 제공 표기)'
+            if row['publication_status'] == 'verified':
+                publication = '발행 ' + _display_time(row['published_at'])
+            else:
+                publication = '제공처 표기 ' + _display_time(row['published_at'])
+                unverified_publication = True
             metadata.append(publication)
             metadata.append('수집 ' + _display_time(row['collected_at']))
         else:
-            metadata.append('수집 기준 ' + _display_time(row['collected_at']) + ' (발행일과 다를 수 있음)')
+            metadata.append('수집 기준 ' + _display_time(row['collected_at']))
+            unknown_publication = True
         if row['content_kind']:
             metadata.append(types.get(row['content_kind'], row['content_kind']))
         if row['observed_at']:
@@ -446,10 +459,24 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
         if row['event_date']:
             date_label = {'disclosure': '접수일', 'macro': '기준일', 'calendar': '예정일'}.get(row['kind'], '사건일')
             metadata.append(date_label + ' ' + _display_time(row['event_date']))
-        if row['limitations']:
-            metadata.append(_display_note(row['limitations']))
+        limitation = row['limitations']
+        if limitation == 'Legacy publication time unverified' and row['publication_status'] != 'verified':
+            pass  # Covered by the source's time label and shared qualification.
+        elif limitation == 'collected within 24h; publication time unverified' and row['publication_status'] != 'verified':
+            metadata.append('최근 24시간 수집')
+        elif limitation == 'Selected first-page regular filings; original content and earnings direction unverified':
+            metadata.append('일부 정기공시 첫 페이지')
+            filing_scope = True
+        elif limitation:
+            metadata.append(_display_note(limitation))
         lines.append('• ' + label + ' · ' + escape(unescape(' · '.join(metadata)), quote=False))
-    lines += ['', *limits]
+    if unknown_publication:
+        lines.append('수집 기준으로 표시한 시각은 발행시각과 다를 수 있습니다.')
+    if unverified_publication:
+        lines.append('제공처 표기 시각은 발행시각으로 검증되지 않았습니다.')
+    if filing_scope:
+        lines.append('일부 정기공시 색인은 원문 내용이나 실적 방향의 근거가 아닙니다.')
+    lines += ['', *_market_observations(limits)]
     return _research_body(lines), obj
 
 
