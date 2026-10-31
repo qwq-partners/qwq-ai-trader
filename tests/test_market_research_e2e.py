@@ -97,7 +97,7 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         assert '전체 업종 순위 아님' in receipt['body']
         assert llm.monthly_budget.status()['settled_count'] == 1
         if invalid:
-            assert '분석 미확보' in receipt['body']
+            assert '사실 요약' in receipt['body']
             assert 'E999' not in receipt['body']
         else:
             assert '서버 공급 확대의 이익 전환 여부' in receipt['body']
