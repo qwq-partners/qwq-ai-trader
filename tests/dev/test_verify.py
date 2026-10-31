@@ -136,3 +136,47 @@ def test_verify_does_not_echo_detected_secret_value(tmp_path):
     assert result.returncode != 0
     assert "leak.txt" in result.stdout
     assert token not in result.stdout
+
+
+def _repo_with_two_tests(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_a.py").write_text("def test_ok():\n    assert True\n")
+    (repo / "tests" / "test_b.py").write_text("def test_bad():\n    assert False\n")
+    init_repo(repo)
+    track_all(repo)
+    return repo
+
+
+def _run(repo: Path, **env_extra):
+    env = {"PATH": os.environ["PATH"], "QWQ_VERIFY_ROOT": str(repo), "QWQ_VERIFY_PYTHON": sys.executable,
+           "QWQ_VERIFY_SKIP_TESTS": "0", **env_extra}
+    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, timeout=120)
+
+
+def test_verify_tests_override_runs_only_that_path(tmp_path):
+    repo = _repo_with_two_tests(tmp_path)
+    assert _run(repo).returncode != 0                                          # default: whole tests dir, test_b fails
+    subset = _run(repo, QWQ_VERIFY_TESTS="tests/test_a.py")                    # relative to the repo root
+    assert subset.returncode == 0, subset.stdout + subset.stderr
+    assert "1 passed" in subset.stdout
+    missing = _run(repo, QWQ_VERIFY_TESTS="tests/nope.py")
+    assert missing.returncode != 0 and "테스트 경로를 찾지 못했습니다" in missing.stderr
+
+
+def test_verify_parallel_requires_xdist_and_a_valid_worker_count(tmp_path, monkeypatch):
+    repo = _repo_with_two_tests(tmp_path)
+    try:
+        import xdist  # noqa: F401
+        has_xdist = True
+    except ImportError:
+        has_xdist = False
+    bad = _run(repo, QWQ_VERIFY_PARALLEL="0", QWQ_VERIFY_TESTS="tests/test_a.py")
+    assert bad.returncode != 0
+    if has_xdist:
+        assert "auto 또는 양의 정수" in bad.stderr
+        ok = _run(repo, QWQ_VERIFY_PARALLEL="2", QWQ_VERIFY_TESTS="tests/test_a.py")
+        assert ok.returncode == 0 and "병렬 2" in ok.stdout
+    else:
+        assert "pytest-xdist 가 필요합니다" in bad.stderr
+        assert "pytest" not in bad.stdout                                       # fails before any test run

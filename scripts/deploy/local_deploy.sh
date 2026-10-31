@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 운영 서버(Lightsail) 안에서 직접 배포 — remote_deploy.sh 절차의 서버 측 미러 (2026-09-03~)
+# 운영 서버(Lightsail) 안에서 직접 배포하는 정본 (2026-09-03~). WSL 의 deploy_lightsail.sh 가 SSH 로 이 스크립트를 부른다 (2026-10-31~)
 # 사용: bash scripts/deploy/local_deploy.sh <SHA>
 #   권한 확인 → fetch → detached checkout → verify.sh → restart → /api/health 대기(12×5s)
 #   실패 시 이전 커밋으로 자동 롤백. origin/main 이 아닌 SHA(핫픽스)도 허용 — 머지 후 main 복귀 필요.

@@ -629,6 +629,7 @@
 
 ## 검증 프로토콜 (절대 규칙)
 코드 수정 후 반드시 아래 순서 수행:
+0. **푸시 전 전체 검증은 CI·배포와 동일한 `bash scripts/dev/verify.sh`** — 로컬(WSL)에서도 같은 스크립트를 쓴다(준비 `scripts/dev/bootstrap.sh`, 한글 글꼴 포함). 로컬 전용 `QWQ_VERIFY_PARALLEL=auto`(xdist)·`QWQ_VERIFY_TESTS=<경로>` 는 중간 확인용이며 최종·CI·서버는 직렬 전체. Codex 도 같은 규칙(`AGENTS.md`). [로컬 개발 6절](docs/operations/local-development.md)
 1. `python3 -m py_compile <수정파일>` — 문법 검증
 2. **봇 재시작**: `sudo systemctl restart qwq-ai-trader`
    - ⚠️ `nohup python scripts/run_trader.py` 직접 실행 **절대 금지** (systemd와 충돌)
@@ -651,6 +652,7 @@ journalctl -u qwq-ai-trader -f                                 # 실시간 로�
 
 ### 운영 스킬 (2026-09-10~)
 - `/ops-check` 운영 점검 요약 (`scripts/dev/ops_check.sh`) · `/deploy-local` 서버 측 배포 (`scripts/deploy/local_deploy.sh`, 자동 롤백) · `/pr-merge` gh 기반 PR→verify→머지
+- **WSL에서의 배포(2026-10-31~, Claude·Codex 공통)**: `bash scripts/deploy/deploy_lightsail.sh`(`--check` → 사용자 승인 뒤 `--deploy [SHA]` → 150초 뒤 `--postcheck`)가 서버의 `local_deploy.sh`를 SSH로 부른다. 장중 거부·pending 0·evolved_overrides 외 변경 중단·고정 SHA. 정본 [docs/operations/lightsail-deployment.md](docs/operations/lightsail-deployment.md)
 - `main`은 보호 브랜치 — 직접 push 불가, 반드시 PR + `verify` 통과
 
 ## 코드 리뷰 프로토콜

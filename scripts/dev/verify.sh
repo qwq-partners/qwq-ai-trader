@@ -41,9 +41,23 @@ run_tests() {
     printf '[건너뜀] 테스트 (격리된 스크립트 테스트 전용 설정)\n'
     return
   fi
-  printf '[검증] 테스트\n'
-  [[ -d "$ROOT/tests" ]] || fail "tests 디렉터리를 찾지 못했습니다."
-  "$PYTHON_BIN" -m pytest "$ROOT/tests" -q
+  # QWQ_VERIFY_TESTS: 로컬에서 일부만 돌릴 때의 경로(기본 tests 전체). CI·서버 배포는 기본값을 쓴다.
+  local target=${QWQ_VERIFY_TESTS:-$ROOT/tests}
+  [[ $target = /* ]] || target="$ROOT/$target"
+  [[ -e "$target" ]] || fail "테스트 경로를 찾지 못했습니다: $target"
+  local -a extra=()
+  # QWQ_VERIFY_PARALLEL=auto|N: 로컬 전용 병렬 실행(pytest-xdist 필요). 서버 배포 검증은 메모리 때문에 직렬 유지.
+  if [[ -n ${QWQ_VERIFY_PARALLEL:-} ]]; then
+    "$PYTHON_BIN" -c 'import xdist' 2>/dev/null \
+      || fail "QWQ_VERIFY_PARALLEL 에는 pytest-xdist 가 필요합니다: $PYTHON_BIN -m pip install pytest-xdist"
+    [[ $QWQ_VERIFY_PARALLEL == auto || $QWQ_VERIFY_PARALLEL =~ ^[1-9][0-9]*$ ]] \
+      || fail "QWQ_VERIFY_PARALLEL 은 auto 또는 양의 정수여야 합니다: $QWQ_VERIFY_PARALLEL"
+    extra+=(-n "$QWQ_VERIFY_PARALLEL" --dist loadfile)
+    printf '[검증] 테스트 (병렬 %s, 파일 단위 분배)\n' "$QWQ_VERIFY_PARALLEL"
+  else
+    printf '[검증] 테스트\n'
+  fi
+  "$PYTHON_BIN" -m pytest "$target" -q "${extra[@]}"
 }
 
 scan_secrets() {
