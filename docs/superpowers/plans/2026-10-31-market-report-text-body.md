@@ -31,9 +31,9 @@
 
 **Interfaces:** `prepare_market_report` returns the same final body; `publish_report` receives that body without photo/caption. No schema changes.
 
-- [ ] Update/add focused regressions for selectable full text, failed analysis fallback, archived morning text and no replay; observe failure against the current image route.
-- [ ] Remove routine body rasterization, preserve historical media support and disable routine link previews.
-- [ ] Run related tests with the project venv and tests/ explicitly; retain Red/Green output and actual commands.
-- [ ] Independent review, then run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree.
+- [x] Update/add focused regressions for selectable full text, failed analysis fallback, archived morning text and no replay; observe failure against the current image route.
+- [x] Remove routine body rasterization, preserve historical media support and disable routine link previews.
+- [x] Run related tests with the project venv and tests/ explicitly; retain Red/Green output and actual commands.
+- [x] Independent review, then run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree.
 - [ ] Update reporting contract and entry docs, commit/push/PR with CI, then normal authorized fixed-SHA deployment only after current schedule/state checks. Never reuse consumed deployment attempts.
 - [ ] Record source/operation/receipt evidence and NEXT in the single roadmap. Natural mobile acceptance remains separate.
