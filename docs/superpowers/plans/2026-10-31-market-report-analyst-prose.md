@@ -48,3 +48,11 @@
 - [ ] Run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree, inspect secrets/diff, commit/push/PR and inspect CI.
 - [ ] Recheck current operating SHA/PID/settings and 21:00/22:00 schedules before preparing a new fixed-SHA deployment; never reuse consumed wrappers. Independent critical gate review and normal verify/restart/rollback/150-second acceptance are required.
 - [ ] Record final operation/review/CI/NEXT in the roadmap. Natural LLM insight and mobile acceptance remain WAIT; no automatic additional trial.
+
+## Task 3 — Deterministic unknown-cost test after the full-suite failure
+
+The first full local run failed because a 50ms role deadline expired before a request was sent. Stored metadata says `failed/not_sent`; an independent synthetic 80ms admission delay reproduced that valid behavior. This is separate from the earlier volume-close failure.
+
+- [x] Change only the synthetic response-read failure in `tests/test_market_report_runner.py` to explicit `TimeoutError`, keeping real admission, budget, durable receipt and second-tick reuse. Preserve separate real role deadline tests. Do not alter product timeouts or relax sent/unknown/one-request assertions.
+- [ ] Independently review the test correction, rerun the related and full formal checks, and update PR CI.
+- [ ] The unused 21h gate is closed without an attempt. Reassess the actual 22h producer completion and prepare a separately reviewed manual window before normal deployment.
