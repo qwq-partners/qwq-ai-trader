@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-31 — 정기 시장 보고의 웹 페이지와 텔레그램 링크 (운영 미적용)
+
+- 장전/장중/장후 보고를 `qwq.ai.kr/reports/YYYY-MM-DD#kind` 하루 한 페이지로 렌더하고 아카이브 `/reports/`를 만든다. 텔레그램 본문 끝에 링크 한 줄을 붙이되 3000자/60줄 한도를 넘으면 생략한다.
+- 입력은 이미 저장된 발송 본문·동결 분석 JSON·슬롯 상태뿐이다. 새 조회·LLM 호출·전망 수치·계좌 정보가 없고, 페이지 생성 실패는 발송을 막지 않으며 소비된 본문은 다시 쓰지 않는다. `REPORT_WEB_BASE_URL=`로 끈다.
+- 새 파일 `src/analytics/market_report_html.py`, `ReportStore.market_days`, 스케줄러 발송 직후 페이지 갱신, 대시보드 `/reports` 라우트(허용 파일명만). 기존 e2e의 발송 텍스트 단언을 "본문 + 링크"로 갱신. [설계](docs/superpowers/specs/2026-10-31-web-report-design.md) · [Plan→Do→See·NEXT](docs/operations/execution-roadmap.md#r02-web-report-20261031).
+
 ## 2026-10-31 — 시장 보고 본문을 Telegram 텍스트로 전환
 
 - 사용자 실제 수신 피드백에 따라 정기 시장 보고 전체를 PNG로 만드는 경로를 제거한다. 검증된 연구 본문과 출처를 기존 텍스트 요청1회로 전달하고 링크 미리보기를 끈다.

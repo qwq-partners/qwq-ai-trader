@@ -14,6 +14,7 @@ import pytest
 
 from src.analytics.audience_reports import MarketSnapshot, render_market_report
 from src.analytics.report_delivery import ReportStore
+from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from src.utils.telegram import TelegramNotifier
 
@@ -126,7 +127,7 @@ async def test_ready_analysis_restart_reuses_exact_body_without_calling_or_colle
     n = notifier()
     fetch = AsyncMock()
     assert await ReportSchedule(store, n, analysis_manager=manager, index_fetcher=fetch).tick(NOW.replace(minute=46), True, MarketSnapshot(), '') == 'accepted'
-    assert n._send_report_once.call_args.args[1] == saved['final_body']
+    assert n._send_report_once.call_args.args[1] == with_web_link(saved['final_body'], DAY, 'morning')
     manager.complete_role.assert_awaited_once()
     fetch.assert_not_awaited()
 
@@ -267,7 +268,7 @@ async def test_after_inputs_and_saved_analysis_survive_restart_without_second_fe
         now.replace(minute=46), True, MarketSnapshot(), '') == 'accepted'
     fetch.assert_awaited_once_with(now.date())
     manager.complete_role.assert_awaited_once()
-    assert n._send_report_once.call_args.args[1] == original['final_body']
+    assert n._send_report_once.call_args.args[1] == with_web_link(original['final_body'], DAY, 'after')
     assert '5,638.35' in original['source_body']
     with store.input_guard(DAY) as first:
         assert first

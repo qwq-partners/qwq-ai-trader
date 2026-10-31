@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **10/31 R02-WEB 구현(운영 미적용):** 사용자 결정으로 정기 시장 보고를 [qwq.ai.kr/reports 웹 페이지](docs/operations/execution-roadmap.md#r02-web-report-20261031)로도 렌더하고 텔레그램 본문 끝에 링크 한 줄을 붙인다. 저장된 발송 본문·동결 분석만 쓰며 새 조회/LLM/전망 수치/계좌 정보는 없다. 사이트 전체 공개 유지·`invalidate` 열은 자연 조사 본문 수락 뒤 별도 PR·기본 noindex. 검증·PR·운영 인수는 원장을 따른다.
+
 > **10/31 텍스트 보고 전환:** 사용자가 실제 시험 이미지의 가독성을 거부하고 레포트 형태의 글을 요청했다. [R02-TEXT](docs/operations/execution-roadmap.md#r02-text-body-20261031)는 정기 시장 본문을 선택 가능한 텍스트로 전송하며 본문→PNG 경로를 제거한다. 기존 뉴스·공시 분석/근거·설정·매수 중지는 유지한다. 검증·배포 완료 여부는 원장의 최종 영수증을 따르며 아래 이미지 계약은 당시 이력이다.
 
 > **10/31 03:04 운영 인수 DONE:** [R02-RESEARCH 배포](docs/operations/execution-roadmap.md#r02-research-deploy-20261031)는 고정356470c4/PID3945959·운영9986검사·기동160.2초/42항목PASS로 완료했다. 기존 Git SSH 경로의 조회/fetch가 정상임을 확인했으며 키/인증설정 변경은0이다(과거 실패 원인 미확정). 보호48파일/기존cron/매수중지·월USD100/log_and_continue·GPT/Claude 설정을 유지했다. NEXT는 자연 조사보고의 내용 수락, 오늘18시 O02 기존사전점검, 새유효 E02/E01/E04 입력이다. 완료문서는 재배포하지 않으며 아래 미배포 표기는 당시 이력이다.

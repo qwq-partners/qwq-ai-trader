@@ -178,6 +178,16 @@ class ReportStore:
             row = db.execute("SELECT slots.*,payloads.body,COALESCE(media_payloads.media_type,'text/html') AS media_type,media_payloads.caption,media_payloads.image_sha256 FROM slots LEFT JOIN payloads USING(audience,kind,report_date) LEFT JOIN media_payloads USING(audience,kind,report_date) WHERE audience=? AND kind=? AND report_date=?", (audience, kind, report_date)).fetchone()
             return dict(row) if row else None
 
+    def market_days(self, limit: int = 120) -> list[dict]:
+        """Newest-first market slot statuses per day for the public archive page."""
+        with self._db() as db:
+            rows = db.execute("SELECT report_date,kind,status FROM slots WHERE audience='market' ORDER BY report_date DESC", ).fetchall()
+        days: dict[str, dict] = {}
+        for row in rows:
+            entry = days.setdefault(row["report_date"], {"report_date": row["report_date"], "statuses": {}})
+            entry["statuses"][row["kind"]] = row["status"]
+        return list(days.values())[:limit]
+
     def archived_photo(self, audience: str, kind: str, report_date: str) -> bytes | None:
         """Explicitly load the immutable image; ordinary receipts omit the blob."""
         validate_slot(audience, kind, report_date)

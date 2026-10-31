@@ -11,6 +11,7 @@ from loguru import logger
 
 from ..analytics.audience_reports import MarketSnapshot, render_engine_digest, render_market_report
 from ..analytics.report_delivery import ReportStore, durable_thread as _durable_thread
+from ..analytics.market_report_html import with_web_link, write_web_pages
 
 KST = ZoneInfo("Asia/Seoul")
 SLOTS = {"morning": (7, 40), "midday": (13, 10), "after": (16, 40), "daily": (21, 0)}
@@ -88,6 +89,7 @@ class ReportSchedule:
                 reason = ("유효한 지수 또는 참고자료 없음. 수신시각을 원천시각으로 대체하지 않음."
                           if kind == "midday" else "원천 시점이 확인된 필수 자료 없음. 수신시각으로 대체하지 않음.")
                 await _durable_thread(self.store.record, "report_quality", f"시장 {kind} 보고 보류: {reason}", now=now)
+                await self._refresh_web_pages(day)
             return status
         if audience == "market":
             from ..analytics.market_report_runner import InvalidMarketReport, prepare_market_report
@@ -100,11 +102,17 @@ class ReportSchedule:
             except InvalidMarketReport:
                 consumed = await _durable_thread(self.store.record_validation_failure,
                                                  audience, kind, day, snapshot_id, now)
+                if consumed:
+                    await self._refresh_web_pages(day)
                 return "failed_validation" if consumed else "already_consumed"
             if analysis is None:
                 return "already_consumed"
             text, snapshot_id = analysis["final_body"], analysis["source_snapshot_id"]
+            # Same validated body plus one link line; dropped silently when limits bind.
+            text = with_web_link(text, day, kind)
         result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store)
+        if audience == "market":
+            await self._refresh_web_pages(day)
         if kind == "morning" and result == "accepted" and self.dispatch_recorder:
             receipt = await _durable_thread(self.store.receipt, audience, kind, day)
             # Read what the notifier actually chose, including preflight fallback.
@@ -120,6 +128,13 @@ class ReportSchedule:
             await _durable_thread(self.dispatch_recorder, kr_date=day, sent_text=sent_text,
                                   expert_consensus=None, status="sent", dispatched_brief_text=None, **archive)
         return result
+
+    async def _refresh_web_pages(self, day):
+        """Render the public day/archive pages from stored rows; never affects delivery."""
+        try:
+            await _durable_thread(write_web_pages, self.store, day, now=self.clock())
+        except Exception as error:
+            logger.warning("[대상별 보고] 웹 리포트 페이지 생성 실패: {}", type(error).__name__)
 
 
 @lru_cache(maxsize=8)

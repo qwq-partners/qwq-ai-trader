@@ -1,5 +1,18 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-web-report-20261031"></a>
+### R02-WEB — 정기 시장 보고의 웹 페이지(qwq.ai.kr/reports)와 본문 링크 (DO / 운영 미적용)
+
+**사용자 결정(10/31):** 기존 사이트 qwq.ai.kr에 장전/장중/장후 보고를 HTML로 올리고 텔레그램 본문에 링크를 붙인다. 애널리스트형 시장 분석·간략 전망의 웹 표현이 목적이다. 세 가지 열린 결정은 ① 사이트 전체 공개 유지(인증 추가 없음) ② `invalidate` 반증 조건 열은 자연 조사 본문 1건 수락 뒤 별도 PR ③ 기본 noindex로 확정했다. [설계](../superpowers/specs/2026-10-31-web-report-design.md) · [목업](../superpowers/specs/2026-10-31-web-report-mockup.html).
+
+**Plan:** 새 조회·새 LLM 호출·새 전망 수치 없이 `payloads`/`report_analyses`/`slots`에 이미 저장된 발송 본문·동결 분석 JSON·상태만으로 하루 한 페이지(`/reports/YYYY-MM-DD#kind`)와 아카이브(`/reports/`)를 순수 함수로 렌더한다. 텔레그램 본문 끝에 링크 한 줄을 붙이되 3000자/60줄/UTF-16 4096 한도를 넘으면 링크를 생략하고 본문을 우선한다. 페이지 생성 실패는 발송을 막지 않는다. 소비된 슬롯 본문은 다시 쓰지 않으며 재생성 결과는 같은 행에서 동일하다. 계좌·보유·현금·엔진 상태는 시장 채널과 같이 전달하지 않는다. `REPORT_WEB_BASE_URL=`(빈 값)로 링크와 파일 생성을 끈다.
+
+**Do:** `src/analytics/market_report_html.py`(렌더러·링크·파일 쓰기), `ReportStore.market_days`, `report_scheduler._refresh_web_pages`(발송/보류 직후), 대시보드 `/reports`·`/reports/{name}` 라우트(허용 이름 `index`·`YYYY-MM-DD`만, 디렉터리 목록 없음). 파일은 스토어 옆 `report_delivery/html/`에 임시파일→`os.replace`로 쓴다. 테스트 스토어가 운영 캐시 경로에 쓰지 않도록 html 디렉터리는 스토어 경로에서 파생한다. 한국 관례(상승 빨강·하락 파랑)·모바일 우선·외부 스크립트 0·`prefers-color-scheme`·`:target` 탭(JS 없음).
+
+**검증:** 신규 `tests/test_market_report_html.py` 6묶음(사실형/조사형 렌더·이스케이프·`javascript:` URL 거부·링크 한도·파일명 허용목록·스토어→파일 멱등/원자성·휴장일 전용 날짜 제외). 기존 e2e의 "발송 텍스트 == 분석 본문" 단언은 "분석 본문 + 링크 줄"로 갱신했다. 운영 스토어 복사본으로 10/30 실제 사실형 본문을 렌더해 390px 화면을 확인했다. 독립 리뷰(Agent 요청 `opus`/high — 전역 정책의 `claude-opus-5-5` 전체 ID는 이 도구가 받지 않아 별칭 사용, 실제 응답 모델 미확인)는 APPROVE·P0/P1 0·P2 7건이었다. P2 전부 반영: 인용 사실 꼬리표 `[F#]` 줄의 카드/막대 유지, 문자 이상 URL은 글자만·비http 스킴 제거, accepted만 기본 탭/‘발송’ 표기(그 외 ‘미발송 저장 본문’), `REPORT_WEB_BASE_URL` 형태 검사(불일치면 비활성), 검증 실패 경로도 페이지 갱신, 자기 링크 줄 제외, 테스트 보강(3000자 한도·스케줄러 갱신 실패/보류 경로·`/reports` HTTP 허용목록·e2e 환경 고정). 관련 11파일 192 passed·격리 0. 정식 로컬 전체 검사는 최종 코드로 10001 passed/2 skipped/2 xfailed·869.34초·격리 0이다. PR CI/병합은 PR 영수증을 따른다.
+
+**See/NEXT:** 전체 검사·PR CI → 사용자 배포 승인 시 장외 고정SHA 인수 → 다음 자연 발송에서 링크 포함 수락·실제 페이지 열림 확인. 그 뒤 P2(일정·공시·거시 접이식 표, 장전↔장후 판단 나란히), P3(전일 판단 복기 문장 대조, 지수 스파크라인), `invalidate` 스키마 PR. 봇 프로세스가 내려가면 링크도 죽는 구조이며 정적 호스팅 이전은 P4다. 링크 미리보기는 계속 OFF다.
+
 <a id="r02-text-body-20261031"></a>
 ### R02-TEXT — 본문 이미지 폐기·읽을 수 있는 글 보고로 전환 (DO)
 

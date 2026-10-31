@@ -7,6 +7,7 @@ import pytest
 
 from src.analytics.audience_reports import MarketSnapshot
 from src.analytics.report_delivery import ReportStore
+from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_llm_roles import manager
 from tests.test_llm_transport_contract import Session, openai_reply
@@ -43,6 +44,7 @@ def research_response():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('invalid, capture', [(False, False), (True, False), (False, True)])
 async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, monkeypatch, invalid, capture):
+    monkeypatch.setenv('REPORT_WEB_BASE_URL', 'https://qwq.ai.kr')
     llm = manager(tmp_path)
     output = research_response()
     if invalid:
@@ -82,7 +84,8 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         analysis = store.analysis_receipt('market', 'morning', DAY)
         receipt = store.receipt('market', 'morning', DAY)
         assert analysis['status'] == ('failed' if invalid else 'ready')
-        assert receipt['body'] == analysis['final_body']
+        assert receipt['body'] == with_web_link(analysis['final_body'], DAY, 'morning')
+        assert receipt['body'].endswith('https://qwq.ai.kr/reports/2026-10-29#morning')
         assert analysis['public_evidence']['records'][0]['title'] == bundle['records'][0]['title']
         assert analysis['evidence_sha256']
         assert factory.await_count == 1
@@ -108,7 +111,7 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         telegram._session.post.assert_called_once()
         call = telegram._session.post.call_args
         assert call.args[0].endswith('/sendMessage')
-        assert call.kwargs['json'] == {'chat_id': 'channel', 'text': analysis['final_body'],
+        assert call.kwargs['json'] == {'chat_id': 'channel', 'text': receipt['body'],
                                        'parse_mode': 'HTML', 'disable_notification': False,
                                        'link_preview_options': {'is_disabled': True}}
         bundle['records'][0]['title'] = 'MUTATED_AFTER_FREEZE'
