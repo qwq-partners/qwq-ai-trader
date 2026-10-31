@@ -1,11 +1,12 @@
-"""Web rendering of already-sent market reports: a pure view over stored rows.
+"""Web-native daily market report page: a pure view over stored rows.
 
-The day page is a different presentation of the exact Telegram body that was
-published (plus the frozen analysis JSON/evidence bundle when one exists). It
-performs no market, news or model requests and never rewrites a consumed slot.
+Inputs per slot are the delivery status (``slots``), the frozen web analysis row
+(``report_analyses`` audience ``web``: observed facts M#, validated analysis JSON,
+public evidence E#) and, for days before the web report existed, the stored
+Telegram body whose metric lines are read back as facts. No market, news or
+model requests happen here and consumed rows are never rewritten.
 """
 import html
-import json
 import os
 import re
 import tempfile
@@ -13,17 +14,29 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .market_report_analysis import _display_note, _display_time
+from .web_report import fact_lines
+
 KST = ZoneInfo("Asia/Seoul")
 MARKET_KINDS = ("morning", "midday", "after")
 _LABELS = {"morning": "장전 07:40", "midday": "장중 13:10", "after": "장후 16:40"}
-_TITLES = {"morning": "한국증시 모닝브리프", "midday": "한국증시 장중시황", "after": "한국증시 마감점검"}
-_STATUS = {"accepted": "API 수락", "attempted": "발송 중", "rejected": "거절", "unknown": "불명",
+_TITLES = {"morning": "모닝브리프", "midday": "장중시황", "after": "마감점검"}
+_STATUS = {"accepted": "텔레그램 발송", "attempted": "발송 중", "rejected": "발송 거절", "unknown": "발송 불명",
            "failed_validation": "검증 실패", "failed_configuration": "설정 오류", "skipped_holiday": "휴장",
            "skipped_missing_current_market_basis": "자료 보류", "skipped_missing_market_basis": "자료 보류"}
+_REASON = {None: "분석을 생성하지 못했습니다.",
+           "research_evidence_missing": "뉴스·공시·일정 근거가 수집되지 않아 분석을 생성하지 않았습니다.",
+           "invalid_evidence": "수집 근거 형식이 맞지 않아 분석을 생성하지 않았습니다.",
+           "no_event_cited": "모델 응답이 공개 사건을 인용하지 않아 채택하지 않았습니다.",
+           "invalid_output": "모델 응답이 근거 검증을 통과하지 못해 채택하지 않았습니다.",
+           "incomplete": "모델 응답이 중간에 끊겨 채택하지 않았습니다.",
+           "refused": "모델이 응답을 거절했습니다.",
+           "provider_failed": "모델 호출이 실패했습니다.", "provider_exception": "모델 호출이 실패했습니다.",
+           "manager_unavailable": "모델 연결이 준비되지 않았습니다.", "prompt_unavailable": "입력이 한도를 넘어 분석을 생성하지 않았습니다.",
+           "interrupted": "이전 처리가 중단되어 재시도하지 않았습니다.", "cancelled": "처리가 중단되었습니다.",
+           "no_web_row": "이 보고에는 웹 분석 행이 없습니다(웹 리포트 도입 전 발송이거나 생성을 건너뛴 경우). 발송 본문의 관측 자료만 보여 드립니다."}
 _WEEKDAY = "월화수목금토일"
 _DEFAULT_BASE = "https://qwq.ai.kr"
-
-
 _BASE_SHAPE = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[\w./-]*)?$")
 
 
@@ -70,297 +83,344 @@ def report_file_name(name: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------- body parsing
+# ---------------------------------------------------------------- legacy body → facts
 
 _TAG = re.compile(r"</?b>")
-_FACT = r"(?: \[(?P<fact>F\d+)\])?$"
-_KPI = re.compile(r"^• (?P<label>.+?) (?P<price>\d[\d,]*\.\d+)(?: \((?P<pct>[+-]\d+\.\d+)%\))?(?: · (?P<meta>.+?))?" + _FACT)
-_PCT = re.compile(r"^• (?P<label>.+?) (?P<pct>[+-]\d+\.\d+)%" + _FACT)
-_LINK_LINE = "📄 전문·근거 보기: "
-_EVIDENCE = re.compile(r"^• (?P<id>E\d+) · (?P<rest>.+)$")
+_FACT_TAIL = r"(?: \[F\d+\])?$"
+_KPI = re.compile(r"^• (?P<label>.+?) (?P<price>\d[\d,]*\.\d+)(?: \((?P<pct>[+-]\d+\.\d+)%\))?(?: · (?P<meta>.+?))?" + _FACT_TAIL)
+_PCT = re.compile(r"^• (?P<label>.+?) (?P<pct>[+-]\d+\.\d+)%" + _FACT_TAIL)
 
 
 def _plain(line: str) -> str:
-    """Telegram-HTML line → plain text (we re-escape on output)."""
     return html.unescape(_TAG.sub("", line))
 
+
+def sent_time_of(body: str | None) -> str:
+    lines = (body or "").split("\n")
+    return _plain(lines[1]) if len(lines) > 1 else ""
+
+
+def facts_from_body(body: str) -> dict:
+    """Read the metric lines of a stored Telegram body back as M# facts (pre-web days only)."""
+    facts = {"version": "legacy-body", "indices": [], "us": [], "sectors": [], "basis_date": None, "us_basis_date": None}
+    heading, count = "", 0
+    for raw in body.split("\n"):
+        if raw.startswith("<b>") and raw.endswith("</b>"):
+            heading = _plain(raw)
+            if heading.startswith("업종 흐름 · ") and re.search(r"\d{4}-\d{2}-\d{2}$", heading):
+                facts["basis_date"] = heading[-10:]
+            if heading.startswith("주요 지표 · 미국 "):
+                facts["us_basis_date"] = heading.rsplit(" ", 1)[-1]
+            continue
+        line = _plain(raw)
+        if heading.startswith("주요 지표") and "미국" not in heading and (m := _KPI.match(line)):
+            count += 1
+            basis = "indicative_minute" if "분 단위" in heading else "provider_reference" if "참고" in heading else "close_vs_prev"
+            facts["indices"].append({"id": f"M{count}", "label": m["label"], "price": float(m["price"].replace(",", "")),
+                                     "pct": float(m["pct"]) if m["pct"] else None, "observed_at": None,
+                                     "observed_text": m["meta"] or "", "source": "KIS", "basis": basis})
+        elif heading.startswith("주요 지표 · 미국") and (m := _PCT.match(line)):
+            count += 1
+            facts["us"].append({"id": f"M{count}", "label": m["label"], "pct": float(m["pct"]), "date": facts["us_basis_date"], "source": "Yahoo Finance"})
+        elif heading.startswith("업종 흐름") and (m := _PCT.match(line)):
+            count += 1
+            facts["sectors"].append({"id": f"M{count}", "name": m["label"], "pct": float(m["pct"]), "as_of": facts["basis_date"], "source": "KIS"})
+    return facts
+
+
+# ---------------------------------------------------------------- rendering helpers
 
 def _esc(text) -> str:
     return html.escape(str(text), quote=True)
 
 
-def _parse_body(body: str) -> dict:
-    lines = body.split("\n")
-    head = {"title": _plain(lines[0]) if lines else "", "time": _plain(lines[1]) if len(lines) > 1 else ""}
-    sections, current = [], None
-    for raw in lines[2:]:
-        if raw.startswith("<b>") and raw.endswith("</b>"):
-            current = {"heading": _plain(raw), "lines": []}
-            sections.append(current)
-        elif not raw.strip() or raw.startswith(_LINK_LINE):
-            current = None  # Blank lines only separate sections; the page never links to itself.
-        elif current is None:
-            current = {"heading": "", "lines": []}  # 자료 범위/출처 trailer or lead-in text
-            sections.append(current)
-            current["lines"].append(_plain(raw))
-        else:
-            current["lines"].append(_plain(raw))
-    return {"head": head, "sections": sections}
+def _sign(value: float | None) -> str:
+    if value is None:
+        return "flat"
+    rounded = float(f"{value:.2f}")
+    return "up" if rounded > 0 else "down" if rounded < 0 else "flat"
 
 
-# ---------------------------------------------------------------- section views
-
-def _card(heading: str, inner: str, extra_class: str = "") -> str:
-    h2 = f"<h2>{_esc(heading)}</h2>" if heading else ""
-    return f'<section class="card {extra_class}">{h2}{inner}</section>'
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{value:+.2f}%"
 
 
-def _para(lines) -> str:
-    return "".join(f"<p>{_esc(line)}</p>" for line in lines if line.strip())
+def _when(row: dict) -> str:
+    if row.get("observed_text"):
+        return row["observed_text"]
+    try:
+        return datetime.fromisoformat(row["observed_at"]).astimezone(KST).strftime("%m/%d %H:%M KST")
+    except (TypeError, ValueError, KeyError):
+        return "시각 미확인"
 
 
-def _badges(ids, kind: str) -> str:
-    chips = []
-    for ref in ids:
-        ref = str(ref)
-        if re.fullmatch(r"E\d+", ref):
-            chips.append(f'<a class="badge" href="#{kind}-{ref}">{ref}</a>')
-        elif re.fullmatch(r"F\d+", ref):
-            chips.append(f'<span class="badge">{_esc(ref)} 시장 사실</span>')
-    return f'<div class="badges">{"".join(chips)}</div>' if chips else ""
+_BASIS_TAG = {"close_vs_prev": "전일 종가 대비", "intraday": "장중 관측", "provider_reference": "제공기관 대비율 · 원천시각 미제공",
+              "indicative_minute": "분 단위 참고 · 확정 종가 아님"}
 
 
-def _judgment(section, kind: str, analysis) -> str:
-    thesis, refs, rest = None, [], []
-    for line in section["lines"]:
-        if line.startswith("LLM 해석: "):
-            thesis = line[len("LLM 해석: "):]
-        elif line.startswith("판단 근거: "):
-            refs = [r.strip() for r in line[len("판단 근거: "):].split(",") if r.strip()]
-        elif line.strip():
-            rest.append(line)
-    if thesis is None and isinstance(analysis, dict) and isinstance(analysis.get("thesis"), dict):
-        thesis = str(analysis["thesis"].get("text", ""))
-        refs = refs or list(analysis["thesis"].get("evidence_ids", []))
-    inner = ""
-    if thesis:
-        inner += f'<p class="thesis">{_esc(thesis)}</p>'
-        inner += _para(rest)
-    else:
-        if rest:
-            inner += f'<p class="thesis muted">{_esc(rest[0])}</p>' + _para(rest[1:])
-        if any("미확보" in line for line in rest):
-            inner += '<div class="badges"><span class="badge warn">분석 미확보 · 사실 보고</span></div>'
-    inner += _badges(refs, kind)
-    return _card("한 줄 판단", inner)
+def _cite(ids, kind: str) -> str:
+    ids = [i for i in (ids or []) if isinstance(i, str) and re.fullmatch(r"[EM]\d+", i)]
+    if not ids:
+        return ""
+    return '<span class="cite">' + "".join(f'<a href="#{kind}-{i}">{i}</a>' for i in ids) + "</span>"
 
 
-def _issues(section, kind: str, analysis) -> str:
-    issues = analysis.get("issues") if isinstance(analysis, dict) else None
-    if isinstance(issues, list) and issues:
-        parts = []
-        for n, issue in enumerate(issues, 1):
-            if not isinstance(issue, dict):
-                continue
-            rows = "".join(
-                f'<dt class="{cls}">{label}</dt><dd>{_esc(issue.get(key, ""))}</dd>'
-                for key, label, cls in (("event", "사건", ""), ("impact", "영향", ""),
-                                        ("counterpoint", "반대", "c"), ("watch", "관찰", "")))
-            parts.append(f'<div class="issue"><h3>{n}. {_esc(issue.get("title", ""))}</h3><dl class="flow">{rows}</dl>'
-                         f'{_badges(issue.get("evidence_ids", []), kind)}</div>')
-        return _card("핵심 이슈와 영향", "".join(parts))
-    return _card(section["heading"], _para(section["lines"]))
+def _p(text, ids, kind) -> str:
+    return f"<p>{_esc(text)}{_cite(ids, kind)}</p>"
 
 
-def _fact_tag(fact) -> str:
-    return f'<span class="tag">{_esc(fact)}</span>' if fact else ""
+def _cited_ids(analysis: dict | None) -> list[str]:
+    if not analysis:
+        return []
+    seen = []
+    blocks = [analysis.get("market_view"), analysis.get("sector_view"), analysis.get("macro_view"), analysis.get("outlook"), *analysis.get("issues", [])]
+    for block in blocks:
+        for ref in (block or {}).get("evidence_ids", []) if isinstance(block, dict) else []:
+            if ref not in seen:
+                seen.append(ref)
+    return seen
 
 
-def _kpis(section, kind: str) -> str:
-    cards, captions = [], []
-    sub = section["heading"].split(" · ", 1)[1] if " · " in section["heading"] else ""
-    for line in section["lines"]:
-        m = _KPI.match(line)
-        if m:
-            pct = m.group("pct")
-            cls = "up" if pct and pct.startswith("+") and float(pct) != 0 else "down" if pct and float(pct) < 0 else ""
-            pct_html = f' <span class="pct {cls}">{_esc(pct)}%</span>' if pct else ""
-            meta = m.group("meta") or ""
-            if not pct:
-                meta = f"{meta} · 전일 대비 미확보" if meta else "전일 대비 미확보"
-            tag = '<span class="tag">확정 종가 아님</span>' if "분 단위" in sub or "참고" in sub else ""
-            fact = _fact_tag(m.group("fact"))
-            cards.append(f'<div class="kpi"><div class="l">{_esc(m.group("label"))}{tag}{fact}</div>'
-                         f'<div class="v">{_esc(m.group("price"))}{pct_html}</div>'
-                         f'<div class="s">{_esc(meta)}</div></div>')
-            continue
-        m = _PCT.match(line)
-        if m:
-            pct = m.group("pct")
-            cls = "up" if float(pct) > 0 else "down" if float(pct) < 0 else ""
-            cards.append(f'<div class="kpi"><div class="l">{_esc(m.group("label"))}{_fact_tag(m.group("fact"))}</div>'
-                         f'<div class="v {cls}">{_esc(pct)}%</div><div class="s">{_esc(sub)}</div></div>')
-            continue
-        if line.strip():
-            captions.append(line)
-    inner = f'<div class="grid">{"".join(cards)}</div>' if cards else ""
-    inner += "".join(f'<p class="cap">{_esc(c)}</p>' for c in captions)
-    return _card("시장 지표" + (f" · {sub}" if sub else ""), inner)
+# ---------------------------------------------------------------- slot views
+
+def _lead(slot: dict) -> str:
+    kind, analysis = slot["kind"], slot.get("analysis")
+    status = _STATUS.get(slot.get("status"), "미발송")
+    kicker = f"{_TITLES[kind]} · {_LABELS[kind]} KST"
+    kicker += f" · {slot['sent_at']} {status}" if slot.get("sent_at") else f" · {status}"
+    if analysis:
+        stance = analysis["stance"]
+        cls = {"우호": "up", "경계": "down"}.get(stance, "flat")
+        summary = "".join(f"<li>{_esc(item)}</li>" for item in analysis.get("summary", []))
+        return (f'<header class="lead"><p class="kicker">{_esc(kicker)}</p>'
+                f'<div class="stance {cls}"><span>시장 스탠스</span><b>{_esc(stance)}</b></div>'
+                f'<h2 class="headline">{_esc(analysis["headline"])}</h2>'
+                f'<ul class="summary">{summary}</ul></header>')
+    reason = _REASON.get(slot.get("web_reason"), "분석을 생성하지 못했습니다.")
+    return (f'<header class="lead"><p class="kicker">{_esc(kicker)}</p>'
+            f'<div class="stance none"><span>시장 스탠스</span><b>분석 미확보</b></div>'
+            f'<h2 class="headline muted">관측 자료만 제공하는 보고입니다</h2>'
+            f'<p class="why">{_esc(reason)}</p></header>')
 
 
-def _sectors(section) -> str:
-    rows, captions = [], []
-    for line in section["lines"]:
-        m = _PCT.match(line)
-        if m:
-            rows.append((m.group("label"), float(m.group("pct")), m.group("pct"), m.group("fact")))
-        elif line.strip():
-            captions.append(line)
-    scale = max([abs(v) for _, v, _, _ in rows] + [0.01])
-    bars = ""
-    for label, value, text, fact in rows:
-        cls = "up" if value > 0 else "down" if value < 0 else "flat"
-        width = abs(value) / scale * 50
-        bars += (f'<div class="n">{_esc(label)}{_fact_tag(fact)}</div><div class="t"><div class="f {cls}" style="width:{width:.1f}%"></div></div>'
-                 f'<div class="v {cls}">{_esc(text)}%</div>')
-    inner = f'<div class="bars" role="img" aria-label="업종 ETF 등락">{bars}</div>' if bars else ""
-    inner += "".join(f'<p class="cap">{_esc(c)}</p>' for c in captions)
-    if bars:
-        inner += '<p class="cap">상승 빨강 / 하락 파랑</p>'
-    return _card(section["heading"], inner)
+def _narrative(slot: dict) -> str:
+    kind, analysis = slot["kind"], slot.get("analysis")
+    if not analysis:
+        facts = slot.get("facts") or {}
+        counts = [f"지수 {len(facts.get('indices', []))}개" if facts.get("indices") else "",
+                  f"미국 지수 {len(facts.get('us', []))}개" if facts.get("us") else "",
+                  f"섹터 ETF {len(facts.get('sectors', []))}개" if facts.get("sectors") else ""]
+        have = " · ".join(c for c in counts if c) or "적격 관측 없음"
+        return (f'<section class="blk"><h3>이 보고에 있는 것</h3><p>{_esc(have)}. 자료 칸에 관측값과 수집 근거를 그대로 표시합니다. '
+                f'해석·전망은 생성하지 않았으므로 방향 판단은 다음 보고에서 확인하십시오.</p></section>')
+    out = [f'<section class="blk"><h3>시장 판단</h3>{_p(analysis["market_view"]["text"], analysis["market_view"]["evidence_ids"], kind)}</section>']
+    issues = ""
+    for n, issue in enumerate(analysis.get("issues", []), 1):
+        issues += (f'<article class="issue"><h4><span class="n">{n}</span>{_esc(issue["title"])}</h4><dl class="flow">'
+                   f'<dt>사건</dt><dd>{_esc(issue["event"])}</dd>'
+                   f'<dt>영향</dt><dd>{_esc(issue["impact"])}</dd>'
+                   f'<dt class="c">반론</dt><dd>{_esc(issue["counterpoint"])}</dd>'
+                   f'<dt class="w">확인</dt><dd>{_esc(issue["watch"])}</dd></dl>{_cite(issue["evidence_ids"], kind)}</article>')
+    out.append(f'<section class="blk"><h3>핵심 이슈</h3>{issues}</section>')
+    out.append(f'<section class="blk"><h3>업종 흐름 해석</h3>{_p(analysis["sector_view"]["text"], analysis["sector_view"]["evidence_ids"], kind)}</section>')
+    if analysis.get("macro_view"):
+        out.append(f'<section class="blk"><h3>거시 · 해외</h3>{_p(analysis["macro_view"]["text"], analysis["macro_view"]["evidence_ids"], kind)}</section>')
+    o = analysis["outlook"]
+    out.append('<section class="blk"><h3>다음 세션 전망</h3><div class="outlook">'
+               f'<div class="o base"><span>기본 시나리오</span><p>{_esc(o["base"])}</p></div>'
+               f'<div class="o up"><span>상방 조건</span><p>{_esc(o["upside"])}</p></div>'
+               f'<div class="o down"><span>하방 조건</span><p>{_esc(o["downside"])}</p></div></div>'
+               f'{_cite(o["evidence_ids"], kind)}<p class="fine">조건부 시나리오이며 목표가·확률이 아닙니다.</p></section>')
+    checks = "".join(f"<li>{_esc(item)}</li>" for item in analysis.get("checklist", []))
+    out.append(f'<section class="blk"><h3>체크리스트</h3><ol class="check">{checks}</ol></section>')
+    return "".join(out)
 
 
-def _watch(section) -> str:
-    items = [line[2:] if line.startswith("• ") else line for line in section["lines"] if line.strip()]
-    rows = "".join(f"<tr><td>{n}</td><td>{_esc(item)}</td></tr>" for n, item in enumerate(items, 1))
-    table = f'<table class="cond"><tr><th>#</th><th>다음 세션에서 확인할 것</th></tr>{rows}</table>' if rows else ""
-    return _card("확인 조건", table)
+_COVERAGE_STATUS = {"partial": "일부", "ok": "확보", "empty": "자료 없음", "unavailable": "미확보", "error": "조회 실패",
+                    "not_ready": "준비 전", "stale": "오래됨", "failed": "조회 실패", "invalid_time": "시각 오류"}
+_COVERAGE_SOURCE = {"news_storage": "뉴스 저장소", "news_curator": "뉴스 수집", "dart_earnings": "공시 색인",
+                    "earnings_calendar": "실적 일정", "disclosure_feed": "공시 유형", "macro_economist": "거시 지표",
+                    "public_research": "공개 자료"}
+_CONTENT_KIND = {"title_excerpt": "기사 발췌", "title": "제목", "index": "색인", "disclosure_index": "공시 색인",
+                 "filing_index": "공시 색인", "filing_type_description": "공시 유형 설명", "article_excerpt": "기사 발췌",
+                 "earnings_calendar": "실적 일정", "indicator_value": "지표 관측", "macro": "거시 관측", "calendar": "일정"}
 
 
-def _sources(section, kind: str) -> str:
-    coverage, items, trailing = [], [], []
-    for line in section["lines"]:
-        if line.startswith("수집 범위: "):
-            coverage += [c.strip() for c in line[len("수집 범위: "):].split(" / ") if c.strip()]
-            continue
-        m = _EVIDENCE.match(line)
-        if m:
-            parts = [p.strip() for p in m.group("rest").split(" · ")]
-            items.append({"id": m.group("id"), "source": parts[0] if parts else "",
-                          "title": parts[1] if len(parts) > 1 else "", "meta": parts[2:], "url": None})
-            continue
-        if line.startswith("원문: ") and items:
-            items[-1]["url"] = line[len("원문: "):].strip()
-            continue
-        if line.strip():
-            trailing.append(line)
-    inner = ""
-    if coverage:
-        chips = "".join(f'<span class="badge{" warn" if any(w in c for w in ("미확보", "없음", "실패", "오류", "오래된", "준비 전")) else ""}">{_esc(c)}</span>' for c in coverage)
-        inner += f'<div class="cov">{chips}</div>'
-    if items:
+def _link(url, text: str) -> str:
+    if isinstance(url, str) and re.match(r"^https?://", url):
+        return f'<a href="{_esc(url)}" rel="noopener">{text}</a>'
+    return text
+
+
+def _data_column(slot: dict) -> str:
+    kind, facts, evidence = slot["kind"], slot.get("facts") or {}, slot.get("evidence") or {}
+    out = []
+    cards = ""
+    for row in facts.get("indices", []):
+        pct = row.get("pct")
+        sub = _pct(pct) if pct is not None else "전일 대비 미확보"
+        cards += (f'<div class="kpi"><span class="l">{_esc(row["label"])}</span>'
+                  f'<span class="v">{row["price"]:,.2f}</span><span class="pct {_sign(pct)}">{_esc(sub)}</span>'
+                  f'<span class="s">{_esc(_when(row))} · {_esc(_BASIS_TAG.get(row.get("basis"), "기준 미확인"))}</span></div>')
+    for row in facts.get("us", []):
+        cards += (f'<div class="kpi"><span class="l">미국 {_esc(row["label"])}</span>'
+                  f'<span class="v {_sign(row["pct"])}">{_esc(_pct(row["pct"]))}</span>'
+                  f'<span class="s">{_esc(row.get("date") or "기준일 미확인")} 마감</span></div>')
+    if cards:
+        out.append(f'<section class="dat"><h3>지수</h3><div class="kpis">{cards}</div></section>')
+    sectors = facts.get("sectors", [])
+    if sectors:
+        scale = max(abs(float(s["pct"])) for s in sectors) or 1.0
+        rows = ""
+        for s in sectors:
+            cls = _sign(s["pct"])
+            fill = f'<i class="f {cls}" style="width:{abs(float(s["pct"])) / scale * 50:.1f}%"></i>' if cls != "flat" else ""
+            rows += (f'<div class="n">{_esc(s["name"])}</div><div class="t">{fill}</div>'
+                     f'<div class="v {cls}">{_esc(_pct(s["pct"]))}</div>')
+        basis = facts.get("basis_date") or sectors[0].get("as_of") or "기준일 미확인"
+        out.append(f'<section class="dat"><h3>섹터 ETF</h3><div class="bars">{rows}</div>'
+                   f'<p class="fine">확인 {len(sectors)}개 · 기준일 {_esc(basis)} 최근 1세션 · 전체 업종 순위 아님</p></section>')
+    records = evidence.get("records", []) if isinstance(evidence, dict) else []
+    macro = [r for r in records if r.get("kind") == "macro"]
+    if macro:
+        trs = "".join(f'<tr><td>{_esc(r["title"])}</td><td class="num">{_esc(r.get("excerpt") or "—")}</td>'
+                      f'<td class="m">{_esc(r.get("source") or "")} · {_esc(_display_time(r.get("event_date")))}</td></tr>' for r in macro)
+        out.append(f'<section class="dat"><h3>거시 지표</h3><table class="macro">{trs}</table><p class="fine">지표 기준일 기준 · 보고서 발행일 아님</p></section>')
+    events = [r for r in records if r.get("kind") in ("disclosure", "calendar")]
+    if events:
         lis = ""
-        for item in items:
-            link = ""
-            if item["url"] and re.match(r"^https?://[^\s<>\"']+$", item["url"]):
-                link = f' · <a href="{_esc(item["url"])}" rel="noopener nofollow" target="_blank">원문</a>'
-            elif item["url"] and item["url"].startswith(("http://", "https://")):
-                link = f' · 원문 {_esc(item["url"])}'  # odd characters: text only, never an href; other schemes dropped'
-            meta = " · ".join([item["source"], *item["meta"]])
-            lis += (f'<li id="{kind}-{item["id"]}"><span class="id">{item["id"]}</span>{_esc(item["title"])}'
-                    f'<span class="m">{_esc(meta)}{link}</span></li>')
-        inner += f'<ul class="src">{lis}</ul>'
-    inner += _para(trailing)
-    return _card("근거 · 출처", inner)
+        for r in events[:10]:
+            label = {"disclosure": "접수", "calendar": "예정"}[r["kind"]]
+            lis += (f'<li>{_link(r.get("url"), _esc(r["title"]))}'
+                    f'<span class="m">{_esc(r.get("source") or "")} · {label} {_esc(_display_time(r.get("event_date")))}</span></li>')
+        out.append(f'<section class="dat"><h3>공시 · 일정</h3><ul class="ev">{lis}</ul></section>')
+    coverage = evidence.get("coverage", []) if isinstance(evidence, dict) else []
+    if coverage:
+        chips = ""
+        for entry in coverage:
+            status = _COVERAGE_STATUS.get(entry.get("status"), "상태 미확인")
+            source = _COVERAGE_SOURCE.get(entry.get("source"), entry.get("source") or "출처 미확인")
+            warn = entry.get("status") not in ("ok", "partial")
+            chips += f'<span class="chip{" warn" if warn else ""}">{_esc(source)} {_esc(status)}</span>'
+        out.append(f'<section class="dat"><h3>자료 범위</h3><div class="chips">{chips}</div></section>')
+    return "".join(out) or '<section class="dat"><p class="fine">표시할 관측 자료가 없습니다.</p></section>'
+
+
+def _evidence_li(row: dict, kind: str) -> str:
+    meta = []
+    if row.get("published_at"):
+        meta.append("발행 " + _display_time(row["published_at"]) + ("" if row.get("publication_status") == "verified" else " (검증 안됨)"))
+    else:
+        meta.append("발행시각 미확인")
+    if row.get("collected_at"):
+        meta.append("수집 " + _display_time(row["collected_at"]))
+    if row.get("content_kind"):
+        meta.append(_CONTENT_KIND.get(row["content_kind"], row["content_kind"]))
+    if row.get("limitations"):
+        meta.append("한계 " + _display_note(row["limitations"]))
+    link = " · " + _link(row["url"], "원문") if isinstance(row.get("url"), str) and re.match(r"^https?://", row["url"]) else ""
+    return (f'<li id="{kind}-{_esc(row["id"])}"><span class="id">{_esc(row["id"])}</span><b>{_esc(row.get("source") or "제공처 미확인")}</b> {_esc(row["title"])}'
+            f'<span class="m">{_esc(" · ".join(meta))}{link}</span></li>')
+
+
+def _sources(slot: dict) -> str:
+    kind, facts, evidence = slot["kind"], slot.get("facts") or {}, slot.get("evidence") or {}
+    records = evidence.get("records", []) if isinstance(evidence, dict) else []
+    cited = _cited_ids(slot.get("analysis"))
+    out = []
+    if records:
+        first = [r for r in records if r["id"] in cited]
+        rest = [r for r in records if r["id"] not in cited]
+        lis = "".join(_evidence_li(r, kind) for r in first)
+        more = ""
+        if rest:
+            more = (f'<details><summary>인용하지 않은 수집 자료 {len(rest)}건</summary><ul class="src">'
+                    + "".join(_evidence_li(r, kind) for r in rest) + "</ul></details>")
+        out.append(f'<section class="blk src-blk"><h3>근거 · 출처</h3><ul class="src">{lis}</ul>{more}</section>')
+    lines = fact_lines(facts) if facts else []
+    if lines:
+        lis = "".join(f'<li id="{kind}-{_esc(fid)}"><span class="id">{_esc(fid)}</span>{_esc(text)}</li>' for fid, text in lines)
+        out.append(f'<section class="blk src-blk"><h3>관측 자료</h3><ul class="src facts">{lis}</ul></section>')
+    meta = slot.get("web_meta") or {}
+    model = meta.get("resolved_model") or meta.get("requested_model")
+    if model or slot.get("analysis"):
+        out.append(f'<p class="fine">분석 생성{" · 모델 " + _esc(model) if model else ""} · 수치·날짜는 인용 근거의 값만 사용 · 종목 추천·목표가 없음</p>')
+    return "".join(out)
 
 
 def _render_slot(slot: dict, default: bool) -> str:
-    kind, status, body = slot["kind"], slot.get("status"), slot.get("body")
+    kind, status = slot["kind"], slot.get("status")
     cls = "slot default" if default else "slot"
-    label = _STATUS.get(status, "예정" if status is None else "미발송")
-    if body and status != "accepted":
-        label = f"{label} · 미발송 저장 본문"
-    if not body or (status and status.startswith("skipped_")):
+    has_content = bool(slot.get("facts") or slot.get("analysis"))
+    if not has_content or (status and str(status).startswith("skipped_")):
+        label = _STATUS.get(status, "예정" if status is None else "미발송")
         reason = {"skipped_holiday": "휴장일이라 보고가 없습니다.",
                   "skipped_missing_current_market_basis": "원천 시점이 확인된 장중 지수 자료가 없어 보고를 생략했습니다. 수신 시각으로 대체하지 않습니다.",
                   "skipped_missing_market_basis": "원천 시점이 확인된 필수 자료가 없어 보고를 생략했습니다. 수신 시각으로 대체하지 않습니다.",
                   "failed_validation": "본문 형식·분량 검증에 실패해 발송하지 않았습니다."}.get(status, "이 슬롯의 보고는 아직 없습니다.")
-        return (f'<article class="{cls}" id="{kind}"><p class="meta">{_esc(_LABELS[kind])} KST 슬롯 · {_esc(label)}</p>'
-                f'{_card("보고 없음", f"<p class=empty>{_esc(reason)}</p>")}</article>')
-    parsed = _parse_body(body)
-    analysis = slot.get("analysis")
-    out = [f'<article class="{cls}" id="{kind}">',
-           f'<p class="meta">{_esc(_TITLES[kind])} · {_esc(parsed["head"]["time"])} 발송 · {_esc(label)}</p>']
-    for section in parsed["sections"]:
-        heading = section["heading"]
-        if heading == "시장 판단":
-            out.append(_judgment(section, kind, analysis))
-        elif heading == "핵심 이슈와 영향":
-            out.append(_issues(section, kind, analysis))
-        elif heading.startswith("주요 지표"):
-            out.append(_kpis(section, kind))
-        elif heading.startswith("업종 흐름"):
-            out.append(_sectors(section))
-        elif heading == "국내 관전 포인트":
-            out.append(_watch(section))
-        elif heading == "근거 / 출처":
-            out.append(_sources(section, kind))
-        elif heading:
-            out.append(_card(heading, _para(section["lines"])))
-        else:
-            out.append(f'<p class="note">{"<br>".join(_esc(l) for l in section["lines"] if l.strip())}</p>')
-    out.append("</article>")
-    return "".join(out)
+        return (f'<article class="{cls}" id="{kind}"><header class="lead"><p class="kicker">{_esc(_TITLES[kind])} · {_esc(_LABELS[kind])} KST · {_esc(label)}</p>'
+                f'<h2 class="headline muted">보고 없음</h2><p class="why">{_esc(reason)}</p></header></article>')
+    return (f'<article class="{cls}" id="{kind}">{_lead(slot)}'
+            f'<div class="layout"><div class="main">{_narrative(slot)}</div><aside class="aside">{_data_column(slot)}</aside></div>'
+            f'{_sources(slot)}</article>')
 
 
 _CSS = """
-:root{--bg:#f6f7fa;--card:#fff;--ink:#1a1d26;--ink2:#555c6e;--mute:#8a92a6;--line:#e3e6ee;--up:#d64545;--down:#2f6fd6;--accent:#3b4bd6;--chip:#eef0f6;--hl:#fff6d6}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#171a23;--ink:#e7e9f0;--ink2:#aab1c3;--mute:#7b839a;--line:#262a37;--up:#ef6b6b;--down:#6b97f0;--accent:#8b96ff;--chip:#1f2330;--hl:#3a3410}}
-*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.65 -apple-system,"Pretendard Variable",Pretendard,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif;font-feature-settings:"tnum"}
-a{color:var(--accent)}.wrap{max-width:720px;margin:0 auto;padding:0 16px 48px}
-header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
-.bar{max-width:720px;margin:0 auto;padding:10px 16px 0}
-.brand{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;color:var(--mute)}.brand b{color:var(--ink);font-size:15px}
-.nav a{color:var(--mute);text-decoration:none;margin-left:10px}
-h1{font-size:22px;margin:4px 0 8px;letter-spacing:-.01em}
-.tabs{display:flex;gap:6px;margin:0 -16px;padding:0 16px 10px;overflow-x:auto;scrollbar-width:none}
-.tabs a{flex:0 0 auto;padding:8px 14px;border-radius:999px;background:var(--chip);color:var(--ink2);text-decoration:none;font-size:15px;border:1px solid transparent}
-.tabs a.off{color:var(--mute);text-decoration:line-through}.tabs a.live{border-color:var(--accent);color:var(--accent);font-weight:600}
-.slot{display:none}.slot:target{display:block}.slot.default{display:block}body:has(.slot:target) .slot.default:not(:target){display:none}
-section.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px;margin:14px 0}
-h2{font-size:14px;letter-spacing:.06em;color:var(--mute);margin:0 0 10px;font-weight:600}
-.meta{font-size:14px;color:var(--mute);margin:10px 0 2px}
-.thesis{font-size:21px;line-height:1.5;font-weight:600;margin:0 0 10px;letter-spacing:-.01em}.thesis.muted{color:var(--ink2);font-weight:500}
-.badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.badge{font-size:12.5px;padding:2px 8px;border-radius:6px;background:var(--chip);color:var(--ink2);text-decoration:none;border:1px solid var(--line)}
-.badge.warn{color:var(--up);border-color:color-mix(in srgb,var(--up) 40%,transparent)}
-.issue{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.issue:first-child{border-top:0;padding-top:0;margin-top:0}
-.issue h3{font-size:18px;margin:0 0 10px}
-.flow{display:grid;grid-template-columns:62px 1fr;row-gap:10px;column-gap:10px;margin:0}.flow dt{font-size:13px;font-weight:700;color:var(--mute);padding-top:3px}.flow dt.c{color:var(--down)}.flow dd{margin:0}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.kpi{background:var(--chip);border-radius:10px;padding:12px}.kpi .l{font-size:13px;color:var(--mute)}.kpi .v{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:2px 0}.kpi .s{font-size:13px;color:var(--ink2)}
-.kpi .pct{font-size:15px;font-weight:600}.up{color:var(--up)}.down{color:var(--down)}
-.tag{display:inline-block;font-size:11.5px;padding:1px 6px;border-radius:4px;background:var(--card);border:1px solid var(--line);color:var(--mute);margin-left:4px;vertical-align:middle}
-.bars{display:grid;grid-template-columns:72px 1fr 68px;gap:6px 8px;align-items:center;font-size:15px}
-.bars .n{text-align:right;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bars .t{position:relative;height:16px;background:var(--chip);border-radius:4px}.bars .t::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
-.bars .f{position:absolute;top:2px;bottom:2px;border-radius:3px}.bars .f.up{background:var(--up);left:50%}.bars .f.down{background:var(--down);right:50%}.bars .f.flat{display:none}
-.bars .v{font-weight:600}
-.cap{font-size:13.5px;color:var(--mute);margin:10px 0 0}
-table.cond{width:100%;border-collapse:collapse;font-size:15.5px}
-table.cond th{text-align:left;font-size:13px;color:var(--mute);font-weight:600;padding:0 10px 6px 0;border-bottom:1px solid var(--line)}
-table.cond td{padding:10px 10px 10px 0;border-bottom:1px solid var(--line);vertical-align:top}
-table.cond td:first-child,table.cond th:first-child{width:28px;color:var(--mute)}
-.src{list-style:none;padding:0;margin:10px 0 0}.src li{padding:12px 0;border-top:1px solid var(--line);scroll-margin-top:130px}.src li:first-child{border-top:0}
-.src li:target{background:var(--hl);margin:0 -10px;padding:12px 10px;border-radius:8px}
-.src .id{font-weight:700;color:var(--accent);margin-right:6px}.src .m{display:block;font-size:13.5px;color:var(--mute);margin-top:3px}
-.cov{display:flex;flex-wrap:wrap;gap:6px}
-.note{font-size:14px;color:var(--mute);line-height:1.6}.empty{color:var(--mute);font-size:16px;margin:0}
-section.card p{margin:0 0 8px}
-table.index{width:100%;border-collapse:collapse;font-size:16px}table.index td{padding:12px 6px;border-bottom:1px solid var(--line)}table.index td:first-child a{font-weight:600;text-decoration:none}
-@media (min-width:600px){.flow{grid-template-columns:72px 1fr}}
-@media print{.slot{display:block!important}header{position:static}.tabs{display:none}a[href^="http"]::after{content:" (" attr(href) ")";font-size:11px;color:#777}}
+:root{--bg:#f4f5f8;--card:#fff;--ink:#15171f;--ink2:#4b5263;--mute:#7c8496;--line:#e2e5ec;--up:#d2403f;--down:#2d6bd2;--upbg:#fbeaea;--downbg:#e8effb;--accent:#2f3aa8;--chip:#eceef4;--hl:#fff3c4}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1016;--card:#161922;--ink:#e9ebf2;--ink2:#aeb5c6;--mute:#7d8599;--line:#272b38;--up:#f07070;--down:#6f9bf3;--upbg:#3a1f22;--downbg:#1b2740;--accent:#9aa4ff;--chip:#1e2230;--hl:#3b3410}}
+*{box-sizing:border-box}html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16.5px/1.7 -apple-system,"Apple SD Gothic Neo","Pretendard Variable",Pretendard,"Malgun Gothic","Noto Sans KR",system-ui,sans-serif;font-feature-settings:"tnum","ss05";word-break:keep-all}
+a{color:var(--accent)}.wrap{max-width:1100px;margin:0 auto;padding:0 20px 72px}
+.top{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.bar{max-width:1100px;margin:0 auto;padding:12px 20px 0}
+.brand{display:flex;justify-content:space-between;align-items:baseline;font-size:13.5px;color:var(--mute);letter-spacing:.02em}.brand b{color:var(--ink);font-size:15px;letter-spacing:0}
+.nav a{color:var(--mute);text-decoration:none;margin-left:14px}.nav a:hover{color:var(--ink)}
+h1{font-size:26px;margin:6px 0 10px;letter-spacing:-.02em;font-weight:700}
+.tabs{display:flex;gap:8px;margin:0 -20px;padding:0 20px 12px;overflow-x:auto;scrollbar-width:none}
+.tabs a{flex:0 0 auto;padding:8px 16px;border-radius:999px;background:var(--chip);color:var(--ink2);text-decoration:none;font-size:14.5px;border:1px solid transparent}
+.tabs a.off{color:var(--mute);text-decoration:line-through}.tabs a.live{border-color:var(--accent);color:var(--accent);font-weight:600;background:var(--card)}
+.slot{display:none;scroll-margin-top:150px}.slot [id]{scroll-margin-top:150px}.slot:target,.slot:has(:target){display:block}.slot.default{display:block}body:has(.slot:target,.slot :target) .slot.default:not(:target):not(:has(:target)){display:none}
+.lead{padding:36px 0 26px;border-bottom:1px solid var(--line)}
+.kicker{margin:0 0 14px;font-size:13.5px;color:var(--mute);letter-spacing:.02em}
+.stance{display:inline-flex;align-items:center;gap:10px;padding:6px 12px 6px 14px;border-radius:999px;font-size:13px;background:var(--chip);color:var(--ink2);margin-bottom:16px}
+.stance b{font-size:15px;color:var(--ink)}.stance.up{background:var(--upbg)}.stance.up b{color:var(--up)}.stance.down{background:var(--downbg)}.stance.down b{color:var(--down)}.stance.none b{color:var(--mute)}
+.headline{font-size:30px;line-height:1.3;letter-spacing:-.025em;margin:0 0 18px;font-weight:700;max-width:22em}.headline.muted{color:var(--ink2);font-weight:600}
+.summary{margin:0;padding:0;list-style:none;display:grid;gap:8px;max-width:46em}.summary li{position:relative;padding-left:18px;color:var(--ink2);font-size:17px}.summary li::before{content:"";position:absolute;left:0;top:.72em;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.why{color:var(--mute);margin:0;max-width:46em}
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:28px;padding-top:8px}
+@media (min-width:900px){.layout{grid-template-columns:minmax(0,1fr) 340px;gap:48px;align-items:start}.aside{position:sticky;top:132px}.headline{font-size:36px}}
+.blk{padding:26px 0 6px}.blk h3,.dat h3{font-size:12.5px;letter-spacing:.12em;color:var(--mute);margin:0 0 12px;font-weight:700;text-transform:uppercase}
+.blk p{margin:0 0 10px;font-size:17.5px;line-height:1.75}.blk .fine,.fine{font-size:13px;color:var(--mute);margin:8px 0 0;line-height:1.5}
+.cite{display:inline-flex;gap:4px;margin-left:8px;vertical-align:2px}.cite a{font-size:11.5px;padding:1px 7px;border-radius:5px;background:var(--chip);color:var(--ink2);text-decoration:none;border:1px solid var(--line)}.cite a:hover{color:var(--accent);border-color:var(--accent)}
+.issue{padding:18px 0;border-top:1px solid var(--line)}.issue:first-of-type{border-top:0;padding-top:4px}
+.issue h4{font-size:19px;margin:0 0 12px;letter-spacing:-.01em;display:flex;gap:10px;align-items:baseline}.issue .n{font-size:13px;color:var(--mute);font-weight:600;min-width:1.2em}
+.flow{display:grid;grid-template-columns:52px 1fr;gap:8px 14px;margin:0}.flow dt{font-size:12.5px;font-weight:700;color:var(--mute);padding-top:4px;letter-spacing:.04em}.flow dt.c{color:var(--down)}.flow dt.w{color:var(--accent)}.flow dd{margin:0;font-size:16.5px;line-height:1.65}
+.outlook{display:grid;gap:10px}@media (min-width:640px){.outlook{grid-template-columns:1.3fr 1fr 1fr}}
+.o{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px}.o span{display:block;font-size:12px;letter-spacing:.08em;color:var(--mute);font-weight:700;margin-bottom:8px}.o p{font-size:15.5px;margin:0;line-height:1.6}
+.o.up{border-top:3px solid var(--up)}.o.down{border-top:3px solid var(--down)}.o.base{border-top:3px solid var(--accent)}
+.check{margin:0;padding-left:0;list-style:none;counter-reset:c}.check li{counter-increment:c;position:relative;padding:10px 0 10px 36px;border-top:1px solid var(--line);font-size:16.5px}.check li:first-child{border-top:0}
+.check li::before{content:counter(c);position:absolute;left:0;top:10px;width:24px;height:24px;border-radius:50%;background:var(--chip);color:var(--ink2);font-size:12.5px;font-weight:700;display:grid;place-items:center}
+.dat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 16px 14px;margin:0 0 14px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}.kpi{display:grid;gap:2px;background:var(--chip);border-radius:12px;padding:12px}
+.kpi .l{font-size:12.5px;color:var(--mute)}.kpi .v{font-size:22px;font-weight:700;letter-spacing:-.02em}.kpi .pct{font-size:14px;font-weight:600}.kpi .s{font-size:11.5px;color:var(--mute);line-height:1.4}
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--ink2)}
+.bars{display:grid;grid-template-columns:minmax(56px,auto) 1fr 64px;gap:7px 10px;align-items:center;font-size:14px}
+.bars .n{text-align:right;color:var(--ink2);white-space:nowrap}.bars .t{position:relative;height:14px;background:var(--chip);border-radius:4px}.bars .t::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
+.bars .f{position:absolute;top:2px;bottom:2px;border-radius:3px;display:block}.bars .f.up{background:var(--up);left:50%}.bars .f.down{background:var(--down);right:50%}.bars .v{font-weight:600;font-size:13.5px}
+table.macro{width:100%;border-collapse:collapse;font-size:14px}table.macro td{padding:7px 0;border-top:1px solid var(--line);vertical-align:top}table.macro tr:first-child td{border-top:0}table.macro .num{font-weight:600;white-space:nowrap;padding:7px 8px}table.macro .m{color:var(--mute);font-size:12px;text-align:right;white-space:nowrap}
+.ev{list-style:none;margin:0;padding:0;font-size:14px}.ev li{padding:8px 0;border-top:1px solid var(--line)}.ev li:first-child{border-top:0}.ev .m{display:block;font-size:12px;color:var(--mute)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}.chip{font-size:12px;padding:3px 9px;border-radius:6px;background:var(--chip);color:var(--ink2);border:1px solid var(--line)}.chip.warn{color:var(--up);border-color:color-mix(in srgb,var(--up) 35%,transparent)}
+.src-blk{border-top:1px solid var(--line);margin-top:20px}.src{list-style:none;padding:0;margin:0}.src li{padding:12px 0;border-top:1px solid var(--line);font-size:15px;scroll-margin-top:150px;line-height:1.55}.src li:first-child{border-top:0}
+.src li:target{background:var(--hl);border-radius:8px}
+.src .id{display:inline-block;min-width:34px;font-weight:700;color:var(--accent);font-size:13px}.src b{font-weight:600;margin-right:4px}.src .m{display:block;font-size:12.5px;color:var(--mute);margin-top:2px;padding-left:34px}
+.src.facts li{font-size:14px;color:var(--ink2)}
+details{margin-top:10px}summary{cursor:pointer;color:var(--mute);font-size:14px;padding:6px 0}
+.foot{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--mute);line-height:1.6}
+.archive{list-style:none;padding:0;margin:20px 0 0;display:grid;gap:12px}.archive li{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;display:grid;gap:8px}
+.archive .d{font-size:14px;color:var(--mute)}.archive .d a{color:var(--ink);text-decoration:none;font-weight:700;font-size:18px;letter-spacing:-.01em}.archive .h{font-size:17px;margin:0;line-height:1.5}.archive .h a{color:var(--ink);text-decoration:none}
+.archive .h .stance{margin:0 10px 0 0;padding:3px 10px;font-size:12px}.archive .h .stance b{font-size:13px}
+.archive .chips a{text-decoration:none}
+@media print{.slot{display:block!important}.top{position:static}.tabs{display:none}.aside{position:static}a[href^="http"]::after{content:" (" attr(href) ")";font-size:11px;color:#777}}
 """
 
 
@@ -379,19 +439,26 @@ def _day_title(day: str) -> str:
 
 
 def render_day_page(day: str, slots: list[dict], *, generated_at: datetime, neighbours: tuple[str | None, str | None] = (None, None), base: str | None = None) -> str:
-    """slots: [{kind, status, body, analysis}] in MARKET_KINDS order; missing kinds allowed."""
+    """slots: [{kind, status, sent_at, facts, analysis, evidence, web_reason, web_meta}] in MARKET_KINDS order; missing kinds allowed."""
     base = web_base_url() if base is None else base
     by_kind = {s["kind"]: s for s in slots}
-    sent = [k for k in MARKET_KINDS if by_kind.get(k, {}).get("body") and by_kind[k].get("status") == "accepted"]
-    shown = [k for k in MARKET_KINDS if by_kind.get(k, {}).get("body") and not str(by_kind[k].get("status", "")).startswith("skipped_")]
-    default = (sent or shown or [None])[-1]
+
+    def shown(kind):
+        slot = by_kind.get(kind, {})
+        return bool(slot.get("facts") or slot.get("analysis")) and not str(slot.get("status") or "").startswith("skipped_")
+    sent = [k for k in MARKET_KINDS if shown(k) and by_kind[k].get("status") == "accepted"]
+    visible = [k for k in MARKET_KINDS if shown(k)]
+    recorded = [k for k in MARKET_KINDS if by_kind.get(k, {}).get("status")]
+    default = (sent or visible or recorded or [None])[-1]   # a fully-skipped day still shows its last reason
     tabs = ""
     for kind in MARKET_KINDS:
         slot = by_kind.get(kind, {"kind": kind, "status": None})
         status = slot.get("status")
-        cls = "live" if kind == default else ("off" if (status is None or str(status).startswith("skipped_") or not slot.get("body")) else "")
-        suffix = "" if cls != "off" else (" 휴장" if status == "skipped_holiday" else " 보류" if status else "")
-        tabs += f'<a class="{cls}" href="#{kind}">{_esc(_LABELS[kind] + suffix)}</a>'
+        off = not shown(kind)
+        cls = "live" if kind == default else ("off" if off else "")
+        suffix = (" 휴장" if status == "skipped_holiday" else " 보류" if status else "") if off else ""
+        current = ' aria-current="page"' if kind == default else ''
+        tabs += f'<a class="{cls}"{current} href="#{kind}">{_esc(_LABELS[kind] + suffix)}</a>'
     prev_day, next_day = neighbours
     nav = ""
     if prev_day:
@@ -401,34 +468,42 @@ def render_day_page(day: str, slots: list[dict], *, generated_at: datetime, neig
     nav += f'<a href="{_esc(base)}/reports/">아카이브</a>'
     articles = "".join(_render_slot(by_kind.get(kind, {"kind": kind, "status": None}), kind == default) for kind in MARKET_KINDS)
     stamp = generated_at.astimezone(KST).strftime("%Y/%m/%d %H:%M:%S KST")
-    footer = (f'<p class="note">이 페이지는 텔레그램 시장 채널 정기 보고의 저장 본문과 동결 분석으로 자동 생성됩니다. 슬롯별 발송 상태는 각 탭 상단에 표시합니다. '
-              f'투자 권유가 아니며 표시된 관측 표본과 인용 근거의 범위 안에서만 유효합니다. 생성 {stamp}.</p>')
-    body = (f'<header><div class="bar"><div class="brand"><b>QWQ 시장 리포트</b><span class="nav">{nav}</span></div>'
-            f'<h1>{_esc(_day_title(day))}</h1><nav class="tabs">{tabs}</nav></div></header>'
+    footer = (f'<p class="foot">QWQ 시장 리포트는 수집된 공개 자료와 관측값만으로 자동 생성되는 데일리 리포트입니다. '
+              f'투자 권유가 아니며 수치·날짜는 하단 근거에 인용된 값만 사용합니다. 종목 추천·목표가·확률 예측을 포함하지 않습니다. 페이지 생성 {stamp}.</p>')
+    body = (f'<div class="top"><div class="bar"><div class="brand"><b>QWQ 시장 리포트</b><span class="nav">{nav}</span></div>'
+            f'<h1>{_esc(_day_title(day))}</h1><nav class="tabs">{tabs}</nav></div></div>'
             f'<main class="wrap">{articles}{footer}</main>')
-    description = "한국증시 장전·장중·장후 시장 리포트 (자동 생성, 투자 권유 아님)"
+    description = "한국증시 장전·장중·장후 데일리 리포트 (자동 생성, 투자 권유 아님)"
     return _page(f"QWQ 시장 리포트 · {day}", body, description, f"{base}/reports/{day}")
 
 
 def render_index_page(days: list[dict], *, generated_at: datetime, base: str | None = None) -> str:
-    """days: [{report_date, statuses: {kind: status}}] newest first."""
+    """days: [{report_date, statuses: {kind: status}, lead: {kind, stance, headline} | None}] newest first."""
     base = web_base_url() if base is None else base
-    rows = ""
+    items = ""
     for entry in days:
         if entry["statuses"] and all(v == "skipped_holiday" for v in entry["statuses"].values()):
             continue
+        href = f'{_esc(base)}/reports/{_esc(entry["report_date"])}'
+        lead = entry.get("lead")
+        if lead:
+            cls = {"우호": "up", "경계": "down"}.get(lead["stance"], "flat")
+            head = (f'<p class="h"><span class="stance {cls}"><b>{_esc(lead["stance"])}</b></span>'
+                    f'<a href="{href}#{_esc(lead["kind"])}">{_esc(lead["headline"])}</a></p>')
+        else:
+            head = '<p class="h fine">분석 미확보 · 관측 자료만</p>'
         chips = ""
         for kind in MARKET_KINDS:
             status = entry["statuses"].get(kind)
             label = _STATUS.get(status, "—" if status is None else "미발송")
-            cls = "badge" if status == "accepted" else "badge warn" if status in ("rejected", "unknown", "failed_validation", "failed_configuration") else "badge"
-            chips += f'<a class="{cls}" href="{_esc(base)}/reports/{_esc(entry["report_date"])}#{kind}">{_esc(_LABELS[kind].split()[0])} {_esc(label)}</a>'
-        rows += f'<tr><td><a href="{_esc(base)}/reports/{_esc(entry["report_date"])}">{_esc(_day_title(entry["report_date"]))}</a></td><td><div class="badges" style="margin:0">{chips}</div></td></tr>'
+            warn = status in ("rejected", "unknown", "failed_validation", "failed_configuration")
+            chips += f'<a class="chip{" warn" if warn else ""}" href="{href}#{kind}">{_esc(_LABELS[kind].split()[0])} {_esc(label)}</a>'
+        items += f'<li><div class="d"><a href="{href}">{_esc(_day_title(entry["report_date"]))}</a></div>{head}<div class="chips">{chips}</div></li>'
     stamp = generated_at.astimezone(KST).strftime("%Y/%m/%d %H:%M:%S KST")
-    body = (f'<header><div class="bar"><div class="brand"><b>QWQ 시장 리포트</b></div><h1>아카이브</h1></div></header>'
-            f'<main class="wrap"><section class="card"><table class="index">{rows}</table></section>'
-            f'<p class="note">자동 생성 · 투자 권유 아님 · 생성 {stamp}</p></main>')
-    return _page("QWQ 시장 리포트 · 아카이브", body, "한국증시 시장 리포트 아카이브", f"{base}/reports/")
+    body = (f'<div class="top"><div class="bar"><div class="brand"><b>QWQ 시장 리포트</b></div><h1>아카이브</h1></div></div>'
+            f'<main class="wrap"><ul class="archive">{items}</ul>'
+            f'<p class="foot">자동 생성 · 투자 권유 아님 · 생성 {stamp}</p></main>')
+    return _page("QWQ 시장 리포트 · 아카이브", body, "한국증시 데일리 리포트 아카이브", f"{base}/reports/")
 
 
 # ---------------------------------------------------------------- store → files
@@ -449,15 +524,40 @@ def _atomic_write(path: Path, text: str) -> None:
         raise
 
 
+def _web_row(store, kind: str, day: str) -> dict | None:
+    row = store.analysis_receipt("web", kind, day)
+    return row if isinstance(row, dict) and row.get("status") != "attempted" else None
+
+
 def collect_day(store, day: str) -> list[dict]:
     slots = []
     for kind in MARKET_KINDS:
         receipt = store.receipt("market", kind, day)
-        analysis = store.analysis_receipt("market", kind, day) if receipt else None
-        result = analysis.get("result") if isinstance(analysis, dict) and analysis.get("status") == "ready" else None
-        slots.append({"kind": kind, "status": receipt["status"] if receipt else None,
-                      "body": receipt.get("body") if receipt else None, "analysis": result})
+        body = receipt.get("body") if receipt else None
+        web = _web_row(store, kind, day)
+        result = web.get("result") if web and isinstance(web.get("result"), dict) else None
+        facts = result.get("facts") if result else (facts_from_body(body) if body else None)
+        analysis = result.get("analysis") if result and web.get("status") == "ready" else None
+        slots.append({"kind": kind, "status": receipt["status"] if receipt else None, "sent_at": sent_time_of(body),
+                      "facts": facts, "analysis": analysis, "evidence": web.get("public_evidence") if web else None,
+                      "web_reason": (result or {}).get("reason") if web else "no_web_row",
+                      "web_meta": web.get("metadata") if web else None})
     return slots
+
+
+def collect_index(store, days: list[dict], *, limit: int = 60) -> list[dict]:
+    out = []
+    for entry in days:
+        lead = None
+        if len(out) < limit:
+            for kind in reversed(MARKET_KINDS):
+                web = _web_row(store, kind, entry["report_date"])
+                analysis = (web.get("result") or {}).get("analysis") if web and web.get("status") == "ready" else None
+                if analysis:
+                    lead = {"kind": kind, "stance": analysis["stance"], "headline": analysis["headline"]}
+                    break
+        out.append({**entry, "lead": lead})
+    return out
 
 
 def write_web_pages(store, day: str, *, html_dir: Path | None = None, now: datetime | None = None) -> Path | None:
@@ -477,5 +577,5 @@ def write_web_pages(store, day: str, *, html_dir: Path | None = None, now: datet
     page = render_day_page(day, collect_day(store, day), generated_at=now, neighbours=neighbours, base=base)
     target = html_dir / f"{day}.html"
     _atomic_write(target, page)
-    _atomic_write(html_dir / "index.html", render_index_page(days, generated_at=now, base=base))
+    _atomic_write(html_dir / "index.html", render_index_page(collect_index(store, days), generated_at=now, base=base))
     return target

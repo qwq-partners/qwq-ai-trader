@@ -17,7 +17,7 @@ import sqlite3
 from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
-KINDS = {"market": {"morning", "midday", "after"}, "engine": {"daily"}}
+KINDS = {"market": {"morning", "midday", "after"}, "engine": {"daily"}, "web": {"morning", "midday", "after"}}
 MAX_REPORT_PHOTO_BYTES = 4 * 1024 * 1024
 
 
@@ -150,6 +150,8 @@ class ReportStore:
 
     def claim(self, audience: str, kind: str, report_date: str, source_snapshot_id: str, text: str | None = None, *, photo: bytes | None = None, caption: str | None = None) -> bool:
         validate_slot(audience, kind, report_date)
+        if audience == "web":
+            raise ValueError("web rows are analyses, not deliveries")
         if not source_snapshot_id:
             raise ValueError("source_snapshot_id required")
         if photo is not None:
@@ -168,6 +170,8 @@ class ReportStore:
 
     def finish(self, audience: str, kind: str, report_date: str, status: str) -> None:
         validate_slot(audience, kind, report_date)
+        if audience == "web":
+            raise ValueError("web rows are analyses, not deliveries")
         if status not in {"accepted", "rejected", "unknown", "failed_validation", "failed_configuration", "skipped_holiday", "skipped_missing_current_market_basis", "skipped_missing_market_basis"}:
             raise ValueError("invalid terminal status")
         with self._db() as db:
@@ -230,8 +234,8 @@ class ReportStore:
                        prompt_version: str, *, owner: str, public_evidence: dict | None = None) -> bool:
         """Spend the logical analysis once, durably, before any manager call."""
         validate_slot(audience, kind, report_date)
-        if audience != "market":
-            raise ValueError("analysis is market-only")
+        if audience not in ("market", "web"):
+            raise ValueError("analysis is market/web-only")
         if any(not isinstance(value, str) or not value or len(value) > 128
                for value in (source_snapshot_id, prompt_version, owner)):
             raise ValueError("invalid analysis identity")
@@ -254,14 +258,16 @@ class ReportStore:
                           result: dict | None = None, metadata: dict | None = None) -> bool:
         """Atomically freeze validated content and safe metadata; never overwrite."""
         validate_slot(audience, kind, report_date)
-        if audience != "market" or status not in {"ready", "failed", "unknown", "abandoned"}:
+        if audience not in ("market", "web") or status not in {"ready", "failed", "unknown", "abandoned"}:
             raise ValueError("invalid analysis outcome")
         validate_report_body(final_body)
-        if (status == "ready" and not isinstance(result, dict)) or (status != "ready" and result is not None):
+        # Web rows keep their observed facts in result_json even when the model step failed.
+        if (status == "ready" and not isinstance(result, dict)) or (status != "ready" and result is not None and audience != "web"):
             raise ValueError("invalid analysis result")
         result_json = json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False, allow_nan=False)
-        if (result_json is not None and len(result_json.encode()) > 16384) or len(metadata_json.encode()) > 16384:
+        result_limit = 65536 if audience == "web" else 16384
+        if (result_json is not None and len(result_json.encode()) > result_limit) or len(metadata_json.encode()) > 16384:
             raise ValueError("analysis record too large")
         with self._db() as db:
             return db.execute("UPDATE report_analyses SET status=?,result_json=?,final_body=?,metadata_json=? WHERE audience=? AND kind=? AND report_date=? AND owner=? AND status='attempted'",

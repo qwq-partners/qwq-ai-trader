@@ -110,6 +110,12 @@ class ReportSchedule:
             text, snapshot_id = analysis["final_body"], analysis["source_snapshot_id"]
             # Same validated body plus one link line; dropped silently when limits bind.
             text = with_web_link(text, day, kind)
+            # Web-only report (own prompt/schema) is prepared before the send so the
+            # linked page is complete on arrival; its failure never blocks delivery.
+            if saved_analysis is None:
+                await self._prepare_web(kind, day, market, now, analysis)
+            # A retry that reuses a frozen analysis has no snapshot of the same instant; an
+            # existing web row is read by the page as is and no new facts are mixed in.
         result = await self.notifier.publish_report(audience, kind, day, snapshot_id, text, store=self.store)
         if audience == "market":
             await self._refresh_web_pages(day)
@@ -128,6 +134,17 @@ class ReportSchedule:
             await _durable_thread(self.dispatch_recorder, kr_date=day, sent_text=sent_text,
                                   expert_consensus=None, status="sent", dispatched_brief_text=None, **archive)
         return result
+
+    async def _prepare_web(self, kind, day, market, now, analysis):
+        try:
+            from ..analytics.web_report import prepare_web_report
+            await prepare_web_report(self.store, kind=kind, day=day, snapshot=market, now=now,
+                                     public_evidence=analysis.get("public_evidence"),
+                                     manager=self.analysis_manager, manager_factory=self.analysis_manager_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            logger.warning("[대상별 보고] 웹 리포트 준비 실패: {}", type(error).__name__)
 
     async def _refresh_web_pages(self, day):
         """Render the public day/archive pages from stored rows; never affects delivery."""
