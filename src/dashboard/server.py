@@ -120,6 +120,11 @@ class DashboardServer:
         app.router.add_get("/principles", self._serve_page("principles.html"))
         app.router.add_get("/settlement", lambda r: web.HTTPFound("/trades"))
 
+        # 공개 시장 리포트 페이지 (정기 발송 본문의 웹 표현, 생성 파일만 서빙)
+        app.router.add_get("/reports", self._serve_report)
+        app.router.add_get("/reports/", self._serve_report)
+        app.router.add_get("/reports/{name}", self._serve_report)
+
         # 정적 파일 서빙
         app.router.add_static("/static", STATIC_DIR, name="static")
 
@@ -237,6 +242,17 @@ document.addEventListener("DOMContentLoaded", function() {
 <link rel="stylesheet" href="/static/css/mobile-v2.css?v=8">
 <script defer src="/static/js/mobile-v2.js?v=8"></script>
 """
+
+    async def _serve_report(self, request: web.Request) -> web.StreamResponse:
+        """두 가지 파일 이름만 허용: index.html, YYYY-MM-DD.html. 디렉터리 목록 없음."""
+        from ..analytics.market_report_html import default_html_dir, report_file_name
+        file_name = report_file_name(request.match_info.get("name", ""))
+        path = default_html_dir() / file_name if file_name else None
+        if path is None or not path.is_file():
+            return web.Response(text="Report not found", status=404)
+        response = web.FileResponse(path, headers={"Cache-Control": "no-cache"})
+        response.content_type = "text/html"
+        return response
 
     def _serve_page(self, template_name: str):
         """HTML 페이지 서빙 핸들러 팩토리"""

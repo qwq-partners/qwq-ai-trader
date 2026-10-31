@@ -169,9 +169,9 @@ def _safe_metadata(response, *, reason=None):
     return metadata
 
 
-async def _complete_once(manager, prompt, system):
+async def _complete_once(manager, prompt, system, role=LLMRole.MARKET_BRIEF):
     """Propagate cancellation once, then drain provider cleanup and settlement."""
-    task = asyncio.create_task(manager.complete_role(prompt, role=LLMRole.MARKET_BRIEF, system=system))
+    task = asyncio.create_task(manager.complete_role(prompt, role=role, system=system))
     try:
         await asyncio.wait({task})
     except asyncio.CancelledError as cancelled:

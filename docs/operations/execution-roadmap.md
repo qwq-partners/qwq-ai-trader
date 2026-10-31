@@ -1,5 +1,17 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-web-report-20261031"></a>
+### R02-WEB — 웹 전용 데일리 리포트(qwq.ai.kr/reports)와 텔레그램 링크 (v2 DO / 운영 미적용)
+
+**사용자 결정(10/31):** ① 기존 사이트에 장전/장중/장후 리포트 HTML을 올리고 텔레그램 본문에 링크를 붙인다 ② 사이트 전체 공개 유지·`invalidate` 열은 별도 PR·기본 noindex ③ **P1 거울형 페이지는 "너무 구리다"로 거부**: 10/30 실제 본문이 사실형 폴백(지수 2·ETF 4·관전 2줄)이라 "미확보" 배지만 남았고, 원인은 웹에 LLM 0·거울만 허용한 설계 제약이었다 ④ **"텔레그램과 웹을 통일하지 말고 웹은 웹 전용으로 설계·구현"** ⑤ **"LLM도 좋은 모델"** → 웹 역할은 GPT-6 Astra. [설계 v2](../superpowers/specs/2026-10-31-web-report-design.md).
+
+**Plan(v2):** 텔레그램은 R02-TEXT 조사 본문 + 링크 한 줄(한도 초과 시 생략)로 불변. 웹은 자체 생성: 발송 시점 스냅샷의 적격 관측 사실 M#(지수 basis 구분·미국·섹터 ETF 전체, 기존 선별 규칙·잘라내기 없음) + 텔레그램 분석이 동결한 공개 근거 E#를 입력으로 새 고정 역할 `WEB_REPORT`(GPT-6 Astra/medium·출력12288·180초·입력96KiB·json_object·standard 예산) 1회. 스키마 `web-report-v1`(스탠스 열거형·제목·요약 2~4·시장 판단·이슈 1~4·업종/거시 해석·전망 기본/상방/하방·체크리스트 2~5). 검증은 조사 보고 규칙 상속(한글 필수·`<>`/URL 금지·숫자/날짜는 인용 근거만·영문은 입력 표기만·사건 E 인용 필수). 저장은 `report_analyses(audience=web)`에 `result_json={facts, analysis|null, reason}`로 동결하며 실패에도 사실을 남긴다. 순서는 텔레그램 분석 → 웹 준비 → 텔레그램 발송 → 페이지 갱신, 웹 예외는 발송 비차단. 보수 비용 추정 약 USD0.4/회·하루 3회(월 USD100·80/95/100% 정책 안). 계좌·보유·엔진 상태 노출 없음, 새 시세/뉴스 조회 없음.
+
+**Do(v2):** `src/analytics/web_report.py`(사실 M·프롬프트·검증·runner), `llm_roles.WEB_REPORT`·`ROLE_POLICY_VERSION=engine-roles-v5-web-report`, `report_delivery`(audience `web` 허용·웹 결과 64KiB·실패 시 result 보존), `market_report_runner._complete_once(role=)`, `report_scheduler._prepare_web`, `market_report_html.py` 전면 재작성(리드 → 2단 서사/자료 → 근거·관측 자료, 아카이브 제목·스탠스 카드, 과거 날짜는 `facts_from_body`), 시스템 폰트만(외부 요청 0, 리뷰 P2로 CDN 폰트 제거)·외부 스크립트 0·noindex·`:target` 탭·다크/프린트.
+
+**검증(v2):** 새 `tests/test_web_report.py` 5묶음(사실 전체 보존/지수 basis, 프롬프트 한도·검증 거부 7종·사건 미인용, runner 결과별 동결/고아 abandoned/재지불 0, 스케줄러 순서·텔레그램 불변·웹 실패 비차단, 스토어 web audience) + `tests/test_market_report_html.py` 재작성 10묶음(과거 본문→자료, 분석 슬롯 섹션·인용 칩·이스케이프·`javascript:` 거부, 실패 사유, 링크 한도, 파일명 허용목록, 스토어→파일 멱등/원자/휴장 제외/아카이브 제목, 스케줄러 보류·갱신 실패, HTTP 허용목록). e2e 3파일의 모델 호출 수 1→2 갱신. 관련 13파일 268 passed·격리 0. **독립 리뷰**(Agent 요청 opus/high, 응답 자기표기 claude-opus-5-5, 실제 effort 미노출)는 REQUEST CHANGES·P0 0·P1 1·P2 10이었고 전부 반영했다: P1 인용 칩 클릭 시 `:target`이 `<li>`로 옮겨가 기본 슬롯이 대신 보이던 결함(`.slot:has(:target)` 규칙·자료 칸 id 제거로 id 유일), P2 숫자 검사 풀을 표시 값·부호 일치로 축소(상용 문구·시각 숫자 제외), 매수/매도 추천·목표가 어휘 거부, 전 슬롯 보류 날 빈 페이지, 저장 분석 재사용 재시도 경로에서 새 웹 행 생성 금지, 텔레그램 지연(최대 180초) 의도 기록, 비용 최악치 약 USD1.1/회·월 약 70 기록, 웹 행 없음 사유 분리, `inf` 차단, 배달 API web audience 거부, 외부 CDN 폰트 제거(시스템 폰트), aria-current, 과거 관측 시각 표시. 반영 후 관련 9파일 155 passed, **최종 코드 로컬 전체 검사 10007 passed / 2 skipped / 2 xfailed · 1107.28초 · 격리 0**. 운영 스토어 복사본(읽기 전용)에 **합성 분석 행을 넣은 복사본**으로 10/30 장후 분석형·장전 과거형·아카이브를 390/1280px 렌더 확인(가짜 문구이며 모델 출력 아님). 전체 검사·독립 리뷰·PR CI는 아래 영수증으로 갱신한다.
+
+**See/NEXT:** 전체 검사 → 독립 리뷰 → PR #314 CI → 사용자 배포 승인 시 장외 고정SHA 인수 → 다음 자연 발송(11/2 07:40)에서 Astra 실제 출력 품질·검증 통과율·비용·링크 페이지 열림 확인. 모델 응답이 숫자/영문 규칙에 자주 걸리면 프롬프트 보강 또는 허용 어휘 확대를 별도 변경으로 검토한다. P1 이력: 거울형 렌더(`_judgment/_issues/_watch`)·독립 리뷰 P2 7건 반영·전체 10001 passed는 당시 기록이며 v2로 대체됐다. 봇 프로세스가 내려가면 링크도 죽는 구조(정적 호스팅은 P4), 링크 미리보기 OFF 유지.
 <a id="r02-analyst-prose-20261031"></a>
 ### R02-INSIGHT — 독자용 분석 문장과 간결한 출처 (DO)
 

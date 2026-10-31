@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 
 
-ROLE_POLICY_VERSION = 'engine-roles-v4-market-research'
+ROLE_POLICY_VERSION = 'engine-roles-v5-web-report'
 
 
 class LLMRole(str, Enum):
@@ -12,6 +12,7 @@ class LLMRole(str, Enum):
     MORNING_BRIEF = 'morning_brief'
     MARKET_BRIEF = 'market_brief'
     POST_EXIT_RESEARCH = 'post_exit_research'
+    WEB_REPORT = 'web_report'
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,11 @@ ROLE_PROFILES = MappingProxyType({
     LLMRole.POST_EXIT_RESEARCH: RoleProfile(
         'openai', 'gpt-6.1-sol', 4096, 90.0, 128 * 1024, 'research',
         reasoning_effort='medium'),
+    # 웹 전용 데일리 리포트(사용자 10/31: 더 좋은 모델). 상위 모델 한 번, 출력 상한은
+    # 추론 토큰을 포함하므로 넉넉히 둔다. 보수 추정 약 USD0.4/회·하루 3회.
+    LLMRole.WEB_REPORT: RoleProfile(
+        'openai', 'gpt-6-astra', 12288, 180.0, 96 * 1024, 'standard',
+        reasoning_effort='medium', response_format='json_object'),
 })
 
 

@@ -7,6 +7,7 @@ import pytest
 
 from src.analytics.audience_reports import MarketSnapshot
 from src.analytics.report_delivery import ReportStore
+from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_llm_roles import manager
 from tests.test_llm_transport_contract import Session, openai_reply
@@ -43,11 +44,15 @@ def research_response():
 @pytest.mark.asyncio
 @pytest.mark.parametrize('invalid, capture', [(False, False), (True, False), (False, True)])
 async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, monkeypatch, invalid, capture):
+    monkeypatch.setenv('REPORT_WEB_BASE_URL', 'https://qwq.ai.kr')
     llm = manager(tmp_path)
     output = research_response()
     if invalid:
         output['issues'][0]['evidence_ids'] = ['E999']
-    session = Session(openai_reply(json.dumps(output, ensure_ascii=False)))
+    from tests.test_web_report import web_response
+    # Second reply serves the web-only report role; its JSON is independent of the Telegram schema.
+    session = Session(openai_reply(json.dumps(output, ensure_ascii=False)),
+                      openai_reply(json.dumps(web_response(), ensure_ascii=False)))
     llm.openai._session = session
     bundle = research_fixture()
     factory = AsyncMock(return_value=bundle)
@@ -82,11 +87,12 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         analysis = store.analysis_receipt('market', 'morning', DAY)
         receipt = store.receipt('market', 'morning', DAY)
         assert analysis['status'] == ('failed' if invalid else 'ready')
-        assert receipt['body'] == analysis['final_body']
+        assert receipt['body'] == with_web_link(analysis['final_body'], DAY, 'morning')
+        assert receipt['body'].endswith('https://qwq.ai.kr/reports/2026-10-29#morning')
         assert analysis['public_evidence']['records'][0]['title'] == bundle['records'][0]['title']
         assert analysis['evidence_sha256']
         assert factory.await_count == 1
-        assert len(session.payloads) == 1
+        assert len(session.payloads) == 2
         payload = session.payloads[0]
         assert payload['model'] == 'gpt-6.1-sol'
         assert payload['reasoning_effort'] == 'medium'
@@ -94,8 +100,13 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         prompt = json.dumps(payload, ensure_ascii=False)
         assert '가온반도체' in prompt and '설비 투자 비용' in prompt
         assert all(secret not in prompt for secret in ('PRIVATE_ACCOUNT_CANARY', 'PRIVATE_SOURCE_CANARY', 'PRIVATE_BOT_CANARY'))
+        web_payload = session.payloads[1]
+        assert web_payload['model'] == 'gpt-6-astra' and web_payload['max_completion_tokens'] == 12288
+        assert '애널리스트' in json.dumps(web_payload, ensure_ascii=False) and 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(web_payload)
+        web_row = store.analysis_receipt('web', 'morning', DAY)
+        assert web_row['status'] == 'ready' and web_row['result']['analysis']['stance'] == '중립'
         assert '전체 업종 순위 아님' in receipt['body']
-        assert llm.monthly_budget.status()['settled_count'] == 1
+        assert llm.monthly_budget.status()['settled_count'] == 2
         if invalid:
             assert '시장 지표 요약' in receipt['body']
             assert 'E999' not in receipt['body']
@@ -108,7 +119,7 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         telegram._session.post.assert_called_once()
         call = telegram._session.post.call_args
         assert call.args[0].endswith('/sendMessage')
-        assert call.kwargs['json'] == {'chat_id': 'channel', 'text': analysis['final_body'],
+        assert call.kwargs['json'] == {'chat_id': 'channel', 'text': receipt['body'],
                                        'parse_mode': 'HTML', 'disable_notification': False,
                                        'link_preview_options': {'is_disabled': True}}
         bundle['records'][0]['title'] = 'MUTATED_AFTER_FREEZE'
@@ -116,7 +127,7 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         assert await ReportSchedule(store, telegram, analysis_manager=llm,
                                     public_evidence_factory=AsyncMock(side_effect=AssertionError('refetched'))).tick(
                                         NOW.replace(minute=44), True, MarketSnapshot(), 'CHANGED_PRIVATE') == 'already_consumed'
-        assert len(session.payloads) == 1
+        assert len(session.payloads) == 2
         telegram._session.post.assert_called_once()
     finally:
         llm.openai._session = llm.gemini._session = None

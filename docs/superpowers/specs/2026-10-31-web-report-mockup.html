@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>QWQ 시장 리포트 · 2026-10-30</title>
+<meta name="description" content="한국증시 장전·장중·장후 리포트 (목업)">
+<style>
+:root{
+  --bg:#f6f7fa;--card:#ffffff;--ink:#1a1d26;--ink2:#555c6e;--mute:#8a92a6;--line:#e3e6ee;
+  --up:#d64545;--down:#2f6fd6;--accent:#3b4bd6;--chip:#eef0f6;--hl:#fff6d6;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0f1117;--card:#171a23;--ink:#e7e9f0;--ink2:#aab1c3;--mute:#7b839a;--line:#262a37;
+  --up:#ef6b6b;--down:#6b97f0;--accent:#8b96ff;--chip:#1f2330;--hl:#3a3410;
+}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.65 -apple-system,"Pretendard Variable",Pretendard,"Apple SD Gothic Neo","Noto Sans KR",system-ui,sans-serif;font-feature-settings:"tnum"}
+a{color:var(--accent)}
+.wrap{max-width:720px;margin:0 auto;padding:0 16px 48px}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.bar{max-width:720px;margin:0 auto;padding:10px 16px 0}
+.brand{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;color:var(--mute)}
+.brand b{color:var(--ink);font-size:15px}
+.nav a{color:var(--mute);text-decoration:none;margin-left:10px}
+h1{font-size:22px;margin:4px 0 8px;letter-spacing:-.01em}
+.tabs{display:flex;gap:6px;margin:0 -16px;padding:0 16px 10px;overflow-x:auto;scrollbar-width:none}
+.tabs a{flex:0 0 auto;padding:8px 14px;border-radius:999px;background:var(--chip);color:var(--ink2);text-decoration:none;font-size:15px;border:1px solid transparent}
+.tabs a.off{color:var(--mute);text-decoration:line-through}
+.tabs a.live{border-color:var(--accent);color:var(--accent);font-weight:600}
+.slot{display:none}
+.slot:target{display:block}
+body:not(:has(.slot:target)) #after{display:block}
+section.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px;margin:14px 0}
+h2{font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:0 0 10px;font-weight:600}
+.meta{font-size:14px;color:var(--mute);margin:10px 0 2px}
+.thesis{font-size:21px;line-height:1.5;font-weight:600;margin:0 0 10px;letter-spacing:-.01em}
+.badges{display:flex;flex-wrap:wrap;gap:6px}
+.badge{font-size:12.5px;padding:2px 8px;border-radius:6px;background:var(--chip);color:var(--ink2);text-decoration:none;border:1px solid var(--line)}
+.badge.warn{color:var(--up);border-color:color-mix(in srgb,var(--up) 40%,transparent)}
+.issue{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
+.issue:first-of-type{border-top:0;padding-top:0;margin-top:0}
+.issue h3{font-size:18px;margin:0 0 10px}
+.flow{display:grid;grid-template-columns:62px 1fr;row-gap:10px;column-gap:10px}
+.flow dt{font-size:13px;font-weight:700;color:var(--mute);padding-top:3px}
+.flow dt.c{color:var(--down)}
+.flow dd{margin:0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpi{background:var(--chip);border-radius:10px;padding:12px}
+.kpi .l{font-size:13px;color:var(--mute)}
+.kpi .v{font-size:24px;font-weight:700;letter-spacing:-.02em;margin:2px 0}
+.kpi .s{font-size:13px;color:var(--ink2)}
+.tag{display:inline-block;font-size:11.5px;padding:1px 6px;border-radius:4px;background:var(--card);border:1px solid var(--line);color:var(--mute);margin-left:4px;vertical-align:middle}
+.bars{display:grid;grid-template-columns:64px 1fr 64px;gap:6px 8px;align-items:center;font-size:15px}
+.bars .n{text-align:right;color:var(--ink2)}
+.bars .t{position:relative;height:16px;background:var(--chip);border-radius:4px}
+.bars .t::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--line)}
+.bars .f{position:absolute;top:2px;bottom:2px;border-radius:3px}
+.bars .f.up{background:var(--up);left:50%}
+.bars .f.down{background:var(--down);right:50%}
+.bars .v{font-weight:600}
+.bars .v.up{color:var(--up)}.bars .v.down{color:var(--down)}
+.cap{font-size:13.5px;color:var(--mute);margin-top:10px}
+table.cond{width:100%;border-collapse:collapse;font-size:15.5px}
+table.cond th{text-align:left;padding-right:10px;font-size:13px;color:var(--mute);font-weight:600;padding:0 0 6px;border-bottom:1px solid var(--line)}
+table.cond td{padding:10px 10px 10px 0;border-bottom:1px solid var(--line);vertical-align:top}
+table.cond td:first-child,table.cond th:first-child{width:28px;color:var(--mute)}
+.src{list-style:none;padding:0;margin:0}
+.src li{padding:12px 0;border-top:1px solid var(--line);scroll-margin-top:120px}
+.src li:first-child{border-top:0;padding-top:0}
+.src li:target{background:var(--hl);margin:0 -10px;padding:12px 10px;border-radius:8px}
+.src .id{font-weight:700;color:var(--accent);margin-right:6px}
+.src .m{display:block;font-size:13.5px;color:var(--mute);margin-top:3px}
+.cov{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}
+.note{font-size:14px;color:var(--mute);line-height:1.6}
+.pill{background:var(--hl);border:1px dashed var(--up);border-radius:10px;padding:10px 12px;font-size:14px;color:var(--ink2);margin:0 0 14px}
+.empty{color:var(--mute);font-size:16px}
+@media (min-width:600px){.flow{grid-template-columns:72px 1fr}}
+@media print{.slot{display:block!important}header{position:static}.tabs{display:none}a[href^="http"]::after{content:" (" attr(href) ")";font-size:11px;color:#777}}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <div class="brand"><b>QWQ 시장 리포트</b><span class="nav"><a href="#">‹ 10/29</a><a href="#">아카이브</a></span></div>
+  <h1>2026년 10월 30일 (목)</h1>
+  <nav class="tabs">
+    <a href="#morning">장전 07:40</a>
+    <a href="#midday" class="off">장중 13:10 보류</a>
+    <a href="#after" class="live">장후 16:40</a>
+  </nav>
+</div></header>
+
+<main class="wrap">
+
+<!-- ===== 장전 ===== -->
+<article class="slot" id="morning">
+  <p class="meta">발송 07:40 KST · 미국 자료 기준 2026/10/29 마감 · 국내 지수 기준 2026/10/29 종가</p>
+  <section class="card">
+    <h2>한 줄 판단</h2>
+    <p class="thesis">서버 수요 확대의 수혜와 투자 비용 부담을 함께 판단해야 한다.</p>
+    <div class="badges"><a class="badge" href="#E1">E1 공급 확대</a><a class="badge" href="#E2">E2 투자 비용</a></div>
+  </section>
+  <section class="card"><h2>핵심 이슈와 영향</h2>
+    <div class="issue"><h3>1. 서버 공급 확대의 이익 전환 여부</h3>
+      <dl class="flow">
+        <dt>사건</dt><dd>가온반도체가 서버용 제품 공급 확대와 설비 투자 비용 증가를 밝혔다.</dd>
+        <dt>영향</dt><dd>공급 확대는 매출에 긍정적이나 투자 비용이 증가하면 이익 개선 속도는 늦어질 수 있다.</dd>
+        <dt class="c">반대</dt><dd>투자 비용 부담이 함께 확인돼 공급 확대만으로 수익성 개선을 단정하기 어렵다.</dd>
+        <dt>관찰</dt><dd>후속 실적 발표에서 서버 매출 증가가 영업이익률 개선으로 이어지는지 확인한다.</dd>
+      </dl>
+      <div class="badges" style="margin-top:10px"><a class="badge" href="#E1">E1</a><a class="badge" href="#E2">E2</a></div>
+    </div>
+  </section>
+  <section class="card"><h2>근거 · 출처</h2>
+    <ul class="src">
+      <li id="E1"><span class="id">E1</span>가온반도체 서버용 제품 공급 확대 <span class="m">뉴스 저장소 · 발행 표기 2026/10/29 07:05 KST · 수집 07:20 KST · 기사 발췌 · <a href="https://example.com/research/server-supply" rel="noopener nofollow" target="_blank">원문</a></span></li>
+      <li id="E2"><span class="id">E2</span>가온반도체 설비 투자 비용 증가 <span class="m">뉴스 저장소 · 발행 표기 2026/10/29 07:05 KST · 수집 07:20 KST · 기사 발췌 · <a href="https://example.com/research/investment-cost" rel="noopener nofollow" target="_blank">원문</a></span></li>
+    </ul>
+  </section>
+  <p class="note">※ 이 장전 탭은 테스트의 <b>합성 조사 응답</b>을 그대로 넣은 레이아웃 예시다. 실제 10/30 장전 발송은 사실형 본문이었다.</p>
+</article>
+
+<!-- ===== 장중 ===== -->
+<article class="slot" id="midday">
+  <p class="meta">13:10 KST 슬롯</p>
+  <section class="card"><h2>발송 보류</h2>
+    <p class="empty">원천 시점이 확인된 장중 지수 자료가 없어 보고를 생략했습니다. 수신 시각으로 대체하지 않습니다.</p>
+  </section>
+</article>
+
+<!-- ===== 장후 ===== -->
+<article class="slot" id="after">
+  <p class="meta">발송 16:40 KST · API 수락 · 국내 지수 관측 2026/10/30 15:32 KST</p>
+
+  <section class="card">
+    <h2>한 줄 판단</h2>
+    <p class="thesis" style="color:var(--ink2);font-weight:500">시점이 확인된 지수 참고 가격만 확보됐습니다. 전일 대비 등락과 시장 방향 판단자료는 미확보입니다.</p>
+    <div class="badges"><span class="badge warn">분석 미확보 · 사실 보고</span></div>
+  </section>
+
+  <section class="card"><h2>시장 지표</h2>
+    <div class="grid">
+      <div class="kpi"><div class="l">KOSPI <span class="tag">확정 종가 아님</span></div><div class="v">5,730.74</div><div class="s">10/30 15:32 분 관측 · 전일 대비 미확보</div></div>
+      <div class="kpi"><div class="l">KOSDAQ <span class="tag">확정 종가 아님</span></div><div class="v">724.38</div><div class="s">10/30 15:32 분 관측 · 전일 대비 미확보</div></div>
+    </div>
+    <p class="cap">출처 KIS · 해당 분 관측값이며 봉 완료 여부 미확인</p>
+  </section>
+
+  <section class="card"><h2>업종 흐름 · 한국 상장 섹터 ETF 2026-10-30</h2>
+    <div class="bars">
+      <div class="n">은행</div><div class="t"><div class="f up" style="width:3.2%"></div></div><div class="v up">+0.42%</div>
+      <div class="n">보험</div><div class="t"><div class="f up" style="width:1.0%"></div></div><div class="v up">+0.13%</div>
+      <div class="n">자동차</div><div class="t"><div class="f down" style="width:35%"></div></div><div class="v down">−4.60%</div>
+      <div class="n">반도체</div><div class="t"><div class="f down" style="width:50%"></div></div><div class="v down">−6.49%</div>
+    </div>
+    <p class="cap">확인 10개 중 최근 1세션 등락의 상·하위 (전체 업종 순위 아님) · 상승 빨강 / 하락 파랑</p>
+  </section>
+
+  <section class="card"><h2>확인 조건</h2>
+    <table class="cond">
+      <tr><th>#</th><th>다음 세션에서 확인할 것</th></tr>
+      <tr><td>1</td><td>확정 종가와 전일 종가를 대조한 뒤 방향을 판단합니다.</td></tr>
+      <tr><td>2</td><td>ETF 은행·반도체의 상대 순위 유지·역전 여부를 확인합니다.</td></tr>
+    </table>
+    <p class="cap">반증 조건 열은 LLM 스키마에 <code>invalidate</code> 필드를 추가한 뒤 켭니다(설계 §3.1-5).</p>
+  </section>
+
+  <section class="card"><h2>자료 범위와 한계</h2>
+    <div class="cov"><span class="badge">KIS 지수 확보</span><span class="badge">섹터 ETF 확보</span><span class="badge warn">뉴스 저장소 미확보</span><span class="badge warn">공시 색인 미확보</span><span class="badge warn">거시 지표 미확보</span></div>
+    <p class="note" style="margin-top:12px">표시된 관측 표본만 사용했습니다. 시장 전체 종목 수·당일 누적 수급은 미확보입니다. 이 페이지는 텔레그램 발송 본문과 같은 저장 자료로 자동 생성되며 투자 권유가 아닙니다. 생성 16:40:12 KST.</p>
+  </section>
+</article>
+
+</main>
+</body>
+</html>

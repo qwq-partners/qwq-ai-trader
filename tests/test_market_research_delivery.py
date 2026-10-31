@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from src.analytics.report_delivery import ReportStore
+from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_market_report_runner import DAY, NOW, MARKET, content, notifier, response
 
@@ -280,7 +281,7 @@ async def test_research_identity_includes_bundle_and_ready_long_body_is_reused(t
         n = notifier()
         factory = AsyncMock(side_effect=AssertionError('no fresh sources'))
         assert await ReportSchedule(store, n, public_evidence_factory=factory).tick(NOW, True, MARKET, '') == 'accepted'
-        assert n._send_report_once.call_args.args[1] == row['final_body']
+        assert n._send_report_once.call_args.args[1] == with_web_link(row['final_body'], DAY, 'morning')
         factory.assert_not_awaited()
     assert records[0]['source_sha256'] == records[1]['source_sha256']
     assert records[0]['source_snapshot_id'] != records[1]['source_snapshot_id']
@@ -349,8 +350,8 @@ async def test_real_content_and_sources_produce_research_or_explicit_missing(tmp
     row = store.analysis_receipt('market', 'morning', research_now.date().isoformat())
     assert row['status'] == ('ready' if events else 'failed')
     assert ('핵심 이슈와 영향' if events else '시장 지표 요약') in row['final_body']
-    assert n._send_report_once.call_args.args[1] == row['final_body']
-    assert manager.complete_role.await_count == int(events)
+    assert n._send_report_once.call_args.args[1] == with_web_link(row['final_body'], research_now.date().isoformat(), 'morning')
+    assert manager.complete_role.await_count == (2 if events else 0)   # Telegram brief + web report; neither when no events
 
 
 @pytest.mark.asyncio

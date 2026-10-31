@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 운영 미적용)
+
+- 사용자 교정: P1 거울형 페이지(텔레그램 본문 재표현)는 내용이 비어 거부됐고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. 웹은 자체 생성 리포트로 바꾸고 텔레그램 본문은 링크 한 줄만 유지한다.
+- 새 `src/analytics/web_report.py`: 스냅샷 적격 관측 사실 M#(지수 basis 구분·미국·섹터 ETF 전체) + 동결 공개 근거 E#로 고정 역할 `WEB_REPORT`(사용자 요청으로 상위 모델 GPT-6 Astra/medium, 출력12288·180초·JSON) 1회 호출. 스키마 `web-report-v1`(스탠스·제목·요약·시장 판단·이슈 1~4·업종/거시 해석·전망 기본/상방/하방·체크리스트), 숫자·날짜는 인용 근거만, 영문은 입력 표기만, 사건 E 인용 필수.
+- `report_analyses`에 audience `web` 허용(`claim/complete_analysis`), 웹 행은 실패에도 `result_json={facts, analysis|null, reason}` 보존·64KiB 한도. `ROLE_POLICY_VERSION` → `engine-roles-v5-web-report`.
+- `market_report_html.py` 전면 재작성: 리드(스탠스·제목·요약) → 2단(서사/자료) → 근거·관측 자료. 거울형 섹션 렌더 삭제, 과거 날짜는 본문 지표 줄만 자료로 읽음(`facts_from_body`). 아카이브는 날짜별 제목·스탠스 카드. 스케줄러는 텔레그램 분석 → 웹 준비 → 발송 → 페이지 갱신, 웹 예외는 발송 비차단.
+- 독립 리뷰(Agent 요청 opus/high, 응답 자기표기 claude-opus-5-5) REQUEST CHANGES → P1 1건·P2 10건 전부 반영: 인용 칩 클릭 시 `:target`이 슬롯을 벗어나 다른 슬롯이 보이던 결함(`.slot:has(:target)`), 중복 id 제거, 숫자 검사 풀을 표시 값·부호 일치로 축소, 매수/매도 추천·목표가 어휘 거부, 전 슬롯 보류 날의 빈 페이지, 저장 분석 재사용 경로의 현재 시세 혼입 차단, 외부 CDN 폰트 제거, `inf` 차단, 배달 API의 web audience 거부, aria-current, 과거 관측 시각 표시, 비용 최악치(약 USD1.1/회) 기록.
+- 검증: 새 `tests/test_web_report.py`(사실·검증·runner·스케줄러·스토어), `tests/test_market_report_html.py` 재작성, e2e의 모델 호출 수 1→2 갱신. 관련 9파일 155 passed(리뷰 반영 후), 최종 코드 전체 10007 passed / 2 skipped / 2 xfailed · 격리 0. 전체 검사·독립 리뷰·CI는 [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031). [설계 v2](docs/superpowers/specs/2026-10-31-web-report-design.md).
 ## 2026-10-31 — 시장 보고의 분석 문장과 출처 표시 개선
 
 - 내부 E/F 근거 연결을 유지하면서 독자용 번호·LLM 라벨·반복 수집 상태를 제거하고, 핵심 쟁점·조건부 실적 경로·다음 확인 조건을 문단으로 연결한다.

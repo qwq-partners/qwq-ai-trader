@@ -7,6 +7,7 @@ import pytest
 from src.analytics.audience_reports import MarketSnapshot
 from src.analytics.daily_report import record_morning_brief_dispatch
 from src.analytics.report_delivery import ReportStore
+from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_llm_roles import manager
 from tests.test_llm_transport_contract import Session, openai_reply
@@ -42,7 +43,7 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         analysis = store.analysis_receipt('market', 'morning', DAY)
         receipt = store.receipt('market', 'morning', DAY)
         assert analysis['status'] == ('failed' if invalid else 'ready')
-        assert receipt['body'] == analysis['final_body']
+        assert receipt['body'] == with_web_link(analysis['final_body'], DAY, 'morning')
         assert ('분석 미확보' if invalid else 'LLM 해석:') in receipt['body']
         assert '99%' not in receipt['body']
         assert '금융 +1.20%' in receipt['body'] and '자동차 -1.40%' in receipt['body']
