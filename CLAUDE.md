@@ -1,6 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
 > **10/31 R02-WEB v2 웹 전용 리포트(운영 미적용):** 사용자가 P1 거울형 페이지를 거부하고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. [qwq.ai.kr/reports](docs/operations/execution-roadmap.md#r02-web-report-20261031)는 이제 자체 생성 데일리 리포트다. 새 고정 역할 `WEB_REPORT`(GPT-6 Astra/medium, 출력12288·180초·JSON)가 관측 사실 M(지수·미국·적격 섹터 ETF 전체)과 같은 공개 근거 E로 스탠스·제목·요약·시장 판단·이슈·업종/거시 해석·전망(기본/상방/하방)·체크리스트를 쓰고, `report_analyses(audience=web)`에 동결한다. 텔레그램 본문은 링크 한 줄만 유지한다. 검증·PR·운영 인수는 원장을 따르며 실제 모델 출력 품질·비용은 첫 자연 발송에서 확인한다.
+> **10/31 분석 문장 후속:** [R02-INSIGHT](docs/operations/execution-roadmap.md#r02-analyst-prose-20261031)는 실제 텍스트 수신 뒤의 근거/출처 복잡성과 인사이트 부족 피드백을 반영한다. 내부 검증은 유지하고 독자용 판단·조건·출처 표현을 개선한다. 관련138검사·독립 리뷰는 통과했으며 전체/CI·운영 인수는 원장 최종 근거를 따른다. 운영83d1b21f·기존 설정/매수중지 유지, 추가 시험 발송0, 자연 내용 수락은 WAIT다.
 
 > **10/31 17:36 텍스트 보고 운영 인수 DONE:** [R02-TEXT](docs/operations/execution-roadmap.md#r02-text-body-20261031)는 본문→PNG 경로를 제거하고 전체 분석문·출처를 Telegram 텍스트로 전달한다. 고정83d1b21f/PID3981071·운영9,984검사·기동165.2초/43항목PASS이며 보호48파일/기존cron/매수중지·월USD100/log_and_continue·GPT/Claude를 보존했다. 뉴스·공시 분석은 유지하며 추가 시험 발송은 없다. O02 오늘 사전점검은 완료, 11/1 기존 정리 영수증과 다음 자연 텍스트 내용 수락·새 유효 E02/E01/E04 입력은 WAIT다. 완료 문서 재배포는 없으며 아래 상태는 당시 이력이다.
 

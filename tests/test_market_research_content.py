@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,11 +47,18 @@ def test_research_prompt_and_render_preserve_sources_and_market():
     assert all(x in system for x in ('데이터', '수요', '반대', '공시'))
     body, result = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=evidence())
     assert result == analysis() and '핵심 이슈와 영향' in body
-    assert all(x in body for x in ('사건:', '영향:', '반대:', '관찰:', '반도체 -1.00%', '전체 업종 순위 아님', '공시 원문 미확인'))
-    assert all(x not in body for x in ('partial', 'unverified', 'article_excerpt', '2026-10-29T06:00:00'))
-    assert '일부 자료' in body and '발행시각 미확인' in body and '기사 발췌' in body and '2026/10/29 06:00 KST' in body
+    assert all(x in body for x in ('반도체 -1.00%', '전체 업종 순위 아님', '공시 원문 미확인', '다음 확인'))
+    assert all(x not in body for x in ('LLM 해석', 'E1', 'F2', '사건:', '영향:', '반대:', '관찰:', '수집 범위:', '발행시각 미확인'))
+    assert '수집 기준' in body and '2026/10/29 06:00 KST' in body
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '시장 전체 종목 수·당일 누적 수급은 미확보' not in body
     assert all(record['url'] in body for record in evidence()['records'])
     assert len(body) <= 3000 and len(body.splitlines()) <= 60
+    assert len(body.encode('utf-16-le')) // 2 <= 4096
+
+
+def test_legacy_research_image_receipt():
+    body = (Path(__file__).parent / 'fixtures/market_research_legacy_image.txt').read_text().rstrip()
     image = render_market_report_image(body)
     assert image is not None and image.height <= 4500
     assert evidence()['records'][0]['url'] in image.caption and evidence()['records'][1]['url'] in image.caption
@@ -83,11 +91,11 @@ def test_research_fallback_preserves_facts_when_no_public_event():
     bundle = evidence()
     bundle['records'] = []
     body = factual_fallback(market(), public_evidence=bundle)
-    assert '조사 분석 미확보' in body and '뉴스·공시 근거 미확보' in body
+    assert '시장 지표 요약' in body and '추가 해석 없이' in body
+    assert '확인된 시장 관측' not in body
     assert '반도체 -1.00%' in body and '전체 업종 순위 아님' in body
-    assert render_market_report_image(body) is not None
     malformed = factual_fallback(market(), public_evidence={'records': 'bad'})
-    assert '조사 분석 미확보' in malformed
+    assert '시장 지표 요약' in malformed
 
 
 def test_valid_source_numbers_allowed_but_unsupported_numbers_rejected():
@@ -136,7 +144,7 @@ def test_caption_sources_are_identified_and_only_caption_urls_hidden_in_image(mo
         return artist
     monkeypatch.setattr(Axes, 'text', capture)
     bundle = evidence()
-    body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    body = (Path(__file__).parent / 'fixtures/market_research_legacy_image.txt').read_text().rstrip()
     result = render_market_report_image(body)
     assert result is not None
     assert 'E1 · ' + bundle['records'][0]['url'] in result.caption
@@ -150,7 +158,7 @@ def test_unknown_provider_is_explicit_and_private_url_rejected():
     bundle = evidence()
     bundle['records'][0]['source'] = ''
     body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
-    assert '제공처 미확인' in body
+    assert 'example.com' in body
     bundle['records'][0]['url'] = 'http://127.0.0.1/private'
     with pytest.raises(ValueError):
         build_analysis_prompt(market(), kind='morning', day='2026-10-29', public_evidence=bundle)
@@ -187,10 +195,9 @@ def test_two_issues_four_sources_and_six_coverage_rows_fit_image():
     final, _ = compose_analysis(body, json.dumps(obj, ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
     assert len(final) <= 3000 and len(final.splitlines()) <= 60
     assert all(row['url'] in final for row in bundle['records'])
-    assert all(word in final for word in ('뉴스 저장소', '뉴스 수집', '공시 색인', '실적 일정', '공시 유형', '거시 지표', '조회 실패'))
+    assert '수집 범위:' not in final
     assert 'S&amp;P500 +0.20%' in final and 'KOSDAQ 3,000.00' in final and '자동차 -1.40%' in final
-    result = render_market_report_image(final)
-    assert result is not None and result.height <= 4500
+    assert len(final.encode('utf-16-le')) // 2 <= 4096
 
 
 def test_rejects_more_than_four_distinct_public_references():
@@ -210,3 +217,67 @@ def test_timestamp_year_does_not_authorize_percentage_but_full_date_is_allowed()
     obj['issues'][0]['event'] = '2026-10-29 수집된 기사에서 주문 증가를 전망했습니다.'
     final, _ = compose_analysis(market(), json.dumps(obj, ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=evidence())
     assert '2026-10-29 수집된 기사' in final
+
+
+def test_mixed_provenance_links_are_escaped_without_double_encoding():
+    bundle = evidence()
+    first, second, filing = bundle['records']
+    first.update(title='수요 &amp; 가격', source='', url='https://example.com/a?x=1&y=2')
+    second.update(published_at='2026-10-28T12:00:00+09:00', publication_status='verified', observed_at='2026-10-28')
+    filing.update(event_date='2026-10-27', limitations='특별한 원문 범위 제한')
+    body, result = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert result == analysis()
+    assert '<a href="https://example.com/a?x=1&amp;y=2">' in body
+    assert '수요 &amp; 가격' in body and '&amp;amp;' not in body
+    assert 'example.com' in body and '수집 기준' in body
+    assert '발행' in body and '2026/10/28 12:00 KST' in body and '관측 2026-10-28' in body
+    assert '접수일 2026-10-27' in body and '특별한 원문 범위 제한' in body
+    assert '공시 색인' in body
+
+
+def test_prompt_requests_ranked_grounded_mechanism_and_specific_invalidation():
+    prompt, system = build_analysis_prompt(market(), kind='morning', day='2026-10-29', public_evidence=evidence())
+    instructions = prompt + system
+    assert all(term in instructions for term in ('우선순위', '실적', '반증', '촉매', '중복 기사', '기술적 가격', '근거의 강도', '시장 해석'))
+
+
+def test_no_url_source_keeps_provider_title_and_actual_clocks():
+    bundle = evidence()
+    bundle['records'][0].update(url=None, published_at='2026-10-28T11:00:00+09:00', publication_status='unverified')
+    body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert '가상 통신 · 반도체 수요 회복 전망' in body
+    assert '제공처 표기 2026/10/28 11:00 KST' in body
+    assert '수집 2026/10/29 06:00 KST' in body
+
+
+def test_shared_provenance_notes_and_counterpoint_remain_readable():
+    bundle = evidence()
+    bundle['records'][0]['limitations'] = 'Legacy publication time unverified'
+    bundle['records'][1]['limitations'] = 'collected within 24h; publication time unverified'
+    bundle['records'][2]['limitations'] = 'Selected first-page regular filings; original content and earnings direction unverified'
+    obj = analysis()
+    body, _ = compose_analysis(market(), json.dumps(obj, ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '기사 발행시각 미확인' not in body
+    assert '공시 색인' in body and '원문' in body and '실적' in body
+    assert obj['issues'][0]['impact'] + '\n' + obj['issues'][0]['counterpoint'] in body
+    assert '표시된 관측 표본' in body and '시장 전체 종목 수' in body and '당일 누적 수급' in body
+    prompt, system = build_analysis_prompt(market(), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert '출처와 시각은 코드가 표시' in prompt + system
+
+
+def test_known_korean_source_limitations_are_compact_but_custom_notes_survive():
+    bundle = evidence()
+    bundle['records'][0].update(limitations='기존 저장 기사의 발행시각 미검증', collected_at='2026-10-29T06:00:45+09:00')
+    bundle['records'][1].update(content_kind='title', limitations='기존 캐시에는 기사 제목만 저장됨')
+    bundle['records'][2].update(limitations='특별한 출처 시각 제한')
+    body, result = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert result == analysis()
+    assert '기존 저장 기사의 발행시각 미검증' not in body
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '수집 기준 2026/10/29 06:00 KST' in body and '06:00:45' not in body
+    assert '제목만' in body and '기존 캐시에는 기사 제목만 저장됨' not in body
+    assert '특별한 출처 시각 제한' in body
+    bundle['records'][0]['limitations'] = '제공처 발췌'
+    body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert '기사 발췌 · 제공처 발췌' not in body

@@ -8,6 +8,12 @@
 - `market_report_html.py` 전면 재작성: 리드(스탠스·제목·요약) → 2단(서사/자료) → 근거·관측 자료. 거울형 섹션 렌더 삭제, 과거 날짜는 본문 지표 줄만 자료로 읽음(`facts_from_body`). 아카이브는 날짜별 제목·스탠스 카드. 스케줄러는 텔레그램 분석 → 웹 준비 → 발송 → 페이지 갱신, 웹 예외는 발송 비차단.
 - 독립 리뷰(Agent 요청 opus/high, 응답 자기표기 claude-opus-5-5) REQUEST CHANGES → P1 1건·P2 10건 전부 반영: 인용 칩 클릭 시 `:target`이 슬롯을 벗어나 다른 슬롯이 보이던 결함(`.slot:has(:target)`), 중복 id 제거, 숫자 검사 풀을 표시 값·부호 일치로 축소, 매수/매도 추천·목표가 어휘 거부, 전 슬롯 보류 날의 빈 페이지, 저장 분석 재사용 경로의 현재 시세 혼입 차단, 외부 CDN 폰트 제거, `inf` 차단, 배달 API의 web audience 거부, aria-current, 과거 관측 시각 표시, 비용 최악치(약 USD1.1/회) 기록.
 - 검증: 새 `tests/test_web_report.py`(사실·검증·runner·스케줄러·스토어), `tests/test_market_report_html.py` 재작성, e2e의 모델 호출 수 1→2 갱신. 관련 9파일 155 passed(리뷰 반영 후), 최종 코드 전체 10007 passed / 2 skipped / 2 xfailed · 격리 0. 전체 검사·독립 리뷰·CI는 [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031). [설계 v2](docs/superpowers/specs/2026-10-31-web-report-design.md).
+## 2026-10-31 — 시장 보고의 분석 문장과 출처 표시 개선
+
+- 내부 E/F 근거 연결을 유지하면서 독자용 번호·LLM 라벨·반복 수집 상태를 제거하고, 핵심 쟁점·조건부 실적 경로·다음 확인 조건을 문단으로 연결한다.
+- 원문은 제목 링크로, 시각과 자료 범위는 간결한 표기로 제공한다. 알려진 중복 안내만 묶고 공시 원문/잠정가격 구분과 별도의 한계는 보존한다. 분석 대체는 시장 지표 요약으로 명시한다.
+- 모델·호출·예산·스케줄·주문 설정 변경0. 관련138검사·독립 리뷰 통과, [전체/운영 인수와 NEXT](docs/operations/execution-roadmap.md#r02-analyst-prose-20261031)는 최종 원장을 따른다. 자연 LLM/모바일 내용 수락은 별도다.
+
 
 ## 2026-10-31 — 시장 보고 본문을 Telegram 텍스트로 전환
 

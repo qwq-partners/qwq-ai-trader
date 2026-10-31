@@ -349,7 +349,7 @@ async def test_real_content_and_sources_produce_research_or_explicit_missing(tmp
         public_evidence_factory=AsyncMock(return_value=data)).tick(research_now, True, MARKET, '') == 'accepted'
     row = store.analysis_receipt('market', 'morning', research_now.date().isoformat())
     assert row['status'] == ('ready' if events else 'failed')
-    assert ('핵심 이슈와 영향' if events else '뉴스·공시 근거 미확보') in row['final_body']
+    assert ('핵심 이슈와 영향' if events else '시장 지표 요약') in row['final_body']
     assert n._send_report_once.call_args.args[1] == with_web_link(row['final_body'], research_now.date().isoformat(), 'morning')
     assert manager.complete_role.await_count == (2 if events else 0)   # Telegram brief + web report; neither when no events
 
