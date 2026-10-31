@@ -230,6 +230,10 @@ def test_snapshot_rejects_oversize_and_detects_mid_read_mutation(tmp_path, monke
     with pytest.raises(ValueError, match="size limit"):
         _snapshot(path, 1)
     import src.analytics.capture_readiness as readiness
+    # Rapid same-size writes can retain both timestamps, including on WSL ext4.
+    # Freeze the observed metadata so rejection must come from the content.
+    original_stat = path.stat()
+    monkeypatch.setattr(readiness.os, "fstat", lambda fd: original_stat)
     real_read, calls = readiness.os.read, [0]
     def mutate(fd, size):
         part = real_read(fd, size)
@@ -240,6 +244,105 @@ def test_snapshot_rejects_oversize_and_detects_mid_read_mutation(tmp_path, monke
     monkeypatch.setattr(readiness.os, "read", mutate)
     with pytest.raises(ValueError, match="changed"):
         _snapshot(path, 2)
+
+
+@pytest.mark.parametrize("payload", [b"", b"abc", bytes(range(256)) * 4097],
+                         ids=["empty", "small", "multichunk"])
+def test_snapshot_accepts_stable_content_with_short_reads(tmp_path, monkeypatch, payload):
+    import src.analytics.capture_readiness as readiness
+
+    path = tmp_path / "source.bin"
+    path.write_bytes(payload)
+    real_read = readiness.os.read
+    sizes = iter([131071, 17, 65539, 1021] * 100)
+
+    def short_read(fd, size):
+        assert 0 < size <= 1024 * 1024
+        return real_read(fd, min(size, next(sizes)))
+
+    monkeypatch.setattr(readiness.os, "read", short_read)
+    raw, meta = readiness._snapshot(path, max(1, len(payload)))
+
+    assert raw == payload
+    assert meta["bytes"] == len(payload)
+    assert meta["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize("replacement", [b"", b"abc"], ids=["truncate", "grow"])
+def test_snapshot_rejects_length_changes_with_unchanged_metadata(tmp_path, monkeypatch, replacement):
+    import src.analytics.capture_readiness as readiness
+
+    path = tmp_path / "source.bin"
+    path.write_bytes(b"ab")
+    original_stat = path.stat()
+    real_read = readiness.os.read
+    changed = False
+
+    def mutate(fd, size):
+        nonlocal changed
+        part = real_read(fd, size)
+        if not changed:
+            changed = True
+            path.write_bytes(replacement)
+        return part
+
+    monkeypatch.setattr(readiness.os, "fstat", lambda fd: original_stat)
+    monkeypatch.setattr(readiness.os, "read", mutate)
+    with pytest.raises(ValueError, match="changed"):
+        readiness._snapshot(path, 2)
+
+
+@pytest.mark.parametrize("tail", [b"new!", b"", b"old!extra"],
+                         ids=["overwrite", "truncate", "grow"])
+def test_snapshot_rejects_changes_during_content_verification(tmp_path, monkeypatch, tail):
+    import src.analytics.capture_readiness as readiness
+
+    prefix = b"a" * (1024 * 1024)
+    path = tmp_path / "source.bin"
+    path.write_bytes(prefix + b"old!")
+    original_stat = path.stat()
+    real_read = readiness.os.read
+    first_eof, changed = False, False
+
+    def mutate(fd, size):
+        nonlocal first_eof, changed
+        part = real_read(fd, size)
+        if first_eof and part and not changed:
+            changed = True
+            path.write_bytes(prefix + tail)
+        if not part:
+            first_eof = True
+        return part
+
+    monkeypatch.setattr(readiness.os, "fstat", lambda fd: original_stat)
+    monkeypatch.setattr(readiness.os, "read", mutate)
+    with pytest.raises(ValueError, match="changed"):
+        readiness._snapshot(path, len(prefix) + 4)
+    assert changed
+
+
+def test_snapshot_checks_metadata_after_content_verification(tmp_path, monkeypatch):
+    import src.analytics.capture_readiness as readiness
+
+    path = tmp_path / "source.bin"
+    path.write_bytes(b"ab")
+    original_stat = path.stat()
+    real_read = readiness.os.read
+    eof_count = 0
+
+    def touch_after_verification(fd, size):
+        nonlocal eof_count
+        part = real_read(fd, size)
+        if not part:
+            eof_count += 1
+            if eof_count == 2:
+                readiness.os.utime(path, ns=(original_stat.st_atime_ns,
+                                            original_stat.st_mtime_ns + 1_000_000_000))
+        return part
+
+    monkeypatch.setattr(readiness.os, "read", touch_after_verification)
+    with pytest.raises(ValueError, match="changed"):
+        readiness._snapshot(path, 2)
 
 
 def test_zero_started_scope_and_unsealed_prefix_never_claim_coverage_or_profit(tmp_path):
