@@ -37,14 +37,14 @@
 
 **Interfaces:** Existing `build_analysis_prompt`, `compose_analysis`, `factual_fallback`; validated analysis object and raw frozen evidence remain unchanged. Bump the prompt version to distinguish the revised instruction/presentation contract.
 
-- [ ] Write behavioral RED checks for reader-visible IDs/status noise absent, internal IDs/result unchanged, compact safe sources with mixed provenance, grounded insight instructions and readable factual fallback.
-- [ ] Implement the bounded prompt/composition change and restore GREEN, including legacy image coverage without adapting the image renderer to new report bodies.
-- [ ] Run related isolated tests and commit; hand off exact commands, RED/GREEN output and limitations. No full-suite duplication by worker.
+- [x] Write behavioral RED checks for reader-visible IDs/status noise absent, internal IDs/result unchanged, compact safe sources with mixed provenance, grounded insight instructions and readable factual fallback.
+- [x] Implement the bounded prompt/composition change and restore GREEN, including legacy image coverage without adapting the image renderer to new report bodies.
+- [x] Run related isolated tests and commit; hand off exact commands, RED/GREEN output and limitations. No full-suite duplication by worker.
 
 ## Task 2 — Independent review and integration
 
-- [ ] Root regenerates an offline example from the already reviewed public 10/30 snapshot using the new composer; no live API/model calls. Review the actual text and distinguish it from natural LLM output.
-- [ ] Independent review covers the full diff, internal evidence preservation, source/time truthfulness and the strength of the example's argument. Resolve findings before integration.
+- [x] Root regenerates an offline example from the already reviewed public 10/30 snapshot using the new composer; no live API/model calls. Review the actual text and distinguish it from natural LLM output.
+- [x] Independent review covers the full diff, internal evidence preservation, source/time truthfulness and the strength of the example's argument. Resolve findings before integration.
 - [ ] Run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree, inspect secrets/diff, commit/push/PR and inspect CI.
 - [ ] Recheck current operating SHA/PID/settings and 21:00/22:00 schedules before preparing a new fixed-SHA deployment; never reuse consumed wrappers. Independent critical gate review and normal verify/restart/rollback/150-second acceptance are required.
 - [ ] Record final operation/review/CI/NEXT in the roadmap. Natural LLM insight and mobile acceptance remain WAIT; no automatic additional trial.
