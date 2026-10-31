@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="r02-validation-rejection-20261101"></a>
-### R02-VALIDATE — 정상 분석의 검증 거절 수정 (DO)
+### R02-VALIDATE — 정상 분석의 검증 거절 수정 (PR319 병합 DONE / WSL 스냅샷 검증 DONE·통합 WAIT / 배포·발송 WAIT)
 
 **승인/Plan:** 사용자: “거절 원인 찾아서 제대로 고치고, 검증 후 커밋/푸시/배포까지 마무리해줘. 기존 설정과 매수 중지는 유지하고 정상 분석 보고서를 텔레그램으로 다시 한 번 보내줘.” [실행 계획](../superpowers/plans/2026-11-01-market-report-validation.md). 이번 지시는 새 단발 발송1회이며 이미 소비한 시험/정기 슬롯을 재실행하지 않는다. 시작 main54b2ba65·운영5af43e48/PID4116785, 운영 evolved 미커밋과 매수 중지는 보존한다.
 
@@ -11,11 +11,19 @@
 
 **See/소스·실제 출력:** 구현772ab801과 리뷰 보완294fdf1c를 통합했다. 합성 RED10+빈 구간 RED1 뒤 관련152검사 PASS/격리0, 리뷰 보완 RED2 뒤 관련81검사 PASS/격리0이다. 실제 `claude-opus-5-5`/요청high(실효 effort 미노출)의 소스 리뷰와 보완 재리뷰는 APPROVE이며 도구/MCP 없이 저장소 소스·합성 검사만 제공했다. 두 LOW(파서 예외 문맥 표시 억제, 사건 미인용의 별도 진단)를 반영했다. 원응답은 변경 없이1481자/37줄로 통과했다. 별도 검토된 단발 생성기는 새 MARKET_BRIEF 호출1회에서 `ready/validated`·실제gpt-6.1-sol·입력2194/출력1056token·finish stop을 확인했다. 10/30 선택 기사3행(중복 포함)·공시0의 제한된 저장 입력이며 자연 정기 출력이 아니다. 발송 대기 본문은 기준일 설명 포함1548자/40줄, 모델 문장 교체0·정기 스토어 변경0·보호 설정/매수 중지 동일이다. 원응답/본문은 비공개 `report-validation-preview/`에 보존한다.
 
-**최종 게이트:** 첫 전체 실행은 리뷰의 작은 오류 경로 보완을 적용하려고 coordinator가 의도적으로 중단했다(실패 관측 없음·rc143/230.24초). 최종 소스에서 직렬 전체 검증을 새로 수행하며 중단된 실행을 PASS로 세지 않는다. 새 배포 규칙의 WSL 전용 진입점과 현재 AWS 호스트의 차이는 독립 Sol6.1/high로 확인했다. WSL 실행 환경이 없으면 배포 직전에 서버 정본 직접 실행의 좁은 방법 예외만 확인한다. 사전/150초 뒤 인수, 설정/cron/영수증 보존, 고정 SHA와 전체 직렬 검증은 유지한다.
+**최종 게이트:** 첫 전체 실행은 리뷰의 작은 오류 경로 보완을 적용하려고 coordinator가 의도적으로 중단했다(실패 관측 없음·rc143/230.24초). 중단된 실행은 PASS가 아니다. 아래의 완료 실행은 AWS 개발 worktree 검사이며 사용자 WSL 검증을 대신하지 않는다. WSL에서 사전 검증과 배포 실행을 이어가며 사전/150초 뒤 인수, 설정/cron/영수증 보존, 고정 SHA와 전체 직렬 검증을 유지한다.
 
-**See/최종 로컬 검증 DONE — 02:23 KST:** 정식 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`는 **10,031 passed / 2 skipped / 2 xfailed**, 테스트814.77초·전체831.19초·rc0, 격리 위반0·문법/비밀정보 PASS다. 검사 선택/병렬/skip 환경변수를 제거한 직렬 전체다. 새 사전/사후 읽기 점검기는 독립 Sol6.1/high 리뷰와 합성10검사 PASS, 정상 분석만 허용하는 새 단발 전송기와 보낼 실제 본문의 공개 근거 대조도 각각 APPROVE/READY다(native actual/effective 미노출). 이 단계에서 운영 배포·새 Telegram 전송은0이며 PR/main CI·운영 인수·수신은 다음 게이트다.
+**See/AWS 서버 보조 검증 DONE — 02:23 KST:** 정식 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`는 **10,031 passed / 2 skipped / 2 xfailed**, 테스트814.77초·전체831.19초·rc0, 격리 위반0·문법/비밀정보 PASS다. 실행 위치는 사용자 WSL이 아닌 AWS 호스트의 격리 개발 worktree다. 검사 선택/병렬/skip 환경변수를 제거한 직렬 전체다. 새 사전/사후 읽기 점검기는 독립 Sol6.1/high 리뷰와 합성10검사 PASS, 정상 분석만 허용하는 새 단발 전송기와 보낼 실제 본문의 공개 근거 대조도 각각 APPROVE/READY다(native actual/effective 미노출). 이 단계에서 운영 배포·새 Telegram 전송은0이었다.
 
-**근거/대기:** 비공개 `~/.local/state/qwq-task-audit/20261101/report-rejection-diagnosis/`에 공개 입력·원응답·독립 판독 근거를 보존하며 저장소/외부 리뷰에는 원문을 넣지 않는다. 개발·독립 리뷰·전체 검사·CI·운영 인수와 새 발송은 아직 완료가 아니다. 기존 O02 11/1 09:46:10·11/5·6 정리와 T04 만료를 유지한다. **NEXT:** R02-VALIDATE 검증/배포/새 단발 발송 → 다음 자연 보고의 내용 수락; E02-RR/E01/E04는 새 유효 자연 입력에서 재개한다.
+**See/병합·사용자 교정:** [PR #319](https://github.com/qwq-partners/qwq-ai-trader/pull/319)는 main `d896a37a`로 병합됐다. PR CI run41224369933(415.15초)과 main CI run41225080698(411.10초)은 각각10,031passed/2skipped/2xfailed·격리0·문법/비밀정보 PASS다. 검증 HEAD와 병합 tree71cdfb0c는 동일하다. 사용자는 이후 “CI는 내 로컬 WSL에서 하기로 했었는데? 최근에 클로드로 그렇게 작업했고.. 확인하고 담부터는 그렇게해”라고 교정했다. [PR #316](https://github.com/qwq-partners/qwq-ai-trader/pull/316)의7f29b0f3/8eaafa4b는 사용자 WSL 사전 검증과 WSL 배포 실행을 정했으며 GitHub 필수verify는 유지했다. AWS 검사를 로컬 WSL 검증처럼 보고한 점과 서버 직접 실행 예외 제안을 바로잡는다. 앞선 예외 질문은 철회하며 이 교정은 AWS 직접 배포 승인이 아니다. 독립 Sol6.1/high 문서·변경 이력 대조도 같은 결론이다(actual/effective 미노출).
+
+**WSL 게이트 후속 R02-VALIDATE-WSL — 11/1 03:30 KST DO:** 사용자가 역방향 SSH와 연결 뒤 WSL 검증·배포·단발 발송을 명시 승인했다. 실제 `6.6.87.2-microsoft-standard-WSL2` 저장소를 읽기 점검하고 깨끗한 main을 d896a37a로 fast-forward했다. 기존 Claude worktree·사용자 SSH 설정·운영 자격/캐시는 보존하며 별도 feature worktree에서 WSL Python3.12.3으로 정식 직렬 전체를 실행했다. **1 failed / 10,030 passed / 2 skipped / 2 xfailed**, 테스트402.49초·전체410.69초·격리0·rc1이므로 배포/새 발송은 아직0이다. 실패는 `test_snapshot_rejects_oversize_and_detects_mid_read_mutation`: 같은 길이 파일을 즉시 덮어쓰면 mtime/ctime이 같을 수 있어 기존 메타데이터 비교만으로 변경을 놓친다. 격리된 합성20회 계측에서18회가 동일 시각·크기로 이전 내용을 수락했다. 독립 Astra/high 진단도 같은 결론이다(actual/effective 미노출). Plan은 동일 fd의 제한된 내용 재검증으로 관측된 변경을 거절하고 결정적 RED/GREEN·별도 독립 리뷰·WSL 전체/CI를 새 소스에 묶는 것이다. 원자적 파일 스냅샷이나 악의적 ABA 변경 방지로 확대 주장하지 않는다. 기존 대량 기록 종료 실패와는 다른 결함이며 운영 관측 연장·검사 skip·맹목 재시도는 없다. **NEXT:** R02-VALIDATE-WSL 수정/검증 → 새 고정 SHA → 실제 진입 직전 상태·일정 재확인 → WSL 정본 배포/인수 → 보존된 정상 분석1회 발송.
+
+**WSL 후속 구현/독립 리뷰:** Astra/high의 `1421b138`은 `_snapshot`을 동일 fd에서 되감아 기존 chunk와 제한된 크기로 대조하고 마지막 EOF/메타데이터까지 검사한다. 재시도·sleep·파일 경로 재열기·두 번째 전체 버퍼는 없으며 원자적 스냅샷/ABA 보장은 하지 않는다. 결정적 관련 검사 RED6failed/14passed → GREEN20passed/1.02초·격리0·문법/비밀정보 PASS다. 실제 응답 모델 `claude-opus-5-5`/요청high의 도구 없는 독립 정적 리뷰는142.721초·rc0·APPROVE·수정 지적0건이다(실효 effort 미노출). 코드는2파일뿐이며 보고 역할·운영 설정·매수 중지·예약 변경0이다. 수정본 WSL 전체 결과는 다음 영수증을 따른다.
+
+**See/실제 WSL 전체 PASS — 11/1 03:41:52 KST:** `/home/user/projects/qwq-wsl-validation-20261101`의1421b138에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`를 직렬 전체로 실행했다. 실제 WSL2/ext4·Python3.12.3, **10,040 passed / 2 skipped / 2 xfailed**, 테스트366.27초·전체 monotonic374.39초·rc0·격리0·문법/비밀정보 PASS다. 운영 자격은 복사하지 않았고 실제 WSL 원본 저장소의 민감 경로도 격리 가드에 지정했다. 초기 실패는 그대로 보존하며 수정 없이 재시도한 성공으로 설명하지 않는다. 이후 변경은 검증 영수증/WSL 정책을 적는 Markdown뿐이다. 독립 Sol6.1/high 문서 리뷰의 범위 명확화(PR319 완료와1421 후속 대기 분리)를 반영했다(actual/effective 미노출). 현재 단계는 WSL push/PR/main CI·병합 대기이며 운영5af43e48/새 발송0이다.
+
+**근거/대기:** 비공개 `~/.local/state/qwq-task-audit/20261101/report-rejection-diagnosis/`에 공개 입력·원응답·독립 판독 근거를 보존하며 저장소/외부 리뷰에는 원문을 넣지 않는다. PR #319/d896a37a의 보고 검증 소스 개발·독립 리뷰·AWS 보조 검사·GitHub CI·병합은 완료됐다. 이후 WSL에서 발견한 스냅샷 후속1421b138은 독립 소스 리뷰까지 완료됐으며 실제 WSL 전체까지 통과했으며 PR/main CI·병합과 운영 인수·새 발송은 아직 미완료다. 마지막 운영 확인은5af43e48/PID4116785이고 설정·매수 중지·기존 예약 변경0이다. 기존 O02 11/1 09:46:10·11/5·6 정리와 T04 만료를 유지한다. **NEXT:** WSL 검증본 commit/push → 스냅샷 후속 PR/main CI·병합 → 새 고정 SHA → 실제 일정/진입 시각·직전 기준선 재확인 → WSL 정본 배포/인수 → 보존된 정상 분석 단발 발송. 이미 생성한 검증된 모델 응답을 보존하고 자동 재호출하지 않는다. E02-RR/E01/E04는 새 유효 자연 입력에서 재개한다.
 
 <a id="r02-web-report-20261031"></a>
 ### R02-WEB — 웹 전용 데일리 리포트(qwq.ai.kr/reports)와 텔레그램 링크 (v2 DO / 운영 미적용)

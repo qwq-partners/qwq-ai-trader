@@ -17,5 +17,6 @@
 
 - `feature/*` 브랜치에서 작업하고 관련 테스트와 문서를 함께 갱신한다.
 - 구현 후 관련 테스트, 전체 테스트, 비밀정보 검사를 수행한다. 전체 검증은 CI·운영 배포와 동일한 `bash scripts/dev/verify.sh` 로 **푸시 전에 로컬에서** 통과시킨다. 로컬(WSL)에서는 `QWQ_VERIFY_PARALLEL=auto`(pytest-xdist) 병렬과 `QWQ_VERIFY_TESTS=<경로>` 부분 실행을 써도 되지만, 최종 확인과 CI·서버는 직렬 전체다. 준비는 `scripts/dev/bootstrap.sh` 를 쓴다([로컬 개발](docs/operations/local-development.md) 2·6절).
+- 여기서 **로컬은 사용자 Windows의 WSL 작업본**이다. AWS 호스트의 worktree 검사는 서버 보조 검증으로 기록하며 WSL 사전 검증을 대신하지 않는다. 검증 영수증에 실행 위치·SHA·명령·결과를 남긴다. WSL 실행 환경에 접근할 수 없으면 WSL 인계와 필요한 변경을 준비하고, 서버 직접 실행 예외를 기본 대안으로 요청하지 않는다. GitHub 필수 `verify`는 유지한다(PR #316의 self-hosted runner 전환은 미적용).
 - 구현자와 최종 리뷰어 역할을 가능하면 분리하고 동일 파일을 동시에 수정하지 않는다.
 - Claude Code가 구현한 브랜치의 교차 리뷰는 `bash scripts/dev/codex_review.sh`(읽기 전용)로 수행한다.
