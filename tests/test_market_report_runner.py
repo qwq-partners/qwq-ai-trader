@@ -276,19 +276,24 @@ async def test_after_inputs_and_saved_analysis_survive_restart_without_second_fe
 
 @pytest.mark.asyncio
 async def test_unknown_cost_log_continue_does_not_reopen_analysis(tmp_path, content, monkeypatch):
-    from dataclasses import replace
+    import time
     from src.utils.llm import LLMConfig, LLMManager
-    from src.utils import llm_roles
     from tests.test_llm_transport_contract import Session, Reply
-    profiles = dict(llm_roles.ROLE_PROFILES)
-    role = llm_roles.LLMRole.MARKET_BRIEF
-    profiles[role] = replace(profiles[role], timeout_seconds=0.05)
-    monkeypatch.setattr(llm_roles, 'ROLE_PROFILES', profiles)
     m = LLMManager(LLMConfig(openai_api_key='synthetic', monthly_budget_usd=100,
         budget_state_path=str(tmp_path/'budget.db'), budget_policy_enabled=True,
         missing_cost_policy='log_and_continue'), audit_dir=tmp_path/'audit')
+    reserve = m.monthly_budget.reserve
+    def slow_reserve(*args, **kwargs):
+        result = reserve(*args, **kwargs)
+        time.sleep(0.08)
+        return result
+    monkeypatch.setattr(m.monthly_budget, 'reserve', slow_reserve)
+    complete = AsyncMock(wraps=m.complete_role)
+    monkeypatch.setattr(m, 'complete_role', complete)
     class Waiting(Reply):
-        async def json(self): await asyncio.Event().wait()
+        async def json(self):
+            assert len(session.payloads) == 1
+            raise asyncio.TimeoutError('synthetic response-body timeout')
     session = Session(Waiting({}))
     m.openai._session = session
     store = ReportStore(tmp_path/'r.db')
@@ -299,10 +304,13 @@ async def test_unknown_cost_log_continue_does_not_reopen_analysis(tmp_path, cont
     r = store.analysis_receipt('market', 'morning', DAY)
     assert r['status'] == 'unknown' and r['metadata']['request_sent'] is True
     assert r['metadata']['usage_known'] is False
+    assert r['metadata']['billing_status'] == 'unknown'
     assert m.monthly_budget.status()['unresolved_count'] == 1
     assert m._check_budget()  # Existing policy permits other independent calls.
     assert await ReportSchedule(store, notifier(), analysis_manager=m).tick(NOW, True, MARKET, '') == 'accepted'
     assert len(session.payloads) == 1
+    complete.assert_awaited_once()
+    assert store.analysis_receipt('market', 'morning', DAY) == r
     m.openai._session = None
     await m.close()
 
