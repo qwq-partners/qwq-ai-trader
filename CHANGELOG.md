@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-10-31 — 로컬(WSL)에서 CI 와 동일한 검증 (Claude Code·Codex 공통)
+
+- 사용자 요청: CI 가 전체 약 10,000건을 직렬로 돌려 8~10분 걸리는 원인을 확인한 뒤, 같은 검증을 사용자 로컬 WSL 에서 미리 돌릴 수 있게 하고 Codex 작업에도 같은 규칙을 적용한다.
+- `scripts/dev/verify.sh`: 로컬 전용 `QWQ_VERIFY_PARALLEL=auto|N`(pytest-xdist, `--dist loadfile`, 미설치·잘못된 값은 즉시 실패)과 `QWQ_VERIFY_TESTS=<경로>` 부분 실행을 추가. 기본 동작(직렬·전체)은 그대로라 CI 워크플로와 `local_deploy.sh` 의 검증은 변하지 않는다.
+- `scripts/dev/bootstrap.sh`: 실제 이미지 렌더 테스트용 한글 글꼴(`fonts-wqy-zenhei`, CI 와 동일) 확인·설치(`QWQ_BOOTSTRAP_SKIP_FONT=1` 로 건너뜀), `QWQ_BOOTSTRAP_PARALLEL=1` 로 pytest-xdist 설치, 검증 전용 머신용 `QWQ_BOOTSTRAP_REQUIRED_TOOLS="git"` 안내.
+- `tests/conftest.py`: xdist 워커는 격리 요약을 쓰지 않고 컨트롤러가 병렬 주석과 함께 한 번 쓴다(차단은 워커 안에서 테스트 실패로 드러남).
+- 문서: [로컬 개발 2·6절](docs/operations/local-development.md), `AGENTS.md`(Codex 푸시 전 로컬 verify 규칙), `CLAUDE.md` 검증 프로토콜 0단계. 운영 서버에서는 병렬을 쓰지 않는다(메모리 공유). 자체 호스팅 러너로 CI 자체를 로컬에서 돌리는 방식은 미적용.
+
 ## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 운영 미적용)
 
 - 사용자 교정: P1 거울형 페이지(텔레그램 본문 재표현)는 내용이 비어 거부됐고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. 웹은 자체 생성 리포트로 바꾸고 텔레그램 본문은 링크 한 줄만 유지한다.

@@ -235,8 +235,12 @@ if _curl_mod is not None:
 
 # ── 리포트 ───────────────────────────────────────────────────────────────────
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if getattr(config, "workerinput", None) is not None:
+        return  # xdist 워커: 요약은 컨트롤러가 쓴다.
+    parallel = getattr(config.option, "numprocesses", None)
     if not VIOLATIONS:
-        terminalreporter.write_line("[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건")
+        note = " (병렬 실행: 차단 시도는 워커 안에서 예외로 해당 테스트를 실패시키며 이 집계에는 합산되지 않음)" if parallel else ""
+        terminalreporter.write_line("[테스트 격리] 운영 상태·외부 네트워크 접근 시도 0건" + note)
         return
     terminalreporter.write_line(
         f"[테스트 격리] 차단된 접근 시도 {len(VIOLATIONS)}건 — 테스트가 임시 경로/가짜 공급자를 주입하지 않았다:"

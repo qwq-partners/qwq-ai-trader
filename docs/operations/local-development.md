@@ -38,6 +38,12 @@ bash scripts/dev/bootstrap.sh
 QWQ_BOOTSTRAP_CHECK_ONLY=1 bash scripts/dev/bootstrap.sh
 ```
 
+검증만 할 머신(Claude Code·Codex·Node 미설치)에서는 필수 도구 목록을 줄이고, 병렬 검증용 `pytest-xdist`까지 함께 넣으려면 다음과 같이 실행한다. 부트스트랩은 실제 이미지 렌더 테스트에 필요한 한글 글꼴(`fonts-wqy-zenhei`, CI 와 동일)이 없으면 `sudo apt-get` 으로 설치한다(`QWQ_BOOTSTRAP_SKIP_FONT=1` 로 건너뛰면 이미지 테스트가 실패한다). 저장소는 `/mnt/c` 가 아니라 WSL 내부 디스크(`~/` 아래)에 둔다.
+
+```bash
+QWQ_BOOTSTRAP_REQUIRED_TOOLS="git" QWQ_BOOTSTRAP_PARALLEL=1 bash scripts/dev/bootstrap.sh
+```
+
 ### Codex가 Windows 경로를 가리킬 때
 
 `codex --version`이 WSL에서 실행되지 않으면 Windows 앱의 경로가 먼저 잡혔을 수 있다. [공식 OpenAI Codex CLI 문서](https://learn.chatgpt.com/docs/codex/cli)에 따라 WSL 터미널 안에서 Linux용 CLI를 설치한 뒤 새 셸을 연다.
@@ -98,6 +104,22 @@ bash scripts/dev/verify.sh
 ```
 
 이 명령은 `.env`를 읽지 않으며 SSH, `systemctl`, `scripts/run_trader.py`, `scripts/liquidate_all.py`를 호출하지 않는다. 실패하면 원인을 수정하고 같은 명령을 다시 실행한다.
+
+**CI 와 동일하다.** GitHub `verify` 워크플로와 운영 배포 스크립트(`local_deploy.sh`)는 같은 `verify.sh` 를 호출한다. 로컬(WSL)에서 이 명령이 통과하면 CI 도 같은 입력에 대해 통과하는 것이 정상이며, 운영 자료·`.env`·네트워크 없이 합성 입력만으로 돈다(conftest 격리 가드). 로컬 통과가 보호 브랜치의 `verify` 체크를 대신하지는 않으므로 PR 병합에는 여전히 CI 결과가 필요하다. Claude Code 와 Codex 모두 **푸시 전에** 이 명령을 로컬에서 먼저 통과시킨다.
+
+로컬 전용 옵션(CI·서버 배포는 기본값인 직렬·전체를 그대로 쓴다):
+
+```bash
+QWQ_VERIFY_PARALLEL=auto bash scripts/dev/verify.sh
+```
+
+`pytest-xdist` 가 있어야 하며 파일 단위(`--dist loadfile`)로 워커에 분배한다. 운영 서버에서는 메모리(3.8GB, 봇과 공유) 때문에 쓰지 않는다. 병렬에서만 흔들리는 테스트가 보이면 데드라인을 늘리지 말고 결정적 재현(가짜 응답·주입 시계)으로 바꾼다. 격리 가드의 차단은 워커 안에서 해당 테스트를 실패시키며, 마지막 "접근 시도 0건" 요약은 컨트롤러 기준이다.
+
+```bash
+QWQ_VERIFY_TESTS=tests/test_web_report.py bash scripts/dev/verify.sh
+```
+
+일부 경로만 돌리는 빠른 확인용이다. 푸시 전 최종 확인은 기본값(전체)으로 한다.
 
 ## 7. Push와 PR
 

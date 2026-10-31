@@ -629,6 +629,7 @@
 
 ## 검증 프로토콜 (절대 규칙)
 코드 수정 후 반드시 아래 순서 수행:
+0. **푸시 전 전체 검증은 CI·배포와 동일한 `bash scripts/dev/verify.sh`** — 로컬(WSL)에서도 같은 스크립트를 쓴다(준비 `scripts/dev/bootstrap.sh`, 한글 글꼴 포함). 로컬 전용 `QWQ_VERIFY_PARALLEL=auto`(xdist)·`QWQ_VERIFY_TESTS=<경로>` 는 중간 확인용이며 최종·CI·서버는 직렬 전체. Codex 도 같은 규칙(`AGENTS.md`). [로컬 개발 6절](docs/operations/local-development.md)
 1. `python3 -m py_compile <수정파일>` — 문법 검증
 2. **봇 재시작**: `sudo systemctl restart qwq-ai-trader`
    - ⚠️ `nohup python scripts/run_trader.py` 직접 실행 **절대 금지** (systemd와 충돌)
