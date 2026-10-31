@@ -45,14 +45,14 @@
 
 - [x] Root regenerates an offline example from the already reviewed public 10/30 snapshot using the new composer; no live API/model calls. Review the actual text and distinguish it from natural LLM output.
 - [x] Independent review covers the full diff, internal evidence preservation, source/time truthfulness and the strength of the example's argument. Resolve findings before integration.
-- [ ] Run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree, inspect secrets/diff, commit/push/PR and inspect CI.
-- [ ] Recheck current operating SHA/PID/settings and 21:00/22:00 schedules before preparing a new fixed-SHA deployment; never reuse consumed wrappers. Independent critical gate review and normal verify/restart/rollback/150-second acceptance are required.
-- [ ] Record final operation/review/CI/NEXT in the roadmap. Natural LLM insight and mobile acceptance remain WAIT; no automatic additional trial.
+- [x] Run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree, inspect secrets/diff, commit/push/PR and inspect CI.
+- [x] Rechecked current operation and 21:00/22:00 receipts; independently reviewed both unused manual gates. Another session deployed combined SHA `5af43e48` containing this unchanged feature, so neither gate was executed. Confirmed source ancestry/identity, full deployment verification and 352.8-second read-only acceptance (42 checks) without another restart. This accepts the inherited feature, not the unrelated web implementation.
+- [x] Recorded source/local/PR/main CI, operational adoption and NEXT in the roadmap. Natural LLM insight and mobile acceptance remain WAIT; no additional trial or docs-only deployment.
 
 ## Task 3 — Deterministic unknown-cost test after the full-suite failure
 
 The first full local run failed because a 50ms role deadline expired before a request was sent. Stored metadata says `failed/not_sent`; an independent synthetic 80ms admission delay reproduced that valid behavior. This is separate from the earlier volume-close failure.
 
 - [x] Change only the synthetic response-read failure in `tests/test_market_report_runner.py` to explicit `TimeoutError`, keeping real admission, budget, durable receipt and second-tick reuse. Preserve separate real role deadline tests. Do not alter product timeouts or relax sent/unknown/one-request assertions.
-- [ ] Independently review the test correction, rerun the related and full formal checks, and update PR CI.
-- [ ] The unused 21h gate is closed without an attempt. Reassess the actual 22h producer completion and prepare a separately reviewed manual window before normal deployment.
+- [x] Independently review the test correction, rerun the related and full formal checks, and update PR CI.
+- [x] Both unused gates are closed without an attempt. The 22:00 producer stored one next-day record with no eligible shadow observations. Combined deployment evidence includes a separate `journal_close_timeout` failure (logged persisted records 30,100) and a later full PASS; the original failure cause remains unresolved and is not declared fixed by the retry.

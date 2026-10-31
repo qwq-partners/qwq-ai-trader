@@ -13,13 +13,13 @@
 
 **See/CI·병합:** [PR #314](https://github.com/qwq-partners/qwq-ai-trader/pull/314) 첫 CI는 21:33 통과했으나 그 사이 PR #315(애널리스트 문장)가 main에 병합돼 재합병(충돌 5파일: 문서 4·테스트 1, 폴백 문구 `시장 지표 요약` 채택)·재CI(run 41201823133 SUCCESS) 뒤 21:45 main `5af43e48`로 병합했다. 사용자 승인 문구: "병합·배포 진행".
 
-**See/운영 배포 1차 — 검증 실패·자동 롤백(21:46~22:01):** 서버 전체 검증에서 `tests/test_oct21_capture_integration.py::test_oct21_declared_window_and_volume_reaches_observed_flow` 1건 실패(`journal_close_timeout`, 10초 안에 30,100건 flush 미완, 나머지 10,012 passed). `local_deploy.sh`가 `83d1b21f`로 롤백·재기동(PID 4104752, 22:01:12, 오류 0, health 200, pending `[]`), 22:00 야간 cron은 정상 완료. 원인 진단: 같은 시간에 이 세션이 서버에서 배포 스크립트·로컬 검증 테스트를 돌려 2 vCPU 부하가 겹친 플레이크(CHANGELOG의 "동시 pytest 0" 주의와 동일 패턴). 음성 대조: 해당 테스트 단독 재실행 38.55초 통과, 테스트 파일은 `83d1b21f`·`5af43e48` 동일. 1차 로그는 세션 스크래치 `deploy-attempt1-rollback.log`에 보존(저장소 미포함). 테스트 skip·시한 연장 없이 같은 고정 SHA를 호스트 유휴 상태에서 재시도했다.
+**See/운영 배포 1차 — 검증 실패·자동 롤백(21:46~22:01):** 서버 전체 검증에서 `tests/test_oct21_capture_integration.py::test_oct21_declared_window_and_volume_reaches_observed_flow` 1건 실패(`journal_close_timeout`, sealed/fsync_confirmed=false, 로그의 persisted_records=30,100, 나머지 10,012 passed). `local_deploy.sh`가 `83d1b21f`로 롤백·재기동(PID 4104752, 22:01:12, 오류 0, health 200, pending `[]`), 22:00 야간 cron은 정상 완료. 원인 후보: 해당 세션은 같은 시간 서버의 배포 스크립트·로컬 검증 테스트가 겹쳤다고 보고했다. 최초 host 자원/지연의 직접 계측은 없어 동시 부하를 확정 원인으로 판정하지 않는다. 후속 관찰: 해당 테스트 단독 재실행 38.55초 통과, 테스트 파일은 `83d1b21f`·`5af43e48` 동일. 1차 로그는 세션 스크래치 `deploy-attempt1-rollback.log`에 보존(저장소 미포함). 테스트 skip·시한 연장 없이 같은 고정 SHA를 호스트 유휴 상태에서 재시도했다.
 
-**See/운영 인수 DONE — 22:18:21 KST:** 2차 `bash scripts/deploy/local_deploy.sh 5af43e48eb3f7b84d54ac5f4dfb7eaa8dc0bf71d` rc0. 서버 정식검증 **10,013 passed / 2 skipped / 2 xfailed · 830.42초 · 격리 0**. 재기동 PID **4116785**, 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`기준자본 확정`·`통합 트레이딩 엔진 시작`, 새 PID ERROR/Traceback 0. 150초 뒤(189초 시점) 인수: active/running·NRestarts 0·broker connected·복구 ready·journal_pending 0·귀속 미확정 0·pending `[]`, ops_check HTTP500/EGW00201/EGW00215/토큰 오류 0·정체/실패 누적 없음. 보호 48파일 지문 동일·crontab 동일·`KILL_SWITCH_KR` 유지·보고 스토어 행 수 불변(slots 18/payloads 14/analyses 0/web 0). `/reports`·`/reports/`·`/reports/2026-10-30`·`/reports/secret.txt`는 모두 404(페이지 파일은 첫 자연 발송 때 생성되므로 정상, 500 없음). 이 배포에는 PR #315의 애널리스트 문장 개선도 함께 적용됐다(그 PR의 별도 실행기는 미사용·미기동 템플릿 상태). 1차 롤백 재기동 1회와 2차 재기동 1회로 이날 재시작은 총 2회다. 실제 Astra 웹 리포트 생성·링크 수신·페이지 열림은 **11/2 07:40 첫 자연 발송에서 확인**한다.
+**See/운영 인수 DONE — 22:18:21 KST:** 2차 `bash scripts/deploy/local_deploy.sh 5af43e48eb3f7b84d54ac5f4dfb7eaa8dc0bf71d` rc0. 서버 정식검증 **10,013 passed / 2 skipped / 2 xfailed · 830.42초 · 격리 0**. 재기동 PID **4116785**, 기동 로그 `KIS API 연결 완료`·`KIS TR 세트: legacy`·`기준자본 확정`·`통합 트레이딩 엔진 시작`, 새 PID ERROR/Traceback 0. 150초 뒤(189초 시점) 인수: active/running·NRestarts 0·broker connected·복구 ready·journal_pending 0·귀속 미확정 0·pending `[]`, ops_check HTTP500/EGW00201/EGW00215/토큰 오류 0·정체/실패 누적 없음. 보호 48파일 지문 동일·crontab 동일·`KILL_SWITCH_KR` 유지·보고 스토어 행 수 불변(slots 18/payloads 14/analyses 0/web 0). `/reports`·`/reports/`·`/reports/2026-10-30`·`/reports/secret.txt`는 모두 404(페이지 파일은 첫 자연 발송 때 생성되므로 정상, 500 없음). 이 배포에는 PR #315의 애널리스트 문장 개선도 함께 적용됐다(그 PR의 별도 실행기는 미사용·미기동 템플릿 상태). 1차 롤백 재기동 1회와 2차 재기동 1회로 이번 통합 배포 흐름의 재시작은 총 2회다. 실제 Astra 웹 리포트 생성·링크 수신·페이지 열림은 **11/2 07:40 첫 자연 발송에서 확인**한다.
 
 **NEXT:** 다음 자연 발송(11/2 07:40)에서 Astra 실제 출력 품질·검증 통과율·비용·링크 페이지 열림 확인. 모델 응답이 숫자/영문 규칙에 자주 걸리면 프롬프트 보강 또는 허용 어휘 확대를 별도 변경으로 검토한다. P1 이력: 거울형 렌더(`_judgment/_issues/_watch`)·독립 리뷰 P2 7건 반영·전체 10001 passed는 당시 기록이며 v2로 대체됐다. 봇 프로세스가 내려가면 링크도 죽는 구조(정적 호스팅은 P4), 링크 미리보기 OFF 유지.
 <a id="r02-analyst-prose-20261031"></a>
-### R02-INSIGHT — 독자용 분석 문장과 간결한 출처 (DO)
+### R02-INSIGHT — 독자용 분석 문장과 간결한 출처 (DONE / 자연 내용 수락 WAIT)
 
 **사용자 피드백:** 새 승인으로20:24:17에 텍스트 예시1회를 발송했고 API accepted·실제 수신은 확인했다. 사용자는 근거 번호/출처가 복잡하고 미검증/미확보 표현이 거슬리며, 전문가 보고서처럼 느껴지지 않고 인사이트가 없다고 지적했다. 형식 전환/발송 성공을 내용 수락으로 세지 않는다. 이번 시험도 소비됐으며 새 발송 승인이 아니다.
 
@@ -29,9 +29,9 @@
 
 **Do/소스와 예시:** Terra6.1/high의 변경은 제품1파일과 관련 검사/과거 이미지 합성 fixture에 한정된다. RED4·후속 RED4/1을 확인하고 최종 관련138검사/14.45초·격리0을 통과했다. coordinator가 ad911467/33eb4811/928c300a로 통합했고 10/30 공개 자료로 검토 예시를 재구성했다. 새 예시는1568raw자/1379표시자/38줄·E/F표시0, 출처 설명357자로 이전605자보다 감소했다. 이는 대화 작성 예시이며 모델/Telegram 호출0이다.
 
-**See/독립 리뷰:** Sol6.1/high의 전체diff·실제 예시 리뷰는 APPROVE·P0/P1/P2없음이다. 연간 목표 하향이 보도된 자동차와 아직 실제 투자 축소가 제시되지 않은 반도체의 근거 강도 차이, 조건부 실적 경로·후속 촉매를 확인했다. 출처 링크·시각/공시 범위·사용자 지정 한계·기존 이미지 parser 검사를 보존했고 근거 없는 전일 저점 조건은 예시에서 제거했다. native actual/effective는 미노출이다. 정식 전체/CI와 운영 인수는 아직 진행 전/대기다.
+**See/독립 리뷰:** Sol6.1/high의 전체diff·실제 예시 리뷰는 APPROVE·P0/P1/P2없음이다. 연간 목표 하향이 보도된 자동차와 아직 실제 투자 축소가 제시되지 않은 반도체의 근거 강도 차이, 조건부 실적 경로·후속 촉매를 확인했다. 출처 링크·시각/공시 범위·사용자 지정 한계·기존 이미지 parser 검사를 보존했고 근거 없는 전일 저점 조건은 예시에서 제거했다. native actual/effective는 미노출이다. 이 시점 이후의 정식 전체/CI와 운영 인수는 아래 최종 근거를 따른다.
 
-**경계/NEXT:** 기존 후속 개발·검증·커밋/푸시·정상 배포 승인을 이어간다. 21시 개인 요약과22시 저장 일정은 실제 진입 전 대조하며 기존 소비된 실행기는 재사용하지 않는다. 추가 시험 Telegram/유료 모델 실험·설정/예산/매수중지 변경0. 관련 RED→GREEN·독립 코드/예시 리뷰·정식 전체/CI → 현재 일정에 맞는 고정SHA 운영 인수 → 다음 자연 LLM 내용/가독성 수락. O02 기존11/1·5·6 정리와 새 유효 E02/E01/E04 입력 조건은 유지한다.
+**경계:** 이 작업은 기존 후속 개발·검증·커밋/푸시·정상 배포 승인 안에서 수행했다. 추가 시험 Telegram/유료 모델 실험·설정/예산/매수중지 변경0이며 최종 운영 상태와 NEXT는 아래에 기록한다.
 
 
 **전체 검사 후속 — 21시 배포 미실행:** PR #315 첫 CI(run41198323486)는9,990passed/2skipped/2xfailed·388.95초·격리0·문법/비밀PASS다. 로컬 정식 전체는1failed/9,989passed/2skipped/2xfailed·1178.95초·격리0으로 실패했다. `test_unknown_cost_log_continue_does_not_reopen_analysis`는 요청 후 unknown을 기대했으나 실제 저장값은failed/request_sent=false/not_sent였다. 독립 Astra/high는50ms 검사 deadline에80ms 합성 admission 지연을 넣어 전송 전 종료·예약해제·payload0을 재현했다. 제품의 미전송 판정은 정당하며, 검사 의도인 전송 후 비용미상은 가짜 응답의 TimeoutError로 결정적으로 재현한다. 운영 timeout/정책을 늘리거나 재시도로 성공 처리하지 않는다. 테스트만의 후속 수정과 새 전체 검증 전에는 병합/배포하지 않는다.
@@ -39,6 +39,22 @@
 **검사 수정:** Terra6.1/high의 테스트1파일 변경을0e8e524f로 통합했다. 실제90초 역할 설정·실제 예산/저장 경로를 유지하고,80ms 합성 admission 지연 뒤 가짜 응답본문에서 TimeoutError를 발생시킨다. 요청 후unknown/미해결예약1/추가요청0/원장불변을 유지·강화했다. 원래 단언의 RED와관련317검사/33.08초·격리0 GREEN을 확인했다. 실제 최초 실행의 host 지연 원인은 별도 계측되지 않았으며 재현은 충분한 경계 원인이다. 제품 제한시간/전송/예산 정책 변경0, 새 전체/CI·독립 리뷰는 후속 근거를 따른다.
 
 **21시 자연 영수증/배포 검토:**21:00:46.500 파일 로그accepted1건,engine/daily 저장본문1개·주간/일일 제목·전일22시llm_migration 발췌 포함을 확인했다. 시장3슬롯은휴일skip·당일분석행0이다. 최초 journal-only 판독은INFO영수증을 찾지 못했으며 실제 파일로그로 출처를 바로잡았다(시험/재발송0). 실행기 최초실제Opus5.5/high 리뷰는NOT READY였고, 별도Sol 소스추적과위사실을반영한후속122.316초 검토는조건부READY·미해결P0/P1/P2없음이다. 그러나로컬실패로21:10~21:25실행기는plan/attempt없이미실행보존한다.22시기존저장작업완료후새수동창/실행기독립검토가필요하며자동연장은없다.운영83d1b21f/PID3981071·기존설정/매수중지유지다.
+
+**최종 소스 검증/통합:** 테스트 후속의 독립 Sol6.1/high 리뷰도APPROVE·미해결P0/P1/P2없음이다. 새 로컬 정식검증은9,990passed/2skipped/2xfailed·994.51초·격리0·문법/비밀PASS, 새 PR CI(run41200062751)는같은9,990검사·488.32초·격리0·문법/비밀PASS다. [PR #315](https://github.com/qwq-partners/qwq-ai-trader/pull/315)를고정`d678247f0775bb527ea28a125e9f8905aa3f4657`로병합했고검증HEAD609d5525와전체tree동일을확인했다. main CI(run41201369313)도9,990검사·463.59초·격리0·문법/비밀PASS로완료됐다.
+
+**22시 이후 준비와 중복 배포 중단:** 새 수동 실행기(22:05~22:30 진입·23:15 전 인수)는 합성16검사/문법PASS, 실제 Opus5.5/high 소스 리뷰216.872초·rc0·조건부READY를 받았다. 무입력 분류는 별도96.196초 검토를 거쳤다. 그러나22:05 실제 상태가 다른 세션의 PR #314 통합 배포로 바뀐 것을 발견해 이 실행기는 사용하지 않았다. 21시/22시 실행기 모두 plan/attempt/apply 없이 미실행으로 닫았고 새 예약·추가 재시작은 없다. 이 검토를 별도 웹 구현 전체의 승인으로 옮기지 않는다.
+
+**22시 자연 저장:** 22:00:01.594065에11/1용 `llm_migration` 기록1행, 기존 wrapper 정상 저장 완료/rc0을 확인했다. 적격 shadow 입력 파일이 없어 `completed_no_observations`이며 기존 phase는 그대로다. 다른 다음날 저장행0과 전체 영수증 digest를 같은 읽기 트랜잭션에서 대조했다. 이는 다음날 개인 요약용 저장이며 추가 Telegram 발송·새 관측기간·모델 품질이나 수익 입증이 아니다.
+
+**동시 배포의 실패 근거:** 다른 세션의 첫 운영 검증은 `tests/test_oct21_capture_integration.py::test_oct21_declared_window_and_volume_reaches_observed_flow`에서1failed/10,012passed/2skipped/2xfailed·852.96초로 실패해83d1b21f로 롤백됐다. 실제 결과는 `journal_close_timeout`, sealed/fsync_confirmed=false, 로그의 persisted_records=30,100이다. 확인 시 임시 JSONL은 없어 현재 파일을 재계수한 값은 아니다. 1,257 합성 주기·producer_checkpoint=None·실제 종료10초라는 검사 조건은 확인했지만 최초 host 지연/자원 원인은 미확정이다. 이후 PASS를 원인 해결로 간주하지 않으며 이번 작업에서 운영 수집 시간·제한은 변경하지 않았다.
+
+**See/운영 반영 인수 DONE — 22:24:14 KST:** 다른 세션의 후속 정상 배포가 `5af43e48eb3f7b84d54ac5f4dfb7eaa8dc0bf71d`로 완료됐다. 운영 전체10,013passed/2skipped/2xfailed·830.42초·격리0·문법/비밀PASS, 해당 main CI(run41202540919)도10,013검사·504.38초·격리0·문법/비밀PASS다. PR #315의 병합 SHA가 조상이며 분석 파일은 검증본과 byte동일임을 확인했다. 새로 배포하지 않고 독립 Sol6.1/high 소스 리뷰를 통과한 읽기 전용 인수로 이번 본문의 포함·운영 상태를 대조했다. 22:18:21 시작 PID4116785, 기동352.8초에42항목 전부PASS·active/running·NRestarts0·브로커연결/복구ready·미체결0,22:24:42 ops_check rc0·주요 API/토큰 오류0·정체/실패누적없음이다. 이 인수는 상속된 R02-INSIGHT 범위이며 별도 웹 구현 전체의 코드 승인으로 확대하지 않는다.
+
+보호48파일과cron은 다른 세션의22:03 사전 기준선과 모두 동일하다. 이전17시 인수 기준과는47개 동일하며 토큰 캐시1개는 배포 전21:15에 이미 갱신된 상태였다. 기존 자격/환경·evolved 미커밋·매수중지·월USD100/log_and_continue·GPT/Claude 및 Gemini 비활성을 보존했다. 21시 API accepted와22시 저장을 포함한 영수증은 재기동 전후 동일, T04는 만료·starts/tokens0·helper없음이다. 사후 근거는 비공개 `~/.local/state/qwq-task-audit/20261031/analyst-report-deploy-prerequisites/`의 adoption-acceptance/adoption-ops-check-public/concurrent-deploy-first-failure에 보존하며 원문 운영 자료는 커밋/외부 리뷰에 넣지 않는다.
+
+**완료 기록 독립 검토:** Sol6.1/high가 최신main0d3d2797 위의6개 문서 diff와 정제된 근거를 읽고 APPROVE·미해결P0/P1/P2없음으로 판정했다. 별도 웹 인수 기록을 보존하고 재시작2회는 해당 통합 배포 흐름으로 범위를 고쳤다. actual/effective metadata는 미노출이며 문서 리뷰를 운영 재검증으로 세지 않는다. 새 CI/배포 정본에 따른 푸시 전 로컬 정식 전체는10,016passed/2skipped/2xfailed·810.74초·rc0·격리0·문법/비밀PASS다. 문서 후속의 PR CI는 해당 PR의 실제 결과를 따른다.
+
+**NEXT:** R02-INSIGHT의 구현·통합·운영 반영은 완료다. 다음 적격 거래일 자연 본문의 논리·내용·모바일 수락은 WAIT이며 오프라인 작성 예시/기존 수신 확인으로 대체하지 않는다. 완료 문서는 최신main0d3d2797(PR #316 개발 도구/명세와 #317 웹 인수 기록 포함) 위에 반영하고 문서만으로 재배포하지 않는다. 재발한 합성 대량 기록 종료 실패의 원인 판독은 별도 미해결 후속으로 유지한다. O02는 기존11/1 09:46:10·11/5·6 09:34:10 실행 영수증 대기, E02-RR/E01/E04는 구별 가능한 새 유효 자연 입력이 생길 때만 재개한다. 매수중지/현금 제약 아래 신규 거래 순수익·계좌 순손익/TWR은 입증하지 않았다.
 
 <a id="r02-text-body-20261031"></a>
 ### R02-TEXT — 본문 이미지 폐기·읽을 수 있는 글 보고로 전환 (DONE / 자연 내용 수락 WAIT)
