@@ -14,11 +14,6 @@ from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_market_report_runner import DAY, NOW, MARKET, notifier, response
 
 
-@pytest.fixture(autouse=True)
-def no_image_transport(monkeypatch):
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda text: None)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize('bad', ['malformed', 'over1800', 'over6000', 'many_lines', 'fallback'])
 async def test_invalid_source_consumes_delivery_once_without_analysis_claim(tmp_path, monkeypatch, bad):
@@ -206,7 +201,6 @@ async def test_provider_value_errors_keep_unknown_settlement_metadata(tmp_path, 
 
 @pytest.mark.asyncio
 async def test_proven_unsent_provider_value_error_is_failed_not_invalid_output(tmp_path, monkeypatch):
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda text: None)
     error = ValueError('local controls')
     error._llm_response = response(success=False, request_sent=False, usage_known=False)
     manager = SimpleNamespace(complete_role=AsyncMock(side_effect=error))

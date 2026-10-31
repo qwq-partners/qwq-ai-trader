@@ -340,7 +340,6 @@ async def test_real_content_and_sources_produce_research_or_explicit_missing(tmp
     data = evidence()
     if not events: data['records'] = []
     monkeypatch.setattr('src.schedulers.report_scheduler.render_market_report', lambda *a: market())
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda *a: None)
     manager = SimpleNamespace(complete_role=AsyncMock(return_value=response(
         content=json.dumps(analysis(), ensure_ascii=False))))
     store = ReportStore(tmp_path/'r.db')

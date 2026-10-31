@@ -122,12 +122,13 @@ class TelegramNotifier:
             return "unknown"
 
     async def _send_report_once(self, target: str, text: str) -> str:
-        """One HTTP attempt. Acceptance is not proof a reader received it."""
+        """One routine HTTP attempt, with URL previews disabled. Acceptance is not receipt."""
         if not self._session or self._session.closed:
             self._session = aiohttp.ClientSession()
         async with self._session.post(
             f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
-            json={"chat_id": target, "text": text, "parse_mode": "HTML", "disable_notification": False},
+            json={"chat_id": target, "text": text, "parse_mode": "HTML", "disable_notification": False,
+                  "link_preview_options": {"is_disabled": True}},
             timeout=aiohttp.ClientTimeout(total=30),
         ) as response:
             data = await response.json()

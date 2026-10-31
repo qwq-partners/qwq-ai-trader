@@ -18,12 +18,6 @@ ROW = dict(code='0001', label='KOSPI', price=5638.35,
 MARKET = MarketSnapshot(sectors=({'name': '반도체', 'r1': 1.5, 'as_of': DAY, 'source': 'etf'},), kr_basis_date=DAY)
 
 
-@pytest.fixture(autouse=True)
-def text_fallback_for_index_contract(monkeypatch):
-    # These tests isolate index allowance/lock semantics from optional rendering.
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda text: None)
-
-
 def notifier():
     n = TelegramNotifier(bot_token='fake', chat_id='dm', report_chat_id='channel')
     n._send_report_once = AsyncMock(return_value='accepted')

@@ -34,7 +34,6 @@ def content(monkeypatch):
         compose_analysis=Mock(side_effect=compose),
         factual_fallback=Mock(side_effect=lambda source: source.replace('시장 판단', '시장 판단') + '\n분석 미확보'))
     monkeypatch.setitem(sys.modules, 'src.analytics.market_report_analysis', module)
-    monkeypatch.setattr('src.schedulers.report_scheduler._render_market_image', lambda text: None)
     return module
 
 

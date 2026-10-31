@@ -135,58 +135,8 @@ async def test_invalid_photo_or_private_audience_uses_text_before_any_photo_atte
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', [None, RuntimeError('render failed'), ImportError('optional')])
-async def test_renderer_failure_falls_back_once(tmp_path, monkeypatch, failure):
-    fn = renderer(monkeypatch, error=failure)
-    n = notifier()
-    n._send_report_once = AsyncMock(return_value='accepted')
-    n._send_report_photo_once = AsyncMock()
-    store = ReportStore(tmp_path/'r.db')
-    assert await ReportSchedule(store, n).tick(NOW, True, MARKET, '') == 'accepted'
-    fn.assert_called_once()
-    n._send_report_once.assert_awaited_once()
-    n._send_report_photo_once.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_malformed_renderer_result_is_pretransport_text_fallback(tmp_path, monkeypatch):
-    renderer(monkeypatch, object())
-    n = notifier()
-    n._send_report_once = AsyncMock(return_value='accepted')
-    n._send_report_photo_once = AsyncMock()
-    assert await ReportSchedule(ReportStore(tmp_path/'r.db'), n).tick(NOW, True, MARKET, '') == 'accepted'
-    n._send_report_once.assert_awaited_once()
-    n._send_report_photo_once.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_market_photo_archive_is_actual_caption_and_not_forecast(tmp_path, monkeypatch, png):
-    fn = renderer(monkeypatch, SimpleNamespace(png=png, caption='실제 캡션', width=720, height=1000, plain_text='보고 본문'))
-    n = notifier()
-    n._send_report_photo_once = AsyncMock(return_value='accepted')
-    n._send_report_once = AsyncMock(return_value='accepted')
-    store = ReportStore(tmp_path/'r.db')
-    def record(**kwargs): return record_morning_brief_dispatch(**kwargs, archive_dir=tmp_path/'archive')
-    s = ReportSchedule(store, n, record)
-    assert await s.tick(NOW, True, MARKET, '') == 'accepted'
-    r = store.receipt('market', 'morning', DAY)
-    paths = list((tmp_path/'archive').glob('*.json'))
-    dispatch = json.loads(paths[0].read_text())['dispatch'][0]
-    assert dispatch['sent_text'] == '실제 캡션'
-    assert dispatch['media_type'] == 'image/png' and dispatch['image_sha256'] == r['image_sha256']
-    assert dispatch['semantic_report_body'] == r['body'] == fn.call_args.args[0]
-    assert dispatch['brief_match'] == 'none' and dispatch['brief_ref'] is None
-    generator = DailyReportGenerator.__new__(DailyReportGenerator)
-    brief, sent, ref, reason = generator._resolve_brief_for_eval(DAY, tmp_path/'absent', tmp_path/'archive')
-    assert sent and brief['claims'] == {} and ref is None
-    assert await s.tick(NOW.replace(hour=21, minute=0), True, MARKET, '개인') == 'accepted'
-    fn.assert_called_once()
-    n._send_report_photo_once.assert_awaited_once()
-    n._send_report_once.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_real_rendered_page_is_the_archived_and_submitted_photo(tmp_path):
+async def test_routine_market_uses_text_and_archives_full_body_without_rendering(tmp_path, monkeypatch):
+    fn = renderer(monkeypatch, error=AssertionError('must not rasterize'))
     n = notifier()
     response = AsyncMock(status=200)
     response.__aenter__.return_value = response
@@ -194,72 +144,65 @@ async def test_real_rendered_page_is_the_archived_and_submitted_photo(tmp_path):
     n._session = Mock(closed=False)
     n._session.post.return_value = response
     store = ReportStore(tmp_path/'r.db')
-    def record(**kwargs):
-        return record_morning_brief_dispatch(**kwargs, archive_dir=tmp_path/'archive')
+    def record(**kwargs): return record_morning_brief_dispatch(**kwargs, archive_dir=tmp_path/'archive')
     schedule = ReportSchedule(store, n, record)
     assert await schedule.tick(NOW, True, MARKET, '') == 'accepted'
-    receipt = store.receipt('market', 'morning', DAY)
-    photo = store.archived_photo('market', 'morning', DAY)
-    assert receipt['media_type'] == 'image/png'
-    with Image.open(BytesIO(photo)) as image:
-        assert image.format == 'PNG' and image.width == 720
-    assert hashlib.sha256(photo).hexdigest() == receipt['image_sha256']
-    payload = n._session.post.call_args.kwargs['data']()
-    class Writer:
-        def __init__(self): self.parts = []
-        async def write(self, value): self.parts.append(value)
-    writer = Writer()
-    await payload.write(writer)
-    wire = b''.join(writer.parts)
-    assert photo in wire and receipt['caption'].encode() in wire
-    dispatch = json.loads(next((tmp_path/'archive').glob('*.json')).read_text())['dispatch'][0]
-    assert dispatch['sent_text'] == receipt['caption']
-    assert dispatch['semantic_report_body'] == receipt['body']
-    assert dispatch['image_sha256'] == receipt['image_sha256']
-    assert await ReportSchedule(ReportStore(store.path), n, record).tick(NOW, True, MARKET, '') == 'already_consumed'
-    n._session.post.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_cancelled_renderer_drains_before_after_lock_release(tmp_path, monkeypatch):
-    entered, release = Event(), Event()
-    def render(text):
-        entered.set()
-        assert release.wait(5)
-        return None
-    monkeypatch.setitem(sys.modules, 'src.analytics.market_report_image', SimpleNamespace(render_market_report_image=render))
-    now = NOW.replace(hour=16, minute=40)
-    market = MarketSnapshot(sectors=({'name': '반도체', 'r1': 1.5, 'as_of': DAY, 'source': 'etf'},), kr_basis_date=DAY)
-    store = ReportStore(tmp_path/'r.db')
-    n = notifier()
-    n._send_report_once = AsyncMock(return_value='accepted')
-    task = asyncio.create_task(ReportSchedule(store, n).tick(now, True, market, ''))
-    try:
-        assert await asyncio.to_thread(entered.wait, 2)
-        task.cancel()
-        await asyncio.sleep(0)
-        assert await ReportSchedule(ReportStore(store.path), n).tick(now, True, market, '') == 'input_collecting'
-    finally:
-        release.set()
-        with pytest.raises(asyncio.CancelledError): await task
-    n._send_report_once.assert_not_awaited()
-    with store.input_guard(DAY) as acquired: assert acquired
-
-
-@pytest.mark.asyncio
-async def test_notifier_preflight_fallback_archive_uses_persisted_text(tmp_path, monkeypatch, png):
-    renderer(monkeypatch, SimpleNamespace(png=png, caption='😀' * 451))
-    n = notifier()
-    n._send_report_once = AsyncMock(return_value='accepted')
-    n._send_report_photo_once = AsyncMock()
-    store = ReportStore(tmp_path/'r.db')
-    recorder = Mock()
-    assert await ReportSchedule(store, n, recorder).tick(NOW, True, MARKET, '') == 'accepted'
-    n._send_report_photo_once.assert_not_awaited()
     r = store.receipt('market', 'morning', DAY)
-    assert r['media_type'] == 'text/html'
-    assert recorder.call_args.kwargs['sent_text'] == r['body']
-    assert 'image_sha256' not in recorder.call_args.kwargs
+    dispatch = json.loads(next((tmp_path/'archive').glob('*.json')).read_text())['dispatch'][0]
+    assert r['media_type'] == 'text/html' and store.archived_photo('market', 'morning', DAY) is None
+    assert dispatch['sent_text'] == r['body'] == n._session.post.call_args.kwargs['json']['text']
+    assert dispatch['brief_match'] == 'none' and dispatch['brief_ref'] is None
+    generator = DailyReportGenerator.__new__(DailyReportGenerator)
+    brief, sent, ref, reason = generator._resolve_brief_for_eval(DAY, tmp_path/'absent', tmp_path/'archive')
+    assert sent and brief['claims'] == {} and ref is None
+    assert await schedule.tick(NOW, True, MARKET, '') == 'already_consumed'
+    n._session.post.assert_called_once()
+    fn.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_legacy_direct_rendered_photo_and_dispatch_archive_remain_readable(tmp_path):
+    from src.analytics.audience_reports import render_market_report
+    from src.analytics.market_report_image import render_market_report_image
+    body = render_market_report('morning', MARKET, NOW)
+    image = render_market_report_image(body)
+    assert image is not None
+    n = notifier()
+    response = AsyncMock(status=200)
+    response.__aenter__.return_value = response
+    response.json.return_value = {'ok': True}
+    n._session = Mock(closed=False)
+    n._session.post.return_value = response
+    store = ReportStore(tmp_path/'r.db')
+    assert await n.publish_report('market', 'morning', DAY, 'legacy', body, store=store,
+                                  photo=image.png, caption=image.caption) == 'accepted'
+    r = store.receipt('market', 'morning', DAY)
+    assert store.archived_photo('market', 'morning', DAY) == image.png
+    assert hashlib.sha256(image.png).hexdigest() == r['image_sha256']
+    assert n._session.post.call_args.args[0].endswith('/sendPhoto')
+    record_morning_brief_dispatch(kr_date=DAY, sent_text=r['caption'], expert_consensus=None,
+                                  status='sent', dispatched_brief_text=None, media_type=r['media_type'],
+                                  image_sha256=r['image_sha256'], semantic_report_body=r['body'],
+                                  archive_dir=tmp_path/'archive')
+    dispatch = json.loads(next((tmp_path/'archive').glob('*.json')).read_text())['dispatch'][0]
+    assert dispatch['sent_text'] == image.caption
+    assert dispatch['semantic_report_body'] == body and dispatch['image_sha256'] == r['image_sha256']
+    generator = DailyReportGenerator.__new__(DailyReportGenerator)
+    brief, sent, ref, reason = generator._resolve_brief_for_eval(DAY, tmp_path/'absent', tmp_path/'archive')
+    assert sent and brief['claims'] == {} and ref is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_photo_receipt_remains_consumed_and_readable(tmp_path, png):
+    store = ReportStore(tmp_path/'r.db')
+    assert store.claim('market', 'morning', DAY, 'old', 'old report', photo=png, caption='old caption')
+    store.finish('market', 'morning', DAY, 'accepted')
+    n = notifier()
+    n._send_report_once = AsyncMock()
+    assert await ReportSchedule(store, n).tick(NOW, True, MARKET, '') == 'already_consumed'
+    assert store.archived_photo('market', 'morning', DAY) == png
+    assert store.receipt('market', 'morning', DAY)['caption'] == 'old caption'
+    n._send_report_once.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -284,8 +227,7 @@ async def test_photo_cancellation_spends_slot_without_retry(tmp_path, png):
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_media_claim_drains_before_after_lock_release(tmp_path, monkeypatch, png):
-    renderer(monkeypatch, SimpleNamespace(png=png, caption='caption'))
+async def test_cancel_during_text_claim_drains_before_after_lock_release(tmp_path, monkeypatch):
     entered, release = Event(), Event()
     store = ReportStore(tmp_path/'r.db')
     real_claim = store.claim
@@ -309,7 +251,8 @@ async def test_cancel_during_media_claim_drains_before_after_lock_release(tmp_pa
         release.set()
         with pytest.raises(asyncio.CancelledError): await task
     assert await other.tick(now, True, market, '') == 'already_consumed'
-    assert store.archived_photo('market', 'after', DAY) == png
+    assert store.archived_photo('market', 'after', DAY) is None
+    assert store.receipt('market', 'after', DAY)['media_type'] == 'text/html'
     n._send_report_photo_once.assert_not_awaited()
 
 
@@ -323,3 +266,29 @@ def test_legacy_payload_remains_semantic_body_with_additive_media_table(tmp_path
     r = ReportStore(path).receipt('market', 'morning', DAY)
     assert r['body'] == '<b>legacy</b>' and r['media_type'] == 'text/html'
     assert r['image_sha256'] is None and r['caption'] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('http_status, reply_data, expected', [
+    (200, {'ok': True}, 'accepted'), (200, {'ok': False}, 'rejected'),
+    (500, {'ok': True}, 'unknown'),
+])
+async def test_scheduler_text_transport_terminal_receipt_is_not_replayed(tmp_path, http_status, reply_data, expected):
+    n = notifier()
+    response = AsyncMock(status=http_status)
+    response.__aenter__.return_value = response
+    response.json.return_value = reply_data
+    n._session = Mock(closed=False)
+    n._session.post.return_value = response
+    store = ReportStore(tmp_path/'r.db')
+    schedule = ReportSchedule(store, n)
+    assert await schedule.tick(NOW, True, MARKET, '') == expected
+    receipt = store.receipt('market', 'morning', DAY)
+    assert receipt['status'] == expected and receipt['media_type'] == 'text/html'
+    assert store.archived_photo('market', 'morning', DAY) is None
+    call = n._session.post.call_args
+    assert call.args[0].endswith('/sendMessage')
+    assert call.kwargs['json']['text'] == receipt['body']
+    assert call.kwargs['json']['link_preview_options'] == {'is_disabled': True}
+    assert await schedule.tick(NOW.replace(minute=44), True, MARKET, '') == 'already_consumed'
+    n._session.post.assert_called_once()

@@ -1,5 +1,4 @@
-"""Real report composition, role transport and photo delivery; synthetic IO only."""
-import hashlib
+"""Real report composition, role transport and text delivery; synthetic IO only."""
 import json
 from unittest.mock import AsyncMock, Mock
 
@@ -54,14 +53,16 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         assert payload['model'] == 'gpt-6.1-sol'
         assert 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(payload)
         assert llm.monthly_budget.status()['settled_count'] == 1
-        photo = store.archived_photo('market', 'morning', DAY)
-        assert photo.startswith(b'\x89PNG\r\n\x1a\n')
-        assert receipt['image_sha256'] == hashlib.sha256(photo).hexdigest()
+        assert store.archived_photo('market', 'morning', DAY) is None
+        assert receipt['media_type'] == 'text/html' and receipt['caption'] is None
         telegram._session.post.assert_called_once()
-        assert telegram._session.post.call_args.args[0].endswith('/sendPhoto')
+        call = telegram._session.post.call_args
+        assert call.args[0].endswith('/sendMessage')
+        assert call.kwargs['json']['text'] == receipt['body']
+        assert call.kwargs['json']['link_preview_options'] == {'is_disabled': True}
         dispatch = json.loads(next((tmp_path / 'archive').glob('*.json')).read_text())['dispatch'][0]
-        assert dispatch['sent_text'] == receipt['caption']
-        assert dispatch['semantic_report_body'] == receipt['body']
+        assert dispatch['sent_text'] == receipt['body']
+        assert dispatch.get('semantic_report_body') is None
         assert await ReportSchedule(ReportStore(store.path), telegram, record, analysis_manager=llm).tick(
             NOW.replace(minute=44), True, MarketSnapshot(), 'CHANGED_PRIVATE') == 'already_consumed'
         assert len(session.payloads) == 1
