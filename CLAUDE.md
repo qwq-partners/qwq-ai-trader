@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/1 R02-VALIDATE:** 실제 분석 응답의 ETF 일반어 거절을 재현해 검증 문맥과 프롬프트를 맞추고 안전한 거절 사유/필드를 기록한다. 관련 검사·실제 Opus5.5 독립 재리뷰와 새 고정 프로필 호출의 ready/validated를 확인했다. 전체/CI·운영/단발 발송의 완료 여부는 [단일 원장](docs/operations/execution-roadmap.md#r02-validation-rejection-20261101)을 따른다. 기존 설정·매수 중지·정기 슬롯은 유지한다.
+
 > **10/31 22:18 R02-WEB v2 운영 인수 DONE:** 고정 `5af43e48`/PID 4116785·서버 10,013검사 통과·189초 시점 인수 PASS(보호 48파일/cron/매수 중지/스토어 보존, PR #315 동반 적용). 1차 시도는 대량 기록 종료 실패로 자동 롤백 뒤 같은 SHA 재시도로 완료했다. 동시 pytest 부하가 원인 후보이나 최초 host 지연은 계측되지 않아 원인 해결은 미확정이다. 실제 Astra 출력·링크 수신·페이지 열림은 11/2 07:40 첫 자연 발송에서 확인한다. [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031). 배포 중 서버에서 다른 pytest를 돌리지 않는다.
 >
 > **10/31 R02-WEB v2 웹 전용 리포트:** 사용자가 P1 거울형 페이지를 거부하고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. [qwq.ai.kr/reports](docs/operations/execution-roadmap.md#r02-web-report-20261031)는 이제 자체 생성 데일리 리포트다. 새 고정 역할 `WEB_REPORT`(GPT-6 Astra/medium, 출력12288·180초·JSON)가 관측 사실 M(지수·미국·적격 섹터 ETF 전체)과 같은 공개 근거 E로 스탠스·제목·요약·시장 판단·이슈·업종/거시 해석·전망(기본/상방/하방)·체크리스트를 쓰고, `report_analyses(audience=web)`에 동결한다. 텔레그램 본문은 링크 한 줄만 유지한다. 검증·PR·운영 인수는 원장을 따르며 실제 모델 출력 품질·비용은 첫 자연 발송에서 확인한다.

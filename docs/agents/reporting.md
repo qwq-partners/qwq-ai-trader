@@ -37,6 +37,14 @@
   예외는 로그만 남기고 발송을 막지 않는다. `REPORT_WEB_BASE_URL=`이면 링크·파일 생성을 끈다. 공개 범위는 기존 사이트와 같고 noindex다.
 ### R02-INSIGHT — 분석 문장과 출처의 독자용 표현
 
+[R02-VALIDATE](../operations/execution-roadmap.md#r02-validation-rejection-20261101)는
+정규 ETF 구간에 실제 등락 관측이 있을 때 상품 종류 일반어 `ETF`를 공통 어휘로 허용한다.
+다른 영문·날짜·수치는 각 항목의 인용 근거에 있어야 하며 수치는 소수 자릿수까지 같은
+표기를 쓴다. 이는 의미의 진실성을 보증하는 검사가 아니다. 실패 영수증의 기존
+`invalid_output`에 허용된 `validation_code`/`validation_field`를 덧붙여 거절 위치를
+구분하며 원응답·문장·오류 전문은 일반 metadata에 넣지 않는다. 모델 원문 재작성,
+자동 재호출, 정기 슬롯 재소비는 하지 않는다.
+
 [현재 작업·운영 인수](../operations/execution-roadmap.md#r02-analyst-prose-20261031)를 따른다.
 연구 schema와 내부 E/F 근거 연결은 유지하지만 독자 본문에는 근거 번호·LLM 라벨·
 반복 수집 상태를 표시하지 않는다. 시장 판단은 근거의 강도에 따라 쟁점의 우선순위를
