@@ -424,7 +424,7 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
                 cited.append(ref)
     lines += [''] + _market_observations(sections) + ['<b>근거 / 출처</b>']
     records = {row['id']: row for row in bundle['records']}
-    types = {'title_excerpt': '기사 발췌', 'title': '제목', 'index': '색인',
+    types = {'title_excerpt': '기사 발췌', 'title': '제목만', 'index': '색인',
              'disclosure_index': '공시 색인', 'filing_index': '공시 색인',
              'filing_type_description': '공시 유형 설명', 'article_excerpt': '기사 발췌',
              'earnings_calendar': '실적 일정', 'indicator_value': '지표 관측',
@@ -460,8 +460,12 @@ def _compose_research(source_body, response_text, *, kind, day, public_evidence)
             date_label = {'disclosure': '접수일', 'macro': '기준일', 'calendar': '예정일'}.get(row['kind'], '사건일')
             metadata.append(date_label + ' ' + _display_time(row['event_date']))
         limitation = row['limitations']
-        if limitation == 'Legacy publication time unverified' and row['publication_status'] != 'verified':
+        if limitation in ('Legacy publication time unverified', '기존 저장 기사의 발행시각 미검증') and row['publication_status'] != 'verified':
             pass  # Covered by the source's time label and shared qualification.
+        elif limitation == '기존 캐시에는 기사 제목만 저장됨' and row['content_kind'] == 'title':
+            pass  # The content type already states this scope.
+        elif limitation in ('Source-provided excerpt', '제공처 발췌') and row['content_kind'] in ('title_excerpt', 'article_excerpt'):
+            pass  # The content type already identifies the excerpt.
         elif limitation == 'collected within 24h; publication time unverified' and row['publication_status'] != 'verified':
             metadata.append('최근 24시간 수집')
         elif limitation == 'Selected first-page regular filings; original content and earnings direction unverified':
@@ -488,7 +492,7 @@ def _display_time(value):
         if dt.tzinfo is None:
             return value + ' (시간대 미확인)' if 'T' in value else value
         dt = dt.astimezone(ZoneInfo('Asia/Seoul'))
-        return dt.strftime('%Y/%m/%d %H:%M:%S KST' if dt.second else '%Y/%m/%d %H:%M KST')
+        return dt.strftime('%Y/%m/%d %H:%M KST')
     except ValueError:
         return value
 

@@ -264,3 +264,20 @@ def test_shared_provenance_notes_and_counterpoint_remain_readable():
     assert '표시된 관측 표본' in body and '시장 전체 종목 수' in body and '당일 누적 수급' in body
     prompt, system = build_analysis_prompt(market(), kind='morning', day='2026-10-29', public_evidence=bundle)
     assert '출처와 시각은 코드가 표시' in prompt + system
+
+
+def test_known_korean_source_limitations_are_compact_but_custom_notes_survive():
+    bundle = evidence()
+    bundle['records'][0].update(limitations='기존 저장 기사의 발행시각 미검증', collected_at='2026-10-29T06:00:45+09:00')
+    bundle['records'][1].update(content_kind='title', limitations='기존 캐시에는 기사 제목만 저장됨')
+    bundle['records'][2].update(limitations='특별한 출처 시각 제한')
+    body, result = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert result == analysis()
+    assert '기존 저장 기사의 발행시각 미검증' not in body
+    assert body.count('발행시각과 다를 수 있습니다') == 1
+    assert '수집 기준 2026/10/29 06:00 KST' in body and '06:00:45' not in body
+    assert '제목만' in body and '기존 캐시에는 기사 제목만 저장됨' not in body
+    assert '특별한 출처 시각 제한' in body
+    bundle['records'][0]['limitations'] = '제공처 발췌'
+    body, _ = compose_analysis(market(), json.dumps(analysis(), ensure_ascii=False), kind='morning', day='2026-10-29', public_evidence=bundle)
+    assert '기사 발췌 · 제공처 발췌' not in body
