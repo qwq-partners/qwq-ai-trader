@@ -35,5 +35,5 @@
 - [x] Remove routine body rasterization, preserve historical media support and disable routine link previews.
 - [x] Run related tests with the project venv and tests/ explicitly; retain Red/Green output and actual commands.
 - [x] Independent review, then run `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` in the integration worktree.
-- [ ] Update reporting contract and entry docs, commit/push/PR with CI, then normal authorized fixed-SHA deployment only after current schedule/state checks. Never reuse consumed deployment attempts.
-- [ ] Record source/operation/receipt evidence and NEXT in the single roadmap. Natural mobile acceptance remains separate.
+- [x] Update reporting contract and entry docs, commit/push/PR with CI, then normal authorized fixed-SHA deployment only after current schedule/state checks. Never reuse consumed deployment attempts.
+- [x] Record source/operation/receipt evidence and NEXT in the single roadmap. Natural mobile acceptance remains separate.
