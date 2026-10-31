@@ -9,8 +9,9 @@
 - 문서: [로컬 개발 2·6절](docs/operations/local-development.md), `AGENTS.md`(Codex 푸시 전 로컬 verify 규칙), `CLAUDE.md` 검증 프로토콜 0단계. 운영 서버에서는 병렬을 쓰지 않는다(메모리 공유). 자체 호스팅 러너로 CI 자체를 로컬에서 돌리는 방식은 미적용.
 - **WSL 배포 명세(사용자 지시: Codex·Claude가 WSL에서 배포 작업)**: [Lightsail 배포 명세](docs/operations/lightsail-deployment.md) 전면 개정 — 원칙(승인·장외·고정 SHA·evolved 보존·WSL에 자격 없음)·준비·PR·병합·배포·인수·기록·실패·역할. `scripts/deploy/deploy_lightsail.sh`를 서버 정본 `local_deploy.sh` 호출로 재작성(`--check` 서버 사전 점검: pending/트리/서비스/health, `--deploy [SHA]`, `--postcheck [since]`, 평일 09:00~15:30 KST 거부·`QWQ_DEPLOY_ALLOW_MARKET_HOURS=1` 예외). stdin 전송·`git reset --hard`·매번 pip 설치를 하던 `remote_deploy.sh`는 evolved_overrides 보존 정책과 충돌해 삭제. `tests/deploy/test_deploy_scripts.py` 재작성(가짜 ssh 5건). `AGENTS.md`·`CLAUDE.md` 운영 스킬 절 갱신.
 
-## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 운영 미적용)
+## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 22:18 운영 인수 DONE)
 
+- 운영 인수: PR #314를 main `5af43e48`로 병합(PR #315 재합병 포함) 뒤 `local_deploy.sh` 1차는 대량 기록 검사 1건(`journal_close_timeout`)으로 자동 롤백 — 같은 호스트에서 동시 실행한 pytest의 2 vCPU 부하 플레이크(단독 재실행 통과·테스트 파일 동일). 2차는 호스트 유휴 상태에서 같은 SHA로 rc0: 서버 10,013 passed / 2 skipped / 2 xfailed, PID 4116785, 189초 인수 PASS(보호 48파일·cron·킬스위치·스토어 보존, `/reports` 404 정상). 실제 Astra 출력·링크·페이지는 11/2 07:40 첫 자연 발송에서 확인. [원장](docs/operations/execution-roadmap.md#r02-web-report-20261031).
 - 사용자 교정: P1 거울형 페이지(텔레그램 본문 재표현)는 내용이 비어 거부됐고 "텔레그램과 통일하지 말고 웹은 웹 전용으로" 지시했다. 웹은 자체 생성 리포트로 바꾸고 텔레그램 본문은 링크 한 줄만 유지한다.
 - 새 `src/analytics/web_report.py`: 스냅샷 적격 관측 사실 M#(지수 basis 구분·미국·섹터 ETF 전체) + 동결 공개 근거 E#로 고정 역할 `WEB_REPORT`(사용자 요청으로 상위 모델 GPT-6 Astra/medium, 출력12288·180초·JSON) 1회 호출. 스키마 `web-report-v1`(스탠스·제목·요약·시장 판단·이슈 1~4·업종/거시 해석·전망 기본/상방/하방·체크리스트), 숫자·날짜는 인용 근거만, 영문은 입력 표기만, 사건 E 인용 필수.
 - `report_analyses`에 audience `web` 허용(`claim/complete_analysis`), 웹 행은 실패에도 `result_json={facts, analysis|null, reason}` 보존·64KiB 한도. `ROLE_POLICY_VERSION` → `engine-roles-v5-web-report`.
