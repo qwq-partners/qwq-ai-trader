@@ -31,7 +31,11 @@ def _limit(value):
 
 
 def _snapshot(path, maximum):
-    """Return a stable, bounded regular-file snapshot and its identity."""
+    """Return bounded bytes after two same-fd reads and metadata checks agree.
+
+    Detect observed changes; this is not an atomic snapshot or protection
+    against changes that are reverted between observations (ABA).
+    """
     fd = os.open(os.fspath(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         before = os.fstat(fd)
@@ -47,11 +51,26 @@ def _snapshot(path, maximum):
         if os.read(fd, 1):
             raise ValueError("input changed during read")
         after = os.fstat(fd)
+        identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError("input changed during read")
+        # 같은 길이의 빠른 쓰기는 mtime/ctime이 같을 수 있다. 경로를 다시
+        # 열지 않고 같은 fd의 내용을 한 번만 대조한다. 두 번째 전체 버퍼는 없다.
+        os.lseek(fd, 0, os.SEEK_SET)
+        for expected in chunks:
+            offset = 0
+            while offset < len(expected):
+                part = os.read(fd, len(expected) - offset)
+                if not part or part != expected[offset:offset + len(part)]:
+                    raise ValueError("input changed during read")
+                offset += len(part)
+        if os.read(fd, 1):
+            raise ValueError("input changed during read")
+        checked = os.fstat(fd)
+        if identity != (checked.st_dev, checked.st_ino, checked.st_size, checked.st_mtime_ns, checked.st_ctime_ns):
+            raise ValueError("input changed during read")
     finally:
         os.close(fd)
-    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
-    if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-        raise ValueError("input changed during read")
     raw = b"".join(chunks)
     return raw, {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "identity": identity}
 
