@@ -52,6 +52,7 @@ def test_json_and_ids_errors_are_safe():
     with pytest.raises(ValueError) as exc:
         compose_analysis(market(), 'CANARY {', kind='morning', day='2026-10-29', public_evidence=evidence())
     assert (exc.value.code, exc.value.field) == ('invalid_json', 'response')
+    assert exc.value.__suppress_context__ is True
     obj = analysis(); obj['thesis']['evidence_ids'] = ['SECRET_ID']
     with pytest.raises(ValueError) as exc:
         compose(obj)
@@ -138,4 +139,19 @@ async def test_broken_diagnostic_still_completes_factual_report(tmp_path, monkey
     row = await prepare_market_report(store, kind='morning', day='2026-10-29', source_snapshot_id='synthetic', source_body=market(), manager=manager, public_evidence=evidence(), now=NOW)
     assert row['status'] == 'failed' and row['metadata']['reason'] == 'invalid_output'
     assert 'PRIVATE_DIAGNOSTIC_CANARY' not in json.dumps(row['metadata'])
+    manager.complete_role.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_runner_distinguishes_no_event_citation_without_retry(tmp_path):
+    obj = analysis()
+    obj['issues'][0]['evidence_ids'] = ['F2']
+    manager = SimpleNamespace(complete_role=AsyncMock(return_value=response(content=json.dumps(obj, ensure_ascii=False))))
+    store = ReportStore(tmp_path/'r.db')
+    kwargs = dict(kind='morning', day='2026-10-29', source_snapshot_id='synthetic', source_body=market(), manager=manager, public_evidence=evidence(), now=NOW)
+    row = await prepare_market_report(store, **kwargs)
+    assert row['status'] == 'failed' and row['metadata']['reason'] == 'invalid_output'
+    assert row['metadata']['validation_code'] == 'no_event_cited'
+    assert row['metadata']['validation_field'] == 'issues'
+    assert await prepare_market_report(store, **kwargs) == row
     manager.complete_role.assert_awaited_once()

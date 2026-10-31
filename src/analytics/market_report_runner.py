@@ -175,6 +175,8 @@ def _validation_diagnostic(error):
     fallback = {'validation_code': 'composition_failure', 'validation_field': 'response'}
     try:
         module = importlib.import_module('.market_report_analysis', __package__)
+        if isinstance(error, module.ResearchEvidenceUnavailable):
+            return {'validation_code': 'no_event_cited', 'validation_field': 'issues'}
         if not isinstance(error, module.AnalysisValidationError):
             return fallback
         codes = {'invalid_json', 'invalid_schema', 'invalid_item', 'invalid_evidence',

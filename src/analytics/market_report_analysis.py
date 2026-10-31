@@ -353,7 +353,7 @@ def _research_validate(text, facts, bundle, sections):
     try:
         obj = json.loads(text, object_pairs_hook=pairs)
     except (TypeError, ValueError):
-        reject('invalid_json', 'response')
+        raise AnalysisValidationError('invalid_json', 'response') from None
     if not isinstance(obj, dict) or set(obj) != {'thesis', 'issues'}:
         reject('invalid_schema', 'response')
     sources = {f'F{i}': unescape(fact) for i, fact in enumerate(facts, 1)}
