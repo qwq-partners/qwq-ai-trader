@@ -9,7 +9,7 @@
 ## 로컬 안전 경계
 
 - 사용자가 현재 요청에서 명시하지 않은 실거래 주문을 실행하지 않는다.
-- 사용자가 현재 요청에서 명시하지 않은 운영 서버 SSH, `systemctl`, 재시작, 배포를 실행하지 않는다.
+- 사용자가 현재 요청에서 명시하지 않은 운영 서버 SSH, `systemctl`, 재시작, 배포를 실행하지 않는다. 승인된 배포는 WSL에서 `bash scripts/deploy/deploy_lightsail.sh`(`--check` → `--deploy` → 150초 뒤 `--postcheck`)만 쓰고 장외 창·고정 SHA·영수증 기록을 지킨다. 절차 정본은 [Lightsail 배포 명세](docs/operations/lightsail-deployment.md)다.
 - 로컬 기본 검증에서는 외부 API와 운영 자격증명을 사용하지 않는다.
 - `.env`, 로그, 캐시, PID, 거래 상태 파일을 커밋하지 않는다.
 

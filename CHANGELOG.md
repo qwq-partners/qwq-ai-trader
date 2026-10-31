@@ -7,6 +7,7 @@
 - `scripts/dev/bootstrap.sh`: 실제 이미지 렌더 테스트용 한글 글꼴(`fonts-wqy-zenhei`, CI 와 동일) 확인·설치(`QWQ_BOOTSTRAP_SKIP_FONT=1` 로 건너뜀), `QWQ_BOOTSTRAP_PARALLEL=1` 로 pytest-xdist 설치, 검증 전용 머신용 `QWQ_BOOTSTRAP_REQUIRED_TOOLS="git"` 안내.
 - `tests/conftest.py`: xdist 워커는 격리 요약을 쓰지 않고 컨트롤러가 병렬 주석과 함께 한 번 쓴다(차단은 워커 안에서 테스트 실패로 드러남).
 - 문서: [로컬 개발 2·6절](docs/operations/local-development.md), `AGENTS.md`(Codex 푸시 전 로컬 verify 규칙), `CLAUDE.md` 검증 프로토콜 0단계. 운영 서버에서는 병렬을 쓰지 않는다(메모리 공유). 자체 호스팅 러너로 CI 자체를 로컬에서 돌리는 방식은 미적용.
+- **WSL 배포 명세(사용자 지시: Codex·Claude가 WSL에서 배포 작업)**: [Lightsail 배포 명세](docs/operations/lightsail-deployment.md) 전면 개정 — 원칙(승인·장외·고정 SHA·evolved 보존·WSL에 자격 없음)·준비·PR·병합·배포·인수·기록·실패·역할. `scripts/deploy/deploy_lightsail.sh`를 서버 정본 `local_deploy.sh` 호출로 재작성(`--check` 서버 사전 점검: pending/트리/서비스/health, `--deploy [SHA]`, `--postcheck [since]`, 평일 09:00~15:30 KST 거부·`QWQ_DEPLOY_ALLOW_MARKET_HOURS=1` 예외). stdin 전송·`git reset --hard`·매번 pip 설치를 하던 `remote_deploy.sh`는 evolved_overrides 보존 정책과 충돌해 삭제. `tests/deploy/test_deploy_scripts.py` 재작성(가짜 ssh 5건). `AGENTS.md`·`CLAUDE.md` 운영 스킬 절 갱신.
 
 ## 2026-10-31 — 웹 전용 데일리 리포트 v2 (R02-WEB, 운영 미적용)
 

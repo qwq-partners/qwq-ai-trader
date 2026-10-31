@@ -652,6 +652,7 @@ journalctl -u qwq-ai-trader -f                                 # 실시간 로�
 
 ### 운영 스킬 (2026-09-10~)
 - `/ops-check` 운영 점검 요약 (`scripts/dev/ops_check.sh`) · `/deploy-local` 서버 측 배포 (`scripts/deploy/local_deploy.sh`, 자동 롤백) · `/pr-merge` gh 기반 PR→verify→머지
+- **WSL에서의 배포(2026-10-31~, Claude·Codex 공통)**: `bash scripts/deploy/deploy_lightsail.sh`(`--check` → 사용자 승인 뒤 `--deploy [SHA]` → 150초 뒤 `--postcheck`)가 서버의 `local_deploy.sh`를 SSH로 부른다. 장중 거부·pending 0·evolved_overrides 외 변경 중단·고정 SHA. 정본 [docs/operations/lightsail-deployment.md](docs/operations/lightsail-deployment.md)
 - `main`은 보호 브랜치 — 직접 push 불가, 반드시 PR + `verify` 통과
 
 ## 코드 리뷰 프로토콜
