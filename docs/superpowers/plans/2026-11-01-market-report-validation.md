@@ -43,12 +43,19 @@ Actual WSL full verification of d896a37a failed one same-size mutation test (10,
 - [x] Compare a bounded second content pass on the same descriptor; preserve regular-file, size, EOF and metadata checks, with no retries/sleeps. Do not claim atomicity or complete ABA protection.
 - [x] Independent actual Claude Opus 5.5/high review APPROVE and focused GREEN (20 passed, isolation zero).
 - [x] Actual WSL serial full verification: 10,040 passed / 2 skipped / 2 xfailed, 366.27s test / 374.39s total, isolation zero, syntax/secrets PASS.
-- [ ] Source/doc commit/push/PR CI/main CI and integration.
-- [ ] Bind the resulting fixed SHA and reassess the real deployment window before collecting a fresh baseline; no early reservation or timeout of canonical rollback.
+- [x] Source/doc commit/push from actual WSL; PR #320 and merged cfc9bc20 main CI each passed 10,040 tests with isolation zero.
+- [x] Bind the resulting fixed SHA and reassess the real deployment window before collecting a fresh baseline; no early reservation or timeout of canonical rollback.
 
 ## Task 3 — Deployment and one report
 
-- [ ] Resume in the user's WSL checkout, run serial full verification and bind the reviewed main SHA with fresh operating/schedule/protected-state checks. The proposed AWS-direct exception was withdrawn after the user's clarification.
-- [ ] Use the canonical full-verification/rollback deploy path; accept only after at least 150 seconds and protected-state/broker/recovery checks.
-- [ ] Bind and offline-revalidate the already-generated frozen `ready/validated` response against the deployed code without another model call. The single sender preserves the actual output, labels the input date and refuses factual fallback.
-- [ ] Send once to the existing market channel, recording API acceptance separately from mobile reception/content acceptance. Update ledger/NEXT and deployment receipt; documentation-only follow-up does not trigger another deployment.
+- [x] Resume in the user's WSL checkout, run serial full verification and bind the reviewed main SHA with fresh operating/schedule/protected-state checks. The proposed AWS-direct exception was withdrawn after the user's clarification.
+- [x] Use the canonical full-verification/rollback deploy path; accept only after at least 150 seconds and protected-state/broker/recovery checks.
+- [x] Bind and offline-revalidate the already-generated frozen `ready/validated` response against the deployed code without another model call. The single sender preserves the actual output, labels the input date and refuses factual fallback.
+- [x] Send once to the existing market channel, recording API acceptance separately from mobile reception/content acceptance. Update ledger/NEXT and deployment receipt; documentation-only follow-up does not trigger another deployment.
+
+## Final operating receipt — 2026-11-01 KST
+
+- Actual WSL full verification, PR #320 CI and merged-main CI: each 10,040 passed / 2 skipped / 2 xfailed, isolation zero. WSL initiated canonical fixed-SHA deployment of cfc9bc20; server full verification also passed 10,040 tests, rc0, no rollback.
+- Restart04:18:41, PID4157369; canonical postcheck9/9. Initial acceptance30/31 retained unchanged: one protected versioned script had an approved comment-only change. Independent Astra/high reviewed exact source-hash/receipt-lineage reconciliation; synthetic gate22 and sender13 tests passed. Final04:35:11 acceptance32/32 at uptime988.61s:47files unchanged, one approved source artifact matches target. Settings, buy stop, cron, report store, evolution and expired T04 state preserved.
+- One text report accepted by Telegram04:35:20; archived10/30 input label, no image, no scheduled-slot replay, no additional generation during sending. Actual mobile reception/content acceptance and natural output remain WAIT.
+- Completion documentation only; no repeat deployment. Existing O02/NEXT and engine evidence constraints follow the execution ledger. The previous high-volume close timeout remains unexplained.
