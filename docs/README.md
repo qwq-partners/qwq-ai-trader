@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **11/1 현재 작업:** [R02-VALIDATE](operations/execution-roadmap.md#r02-validation-rejection-20261101)는 정상 ETF 분석의 검증 거절을 재현·수정한다. 실제 원응답의 무수정 통과와 새 모델 호출의 ready/validated를 확인했으며, 전체 검사·CI·배포·명시 승인 단발 발송의 최종 근거는 원장에 기록한다. 과거 완료 작업과 자연 내용 수락 WAIT는 구분한다.
+
 > **10/31 분석 문장 반영 완료:** [R02-INSIGHT](operations/execution-roadmap.md#r02-analyst-prose-20261031)는 근거/출처 복잡성과 인사이트 부족 피드백을 반영했다. PR #315의 관련317·전체9,990검사와 독립 리뷰/CI를 통과했고, 통합 운영5af43e48에 동일 소스가 포함됨을22:24의42항목 읽기 점검으로 인수했다. 기존 설정·매수중지는 유지하며 추가 시험 발송0, 자연 LLM/모바일 내용 수락은 WAIT다. 완료 문서만으로 재배포하지 않는다.
 
 > **10/31 17:36 텍스트 보고 운영 인수 DONE:** [R02-TEXT](operations/execution-roadmap.md#r02-text-body-20261031)는 본문→PNG 경로를 제거하고 전체 분석문·출처를 Telegram 텍스트로 전달한다. 고정83d1b21f/PID3981071·운영9,984검사·기동165.2초/43항목PASS이며 보호48파일/기존cron/매수중지·월USD100/log_and_continue·GPT/Claude를 보존했다. 뉴스·공시 분석은 유지하며 추가 시험 발송은 없다. O02 오늘 사전점검은 완료, 11/1 기존 정리 영수증과 다음 자연 텍스트 내용 수락·새 유효 E02/E01/E04 입력은 WAIT다. 완료 문서 재배포는 없으며 아래 상태는 당시 이력이다.

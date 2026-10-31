@@ -1,5 +1,22 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-validation-rejection-20261101"></a>
+### R02-VALIDATE — 정상 분석의 검증 거절 수정 (DO)
+
+**승인/Plan:** 사용자: “거절 원인 찾아서 제대로 고치고, 검증 후 커밋/푸시/배포까지 마무리해줘. 기존 설정과 매수 중지는 유지하고 정상 분석 보고서를 텔레그램으로 다시 한 번 보내줘.” [실행 계획](../superpowers/plans/2026-11-01-market-report-validation.md). 이번 지시는 새 단발 발송1회이며 이미 소비한 시험/정기 슬롯을 재실행하지 않는다. 시작 main54b2ba65·운영5af43e48/PID4116785, 운영 evolved 미커밋과 매수 중지는 보존한다.
+
+**진단:** 11/1 00:26 시험은 실제 모델 응답 뒤 `invalid_output`으로 사실 요약을 보냈고 API accepted였으나 정상 분석의 수락은 아니다. 당시 원응답은 보존되지 않아 정확한 최초 원인은 미확정이다. 01:57 별도 진단1회는 기존 MARKET_BRIEF GPT-6.1 Sol/medium 고정 프로필·공통 USD100/log_and_continue로 입력2084/출력808token·finish stop·success 뒤 같은 거절을 재현했다. 저장된 공개 원응답을 순수 함수로 대조한 독립 Astra/high 진단은 `thesis.text`, `issues[0].counterpoint`, `issues[1].counterpoint`의 일반어 ETF만 어휘 검사에 걸림을 확인했다. 나머지8필드는 통과했다. 프롬프트는 ETF 표본의 한계를 설명하도록 지시하지만 검증은 섹션 제목을 버리고 개별 근거 문자열만 검사하는 불일치다. native 실제 모델/실효 effort metadata는 미노출이다.
+
+**Do 범위:** 정규 ETF 섹션에 실제 관측이 있을 때 고정 일반어 ETF만 허용한다. 임의 영문/티커를 전역 허용하거나 숫자·날짜의 인용 범위를 넓히지 않는다. 프롬프트 계약을 명시하고 실패 metadata에는 허용된 사유 코드·정적 필드 경로만 기록한다. 모델 원문을 고쳐 통과시키거나 자동 재호출하지 않는다. Terra6.1/high 구현은 같은 base의 별도 worktree, coordinator는 문서/통합/배포/발송을 담당한다.
+
+**See/소스·실제 출력:** 구현772ab801과 리뷰 보완294fdf1c를 통합했다. 합성 RED10+빈 구간 RED1 뒤 관련152검사 PASS/격리0, 리뷰 보완 RED2 뒤 관련81검사 PASS/격리0이다. 실제 `claude-opus-5-5`/요청high(실효 effort 미노출)의 소스 리뷰와 보완 재리뷰는 APPROVE이며 도구/MCP 없이 저장소 소스·합성 검사만 제공했다. 두 LOW(파서 예외 문맥 표시 억제, 사건 미인용의 별도 진단)를 반영했다. 원응답은 변경 없이1481자/37줄로 통과했다. 별도 검토된 단발 생성기는 새 MARKET_BRIEF 호출1회에서 `ready/validated`·실제gpt-6.1-sol·입력2194/출력1056token·finish stop을 확인했다. 10/30 선택 기사3행(중복 포함)·공시0의 제한된 저장 입력이며 자연 정기 출력이 아니다. 발송 대기 본문은 기준일 설명 포함1548자/40줄, 모델 문장 교체0·정기 스토어 변경0·보호 설정/매수 중지 동일이다. 원응답/본문은 비공개 `report-validation-preview/`에 보존한다.
+
+**최종 게이트:** 첫 전체 실행은 리뷰의 작은 오류 경로 보완을 적용하려고 coordinator가 의도적으로 중단했다(실패 관측 없음·rc143/230.24초). 최종 소스에서 직렬 전체 검증을 새로 수행하며 중단된 실행을 PASS로 세지 않는다. 새 배포 규칙의 WSL 전용 진입점과 현재 AWS 호스트의 차이는 독립 Sol6.1/high로 확인했다. WSL 실행 환경이 없으면 배포 직전에 서버 정본 직접 실행의 좁은 방법 예외만 확인한다. 사전/150초 뒤 인수, 설정/cron/영수증 보존, 고정 SHA와 전체 직렬 검증은 유지한다.
+
+**See/최종 로컬 검증 DONE — 02:23 KST:** 정식 `QWQ_VERIFY_PYTHON=/home/ubuntu/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`는 **10,031 passed / 2 skipped / 2 xfailed**, 테스트814.77초·전체831.19초·rc0, 격리 위반0·문법/비밀정보 PASS다. 검사 선택/병렬/skip 환경변수를 제거한 직렬 전체다. 새 사전/사후 읽기 점검기는 독립 Sol6.1/high 리뷰와 합성10검사 PASS, 정상 분석만 허용하는 새 단발 전송기와 보낼 실제 본문의 공개 근거 대조도 각각 APPROVE/READY다(native actual/effective 미노출). 이 단계에서 운영 배포·새 Telegram 전송은0이며 PR/main CI·운영 인수·수신은 다음 게이트다.
+
+**근거/대기:** 비공개 `~/.local/state/qwq-task-audit/20261101/report-rejection-diagnosis/`에 공개 입력·원응답·독립 판독 근거를 보존하며 저장소/외부 리뷰에는 원문을 넣지 않는다. 개발·독립 리뷰·전체 검사·CI·운영 인수와 새 발송은 아직 완료가 아니다. 기존 O02 11/1 09:46:10·11/5·6 정리와 T04 만료를 유지한다. **NEXT:** R02-VALIDATE 검증/배포/새 단발 발송 → 다음 자연 보고의 내용 수락; E02-RR/E01/E04는 새 유효 자연 입력에서 재개한다.
+
 <a id="r02-web-report-20261031"></a>
 ### R02-WEB — 웹 전용 데일리 리포트(qwq.ai.kr/reports)와 텔레그램 링크 (v2 DO / 운영 미적용)
 

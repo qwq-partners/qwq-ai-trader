@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from html import escape, unescape
 from urllib.parse import urlsplit
 
-PROMPT_VERSION = 'market-analysis-v3-analyst-prose'
+PROMPT_VERSION = 'market-analysis-v4-research-validation'
 _HEAD = '<b>시장 판단</b>'
 _WATCH = '<b>국내 관전 포인트</b>'
 
@@ -223,6 +223,15 @@ def factual_fallback(source_body: str, *, public_evidence=None) -> str:
 
 
 
+class AnalysisValidationError(ValueError):
+    """Fixed rejection category and schema path; never includes response text."""
+
+    def __init__(self, code, field):
+        self.code = code
+        self.field = field
+        super().__init__(code + ': ' + field)
+
+
 class ResearchEvidenceUnavailable(ValueError):
     """No public event is available to ground a research issue."""
 
@@ -313,6 +322,10 @@ def _research_prompt(source_body, *, kind, day, public_evidence):
               '각 문장 필드는 120자 이하, 전체 본문 3000자 60줄 이하를 위해 간결하게 작성하세요. '
               '뉴스·공시·일정 중 하나 이상의 사건을 issue에 인용하고 핵심적인 사건 최대 두 개를 선택하세요. '
               '전체 답변에서 서로 다른 공개 근거 E 번호는 최대 4개만 인용하세요. '
+              '각 항목의 영문·날짜·수치는 그 항목의 evidence_ids 근거에 있어야 합니다. '
+              '수치는 소수 자릿수까지 근거와 정확히 같아야 하고 날짜는 연-월-일 전체로 쓰세요. '
+              '단, 실제 ETF 표본 구간이 있으면 ETF는 공통 자료 유형으로 사용할 수 있습니다. '
+              'thesis에 출처 수집 진단을 반복하지 마세요. JSON 스키마, 각 필드 120자, 인용을 자체 점검하세요. '
               '근거의 강도에 따라 이슈의 우선순위를 정하고 지금 시장 해석에서 무엇이 달라지는지, '
               '실적에 연결되는 조건부 경로를 제시하세요. 근거보다 확신을 높이지 마세요. '
               '각 이슈는 사건과 영향의 연결, 반대 근거, 관련된 다음 촉매와 판단을 바꿀 반증 조건을 구체적으로 쓰세요. '
@@ -326,60 +339,78 @@ def _research_prompt(source_body, *, kind, day, public_evidence):
     return prompt, system
 
 
-def _research_validate(text, facts, bundle):
+def _research_validate(text, facts, bundle, sections):
+    def reject(code, field):
+        raise AnalysisValidationError(code, field)
+
     def pairs(items):
         result = {}
         for key, value in items:
             if key in result:
-                raise ValueError('duplicate key')
+                reject('invalid_json', 'response')
             result[key] = value
         return result
     try:
         obj = json.loads(text, object_pairs_hook=pairs)
     except (TypeError, ValueError):
-        raise ValueError('invalid JSON') from None
+        raise AnalysisValidationError('invalid_json', 'response') from None
     if not isinstance(obj, dict) or set(obj) != {'thesis', 'issues'}:
-        raise ValueError('invalid schema')
+        reject('invalid_schema', 'response')
     sources = {f'F{i}': unescape(fact) for i, fact in enumerate(facts, 1)}
     sources.update({r['id']: ' '.join(str(r[k] or '') for k in _PUBLIC_FIELDS if k not in ('id', 'url')) for r in bundle['records']})
     numeric_sources = {f'F{i}': unescape(fact) for i, fact in enumerate(facts, 1)}
     numeric_sources.update({r['id']: (r['title'] or '') + ' ' + (r['excerpt'] or '') for r in bundle['records']})
     event_ids = {r['id'] for r in bundle['records'] if r['kind'] in ('news', 'disclosure', 'calendar')}
-    def check(item, fields):
+    # This report-wide generic term is allowed only for a standard, populated ETF section.
+    report_vocabulary = set()
+    in_etf = False
+    for line in sections:
+        if line.startswith('<b>'):
+            in_etf = bool(re.fullmatch(r'<b>업종 흐름 · 한국 상장 섹터 ETF \d{4}-\d{2}-\d{2}</b>', line))
+        elif in_etf and (re.fullmatch(r'• .+ [+-]\d+\.\d{2}%', line)
+                         or re.fullmatch(r'최근 1세션 관측 표본 상대 상위 .+ [+-]\d+\.\d{2}%, 하위 .+ [+-]\d+\.\d{2}%입니다\.', line)):
+            report_vocabulary.add('etf')
+    def check(item, fields, path):
         if not isinstance(item, dict) or set(item) != set(fields) | {'evidence_ids'}:
-            raise ValueError('invalid item')
+            reject('invalid_item', path)
         ids = item['evidence_ids']
         if not isinstance(ids, list) or not ids or len(ids) > 16 or any(not isinstance(x, str) or x not in sources for x in ids):
-            raise ValueError('invalid evidence')
+            reject('invalid_evidence', path + '.evidence_ids')
         evidence = unicodedata.normalize('NFKC', ' '.join(sources[x] for x in ids))
         date_pattern = r'\d{4}-\d{2}-\d{2}'
         allowed_dates = set(re.findall(date_pattern, evidence))
         numeric_basis = unicodedata.normalize('NFKC', ' '.join(numeric_sources[x] for x in ids))
         numeric = set(re.findall(r'\d+(?:[.,]\d+)*', re.sub(date_pattern, '', numeric_basis)))
-        latin = {x.casefold() for x in re.findall(r'[A-Za-z]+', evidence)}
+        latin = {x.casefold() for x in re.findall(r'[A-Za-z]+', evidence)} | report_vocabulary
         for key in fields:
             value = item[key]
-            if not isinstance(value, str) or not value.strip() or len(value) > 120:
-                raise ValueError('invalid prose')
+            field = path + '.' + key
+            if not isinstance(value, str) or not value.strip():
+                reject('invalid_prose', field)
+            if len(value) > 120:
+                reject('too_long', field)
             normalized = unicodedata.normalize('NFKC', value)
-            prose_dates = re.findall(date_pattern, normalized)
-            numbers_only = re.sub(date_pattern, '', normalized)
-            if (not re.search(r'[가-힣]', value) or re.search(r'[<>]|https?://|www\.', normalized, re.I)
-                    or any(unicodedata.category(c).startswith('C') or unicodedata.category(c) in {'Zl', 'Zp'} for c in value)
-                    or any(d not in allowed_dates for d in prose_dates)
-                    or any(n not in numeric for n in re.findall(r'\d+(?:[.,]\d+)*', numbers_only))
-                    or any(x.casefold() not in latin for x in re.findall(r'[A-Za-z]+', normalized))
-                    or re.search(r'동행하거나\s*다르게|유지되거나\s*역전|일치하거나\s*다르게', normalized)):
-                raise ValueError('invalid prose')
-    check(obj['thesis'], ('text',))
+            if any(unicodedata.category(c).startswith('C') or unicodedata.category(c) in {'Zl', 'Zp'} for c in value):
+                reject('invalid_control', field)
+            if not re.search(r'[가-힣]', value) or re.search(r'[<>]|https?://|www\.', normalized, re.I):
+                reject('invalid_prose', field)
+            if any(d not in allowed_dates for d in re.findall(date_pattern, normalized)):
+                reject('unsupported_date', field)
+            if any(n not in numeric for n in re.findall(r'\d+(?:[.,]\d+)*', re.sub(date_pattern, '', normalized))):
+                reject('unsupported_numeric', field)
+            if any(x.casefold() not in latin for x in re.findall(r'[A-Za-z]+', normalized)):
+                reject('unsupported_latin', field)
+            if re.search(r'동행하거나\s*다르게|유지되거나\s*역전|일치하거나\s*다르게', normalized):
+                reject('invalid_prose', field)
+    check(obj['thesis'], ('text',), 'thesis')
     issues = obj['issues']
     if not isinstance(issues, list) or not 1 <= len(issues) <= 2:
-        raise ValueError('invalid issues')
-    for issue in issues:
-        check(issue, ('title', 'event', 'impact', 'counterpoint', 'watch'))
+        reject('invalid_schema', 'issues')
+    for index, issue in enumerate(issues):
+        check(issue, ('title', 'event', 'impact', 'counterpoint', 'watch'), f'issues[{index}]')
     public_refs = {ref for item in [obj['thesis'], *issues] for ref in item['evidence_ids'] if ref.startswith('E')}
     if len(public_refs) > 4:
-        raise ValueError('too many public sources')
+        reject('too_many_sources', 'response')
     if not any(event_ids.intersection(issue['evidence_ids']) for issue in issues):
         raise ResearchEvidenceUnavailable('no event cited')
     return obj
@@ -408,7 +439,7 @@ def _market_observations(sections):
 def _compose_research(source_body, response_text, *, kind, day, public_evidence):
     prefix, sections, limits, facts = _context(source_body, kind, day)
     bundle = _public_bundle(public_evidence)
-    obj = _research_validate(response_text, facts, bundle)
+    obj = _research_validate(response_text, facts, bundle, sections)
     lines = prefix + [_HEAD, escape(obj['thesis']['text'], quote=False), '', '<b>핵심 이슈와 영향</b>']
     cited = []
     for i, issue in enumerate(obj['issues']):

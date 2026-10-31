@@ -6,6 +6,7 @@ interrupted claim is never reopened, including after unknown provider charges.
 import asyncio
 from datetime import datetime
 import hashlib
+import importlib
 import json
 import re
 import uuid
@@ -169,6 +170,28 @@ def _safe_metadata(response, *, reason=None):
     return metadata
 
 
+def _validation_diagnostic(error):
+    """Only fixed codes and paths may enter persistent metadata."""
+    fallback = {'validation_code': 'composition_failure', 'validation_field': 'response'}
+    try:
+        module = importlib.import_module('.market_report_analysis', __package__)
+        if isinstance(error, module.ResearchEvidenceUnavailable):
+            return {'validation_code': 'no_event_cited', 'validation_field': 'issues'}
+        if not isinstance(error, module.AnalysisValidationError):
+            return fallback
+        codes = {'invalid_json', 'invalid_schema', 'invalid_item', 'invalid_evidence',
+                 'invalid_prose', 'too_long', 'invalid_control', 'unsupported_date',
+                 'unsupported_numeric', 'unsupported_latin', 'too_many_sources'}
+        fields = {'response', 'thesis', 'thesis.text', 'thesis.evidence_ids', 'issues'}
+        fields.update(f'issues[{i}]' + suffix for i in range(2) for suffix in
+                      ('', '.evidence_ids', '.title', '.event', '.impact', '.counterpoint', '.watch'))
+        if error.code in codes and error.field in fields:
+            return {'validation_code': error.code, 'validation_field': error.field}
+    except Exception:
+        pass
+    return fallback
+
+
 async def _complete_once(manager, prompt, system, role=LLMRole.MARKET_BRIEF):
     """Propagate cancellation once, then drain provider cleanup and settlement."""
     task = asyncio.create_task(manager.complete_role(prompt, role=role, system=system))
@@ -265,6 +288,7 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
     prompt, system = prepared_prompt
     response, result, status, reason = None, None, "failed", "manager_unavailable"
     final_body = fallback
+    validation_metadata = {}
     invocation_started = False
     try:
         if manager is None and manager_factory is not None:
@@ -284,8 +308,12 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
                     evidence = {"public_evidence": public_evidence} if public_evidence is not None else {}
                     final_body, result = compose_analysis(source_body, response.content, kind=kind, day=day, **evidence)
                     _validate_body(final_body)
-                except Exception:
+                except Exception as error:
                     final_body, result, reason = fallback, None, "invalid_output"
+                    try:
+                        validation_metadata = _validation_diagnostic(error)
+                    except Exception:
+                        validation_metadata = {}
                 else:
                     status, reason = "ready", "validated"
     except asyncio.CancelledError as cancelled:
@@ -301,5 +329,5 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
         final_body, result, reason = fallback, None, "provider_exception" if invocation_started else "manager_unavailable"
     await durable_thread(store.complete_analysis, "market", kind, day, owner=owner,
                          status=status, final_body=final_body, result=result,
-                         metadata=_safe_metadata(response, reason=reason))
+                         metadata={**_safe_metadata(response, reason=reason), **validation_metadata})
     return await durable_thread(store.analysis_receipt, "market", kind, day)
