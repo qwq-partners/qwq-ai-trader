@@ -26,6 +26,6 @@
 
 - [x] 합성 검사 먼저(`tests/test_model_comparison_claude.py`): 채널 불일치 전송 전 차단(어댑터·가드 양쪽), dispatch 1회·복구 시 재전송 0, CLI 경로 월 예약/정산 0, API 경로 가드 예약 1회·어댑터 단독 예약 0, 전달 제어(모델·effort·출력 상한·시한·temperature/seed 생략), 정상·신원 불일치·거절·불완전·timeout·미전송·취소·생성 전 거절, 실제 전송 클래스의 무자격 미전송, PairSpec Claude Bear 규칙·역사적 Gemini 쌍 보존, worker 활성화 거부.
 - [x] 관련 기존 검사(runner/execution/admission/recovery/daily_report/worker/contract/input/e2e/claude_transport 등 19파일) 회귀 0 — 결과는 원장.
-- [x] 독립 Codex 교차 리뷰 1회차(HEAD 6f75ac88, 요청 gpt-6-astra/high): P1 2·P2 2 → 전부 반영(아래). 재리뷰·최종은 원장.
+- [x] 독립 Codex 교차 리뷰(요청 gpt-6-astra/high): 1회차(HEAD 6f75ac88) P1 2·P2 2 → 반영, 재리뷰(2b2c8897) P2 1 → 반영, 최종(df60e781) **P0/P1/P2 0**. 상세·반영은 원장.
 - [ ] 실제 WSL 직렬 전체 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` PASS 뒤 커밋/푸시·PR. AWS 검사는 보조.
 - [ ] See: 원장·CHANGELOG·검토 문서 갱신. 운영 적용·실제 호출·worker 연결·R1 활성화·순수익은 완료로 표시하지 않는다.
