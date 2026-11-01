@@ -587,6 +587,14 @@ def test_adapter_declared_channel_is_checked_before_any_dispatch(tmp_path):
     ok = _DeclaredAdapter("subscription", subscription_result())
     assert asyncio.run(guard.call(subscription_request(), dispatch=ok, attempt_id="sub-ok")).settlement == "subscription"
     assert ok.calls == 1 and ledger.status()["settled_count"] == 0
+    # 원장 행 → 일별 보고: 전송 전 차단 두 건은 불명이 아니고(유료는 확정 0원, 구독은 구독 목록) 합계는 확정이다.
+    from src.analytics.model_comparison_daily_report import build_daily_report
+    rows = guard.day_attempts(ledger.today().isoformat())
+    spend = build_daily_report([], day_kst=ledger.today().isoformat(), ledger_attempts=rows)["spend"]
+    assert spend["unknown_attempts"] == [] and spend["unaccounted_attempts"] == []
+    assert spend["not_sent_attempts"] == ["api-to-sub"]
+    assert [s["attempt_id"] for s in spend["subscription_attempts"]] == ["sub-ok", "sub-to-api"]
+    assert spend["total_usd"] == "0"
 
 
 def test_stored_subscription_result_with_token_or_api_request_is_settlement_mismatch(tmp_path):

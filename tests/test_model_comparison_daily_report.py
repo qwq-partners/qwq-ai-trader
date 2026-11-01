@@ -296,6 +296,14 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch',
          'dispatch_entered': False},
+        # 유료 채널의 전송 전 차단(구독 선언 어댑터에 연결): 호출·과금 0 이 확정이라 불명이 아니다
+        {'attempt_id': 'api:bull:9', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'api',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch',
+         'dispatch_entered': False},
+        # 유료 채널의 전송 뒤 차단: 과금 여부 불명
+        {'attempt_id': 'api:bull:8', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'api',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_attempt_interrupted',
+         'dispatch_entered': True},
         # 콜백이 전송 뒤에 허용 목록 사유를 올린 경우: 사유는 같아도 전송 진입이 영속돼 있어 불명이다
         {'attempt_id': 'sub:bear:5', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired',
@@ -312,7 +320,8 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
          'subscription_estimated_cost_usd': None},
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'block_reason': 'comparison_adapter_channel_mismatch',
          'subscription_estimated_cost_usd': None}]
-    assert spend['unknown_attempts'] == ['sub:bear:2', 'sub:bear:4', 'sub:bear:5'] and spend['unaccounted_attempts'] == []
+    assert spend['unknown_attempts'] == ['api:bull:8', 'sub:bear:2', 'sub:bear:4', 'sub:bear:5'] and spend['unaccounted_attempts'] == []
+    assert spend['not_sent_attempts'] == ['api:bull:9']
     assert spend['total_usd'] is None                 # 불확실한 구독 차단이 남아 합계는 미확정
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
                                       ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])

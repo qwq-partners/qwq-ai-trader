@@ -406,7 +406,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     unknown, reconciled_ids, lookup_failed = [], [], []
     ledger_by_id = {la['attempt_id']: la for la in ledger_attempts
                     if isinstance(la, Mapping) and isinstance(la.get('attempt_id'), str)}
-    ledger_used, subscription_known = [], []
+    ledger_used, subscription_known, not_sent = [], [], []
     for attempt_id, a in sorted(unique.items()):
         la = ledger_by_id.get(attempt_id)
         ledger_state = la.get('state') if la is not None else None
@@ -423,6 +423,11 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             # 구독 채널의 그 밖 상태(전송 뒤 불일치·중단·저장 실패·미확정)는 pair 행의 API 추정액(0 포함)으로 대체하지 않고
             # 명시적으로 불명이다. 추정액 대체 경로는 유료 채널 전용이다.
             unknown.append(attempt_id)
+            continue
+        if ledger_state == 'blocked' and la.get('dispatch_entered') is False:
+            # 유료 채널의 전송 전 차단(슬롯 상태 blocked 로 영속): 공급자 호출·과금이 없고 예약은 not_sent 로 해제됐다.
+            # 확정 0원이므로 불명으로 세지 않는다. 합계에는 더할 금액이 없다.
+            not_sent.append(attempt_id)
             continue
         estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
         if estimate is not None:
@@ -460,6 +465,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'ledger_attempts_outside_pair_rows': outside_rows, 'unaccounted_attempts': unaccounted,
              'ledger_cost_used_attempts': ledger_used,
              'subscription_attempts': subscription_known,   # API 합계 밖. 표시 추정비는 청구액이 아니다.
+             'not_sent_attempts': not_sent,                 # 전송 전 차단된 유료 시도 — 확정 0원, 불명 아님
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
              'known_subtotal_usd': str(used),
