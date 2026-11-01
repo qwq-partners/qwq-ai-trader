@@ -229,7 +229,7 @@ def test_stored_v1_policy_is_rejected_without_migration(tmp_path):
     ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, clock=lambda: NOW, policy_enabled=True)
     v1 = json.dumps({"experiment_id": "R1", "daily_attempt_cap": 50, "allowed_models": ["gpt-5-mini"],
                      "max_output_tokens": 400, "schema_version": "model-comparison-execution-v1",
-                     "currency": "USD", "timezone": "Asia/Seoul", "adapter_contract": "single-provider-attempt-v1"},
+                     "currency": "USD", "timezone": "Asia/Seoul", "adapter_contract": "single-provider-attempt-v2"},
                     sort_keys=True, separators=(",", ":"))
     with sqlite3.connect(ledger.path) as db:
         db.execute("CREATE TABLE comparison_policy (id INTEGER PRIMARY KEY CHECK(id=1), policy TEXT NOT NULL)")
