@@ -813,12 +813,15 @@ def test_subscription_attempt_is_blocked_outside_normal_policy_mode(tmp_path):
     assert ledger.status()["policy_mode"] != "normal"
     calls = []
 
-    async def dispatch(req):
-        calls.append(req)
-        return ComparisonAttemptResult(value={}, actual_cost_usd=None, settlement="subscription")
+    class Dispatch:
+        billing_channel = "subscription"
+
+        async def __call__(self, req):
+            calls.append(req)
+            return ComparisonAttemptResult(value={}, actual_cost_usd=None, settlement="subscription")
 
     with pytest.raises(BudgetBlocked, match="comparison_policy_mode_not_normal"):
-        asyncio.run(guard.call(replace(request(), billing_channel="subscription"), dispatch=dispatch,
+        asyncio.run(guard.call(replace(request(), billing_channel="subscription"), dispatch=Dispatch(),
                                attempt_id="sub-economy"))
     assert calls == [] and comparison_reservations(path) == 0
     assert guard.lookup("sub-economy")["state"] == "blocked"

@@ -610,9 +610,10 @@ class ComparisonCallGuard:
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")
             declared = getattr(dispatch, "billing_channel", None)
-            if declared is not None and declared != request.billing_channel:
-                # 어댑터가 채널을 선언하면 전송 전에 대조한다. 구독 요청이 유료 API 어댑터로 가면 예약 없는 과금이 되고,
-                # 유료 요청이 구독 어댑터로 가면 예약이 헛돈다. 미전송이므로 API 예약은 not_sent 로 해제된다.
+            if declared != request.billing_channel and not (declared is None and not subscription):
+                # 전송 전 채널 대조. 구독 요청은 어댑터가 subscription 을 **명시 선언**해야 한다 — 미선언 콜백은
+                # 유료 API 일 수 있어 월 예약 없는 과금이 된다(재리뷰 P1). 유료 요청은 미선언 콜백을 허용하고
+                # 선언이 다르면 거절한다. 미전송이므로 API 예약은 not_sent 로 해제된다.
                 raise BudgetBlocked("comparison_billing_channel_mismatch")
             entered_dispatch = True
             result = await dispatch(request)

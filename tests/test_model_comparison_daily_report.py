@@ -285,10 +285,23 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
     ledger_attempts = [
         {'attempt_id': 'sub:bear:0', 'state': 'known', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': 0.0123, 'request_sent': True, 'block_reason': None},
+        # 전송 전 차단(실험 만료)된 구독 시도: API 비용 불명이 아니다
+        {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired'},
+        # 전송 뒤 어댑터가 API 비용을 보고해 차단된 구독 시도: 과금 여부가 불확실하므로 불명으로 남긴다
+        {'attempt_id': 'sub:bear:2', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': True, 'block_reason': 'comparison_billing_channel_mismatch'},
     ]
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts)
     spend = report['spend']
-    assert spend['subscription_attempts'] == [{'attempt_id': 'sub:bear:0', 'subscription_estimated_cost_usd': 0.0123}]
+    assert spend['subscription_attempts'] == [
+        {'attempt_id': 'sub:bear:0', 'state': 'known', 'block_reason': None, 'subscription_estimated_cost_usd': 0.0123},
+        {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'block_reason': 'comparison_experiment_expired',
+         'subscription_estimated_cost_usd': None}]
+    assert spend['unknown_attempts'] == ['sub:bear:2'] and spend['unaccounted_attempts'] == []
+    assert spend['total_usd'] is None                 # 불확실한 구독 차단 1건이 남아 합계는 미확정
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts[:2])
+    spend = report['spend']
     assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다
     assert 'sub:bear:0' in spend['ledger_attempts_outside_pair_rows']

@@ -3,7 +3,7 @@
 ## 2026-11-01 — E04 비교 호출 경계의 전송 채널 소유권 (PR #323 병합 후속)
 
 - PR #323(공식 GPT snapshot 신원 v2)을 main `c022ef36`으로 병합했다(main CI 10,183 passed / 2 skipped / 2 xfailed). 17:03 이후 새 `signal_events` 0행이라 E02-RR/E01 판독은 WAIT다.
-- `ComparisonRequest.billing_channel`(api|subscription)을 추가했다. 구독 전송은 일 슬롯·요청 지문만 소비하고 공유 월 원장을 예약·정산하지 않는다(운영 LLMManager의 Claude CLI 시도와 같은 소유권). 어댑터가 채널을 선언하면 전송 전에 대조하고(`SingleAttemptAdapter`는 api 선언·구독 요청 거절), 채널과 정산이 다르면 `comparison_billing_channel_mismatch`로 거절하며 API 예약은 unknown으로 남긴다. 일별 보고는 구독 시도를 `subscription_attempts`로 분리한다. 정책 `adapter_contract`는 v2로 올려 구버전 정책 원장은 fail-closed 된다.
+- `ComparisonRequest.billing_channel`(api|subscription)을 추가했다. 구독 전송은 일 슬롯·요청 지문만 소비하고 공유 월 원장을 예약·정산하지 않는다(운영 LLMManager의 Claude CLI 시도와 같은 소유권). 구독 요청은 어댑터가 `billing_channel="subscription"`을 명시 선언해야 전송되고(미선언·다른 선언은 전송 전 거절, `SingleAttemptAdapter`는 api 선언·구독 요청 거절), 채널과 정산이 다르면 `comparison_billing_channel_mismatch`로 거절하며 API 예약은 unknown으로 남긴다. 일별 보고는 구독 시도를 `subscription_attempts`로 분리한다. 정책 `adapter_contract`는 v2로 올려 구버전 정책 원장은 fail-closed 된다.
 - 실제 Claude 어댑터·worker 연결·R1 활성화·운영 배포는 포함하지 않는다. [원장·검증·NEXT](docs/operations/execution-roadmap.md#e04-guard-billing-20261101) · [계획](docs/superpowers/plans/2026-11-01-comparison-guard-billing-channel.md).
 
 ## 2026-11-01 — E04 공식 GPT snapshot 판독 v2

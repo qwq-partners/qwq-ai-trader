@@ -30,7 +30,8 @@
 
 - [x] RED/GREEN: 구독 시도의 월 예약 0·슬롯 소비·복구, 채널 불일치 3종, 구독 비용 보고 거절, API 요청의 구독 응답은 unknown 유지, 구독 전송 예외는 차단 ID, 유효기간/정책 단계 입장 검사, 요청 계약/직렬화 검사. 관련 9파일 398검사 PASS·격리 0(AWS 개발 worktree, 보조 검증).
 - [x] 독립 리뷰: Opus5.5/high APPROVE(P2 4)·Codex Astra/high P1 1·P2 2 → 전부 반영(전송 전 채널 대조, 어댑터 선언/거절, 저장 채널 교차 검사, 복구 추정 범위, 일별 보고 구독 분리). 관련 462검사 PASS. 재리뷰는 원장 참조.
-- [ ] AWS 보조 전체 검증(`verify.sh` 직렬 전체)과 실제 WSL 직렬 전체 검증. WSL 임시 접속은 사용자의 새 authorized_keys 등록이 필요하다.
+- [x] AWS 보조 전체 검증 1차(tree ce9b376c, 10,198 passed) · Codex 재리뷰 P1(미선언 콜백)·P2(차단 구독 집계) 반영 → 관련 463검사. 최종 tree의 재리뷰/AWS 전체/실제 WSL은 원장 참조.
+- [ ] 실제 WSL 직렬 전체 검증. WSL 임시 접속은 사용자의 새 authorized_keys 등록이 필요하다.
 - [ ] See: 원장·CHANGELOG·검토 문서 갱신, 커밋/푸시, PR. 운영 적용·실제 Claude 어댑터·유료 비교는 완료로 표시하지 않는다.
 
 **보고 규칙(리뷰 반영):** 일별 API 지출 보고는 원장 `billing_channel=subscription`·`known` 시도를 `spend.subscription_attempts`에 표시 추정비와 함께 따로 적고 USD 합계·불명 집계에 넣지 않는다.

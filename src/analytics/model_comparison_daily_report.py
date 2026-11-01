@@ -27,6 +27,11 @@ STOP_REASONS = frozenset({
 })
 
 
+# 구독 시도가 전송 뒤에 받는 차단 사유 — 어댑터가 API 비용을 보고했거나 중단돼 실제 과금 여부를 모른다.
+_SUBSCRIPTION_UNCERTAIN_BLOCKS = frozenset({'comparison_billing_channel_mismatch', 'comparison_invalid_measured_cost',
+                                            'comparison_attempt_interrupted', 'comparison_invalid_result'})
+
+
 def _same_day(value, day_kst) -> bool:
     try:
         return _kst_day(value) == day_kst
@@ -403,9 +408,12 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         la = ledger_by_id.get(attempt_id)
         ledger_state = la.get('state') if la is not None else None
         ledger_cost = la.get('cost_usd') if la is not None else None
-        if la is not None and la.get('billing_channel') == 'subscription' and ledger_state == 'known':
-            # 구독 전송은 API 지출이 아니다. 비용 None 을 불명으로 세지 않고 표시 추정비만 따로 남긴다.
-            subscription_known.append({'attempt_id': attempt_id,
+        if (la is not None and la.get('billing_channel') == 'subscription'
+                and (ledger_state == 'known' or (ledger_state == 'blocked'
+                                                 and la.get('block_reason') not in _SUBSCRIPTION_UNCERTAIN_BLOCKS))):
+            # 구독 전송은 API 지출이 아니다. 완료(known)와 전송 전 차단(blocked)은 비용 None 을 불명으로 세지 않고
+            # 상태·사유·표시 추정비만 따로 남긴다. 전송 뒤 과금 여부가 불확실한 차단은 아래 불명 집계에 그대로 둔다.
+            subscription_known.append({'attempt_id': attempt_id, 'state': ledger_state, 'block_reason': la.get('block_reason'),
                                        'subscription_estimated_cost_usd': la.get('subscription_estimated_cost_usd')})
             continue
         estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
