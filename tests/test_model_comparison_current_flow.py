@@ -213,9 +213,18 @@ def test_guard_block_before_cli_dispatch_is_not_an_api_fallback_trigger(tmp_path
     assert (bear[0]['api_cost_usd'], bear[0]['request_sent']) == ('0', False)       # 전송 전 차단만 0원
 
 
+def short_panel(seconds, **over):
+    """공통 패널 시한을 줄인 현행 spec(Bull/Bear 역할 시한 동일)."""
+    fields = dict(current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803, seconds),
+                  candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803, seconds),
+                  bear=bear_controls('subscription', timeout_seconds=seconds))
+    fields.update(over)
+    return current_spec(**fields)
+
+
 def test_role_timeout_during_cli_leaves_timeout_attempt_and_no_api(tmp_path):
-    spec = current_spec(bear=bear_controls('subscription', timeout_seconds=0.3), bear_internal_timeout_seconds=0.25,
-                        bear_cli_timeout_seconds=0.1, bear_api_fallback=bear_controls('api', timeout_seconds=0.25))
+    spec = short_panel(0.3, bear_internal_timeout_seconds=0.25, bear_cli_timeout_seconds=0.1,
+                       bear_api_fallback=bear_controls('api', timeout_seconds=0.25))
     ledger, guard, runner, _, op, cli, api = setup(tmp_path, cli_delay=1.0, spec=spec)
     row = asyncio.run(runner.run(spec))
     bear = bear_attempts(row)
@@ -269,12 +278,12 @@ def test_admission_latency_cannot_extend_the_bear_internal_deadline(tmp_path, mo
 @pytest.mark.parametrize('role', ['bear', 'bull_current'])
 def test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted(tmp_path, monkeypatch, role):
     import time
-    if role == 'bear':   # Bear 내부 예산만 짧게. (동기 sleep 은 루프 전체를 멈추므로 역할별로 한쪽 시한만 좁힌다)
-        spec = current_spec(bear=bear_controls('subscription', timeout_seconds=0.6), bear_internal_timeout_seconds=0.3,
-                            bear_cli_timeout_seconds=0.1, bear_api_fallback=bear_controls('api', timeout_seconds=0.3))
-    else:
-        spec = current_spec(current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803, 0.3),
-                            candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803, 0.3))
+    if role == 'bear':   # Bear 내부 예산만 짧게(패널 0.6). 동기 sleep 은 루프 전체를 멈추므로 역할별로 한쪽만 좁힌다
+        spec = short_panel(0.6, bear_internal_timeout_seconds=0.3, bear_cli_timeout_seconds=0.1,
+                           bear_api_fallback=bear_controls('api', timeout_seconds=0.3))
+    else:                # 패널 0.3, Bear 체인은 그 안에서 즉시 끝난다
+        spec = short_panel(0.3, bear_internal_timeout_seconds=0.3, bear_cli_timeout_seconds=0.1,
+                           bear_api_fallback=bear_controls('api', timeout_seconds=0.3))
     ledger, guard, runner, _, op, cli, api = setup(tmp_path, cli=SCRIPTS['timeout'], spec=spec)
     original = guard._store_result
 
@@ -295,6 +304,34 @@ def test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted(tmp
     # 0.3초를 넘기므로 같은 사유로 hold 다 — 역할 전체 벽시계 재검사의 의도된 의미(운영 whole-call deadline).
     assert other['verdict'] == 'hold'
     assert (role.split('_')[0] + '_role_deadline_exceeded_after_response') in other['reasons']
+
+
+def test_common_panel_deadline_is_fixed_before_roles_start(tmp_path, monkeypatch):
+    import time
+    # 패널 0.5초. Bear 입장(동기)이 0.3초 걸려 Bull 역할 시작이 밀리고, Bull 저장에 0.25초가 더 걸리면 Bull 은 자기 역할
+    # 시작 기준 0.25초 만에 끝났어도 패널 시작 기준 0.55초라 운영처럼 늦은 의견이다.
+    spec = short_panel(0.5, bear_internal_timeout_seconds=0.4, bear_cli_timeout_seconds=0.1,
+                       bear_api_fallback=bear_controls('api', timeout_seconds=0.4))
+    ledger, guard, runner, _, op, cli, api = setup(tmp_path, spec=spec)
+    admit, store = guard._admit, guard._store_result
+
+    def slow_admit(attempt_id, request_json):
+        if attempt_id.endswith(':bear:0'):
+            time.sleep(0.3)
+        return admit(attempt_id, request_json)
+
+    def slow_store(attempt_id, token, payload):
+        if ':bull_' in attempt_id:
+            time.sleep(0.25)
+        return store(attempt_id, token, payload)
+    monkeypatch.setattr(guard, '_admit', slow_admit)
+    monkeypatch.setattr(guard, '_store_result', slow_store)
+    row = asyncio.run(runner.run(spec))
+    for arm in ('current', 'candidate'):
+        assert row[arm]['verdict'] == 'hold'
+        assert 'bull_role_deadline_exceeded_after_response' in row[arm]['reasons']
+        bull = [a for a in row[arm]['attempts'] if a['role'].startswith('bull_')][-1]
+        assert bull['success'] is True and bull['ledger_state'] == 'known'   # 영수증은 보존된다
 
 
 def test_identity_certification_does_not_default_an_explicit_empty_transport():
@@ -365,6 +402,7 @@ def test_current_flow_rows_survive_storage_failure_and_recovery_recomputes_ident
     (lambda s: replace(s, bear_api_fallback=bear_controls('api', timeout_seconds=11.5, max_output_tokens=100)), 'bear_api_fallback'),
     (lambda s: replace(s, bear=bear_controls('api', timeout_seconds=12.0)), 'cli_primary'),
     (lambda s: replace(s, review_policy='something-else'), 'review_policy'),
+    (lambda s: replace(s, bear=bear_controls('subscription', timeout_seconds=11.9), bear_api_fallback=bear_controls('api', timeout_seconds=11.5)), 'common_panel_timeout'),
 ])
 def test_current_profile_rules(mutate, match):
     spec = current_spec()

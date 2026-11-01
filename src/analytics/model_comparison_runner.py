@@ -230,6 +230,8 @@ class PairSpec:
                 raise ValueError('current_policy_requires_bear_internal_timeout')
             if bear_cli_timeout_seconds is None:
                 raise ValueError('current_policy_requires_bear_cli_timeout')   # API 대체가 없어도 CLI 시한은 계약대로
+            if not (current.timeout_seconds == candidate.timeout_seconds == bear.timeout_seconds):
+                raise ValueError('current_policy_requires_common_panel_timeout')  # 운영 LLM_TIMEOUT 은 Bull/Bear 공통
         changed = {k for k in asdict(current) if getattr(current, k) != getattr(candidate, k)}
         if len(changed) != 1 or not changed <= {'model', 'reasoning_effort', 'max_output_tokens'}:
             raise ValueError('one_comparison_variable_required')
@@ -575,12 +577,14 @@ class PairedComparisonRunner:
         attempt_id = f'{pair_id}:{role}:{index}'
         return self._stamp(self._failure(attempt_id, requested_model, 'TimeoutError'), attempt_id, role)
 
-    async def _role(self, pair_id, name, controls, prompt, system, retries):
+    async def _role(self, pair_id, name, controls, prompt, system, retries, deadline_at=None):
         attempts, index = [], 0
         try:
             # The panel gives each parallel role one total deadline, including
             # its empty retry; a second request does not buy another 12 seconds.
-            async with asyncio.timeout(controls.timeout_seconds):
+            # deadline_at(현행 정책): task 생성 전에 고정한 공통 패널 절대 시한 — 역할 시작이 밀려도 늘어나지 않는다.
+            async with (asyncio.timeout_at(deadline_at) if deadline_at is not None
+                        else asyncio.timeout(controls.timeout_seconds)):
                 for index in range(retries + 1):
                     attempt = await self._attempt(pair_id, name, index, controls, prompt, system)
                     attempts.append(attempt)
@@ -590,7 +594,7 @@ class PairedComparisonRunner:
             attempts.append(self._timed_out(pair_id, name, index, controls.model))
         return attempts
 
-    async def _bear_role(self, pair_id, spec, prompt, system):
+    async def _bear_role(self, pair_id, spec, prompt, system, panel_deadline=None):
         """공통 Bear. 현행 Claude 프로필이면 CLI 단일 시도 뒤 허용된 전송 실패에서만 남은 내부 예산으로 API 단일 시도 1회.
 
         각 시도는 guard.call 1회(별도 attempt_id·영수증)이고 어댑터 안에 숨은 retry/fallback 은 없다. 가드 예외·역할 시한·
@@ -605,10 +609,13 @@ class PairedComparisonRunner:
         attempts, index = [], 0
         loop = asyncio.get_running_loop()
         token = None
+        started = loop.time()                                        # Bear 내부 예산의 시작점(절대 시한을 여기서 고정)
+        role_deadline = started + bear.timeout_seconds
+        if panel_deadline is not None:
+            role_deadline = min(role_deadline, panel_deadline)       # 공통 패널 시한이 먼저면 그쪽
+        internal_deadline = min(started + spec.bear_internal_timeout_seconds, role_deadline)
         try:
-            async with asyncio.timeout(bear.timeout_seconds):       # 역할(패널) 총 시한 — 소유자는 이 역할
-                started = loop.time()                                # Bear 내부 예산의 시작점(절대 시한을 여기서 고정)
-                internal_deadline = started + spec.bear_internal_timeout_seconds
+            async with asyncio.timeout_at(role_deadline):           # 역할 총 시한 — 소유자는 이 역할/패널
                 # 가드 입장·월 예약에 걸린 시간이 요청의 상대 시한에 더해지지 않도록 어댑터가 전송 직전 절대 상한을 적용한다.
                 # CLI 단계 상한은 운영 `started + min(8, total/2)` 과 같이 체인 시작 기준 CLI 시한(내부 시한을 넘지 않음)이다.
                 token = DEADLINE_AT.set(min(internal_deadline, started + spec.bear_cli_timeout_seconds))
@@ -708,12 +715,15 @@ class PairedComparisonRunner:
                 'decision_available_at': self.clock().isoformat(), 'attempts': attempts,
                 'api_cost_usd': _sum_cost(attempts), 'sizing_replay': replay, 'reasons': reasons}
 
-    async def _arm(self, pair_id, name, controls, spec, bear_task):
+    async def _arm(self, pair_id, name, controls, spec, bear_task, panel_deadline=None):
         loop = asyncio.get_running_loop()
-        started = loop.time()
-        bull = await self._role(pair_id, 'bull_' + name, controls, spec.common_context + BULL_SUFFIX, BULL_SYSTEM, spec.empty_retries)
-        # Bull 도 가드의 동기 저장·정산 뒤 역할 시한을 재검사한다(현행 정책에서만 판정에 쓴다).
-        bull_late = loop.time() - started > controls.timeout_seconds and bull[-1].get('error') != 'TimeoutError'
+        role_deadline = loop.time() + controls.timeout_seconds
+        if panel_deadline is not None:
+            role_deadline = min(role_deadline, panel_deadline)        # 공통 패널 시한(task 생성 전 고정)이 먼저면 그쪽
+        bull = await self._role(pair_id, 'bull_' + name, controls, spec.common_context + BULL_SUFFIX, BULL_SYSTEM,
+                                spec.empty_retries, deadline_at=role_deadline if panel_deadline is not None else None)
+        # Bull 도 가드의 동기 저장·정산 뒤 역할/패널 시한을 재검사한다(현행 정책에서만 판정에 쓴다).
+        bull_late = loop.time() > role_deadline and bull[-1].get('error') != 'TimeoutError'
         bear, bear_late = await asyncio.shield(bear_task)
         if spec.review_policy == CURRENT_REVIEW_POLICY:
             return self._current_arm(spec, bull, bear, bull_late, bear_late)
@@ -804,11 +814,14 @@ class PairedComparisonRunner:
         if cached is not None:
             return cached
         tasks = []
+        # 현행 정책: 운영 패널(LLM_TIMEOUT)처럼 Bull/Bear 공통 절대 시한을 task 생성 **전에** 고정한다.
+        panel_deadline = (asyncio.get_running_loop().time() + spec.bear.timeout_seconds
+                          if spec.review_policy == CURRENT_REVIEW_POLICY else None)
         try:
-            bear = asyncio.create_task(self._bear_role(pair_id, spec, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM))
+            bear = asyncio.create_task(self._bear_role(pair_id, spec, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM, panel_deadline))
             tasks.append(bear)
-            current = asyncio.create_task(self._arm(pair_id, 'current', spec.current, spec, bear))
-            candidate = asyncio.create_task(self._arm(pair_id, 'candidate', spec.candidate, spec, bear))
+            current = asyncio.create_task(self._arm(pair_id, 'current', spec.current, spec, bear, panel_deadline))
+            candidate = asyncio.create_task(self._arm(pair_id, 'candidate', spec.candidate, spec, bear, panel_deadline))
             tasks += [current, candidate]
             a, b = await asyncio.gather(current, candidate)
         finally:
