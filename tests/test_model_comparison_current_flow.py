@@ -60,14 +60,14 @@ def current_spec(**over):
 def setup(tmp_path, *, cli=_ok, api=_ok, cli_delay=0.0, api_delay=0.0, bull=None, spec=None, cli_channel='subscription',
           daily_attempt_cap=40):
     ledger, guard = guard_for(tmp_path, daily_attempt_cap=daily_attempt_cap)
-    op, ge = bull or CertifiedOpenAI(), FakeGemini()
+    op, ge = (bull if bull is not None else CertifiedOpenAI()), FakeGemini()
     cli_client = (FakeAPI if cli_channel == 'api' else FakeCLI)(cli, delay=cli_delay)
     api_client = FakeAPI(api, delay=api_delay)
     runner = m.PairedComparisonRunner(
         guard=guard, adapter=m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW), clock=lambda: NOW,
         claude_adapter=ClaudeSingleAttemptAdapter(cli_client, clock=lambda: NOW),
         claude_api_adapter=ClaudeSingleAttemptAdapter(api_client, clock=lambda: NOW))
-    return ledger, guard, runner, spec or current_spec(), op, cli_client, api_client
+    return ledger, guard, runner, (spec if spec is not None else current_spec()), op, cli_client, api_client
 
 
 def bear_attempts(row, arm='current'):
@@ -128,6 +128,7 @@ def test_current_policy_counts_bull_opinion_only_with_certified_identity(tmp_pat
     assert arm['policy_verdict'] == 'approve'               # 파싱된 의견만의 판정은 그대로 남는다
     if decided:
         assert arm['verdict'] == 'approve' and arm['bull_verdict'] is True
+        assert 'resolved_model_unverified_or_mismatch' not in arm['reasons']   # 공식 snapshot 은 인증이자 진단에서도 일치
     else:
         assert arm['verdict'] == 'hold' and arm['bull_verdict'] is None
         assert 'bull_identity_unverified_or_mismatch' in arm['reasons'] and arm['sizing_replay'] is None
@@ -244,6 +245,32 @@ def test_api_fallback_receives_only_remaining_internal_time(tmp_path):
     bear = bear_attempts(row)
     assert bear[0]['latency_ms'] is not None and bear[1]['latency_ms'] is not None   # 시도별 시간은 따로 남는다
     assert bear[1]['requested_at'] >= bear[0]['responded_at']
+
+
+def test_admission_latency_cannot_extend_the_bear_internal_deadline(tmp_path, monkeypatch):
+    import time
+    ledger, guard, runner, spec, op, cli, api = setup(tmp_path, cli=SCRIPTS['timeout'], cli_delay=0.2)
+    original = guard._admit
+
+    def slow_admit(attempt_id, request_json):          # 가드 입장(원장 쓰기)에 걸리는 시간을 흉내 낸다
+        if attempt_id.endswith(':bear:1'):
+            time.sleep(0.15)
+        return original(attempt_id, request_json)
+    monkeypatch.setattr(guard, '_admit', slow_admit)
+    asyncio.run(runner.run(spec))
+    (cli_call,), (api_call,) = cli.calls, api.calls
+    # 내부 예산은 Bear 체인 시작에서 고정된 절대 시한이다. CLI 호출 시각은 시작 이후이므로 API 시한은 그보다 11.5초 뒤를 넘지 못한다.
+    assert api_call['deadline'] <= cli_call['loop_time'] + 11.5
+    assert api_call['deadline'] - api_call['loop_time'] < 11.5 - 0.2 - 0.15 + 0.02
+
+
+def test_identity_certification_does_not_default_an_explicit_empty_transport():
+    assert m._identity_certified({'requested_model_match': False, 'provider': 'openai', 'requested_model': 'gpt-5-mini',
+                                  'resolved_model': 'gpt-5-mini-2025-08-07'}) is True
+    assert m._identity_certified({'requested_model_match': False, 'provider': 'openai', 'transport': '',
+                                  'requested_model': 'gpt-5-mini', 'resolved_model': 'gpt-5-mini-2025-08-07'}) is False
+    assert m._identity_certified({'requested_model_match': False, 'provider': 'openai', 'requested_model': 'gpt-5-mini',
+                                  'resolved_model': None}) is False
 
 
 def test_bull_arms_share_one_bear_chain_and_each_attempt_cost_is_preserved(tmp_path):

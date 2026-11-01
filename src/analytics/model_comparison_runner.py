@@ -331,7 +331,9 @@ def _identity_certified(attempt) -> bool:
     """현행 정책의 응답 신원: 요청 모델과 정확히 같거나 공식 문서화된 snapshot(계약 v2)만 인정한다. None 은 미확인이다."""
     if attempt.get('requested_model_match') is True:
         return True
-    transport = attempt.get('transport') or _CONTRACT_TRANSPORTS.get(attempt.get('provider'))
+    transport = attempt.get('transport')
+    if transport is None:                       # 명시된 빈 전송값은 공급자 기본값으로 바꾸지 않는다
+        transport = _CONTRACT_TRANSPORTS.get(attempt.get('provider'))
     return (transport, attempt.get('requested_model'), attempt.get('resolved_model')) in DOCUMENTED_SNAPSHOTS
 
 
@@ -598,15 +600,20 @@ class PairedComparisonRunner:
         if spec.bear_cli_timeout_seconds is None:
             retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
             return await self._role(pair_id, 'bear', bear, prompt, system, retries)
+        from .model_comparison_claude import DEADLINE_AT
         attempts, index = [], 0
         loop = asyncio.get_running_loop()
+        token = None
         try:
             async with asyncio.timeout(bear.timeout_seconds):       # 역할(패널) 총 시한 — 소유자는 이 역할
-                started = loop.time()                                # Bear 내부 예산의 시작점
+                started = loop.time()                                # Bear 내부 예산의 시작점(절대 시한을 여기서 고정)
+                internal_deadline = started + spec.bear_internal_timeout_seconds
+                # 가드 입장·월 예약에 걸린 시간이 요청의 상대 시한에 더해지지 않도록 어댑터가 전송 직전 이 상한을 적용한다.
+                token = DEADLINE_AT.set(internal_deadline)
                 cli = replace(bear, timeout_seconds=spec.bear_cli_timeout_seconds)
                 attempt = await self._attempt(pair_id, 'bear', 0, cli, prompt, system)
                 attempts.append(attempt)
-                remaining = spec.bear_internal_timeout_seconds - (loop.time() - started)
+                remaining = internal_deadline - loop.time()
                 if spec.bear_api_fallback is not None and _api_fallback_authorized(attempt) and remaining > 0:
                     index = 1
                     api = replace(spec.bear_api_fallback,
@@ -615,11 +622,18 @@ class PairedComparisonRunner:
         except TimeoutError:
             model = (spec.bear_api_fallback if index else bear).model
             attempts.append(self._timed_out(pair_id, 'bear', index, model))
+        finally:
+            if token is not None:
+                DEADLINE_AT.reset(token)
         return attempts
 
-    def _attempt_reasons(self, attempts):
+    def _attempt_reasons(self, attempts, certified=None):
+        """certified: 전송된 시도의 신원 판정 함수. 레거시는 정확한 이름 일치, 현행은 _identity_certified(공식 snapshot 포함)."""
+        if certified is None:
+            def certified(attempt):
+                return attempt.get('requested_model_match') is True
         reasons = []
-        if any(a.get('requested_model_match') is not True for a in attempts if a.get('request_sent') is True):
+        if any(not certified(a) for a in attempts if a.get('request_sent') is True):
             reasons.append('resolved_model_unverified_or_mismatch')
         if any(a.get('ledger_state') == 'pending_reconciliation' for a in attempts):
             reasons.append('budget_reconciliation_pending')
@@ -676,7 +690,7 @@ class PairedComparisonRunner:
                 reasons.extend(replay.get('exclusions', ['downstream_admission_not_replayed']))
             except (ValueError, TypeError, KeyError):
                 reasons.append('neutral_sizing_invalid')
-        reasons.extend(self._attempt_reasons(attempts))
+        reasons.extend(self._attempt_reasons(attempts, _identity_certified))
         return {'verdict': verdict, 'validation_verdict': verdict, 'policy_verdict': policy_verdict,
                 'review_policy': spec.review_policy, 'approval_basis': 'entry_independent_review_v1',
                 'unavailable_policy': 'hold_blocks_entry',
