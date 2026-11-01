@@ -90,7 +90,7 @@ class ClaudeSingleAttemptAdapter:
                  'timing_valid': valid_timing, 'latency_ms': (end - start).total_seconds() * 1000 if valid_timing else None,
                  'content': response.content if isinstance(response.content, str) else '',
                  'success': response.success is True and identity_verified,
-                 'error': response.transport_error_kind if response.success is not True else None,
+                 # 'error' 키는 러너가 가드 예외(차단·중단·시한)에만 붙인다. 전송 실패 사유는 transport_error_kind 다.
                  'transport_error_kind': response.transport_error_kind,
                  'refusal_detected': response.refusal_detected is True,
                  'request_sent': response.request_sent, 'billing_status': response.billing_status,

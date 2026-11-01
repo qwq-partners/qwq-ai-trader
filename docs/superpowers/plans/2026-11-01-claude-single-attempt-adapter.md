@@ -19,12 +19,13 @@
 - 새 `src/analytics/model_comparison_claude.py` `ClaudeSingleAttemptAdapter(client, clock)`: raw `ClaudeCLIClient`(subscription) 또는 `AnthropicAPIClient`(api)만 받고 `billing_channel`/`transport`를 전송 클래스에서 선언한다. 요청 채널 불일치·비Claude 모델·temperature/seed 지정·low 외 effort는 공급자 호출 전 `ValueError`. 한 번의 `__call__`은 `client.complete` 한 번이다.
 - 정산: 구독은 `settlement=subscription`·`actual_cost_usd=None`·`cost_basis=subscription_not_api_billed`, CLI 표시 추정비는 value `subscription_estimated_cost_usd`로만 남긴다. API는 `SingleAttemptAdapter`와 같은 규칙(미전송 0·생성 전 거절 추론 0/released·신원 검증+사용량 확인 시 가격표·그 밖은 None→unknown 예약).
 - 응답 상태: `success`는 전송 성공과 신원 `verified`가 함께일 때만. `transport_error_kind`·`refusal_detected`·`model_identity_status`·`request_sent`·`http_status`를 그대로 보존하고 `effective_reasoning_effort=None`으로 요청 effort와 구분한다. 취소는 원형 전파(가드가 `dispatch_entered` 상태로 남김).
-- runner: `PairedComparisonRunner(claude_adapter=…)` 선택 주입, Claude 역할은 `_dispatch_for`로 그 어댑터에만 간다. 없으면 `claim`·슬롯 소비 전에 `claude_adapter_required`. 구독 시도는 `_sum_cost`에서 제외하고 arm 사유 `subscription_attempt_cost_not_api_billed`, 행 `subscription_attempts`로 구분한다(불명이 아니다).
+- runner: `PairedComparisonRunner(claude_adapter=…)` 선택 주입, Claude 역할은 `_dispatch_for`로 그 어댑터에만 간다. 없으면 `claim`·슬롯 소비 전에 `claude_adapter_required`. 구독 시도는 `_sum_cost`에서 제외하고 arm 사유 `subscription_attempt_cost_not_api_billed`, 행 `subscription_attempts`(구독 시도가 있을 때만)로 구분한다(불명이 아니다).
+- 리뷰 반영(복구 계약): 어댑터 value에 러너 예외 필드 `error`를 넣지 않는다(전송 실패는 `transport_error_kind`). 러너 `_failure`와 복구 `_verify_attempt`는 같은 규칙으로 미전송을 판정한다 — 슬롯 blocked·토큰 없음·가드 `dispatch_entered=False`일 때만 0원, 구독 채널 실패는 `billing_channel`을 보존해 전송 불명/API 비용 해당 없음으로 남긴다. `PairSpec.snapshot()`은 Claude용 새 필드가 기본값이면 생략해 역사적 GPT/Gemini manifest·행을 바이트 동일하게 유지한다.
 
 ## 순서와 수락 기준
 
 - [x] 합성 검사 먼저(`tests/test_model_comparison_claude.py`): 채널 불일치 전송 전 차단(어댑터·가드 양쪽), dispatch 1회·복구 시 재전송 0, CLI 경로 월 예약/정산 0, API 경로 가드 예약 1회·어댑터 단독 예약 0, 전달 제어(모델·effort·출력 상한·시한·temperature/seed 생략), 정상·신원 불일치·거절·불완전·timeout·미전송·취소·생성 전 거절, 실제 전송 클래스의 무자격 미전송, PairSpec Claude Bear 규칙·역사적 Gemini 쌍 보존, worker 활성화 거부.
-- [ ] 관련 기존 검사(runner/execution/admission/recovery/daily_report/worker/contract/input/e2e/claude_transport) 회귀 0 — 결과는 원장.
-- [ ] 독립 Codex 교차 리뷰(`scripts/dev/codex_review.sh`, 고정 SHA/tree, 리뷰 중 편집 금지) — 결과·반영은 원장.
+- [x] 관련 기존 검사(runner/execution/admission/recovery/daily_report/worker/contract/input/e2e/claude_transport 등 19파일) 회귀 0 — 결과는 원장.
+- [x] 독립 Codex 교차 리뷰 1회차(HEAD 6f75ac88, 요청 gpt-6-astra/high): P1 2·P2 2 → 전부 반영(아래). 재리뷰·최종은 원장.
 - [ ] 실제 WSL 직렬 전체 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` PASS 뒤 커밋/푸시·PR. AWS 검사는 보조.
 - [ ] See: 원장·CHANGELOG·검토 문서 갱신. 운영 적용·실제 호출·worker 연결·R1 활성화·순수익은 완료로 표시하지 않는다.

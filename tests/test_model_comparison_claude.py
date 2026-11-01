@@ -59,15 +59,15 @@ SCRIPTS = {
 
 
 class _Recorder:
-    def __init__(self, script=_ok):
+    def __init__(self, script=_ok, delay=0.0):
         super().__init__(LLMConfig(openai_api_key='', gemini_api_key=''))
-        self.calls, self.script = [], script
+        self.calls, self.script, self.delay = [], script, delay
 
     async def complete(self, prompt, system='', *, model, max_tokens=400, reasoning_effort='low', deadline=None, **kw):
         self.calls.append(dict(prompt=prompt, system=system, model=model, max_tokens=max_tokens,
                                reasoning_effort=reasoning_effort, deadline=deadline, extra=kw,
                                loop_time=asyncio.get_running_loop().time()))
-        await asyncio.sleep(0)
+        await asyncio.sleep(self.delay)
         return self.script(self._response(model, reasoning_effort))
 
 
@@ -80,7 +80,8 @@ class FakeAPI(_Recorder, AnthropicAPIClient):
 
 
 def guard_for(tmp_path, ledger=None):
-    ledger = ledger or MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
+    if ledger is None:
+        ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
     return ledger, ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
         experiment_id='C', daily_attempt_cap=40, allowed_models=('gpt-5-mini', CLAUDE, 'gemini-3.1-flash-lite'),
         max_output_tokens=400, experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
@@ -106,17 +107,17 @@ def bear_controls(channel='subscription', **over):
     return m.RoleControls(**fields)
 
 
-def claude_setup(tmp_path, *, bear_script=_ok, api=False):
+def claude_setup(tmp_path, *, bear_script=_ok, api=False, bear_delay=0.0, bear_timeout=11.5):
     ledger, guard = guard_for(tmp_path)
     op, ge = FakeOpenAI(), FakeGemini()
-    client = (FakeAPI if api else FakeCLI)(bear_script)
+    client = (FakeAPI if api else FakeCLI)(bear_script, delay=bear_delay)
     runner = m.PairedComparisonRunner(guard=guard, adapter=m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW),
                                       claude_adapter=ClaudeSingleAttemptAdapter(client, clock=lambda: NOW), clock=lambda: NOW)
     spec = m.PairSpec(decision_id='decision-c', signal_id='signal-1', symbol='005490',
                       common_context='same immutable facts', input_available_at=NOW.isoformat(),
                       current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803),
                       candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803),
-                      bear=bear_controls('api' if api else 'subscription'), bear_empty_retries=0,
+                      bear=bear_controls('api' if api else 'subscription', timeout_seconds=bear_timeout), bear_empty_retries=0,
                       neutral_sizing=None, pricing_basis='offline_replay',
                       fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
     return ledger, guard, runner, spec, op, client
@@ -229,10 +230,11 @@ def test_response_states_are_preserved_not_repaired(tmp_path, case, api):
     assert value['success'] is (case == 'ok')
     assert value['requested_model_match'] is (case == 'ok')
     assert value['effective_reasoning_effort'] is None and value['requested_reasoning_effort'] == 'low'
+    assert 'error' not in value                                          # 러너 예외 필드는 어댑터가 쓰지 않는다
     if case == 'ok':
-        assert value['model_identity_status'] == 'verified' and value['error'] is None
+        assert value['model_identity_status'] == 'verified' and value['transport_error_kind'] is None
     else:
-        assert value['error'] == value['transport_error_kind'] and value['transport_error_kind']
+        assert value['transport_error_kind']
     assert value['refusal_detected'] is (case == 'refusal')
     assert value['request_sent'] is (case != 'not_sent')
     assert value['usage_known'] is (case == 'ok')
@@ -338,7 +340,7 @@ def test_api_claude_bear_pair_reserves_each_attempt_exactly_once(tmp_path):
     ledger, guard, runner, spec, op, client = claude_setup(tmp_path, api=True)
     row = asyncio.run(runner.run(spec))
     assert len(client.calls) == 1 and len(reservations(ledger)) == 3
-    assert row['subscription_attempts'] == 0 and row['total_comparison_cost_usd'] is not None
+    assert 'subscription_attempts' not in row and row['total_comparison_cost_usd'] is not None   # 유료만이면 역사적 행 형식
     bear = [a for a in row['current']['attempts'] if a['role'] == 'bear'][0]
     assert bear['billing_channel'] == 'api' and bear['api_cost_usd'] is not None
 
@@ -369,8 +371,14 @@ def test_historical_gemini_bear_spec_still_validates_and_snapshot_keeps_api_chan
     _, _, _, spec, _, _ = setup(tmp_path)
     spec.validate()
     snapshot = spec.snapshot()
-    assert snapshot['bear']['billing_channel'] == 'api' and snapshot['bear_empty_retries'] is None
-    assert spec.bear.temperature == 0.0
+    # 역사적 쌍의 스냅샷은 바이트 동일 — 새 기본 필드가 manifest 에 나타나지 않는다.
+    assert 'bear_empty_retries' not in snapshot and spec.bear_empty_retries is None
+    assert all('billing_channel' not in snapshot[role] for role in ('current', 'candidate', 'bear'))
+    assert spec.bear.temperature == 0.0 and spec.bear.billing_channel == 'api'
+    historical_row = m.finalize_row('p', snapshot, NOW.isoformat(),
+                                    {'attempts': [{'attempt_id': 'p:bull_current:0', 'api_cost_usd': '0'}]},
+                                    {'attempts': [{'attempt_id': 'p:bull_candidate:0', 'api_cost_usd': '0'}]})
+    assert 'subscription_attempts' not in historical_row
 
 
 def test_runner_without_claude_adapter_rejects_claude_bear_before_claim(tmp_path):
@@ -398,3 +406,56 @@ def test_worker_activation_remains_refused():
     from src.analytics import model_comparison_worker as w
     with pytest.raises(ValueError, match='provider_disabled'):
         w._raw_clients()
+
+
+def test_claude_bear_runner_timeout_after_dispatch_is_unknown_transmission_not_zero(tmp_path):
+    ledger, guard, runner, spec, op, client = claude_setup(tmp_path, bear_delay=1.0, bear_timeout=0.2)
+    row = asyncio.run(runner.run(spec))
+    assert len(client.calls) == 1
+    bear = [a for a in row['current']['attempts'] if a['role'] == 'bear'][0]
+    assert bear['error'] == 'TimeoutError' and bear['success'] is False
+    assert bear['request_sent'] is None and bear['api_cost_usd'] is None        # 전송 불명·구독은 API 비용 해당 없음
+    assert bear['billing_channel'] == 'subscription' and bear['ledger_state'] == 'blocked'
+    record = guard.lookup(bear['attempt_id'])
+    assert record['dispatch_entered'] is True and record['reservation_token'] is None
+    assert row['subscription_attempts'] == 1 and row['unknown_transmission_attempts'] == 1
+    assert row['current']['verdict'] == 'unavailable' and row['current']['api_cost_usd'] is not None
+    assert ledger.status()['unresolved_count'] == 0                          # 구독 중단은 월 원장을 막지 않는다
+
+
+@pytest.mark.parametrize('case,api', [('ok', False), ('timeout', False), ('ok', True), ('incomplete', True)])
+def test_claude_pair_row_survives_storage_failure_and_recovery_recomputes_identically(tmp_path, monkeypatch, case, api):
+    from contextlib import contextmanager
+    import sqlite3
+    from src.analytics import model_comparison_recovery as recovery
+    ledger, guard, runner, spec, op, client = claude_setup(tmp_path, bear_script=SCRIPTS[case], api=api)
+    original = ledger._connect
+
+    class Connection:
+        def __init__(self, db): self.db = db
+        def execute(self, sql, *args):
+            if sql.startswith('UPDATE comparison_pairs SET result='):
+                raise sqlite3.OperationalError('injected pair storage failure')
+            return self.db.execute(sql, *args)
+        def __getattr__(self, name): return getattr(self.db, name)
+
+    @contextmanager
+    def connect(**kwargs):
+        with original(**kwargs) as db:
+            yield Connection(db)
+    monkeypatch.setattr(ledger, '_connect', connect)
+    with pytest.raises(m.PairResultPersistenceError) as error:
+        asyncio.run(runner.run(spec))
+    monkeypatch.setattr(ledger, '_connect', original)
+    row = error.value.result
+    pair_id = row['pair_id']
+    attempts = recovery._row_attempts(row, pair_id)
+    assert len(attempts) == 3 and len(client.calls) == 1
+    # 저장 spec·시도들로 다시 만든 행과 저장 원본에서 재계산한 각 시도가 저널 행과 완전히 같다(restore_pair_result 의 대조).
+    arms = [dict(row[name]) for name in ('current', 'candidate')]
+    assert m.finalize_row(pair_id, spec.snapshot(), row['requested_at'], *arms) == row
+    for attempt in attempts.values():
+        recovery._verify_attempt(guard, spec.snapshot(), pair_id, attempt)
+    bear = [a for a in attempts.values() if a['role'] == 'bear'][0]
+    assert bear['billing_channel'] == ('api' if api else 'subscription') and 'error' not in bear
+    assert bear['success'] is (case == 'ok')

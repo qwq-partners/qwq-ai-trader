@@ -173,9 +173,18 @@ class PairSpec:
         _json(asdict(self))  # Reject non-JSON snapshots and nonfinite numbers before admission.
 
     def snapshot(self):
-        """Persisted spec: the per-process attestation is evidence of this run, not pair identity."""
+        """Persisted spec: the per-process attestation is evidence of this run, not pair identity.
+
+        Claude 역할용 새 필드는 기본값이면 생략해 역사적 GPT/Gemini 쌍의 manifest·policy 스냅샷을 바이트 동일하게 둔다
+        (저장 manifest 대조·incomplete 행 복구가 완전 일치 비교라서). Claude Bear 스냅샷에만 새 키가 나타난다.
+        """
         value = asdict(self)
         value.pop('attestation')
+        if value['bear_empty_retries'] is None:
+            value.pop('bear_empty_retries')
+        for role in (value['current'], value['candidate'], value['bear'], *value['fallback_chain']):
+            if role.get('billing_channel') == 'api':
+                role.pop('billing_channel')
         return value
 
 
@@ -262,10 +271,12 @@ def context_bytes(text) -> int:
     return len(text.encode('utf-8', 'surrogatepass'))
 
 
-def failed_attempt_value(saved, *, not_sent, requested_model, error):
+def failed_attempt_value(saved, *, not_sent, requested_model, error, billing_channel=None):
     """실패 시도의 기록값. 저장 응답(ComparisonAttemptResult|None)과 오류만으로 결정된다 — 복구가 같은 함수로 재계산한다.
 
     0원은 예약 없는 전송 전 차단(not_sent)만 증명한다. 저장 응답이 있으면 그 측정 비용을 그대로 쓴다.
+    구독 채널의 실패는 저장 응답이 없어도 채널을 남겨 API 합계·구독 집계에서 유료 시도와 섞이지 않게 한다
+    (유료 채널은 역사적 행 형식 보존을 위해 키를 더하지 않는다).
     """
     value = dict(saved.value) if saved is not None else {}
     cost = None if saved is None or saved.actual_cost_usd is None else str(saved.actual_cost_usd)
@@ -273,6 +284,8 @@ def failed_attempt_value(saved, *, not_sent, requested_model, error):
                  api_cost_usd=cost if saved is not None else '0' if not_sent else None,
                  request_sent=value.get('request_sent', False if not_sent else None),
                  timing_valid=False, requested_model=requested_model, error=error)
+    if billing_channel == 'subscription':
+        value['billing_channel'] = 'subscription'
     return value
 
 
@@ -300,9 +313,12 @@ def finalize_row(pair_id, snapshot, requested_at, current, candidate):
            'actual_provider_attempts': sum(att.get('request_sent') is True for att in unique.values()),
            'unknown_transmission_attempts': sum(att.get('request_sent') is None for att in unique.values()),
            'admitted_attempts': len(unique), 'total_comparison_cost_usd': _sum_cost(list(unique.values())),
-           'subscription_attempts': sum(att.get('billing_channel') == 'subscription' for att in unique.values()),
            'economic_evaluable': False, 'net_delta_krw': None, 'actual_execution': False,
            'reasons': ['downstream_admission_not_replayed', 'continuous_session_not_certified']}
+    subscription_attempts = sum(att.get('billing_channel') == 'subscription' for att in unique.values())
+    if subscription_attempts:
+        # 구독 시도가 있을 때만 적는다 — 역사적 행(유료만)의 형식을 바꾸지 않아 완전 일치 복구가 유지된다.
+        row['subscription_attempts'] = subscription_attempts
     if snapshot['pricing_basis'] != 'paired_live_shadow':
         row['reasons'].append('offline_replay_not_live')
     return row
@@ -434,10 +450,13 @@ class PairedComparisonRunner:
 
     def _failure(self, attempt_id, requested_model, error):
         record = self.guard.lookup(attempt_id)
-        # Only a persisted pre-dispatch block without a reservation proves zero.
-        not_sent = bool(record and record.get('state') == 'blocked' and record.get('reservation_token') is None)
+        # Only a persisted pre-dispatch block (slot state blocked, dispatch never entered) without a reservation proves
+        # zero. 구독 시도는 토큰이 없어도 전송 뒤 중단될 수 있으므로 가드의 dispatch_entered 를 함께 본다(복구와 같은 규칙).
+        not_sent = bool(record and record.get('state') == 'blocked' and record.get('reservation_token') is None
+                        and record.get('dispatch_entered') is False)
         return failed_attempt_value(record.get('result') if record else None, not_sent=not_sent,
-                                    requested_model=requested_model, error=error)
+                                    requested_model=requested_model, error=error,
+                                    billing_channel=record.get('billing_channel') if record else None)
 
     def _stamp(self, value, attempt_id, role):
         record = self.guard.lookup(attempt_id)
