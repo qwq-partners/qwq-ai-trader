@@ -161,12 +161,17 @@ class SingleAttemptAdapter:
     The caller supplies raw clients and closes them. Price table output is a
     usage-based estimate, not an invoice or provider-reported billed USD.
     """
+    billing_channel = 'api'   # 유료 API 전송만 한다. 가드가 전송 전에 요청 채널과 대조한다.
+
     def __init__(self, *, openai: OpenAIClient, gemini: GeminiClient, clock=_now):
         if not isinstance(openai, OpenAIClient) or not isinstance(gemini, GeminiClient):
             raise ValueError('raw_provider_clients_required; LLMManager forbidden')
         self.openai, self.gemini, self.clock = openai, gemini, clock
 
     async def __call__(self, request: ComparisonRequest):
+        if request.billing_channel != self.billing_channel:
+            # 구독 요청은 월 예약이 없으므로 이 어댑터가 호출하면 예약 없는 과금이 된다. 공급자 호출 전에 거절한다.
+            raise ValueError('api_adapter_requires_api_billing_channel')
         provider = _provider(request.model)
         _validate_controls(request.model, provider, {'reasoning_effort': request.reasoning_effort, 'seed': request.seed})
         client = self.openai if provider == LLMProvider.OPENAI else self.gemini

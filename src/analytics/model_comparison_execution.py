@@ -321,6 +321,8 @@ class ComparisonCallGuard:
         if hashlib.sha256(row["request_json"].encode()).hexdigest() != row["request_sha256"]:
             raise BudgetStateError("comparison_storage_corrupt")
         result = _read_result(row["result_json"]) if row["result_json"] is not None else None
+        stored_request = json.loads(row["request_json"]).get("request")
+        channel = stored_request.get("billing_channel", "api") if isinstance(stored_request, dict) else "api"
         token = row["reservation_token"]
         reservation = (db.execute("SELECT state,actual_units FROM reservations WHERE token=?", (token,)).fetchone()
                        if token is not None else None)
@@ -335,9 +337,10 @@ class ComparisonCallGuard:
         if result is not None:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
             cost = _ledger_cost(result.actual_cost_usd)
-            if result.settlement == "subscription":
-                # 구독 전송은 예약 토큰이 없어야 한다. 토큰이 있으면 채널과 정산이 어긋난 저장이다.
-                if token is not None or reservation is not None or cost is not None:
+            if result.settlement == "subscription" or channel == "subscription":
+                # 구독 전송은 구독 요청·구독 정산·예약 토큰 없음이 모두 맞아야 한다. 하나라도 어긋나면 손상된 저장이다.
+                if (result.settlement != "subscription" or channel != "subscription"
+                        or token is not None or reservation is not None or cost is not None):
                     raise BudgetStateError("comparison_settlement_mismatch")
                 state, reason = "known", None
             elif reservation is not None:
@@ -356,7 +359,7 @@ class ComparisonCallGuard:
                     state, reason = "known", None
         estimate = result.value.get("api_cost_usd") if result is not None and isinstance(result.value, dict) else None
         return {"attempt_id": row["attempt_id"], "request_sha256": row["request_sha256"],
-                "state": state, "reservation_token": token,
+                "state": state, "reservation_token": token, "billing_channel": channel,
                 "result": result, "block_reason": reason,
                 "original_estimated_cost_usd": estimate, "reconciled": reconciled}
 
@@ -606,6 +609,11 @@ class ComparisonCallGuard:
                                             link_reservation=lambda db, tok: self._link_in_transaction(db, attempt_id, slot, tok))
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")
+            declared = getattr(dispatch, "billing_channel", None)
+            if declared is not None and declared != request.billing_channel:
+                # 어댑터가 채널을 선언하면 전송 전에 대조한다. 구독 요청이 유료 API 어댑터로 가면 예약 없는 과금이 되고,
+                # 유료 요청이 구독 어댑터로 가면 예약이 헛돈다. 미전송이므로 API 예약은 not_sent 로 해제된다.
+                raise BudgetBlocked("comparison_billing_channel_mismatch")
             entered_dispatch = True
             result = await dispatch(request)
             if not isinstance(result, ComparisonAttemptResult):
@@ -678,8 +686,7 @@ def _day_attempt_rows(guard, db, day: str) -> list[dict]:
             cost = record["reconciled"]["actual_cost_usd"]
         elif record["state"] == "known" and result is not None and result.actual_cost_usd is not None:
             cost = str(_d(result.actual_cost_usd, "actual_cost_usd"))
-        stored_request = json.loads(row["request_json"]).get("request")
-        channel = stored_request.get("billing_channel", "api") if isinstance(stored_request, dict) else "api"
+        channel = record["billing_channel"]
         out.append({"attempt_id": record["attempt_id"], "admission_day": day, "state": record["state"],
                     "reservation_token": record["reservation_token"], "cost_usd": cost,
                     "billing_channel": channel,

@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **11/1 E04 후속(guard 소유권):** PR #323 병합(main `c022ef36`). 비교 호출 경계에 전송 채널(api|subscription)을 명시해 구독 시도가 월 원장을 예약·정산하지 않게 했다. 실제 Claude 어댑터·R1은 별도, 설정·매수 중지 유지. [원장](operations/execution-roadmap.md#e04-guard-billing-20261101).
+
 > **11/1 E04 후속:** PR #322 CI 통과·main `e71ebc32` 병합 완료. 공식 GPT snapshot 신원 판독 v2를 보완하며 기존 계약·설정·매수 중지는 보존한다. [독립 리뷰·실제 WSL 검증·현재 NEXT](operations/execution-roadmap.md#e04-snapshot-identity-20261101)를 따른다. 아래 이전 승인/미병합 표기는 당시 이력이다.
 
 > **11/1 E04 현재 작업:** [GPT/Claude 오프라인 비교 계약·검증 상태·NEXT](operations/execution-roadmap.md#e04-current-contract-20261101). 현행 entry 검토의 재시도·시한·신원·전송별 비용을 명시 파일로 검사한다. 실제 WSL 검증 후 커밋/푸시하며 기존 설정·매수 중지·worker/R1 OFF는 유지한다. [사용법·합성 예시](reviews/engine-comparison-contract-2026-11-01.md#offline-contract-v1). 아래 R02 WAIT는 당시 이력이며04:35 예시의 모바일 수락과11/1 O02 영수증은 원장 후속에 반영됐다.

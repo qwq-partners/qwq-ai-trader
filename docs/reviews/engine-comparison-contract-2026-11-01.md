@@ -17,7 +17,7 @@
 | 재시도 | Bull 기존 계약, Bear empty retry0 | runner는 공통 `empty_retries`를 Bear에도 적용한다. |
 | 시한 | entry panel12초, Bear 내부11.5초 | producer가 보존하는 Bear 내부 시한을 worker의 예상 제어 대조가 검증하지 않는다. 팀 Bear의19.5초/API800과 구별한다. |
 | 독립 검토 | 한쪽 검토 누락 시 보류 | runner의 `_arm`에는 한쪽만으로 승인하거나 단일 fallback으로 승인하는 옛 규칙이 남아 있다. |
-| 전송·정산 | Claude CLI 우선, API 대체; 구독 표시 추정비와 API 비용 구분 | adapter는 raw OpenAI/Gemini, 실행 정책은 `single-provider-attempt-v1`이다. 다중 전송을 `LLMManager` 하나로 감싸면 기존 예약/시도 의미가 달라진다. |
+| 전송·정산 | Claude CLI 우선, API 대체; 구독 표시 추정비와 API 비용 구분 | adapter는 raw OpenAI/Gemini, 실행 정책은 `single-provider-attempt-v1`이었다(11/1 [guard 소유권](#guard-billing-channel) 뒤 v2). 다중 전송을 `LLMManager` 하나로 감싸면 기존 예약/시도 의미가 달라진다. |
 | 입력 검증 | producer가 Bear retry0·내부 시한·전송 순서 보존 | worker의 `_expected_controls`가 이 세 필드를 검증하지 않는다. **추가 키 때문에 봉투를 거부하는 것이 아니라 추가 키를 검증하지 않는 것**이다. |
 
 직접 대조한 소스:
@@ -85,3 +85,13 @@ v1은 요청/응답 모델명의 완전 일치를 계속 요구한다. v2를 명
 각 시도 관측의 `identity_match`는 `exact`, `documented_snapshot`, `unknown`, `mismatch` 중 하나다. 요청과 응답 이름은 별도로 보존한다(비정형 관측은 기존 정제 규칙 유지). 마지막 응답뿐 아니라 앞선 시도에도 같은 판정을 적용하며 원래 refusal/identity_mismatch·시간/전송 위반을 정상으로 복구하지 않는다. 이 분류는 제공된 문자열 관계이며 입력 진위·실효 effort·실시간 alias 포인터·모델 가용성을 인증하지 않는다. v2 `limitations`에도 `documented_identity_not_current_attestation`을 명시한다.
 
 예를 들어 합성 fixture의 GPT 응답 이름만 공식 snapshot으로 바꾸면 v1은 신원 불일치로hold, v2는 다른 조건이 모두 정상이면conformant다. 임의 날짜/다른 모델·반대 방향의 관계는 계속hold다. 실제 앱 모델을 바꾸거나 API를 호출하는 기능이 아니며 `actual_execution=false`, `economic_evaluable=false`, `live_activation_supported=false`, 순수익null은 유지한다. [검증·운영/NEXT](../operations/execution-roadmap.md#e04-snapshot-identity-20261101).
+
+
+<a id="guard-billing-channel"></a>
+## 호출 경계의 전송 채널 소유권
+
+PR #323 병합 뒤 Claude CLI→API 대체의 시도 단위 입장·월 예약·정산 소유권을 대조했다. 운영 `LLMManager._run_complete_attempt`는 구독 CLI 시도에 월 예약을 만들지 않고 API 대체 1회만 예약·정산한다. 비교 실행기의 `ComparisonCallGuard`는 모든 입장 시도를 월 원장에 예약·정산하므로 비과금 구독 시도를 표현할 수 없었다. 구독 시도를 비용 None으로 넘기면 공유 원장 `unknown`이 운영 유료 호출까지 막고, CLI 사용량을 API 요율로 계산하면 가짜 USD가 정산된다. `SingleAttemptAdapter`의 raw 클라이언트 형식 검사는 LLMManager 감싸기(API 이중 예약)를 막지만 이 공백을 채우지 않았다.
+
+`ComparisonRequest.billing_channel`(api|subscription)을 추가했다. 구독 요청은 일 슬롯·요청 지문을 유료와 같이 소비하고 정책 단계 normal·실험 유효기간만 읽는다. 월 `reserve`·80%·실험 상한은 대상이 아니다. 응답 정산 `subscription`은 `actual_cost_usd=None`만 허용하며 구독 표시 추정비는 value의 `subscription_estimated_cost_usd`로만 남겨 API 비용에 더하지 않는다. 요청 채널과 응답 정산이 다르면 `comparison_billing_channel_mismatch`로 거절하고 API 예약은 `unknown`, 구독 시도는 차단 ID만 남는다. `day_attempts`는 `billing_channel`과 구독 추정비를 따로 노출한다. 정책 `adapter_contract`는 `single-provider-attempt-v2`다.
+
+독립 리뷰 반영으로 어댑터가 `billing_channel`을 선언하면 가드가 전송 전에 요청 채널과 대조하고, `SingleAttemptAdapter`는 `api`를 선언해 구독 요청을 공급자 호출 전에 거절한다. 저장 조회는 요청 채널·정산·토큰이 모두 맞을 때만 구독 `known`이며, 복구는 유료 채널에만 미전송을 추정한다. 일별 API 지출 보고는 구독 시도를 `subscription_attempts`로 따로 적고 USD 합계·불명에 넣지 않는다. 이 변경은 실제 Claude 어댑터가 아니다. runner는 여전히 raw OpenAI/Gemini만 받고 PairSpec Bear는 Gemini를 요구하며 worker/R1은 OFF다. 검증·리뷰·NEXT는 [원장](../operations/execution-roadmap.md#e04-guard-billing-20261101)을 따른다.

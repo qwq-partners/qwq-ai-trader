@@ -229,7 +229,7 @@ def test_stored_v1_policy_is_rejected_without_migration(tmp_path):
     ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, clock=lambda: NOW, policy_enabled=True)
     v1 = json.dumps({"experiment_id": "R1", "daily_attempt_cap": 50, "allowed_models": ["gpt-5-mini"],
                      "max_output_tokens": 400, "schema_version": "model-comparison-execution-v1",
-                     "currency": "USD", "timezone": "Asia/Seoul", "adapter_contract": "single-provider-attempt-v2"},
+                     "currency": "USD", "timezone": "Asia/Seoul", "adapter_contract": "single-provider-attempt-v1"},
                     sort_keys=True, separators=(",", ":"))
     with sqlite3.connect(ledger.path) as db:
         db.execute("CREATE TABLE comparison_policy (id INTEGER PRIMARY KEY CHECK(id=1), policy TEXT NOT NULL)")
@@ -783,3 +783,43 @@ def test_process_loss_leaves_inspectable_incomplete_pair_without_retry(tmp_path)
     assert ledger.status()["unresolved_count"] >= 1
     assert ledger.status()["activated_at"] == activated
     assert recovery.inspect_attempt(guard, "missing")["found"] is False
+
+
+def test_stored_policy_with_v1_adapter_contract_is_rejected(tmp_path):
+    """현재 스키마라도 adapter_contract 만 v1 이면(요청 지문에 billing_channel 없음) fail-closed 다."""
+    from src.analytics.model_comparison_execution import ComparisonCallGuard
+    ledger = MonthlyBudgetLedger(tmp_path / "b.db", 100, clock=lambda: NOW, policy_enabled=True)
+    current = policy()
+    stale = json.loads(current.serialized())
+    assert stale["adapter_contract"] == "single-provider-attempt-v2"
+    stale["adapter_contract"] = "single-provider-attempt-v1"
+    with sqlite3.connect(ledger.path) as db:
+        db.execute("CREATE TABLE comparison_policy (id INTEGER PRIMARY KEY CHECK(id=1), policy TEXT NOT NULL)")
+        db.execute("INSERT INTO comparison_policy VALUES (1,?)", (json.dumps(stale, sort_keys=True, separators=(",", ":")),))
+        db.execute("CREATE TABLE comparison_attempts (slot TEXT PRIMARY KEY, admission_day TEXT NOT NULL, "
+                   "reservation_token TEXT, state TEXT NOT NULL)")
+    with pytest.raises(BudgetBlocked, match="comparison_policy_mismatch"):
+        ComparisonCallGuard(ledger=ledger, policy=current)
+
+
+def test_subscription_attempt_is_blocked_outside_normal_policy_mode(tmp_path):
+    """구독 시도는 월 예약이 없어도 절약 단계(80% 초과)에서는 입장하지 않는다. 전송 0·예약 0."""
+    from dataclasses import replace
+    from src.analytics.model_comparison_execution import ComparisonAttemptResult
+    path = tmp_path / "b.db"
+    prespend(path, 1, 850_000_000)
+    before = frozen(path)
+    ledger, guard = guard_for(path, limit=1)
+    assert ledger.status()["policy_mode"] != "normal"
+    calls = []
+
+    async def dispatch(req):
+        calls.append(req)
+        return ComparisonAttemptResult(value={}, actual_cost_usd=None, settlement="subscription")
+
+    with pytest.raises(BudgetBlocked, match="comparison_policy_mode_not_normal"):
+        asyncio.run(guard.call(replace(request(), billing_channel="subscription"), dispatch=dispatch,
+                               attempt_id="sub-economy"))
+    assert calls == [] and comparison_reservations(path) == 0
+    assert guard.lookup("sub-economy")["state"] == "blocked"
+    assert frozen(path) == before and ledger.status()["unresolved_count"] == 0

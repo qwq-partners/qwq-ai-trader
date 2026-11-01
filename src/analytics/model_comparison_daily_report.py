@@ -398,14 +398,19 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     unknown, reconciled_ids, lookup_failed = [], [], []
     ledger_by_id = {la['attempt_id']: la for la in ledger_attempts
                     if isinstance(la, Mapping) and isinstance(la.get('attempt_id'), str)}
-    ledger_used = []
+    ledger_used, subscription_known = [], []
     for attempt_id, a in sorted(unique.items()):
-        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
-        if estimate is not None:
-            estimated += estimate
         la = ledger_by_id.get(attempt_id)
         ledger_state = la.get('state') if la is not None else None
         ledger_cost = la.get('cost_usd') if la is not None else None
+        if la is not None and la.get('billing_channel') == 'subscription' and ledger_state == 'known':
+            # 구독 전송은 API 지출이 아니다. 비용 None 을 불명으로 세지 않고 표시 추정비만 따로 남긴다.
+            subscription_known.append({'attempt_id': attempt_id,
+                                       'subscription_estimated_cost_usd': la.get('subscription_estimated_cost_usd')})
+            continue
+        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
+        if estimate is not None:
+            estimated += estimate
         if ledger_state in ('pending', 'pending_reconciliation', 'unknown'):
             unknown.append(attempt_id)                      # 원장이 미확정이면 추정액으로 메우지 않는다
             continue
@@ -438,6 +443,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'unknown_attempts': unknown, 'lookup_failed_attempts': lookup_failed,
              'ledger_attempts_outside_pair_rows': outside_rows, 'unaccounted_attempts': unaccounted,
              'ledger_cost_used_attempts': ledger_used,
+             'subscription_attempts': subscription_known,   # API 합계 밖. 표시 추정비는 청구액이 아니다.
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
              'known_subtotal_usd': str(used),
@@ -446,6 +452,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'basis': 'unique attempt_id once across all pair runs of the day; '
                       'unresolved ledger stays unknown; otherwise ledger(known|known_reconciled) > '
                       'reconciliation lookup > original estimate > unknown; arm scenario costs are not summed; '
+                      'subscription-channel attempts are listed separately and never added to USD totals; '
                       'known_subtotal_usd is computable cost including any original estimates used, '
                       'not verified invoice charges'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)

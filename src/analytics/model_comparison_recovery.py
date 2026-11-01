@@ -181,7 +181,9 @@ def _verify_attempt(guard, spec, pair_id, attempt):
             reason = record['block_reason']
             if not (error == reason or (reason == _INTERRUPTED and _EXCEPTION_NAME.fullmatch(error))):
                 raise ValueError('result_row_error_mismatch')
-        not_sent = record['state'] == 'blocked' and record['reservation_token'] is None
+        # 구독 시도는 전송 뒤 실패해도 토큰이 없으므로 "토큰 없음 = 미전송" 추정은 유료 채널에만 적용한다.
+        not_sent = (record['state'] == 'blocked' and record['reservation_token'] is None
+                    and record.get('billing_channel', 'api') == 'api')
         expected = failed_attempt_value(saved, not_sent=not_sent, error=error, requested_model=requested_model)
     if body != expected:
         raise ValueError('result_row_response_mismatch')

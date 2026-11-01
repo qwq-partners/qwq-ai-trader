@@ -1,5 +1,28 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-guard-billing-20261101"></a>
+### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합 DONE · 구현/관련 검사 DONE · 독립 리뷰/전체 검증 진행)
+
+**Plan:** 사용자 “PR #323의 현재 CI·리뷰·HEAD를 확인하고 문제가 없으면 병합한다. 최신 실행 원장에 따라 지금 가능한 엔진 개선을 이어간다. … 기존 설정과 매수 중지는 유지한다. 이번 요청에 운영 배포·재시작·실주문·유료 비교 활성화는 포함하지 않는다.” [실행 계획](../superpowers/plans/2026-11-01-comparison-guard-billing-channel.md). 11/1 17:36 KST 확인: 운영 checkout `cfc9bc20`·미커밋 `config/evolved_overrides.yml`만·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재. 개발은 운영 checkout이 아닌 별도 worktree의 `feature/e04-guard-billing-channel-20261101`(기준 main `c022ef36`)에서 한다.
+
+**PR #323 병합 DONE:** HEAD `1167a6f5`·필수 verify run41288445181 SUCCESS·MERGEABLE/CLEAN·추가 커밋/리뷰 변경 0을 인계 기록과 대조한 뒤 11/1 17:37:22 KST(09:37:22Z)에 merge commit으로 병합했다. main `c022ef365b931afb76a1f3b9e3515052af52e499`, PR 소스 tree `30d7f161`과 main tree 동일. main CI run41289640462 **10,183 passed / 2 skipped / 2 xfailed**(497.36초)·격리0·문법/비밀정보 PASS. 오프라인 도구 병합이므로 운영 재배포는 없다.
+
+**① E02-RR/E01 새 입력:** 마지막 경계 17:03:16.662937 이상~17:42:10.256971 미만 KST만 기존 PostgreSQL `signal_events`를 READ ONLY 트랜잭션·statement_timeout 5초·10,001행 상한으로 집계했다. **0행·RR 문맥 0행**이며 전체 최신 행은 10/30 14:58:33이다. 이전 구간은 재조회하지 않았다. 유효 입력이 없으므로 E02-RR/F1/W1·E01은 WAIT, 임계값·전략 변경 0이다.
+
+**② 조사:** Claude CLI→API 대체의 시도 단위 입장·월 예약·정산 소유권을 소스로 대조했다. 운영 `LLMManager._run_complete_attempt`는 구독 CLI 시도(`_client is self.claude_cli`)에 월 예약을 만들지 않고 API 대체 1회만 예약·정산한다. 비교 실행기의 `SingleAttemptAdapter`는 raw OpenAI/Gemini만 받아 LLMManager 감싸기(API 시도 이중 예약)를 형식 검사로 막지만, `ComparisonCallGuard`는 모든 입장 시도를 월 원장에 예약·정산하므로 **비과금 구독 시도를 표현할 수 없다**. 구독 시도를 비용 None으로 넘기면 공유 원장의 `unknown` 예약이 운영 유료 호출까지 막고, 사용량을 API 요율로 계산하면 가짜 USD가 정산된다. 이는 Claude 어댑터가 없는 현재의 운영 결함이 아니라 연결 전 선행 조건이다.
+
+**Do:** `ComparisonRequest.billing_channel`(api|subscription, 기본 api)을 추가했다. 어댑터가 채널을 선언하면 전송 전에 대조하고 `SingleAttemptAdapter`는 구독 요청을 거절한다. 구독 요청은 `_admit`으로 일 슬롯·요청 지문을 유료와 같이 소비하되 월 `reserve`를 호출하지 않고 정책 단계 normal·실험 유효기간만 읽는다. 응답 정산 `subscription`은 `actual_cost_usd=None`만 허용하고 구독 표시 추정비는 value의 `subscription_estimated_cost_usd`로만 남긴다. 요청 채널과 응답 정산이 다르면 `comparison_billing_channel_mismatch`로 거절하며 API 예약은 `unknown`(과금 불명)으로, 구독 시도는 차단 ID만 남는다. `lookup`/`day_attempts`는 구독 결과를 토큰 없는 `known`·`cost_usd None`·`billing_channel`로 노출하고 토큰이 붙은 구독 결과는 `comparison_settlement_mismatch`다. 정책 `adapter_contract`는 `single-provider-attempt-v2`로 올려 구버전 정책 원장은 `comparison_policy_mismatch`로 fail-closed 된다(운영 원장에 비교 표 없음: worker 미활성). runner/adapter/worker/PairSpec·가격표·R1/Gemini·주문·예약은 변경하지 않았다. 일별 API 지출 보고는 구독 시도를 아직 API 비용 불명으로 세는 보수적 한계가 있다.
+
+**See/관련 검사(AWS 보조):** 새 검사 7개 포함 `tests/test_model_comparison_execution.py`와 execution_boundaries/admission_budget/recovery/daily_report/runner/worker/worker_lifecycle/contract 9파일 **398 passed**·격리 0(개발 worktree, venv pytest). 전체 직렬 검증과 실제 WSL은 아래에 기록한다.
+
+**See/독립 리뷰:** 명시 `claude-opus-5-5`/high 소스 리뷰(Agent 요청 opus/high, 응답 자기표기 claude-opus-5-5, 도구 읽기 전용)는 **APPROVE·P0/P1 0·P2 4**였다 — v1 고정 자료 변경, 복구의 “토큰 없음=미전송” 추정, 저장 요청 채널 교차 검사, 검사 공백 2건. Codex 교차 리뷰(요청 gpt-6-astra/high, actual/effective 미노출)는 **P1 1·P2 2**로 병합 보류를 권고했다 — 구독 요청이 기존 API 어댑터로 가면 예약 없는 과금이 되며 가드의 불일치 검사가 전송 뒤라는 지적, 일별 보고의 구독 시도 불명 집계, 문서 미커밋. coordinator가 전부 반영했다: 어댑터가 `billing_channel`을 선언하면 가드가 **전송 전에** 대조하고 `SingleAttemptAdapter`는 `api`를 선언하며 구독 요청을 공급자 호출 전에 거절한다. `_lookup_row`는 저장 요청 채널·정산·토큰이 모두 맞을 때만 구독 `known`이며 `billing_channel`을 노출한다. 복구는 유료 채널에만 미전송을 추정한다. 일별 보고는 구독 시도를 `subscription_attempts`로 따로 적고 USD 합계·불명에 넣지 않는다. 검사 7개를 더해 관련 12파일 **462 passed**·격리 0(AWS 개발 worktree). 리뷰 중 coordinator의 문서 편집이 교차 리뷰 스크립트의 작업 트리 대조에 잡혀 rc3(읽기 전용 위반 경고)로 끝났으나 Codex의 파일 변경은 없었고 결과 본문은 보존했다. 수정 뒤 재리뷰·전체 검증은 아래에 적는다.
+
+**See/전체 검증:** (AWS 직렬 전체·Codex 재리뷰·실제 WSL 결과를 이 절에 갱신한다.)
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 자연 보고 수락은 별도다.
+
+**NEXT:** E02-RR/E01 새 유효 자연 입력 판독 우선(평일 장중 자료 생성 뒤). E04는 이 소유권 위에 실제 Claude 어댑터(raw `ClaudeCLIClient`/`AnthropicAPIClient` 단일 시도, PairSpec Bear 공급자·temperature None 제어, 구독 시도 보고 집계)를 별도 승인 범위에서 설계하며 R1 OFF를 유지한다.
+
 <a id="e04-snapshot-identity-20261101"></a>
 ### E04-SNAPSHOT-IDENTITY — 공식 GPT snapshot 신원 판독 (구현·독립 리뷰·실제 WSL DONE)
 

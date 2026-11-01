@@ -278,3 +278,17 @@ def test_cli_offers_requires_worker_reader(tmp_path, capsys, monkeypatch):
                         raising=False)
     assert report_main(['--pairs', str(pairs), '--daily', DAY, '--offers', str(offers)]) == 0
     assert json.loads(capsys.readouterr().out)['denominators']['complete'] == 1
+
+
+def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
+    row = pair('d1')
+    ledger_attempts = [
+        {'attempt_id': 'sub:bear:0', 'state': 'known', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': 0.0123, 'request_sent': True, 'block_reason': None},
+    ]
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts)
+    spend = report['spend']
+    assert spend['subscription_attempts'] == [{'attempt_id': 'sub:bear:0', 'subscription_estimated_cost_usd': 0.0123}]
+    assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
+    assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다
+    assert 'sub:bear:0' in spend['ledger_attempts_outside_pair_rows']
