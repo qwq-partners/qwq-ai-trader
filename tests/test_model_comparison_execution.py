@@ -269,7 +269,7 @@ def test_persisted_policy_describes_currency_timezone_and_request_contract(tmp_p
     with sqlite3.connect(ledger.path) as db:
         saved = json.loads(db.execute("SELECT policy FROM comparison_policy").fetchone()[0])
     assert saved["currency"] == "USD" and saved["timezone"] == "Asia/Seoul"
-    assert saved["adapter_contract"] == "single-provider-attempt-v1"
+    assert saved["adapter_contract"] == "single-provider-attempt-v2"
     assert saved["schema_version"] == "model-comparison-execution-v2"
     assert saved["max_output_tokens"] == 400
     assert saved["experiment_usd_ceiling"] == "1" and saved["required_policy_mode"] == "normal"
@@ -382,3 +382,263 @@ def test_adapter_contract_violation_is_budget_blocked_with_unknown_spend(tmp_pat
     with pytest.raises(BudgetBlocked, match="comparison_invalid_"):
         asyncio.run(guard.call(request(), dispatch=transport))
     assert ledger.status()["unresolved_count"] == 1
+
+
+# ── 전송 채널 소유권: 구독 전송은 일 슬롯만 소비하고 공유 월 원장을 예약·정산하지 않는다 ──────────
+
+def subscription_request():
+    from src.analytics.model_comparison_execution import ComparisonRequest
+    return ComparisonRequest(model="gpt-5-mini", prompt="same facts", system="same role",
+                             max_output_tokens=100, billing_channel="subscription")
+
+
+def declared(fn, channel="subscription"):
+    """구독 요청은 채널을 명시 선언한 어댑터만 전송할 수 있다 — 검사용 선언 래퍼."""
+    class _Declared:
+        billing_channel = channel
+
+        async def __call__(self, req):
+            return await fn(req)
+    return _Declared()
+
+
+def subscription_result(estimate=0.0123):
+    from src.analytics.model_comparison_execution import ComparisonAttemptResult
+    return ComparisonAttemptResult(value={"request_sent": True, "subscription_estimated_cost_usd": estimate},
+                                   actual_cost_usd=None, settlement="subscription")
+
+
+def test_request_contract_names_billing_channel_and_rejects_unknown_channel():
+    from src.analytics.model_comparison_execution import ComparisonRequest, _result_json
+    assert request().billing_channel == "api"
+    with pytest.raises(ValueError, match="billing_channel"):
+        ComparisonRequest(model="gpt-5-mini", prompt="p", system="s", max_output_tokens=1, billing_channel="free")
+    # 구독 정산은 월 원장 USD 를 실을 수 없다 — 저장 직렬화에서 거절한다.
+    from src.analytics.model_comparison_execution import ComparisonAttemptResult
+    with pytest.raises(ValueError, match="subscription"):
+        _result_json(ComparisonAttemptResult(value={}, actual_cost_usd=0.01, settlement="subscription"))
+
+
+def test_subscription_attempt_consumes_slot_without_monthly_reservation(tmp_path):
+    ledger, policy, guard = setup_guard(tmp_path, cap=1)
+    seen = []
+
+    async def transport(req):
+        status = ledger.status()
+        seen.append((req.billing_channel, status["reserved_usd"], status["settled_count"], status["unresolved_count"]))
+        return subscription_result()
+
+    result = asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1"))
+    assert result.settlement == "subscription" and result.actual_cost_usd is None
+    assert seen == [("subscription", 0, 0, 0)]          # 전송 중에도 월 예약이 없다
+    status = ledger.status()
+    assert (status["settled_count"], status["unresolved_count"], status["spent_usd"], status["reserved_usd"]) == (0, 0, 0, 0)
+    record = guard.lookup("sub-1")
+    assert (record["state"], record["reservation_token"], record["block_reason"]) == ("known", None, None)
+    assert record["original_estimated_cost_usd"] is None   # API 추정비 없음 — 구독 추정비는 value 에만 있다
+    # 같은 ID 는 재전송 없이 저장 응답을 그대로 복구한다.
+    assert asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1")) == result
+    assert len(seen) == 1
+    # 일 슬롯은 유료 시도와 같은 상한을 소비한다(cap=1).
+    with pytest.raises(BudgetBlocked, match="comparison_daily_attempt_cap"):
+        asyncio.run(guard.call(request(), dispatch=paid_once))
+    rows = guard.day_attempts(ledger.today().isoformat())
+    assert [(r["attempt_id"], r["billing_channel"], r["state"], r["cost_usd"], r["subscription_estimated_cost_usd"])
+            for r in rows if r["block_reason"] is None] == [("sub-1", "subscription", "known", None, 0.0123)]
+
+
+@pytest.mark.parametrize("response", [measured(0.0001), measured(None),
+                                      __import__("src.analytics.model_comparison_execution", fromlist=["x"])
+                                      .ComparisonAttemptResult(value="x", actual_cost_usd=0.0001,
+                                                               settlement="rejected_before_generation")])
+def test_subscription_attempt_rejects_api_settlement_without_touching_ledger(tmp_path, response):
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+    calls = []
+
+    async def transport(req):
+        calls.append(req.billing_channel)
+        return response
+
+    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-bad"))
+    status = ledger.status()
+    assert (status["settled_count"], status["unresolved_count"], status["reserved_usd"], status["spent_usd"]) == (0, 0, 0, 0)
+    record = guard.lookup("sub-bad")
+    assert (record["state"], record["reservation_token"]) == ("blocked", None)
+    # 다른 채널로 바꿔 복구하지 않고 같은 ID 의 재전송도 막는다.
+    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-bad"))
+    assert calls == ["subscription"]
+
+
+def test_subscription_result_with_ledger_cost_is_invalid_measured_cost(tmp_path):
+    from src.analytics.model_comparison_execution import ComparisonAttemptResult
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def transport(req):
+        return ComparisonAttemptResult(value={}, actual_cost_usd=0.0001, settlement="subscription")
+
+    with pytest.raises(BudgetBlocked, match="comparison_invalid_measured_cost"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-cost"))
+    assert ledger.status()["unresolved_count"] == 0 and guard.lookup("sub-cost")["state"] == "blocked"
+
+
+def test_api_attempt_returning_subscription_settlement_keeps_reservation_unknown(tmp_path):
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def transport(req):
+        assert req.billing_channel == "api"
+        return subscription_result()
+
+    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+        asyncio.run(guard.call(request(), dispatch=transport, attempt_id="api-sub"))
+    status = ledger.status()
+    assert status["unresolved_count"] == 1 and status["spent_usd"] == 0     # 과금 여부 불명 — 해제하지 않는다
+    assert guard.lookup("api-sub")["state"] == "blocked"
+
+
+def test_subscription_attempt_exception_is_blocked_without_ledger_rows(tmp_path):
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def transport(req):
+        raise RuntimeError("cli crashed")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-crash"))
+    assert ledger.status()["unresolved_count"] == 0 and ledger.status()["settled_count"] == 0
+    record = guard.lookup("sub-crash")
+    assert (record["state"], record["reservation_token"], record["block_reason"]) == (
+        "blocked", None, "comparison_attempt_interrupted")
+    with pytest.raises(BudgetBlocked, match="comparison_attempt_interrupted"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(paid_once), attempt_id="sub-crash"))
+
+
+def test_dispatch_entry_is_persisted_so_reports_cannot_trust_reason_strings_alone(tmp_path):
+    """콜백이 전송 뒤 '전송 전' 사유(BudgetBlocked)를 올려도 원장은 전송 진입을 따로 남긴다(재리뷰 P2)."""
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def lying(req):
+        raise BudgetBlocked("comparison_experiment_expired")
+
+    with pytest.raises(BudgetBlocked, match="comparison_experiment_expired"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(lying), attempt_id="sub-lying"))
+    after = guard.lookup("sub-lying")
+    assert (after["state"], after["block_reason"], after["dispatch_entered"]) == ("blocked", "comparison_experiment_expired", True)
+    # 진짜 전송 전 차단(미선언 콜백)은 dispatch_entered False 로 구분된다.
+    async def never(req):
+        raise AssertionError("must not dispatch")
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=never, attempt_id="sub-pre"))
+    assert guard.lookup("sub-pre")["dispatch_entered"] is False
+    rows = {r["attempt_id"]: r["dispatch_entered"] for r in guard.day_attempts(ledger.today().isoformat())}
+    assert rows == {"sub-lying": True, "sub-pre": False}
+    assert ledger.status()["unresolved_count"] == 0            # 구독 경로는 여전히 월 원장을 건드리지 않는다
+
+
+def test_subscription_admission_still_requires_experiment_window_and_policy(tmp_path):
+    from src.analytics.model_comparison_execution import ComparisonCallGuard
+    calls = []
+
+    async def transport(req):
+        calls.append(req.billing_channel)
+        return subscription_result()
+
+    expired = datetime(2026, 12, 1, 3, tzinfo=timezone.utc)
+    ledger, policy, guard = setup_guard(tmp_path, cap=5, clock=lambda: expired)
+    with pytest.raises(BudgetBlocked, match="comparison_experiment_expired"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-late"))
+    ledger.close()
+    disabled = MonthlyBudgetLedger(tmp_path / "plain.db", 100, clock=lambda: NOW, policy_enabled=False)
+    other = ComparisonCallGuard(ledger=disabled, policy=policy)
+    with pytest.raises(BudgetBlocked, match="comparison_policy_disabled"):
+        asyncio.run(other.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-plain"))
+    assert calls == []
+    # 차단 ID 는 고정돼 다음 날 자동 재시도가 되지 않는다.
+    assert guard.lookup("sub-late")["state"] == "blocked" and other.lookup("sub-plain")["state"] == "blocked"
+
+
+class _DeclaredAdapter:
+    """채널을 선언하는 가짜 어댑터 — 가드는 전송 전에 요청 채널과 대조해야 한다."""
+    def __init__(self, channel, result):
+        self.billing_channel, self._result, self.calls = channel, result, 0
+
+    async def __call__(self, req):
+        self.calls += 1
+        return self._result
+
+
+def test_adapter_declared_channel_is_checked_before_any_dispatch(tmp_path):
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+    api_adapter = _DeclaredAdapter("api", measured())
+    # 구독 요청 → 유료 API 어댑터: 월 예약 없는 과금이 되므로 공급자 호출 0 으로 차단한다(전송 전 사유).
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=api_adapter, attempt_id="sub-to-api"))
+    assert api_adapter.calls == 0
+    assert guard.lookup("sub-to-api")["state"] == "blocked"
+    # 유료 요청 → 구독 어댑터: 미전송이므로 예약은 not_sent 로 해제되고 불명이 남지 않는다.
+    sub_adapter = _DeclaredAdapter("subscription", subscription_result())
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
+        asyncio.run(guard.call(request(), dispatch=sub_adapter, attempt_id="api-to-sub"))
+    assert sub_adapter.calls == 0
+    status = ledger.status()
+    assert (status["unresolved_count"], status["spent_usd"], status["reserved_usd"]) == (0, 0, 0)
+    assert guard.lookup("api-to-sub")["state"] == "blocked"
+    # 채널이 맞는 선언 어댑터는 그대로 전송된다.
+    ok = _DeclaredAdapter("subscription", subscription_result())
+    assert asyncio.run(guard.call(subscription_request(), dispatch=ok, attempt_id="sub-ok")).settlement == "subscription"
+    assert ok.calls == 1 and ledger.status()["settled_count"] == 0
+    # 원장 행 → 일별 보고: 전송 전 차단 두 건은 불명이 아니고(유료는 확정 0원, 구독은 구독 목록) 합계는 확정이다.
+    from src.analytics.model_comparison_daily_report import build_daily_report
+    rows = guard.day_attempts(ledger.today().isoformat())
+    spend = build_daily_report([], day_kst=ledger.today().isoformat(), ledger_attempts=rows)["spend"]
+    assert spend["unknown_attempts"] == [] and spend["unaccounted_attempts"] == []
+    assert spend["not_sent_attempts"] == ["api-to-sub"]
+    assert [s["attempt_id"] for s in spend["subscription_attempts"]] == ["sub-ok", "sub-to-api"]
+    assert spend["total_usd"] == "0"
+
+
+def test_stored_subscription_result_with_token_or_api_request_is_settlement_mismatch(tmp_path):
+    from src.utils.llm_budget import BudgetStateError
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def transport(req):
+        return subscription_result()
+
+    asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1"))
+    with sqlite3.connect(ledger.path) as db:
+        db.execute("UPDATE comparison_requests SET reservation_token='forged' WHERE attempt_id='sub-1'")
+    with pytest.raises(BudgetStateError, match="comparison_settlement_mismatch"):
+        guard.lookup("sub-1")
+    # 같은 ID 복구도 정상으로 돌려주지 않는다.
+    with pytest.raises(BudgetStateError, match="comparison_settlement_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1"))
+    # 유료 요청 행에 구독 정산 응답을 끼워 넣은 저장도 거절한다.
+    asyncio.run(guard.call(request(), dispatch=paid_once, attempt_id="api-1"))
+    from src.analytics.model_comparison_execution import _result_json
+    with sqlite3.connect(ledger.path) as db:
+        db.execute("UPDATE comparison_requests SET result_json=? WHERE attempt_id='api-1'",
+                   (_result_json(subscription_result()),))
+    with pytest.raises(BudgetStateError, match="comparison_settlement_mismatch"):
+        guard.lookup("api-1")
+
+
+def test_subscription_request_requires_declared_subscription_adapter(tmp_path):
+    """미선언 콜백은 유료 API 일 수 있다 — 구독 요청은 전송 전에 거절하고 공급자 호출 0 이어야 한다(재리뷰 P1)."""
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+    calls = []
+
+    async def undeclared(req):
+        calls.append(req.billing_channel)
+        return measured()
+
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=undeclared, attempt_id="sub-undeclared"))
+    assert calls == []
+    record = guard.lookup("sub-undeclared")
+    assert (record["state"], record["reservation_token"], record["billing_channel"]) == ("blocked", None, "subscription")
+    assert record["block_reason"] == "comparison_adapter_channel_mismatch"      # 전송 전 사유 — 보고서가 과금 불명으로 세지 않는다
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute("SELECT COUNT(*) FROM reservations").fetchone()[0] == 0
+    # 유료 요청의 미선언 콜백은 기존 계약대로 허용된다.
+    assert asyncio.run(guard.call(request(), dispatch=undeclared, attempt_id="api-undeclared")).value == "approve"
+    assert calls == ["api"]

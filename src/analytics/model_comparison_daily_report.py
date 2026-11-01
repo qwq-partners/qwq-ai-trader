@@ -27,6 +27,14 @@ STOP_REASONS = frozenset({
 })
 
 
+# 가드가 구독 시도를 **전송 전에** 거절할 때 남기는 사유(허용 목록). 사유만으로는 부족하다 — 콜백이 전송 뒤 같은 사유를
+# 올릴 수 있으므로 원장의 `dispatch_entered`(슬롯 상태 blocked/unknown 으로 영속)가 False 일 때만 전송 전 차단으로 본다.
+# 그 밖의 사유(전송 뒤 정산 불일치·중단·저장 실패 등)와 전송 진입 뒤 실패는 과금 여부를 모르므로 불명으로 둔다.
+_SUBSCRIPTION_PRE_DISPATCH_BLOCKS = frozenset({
+    'comparison_adapter_channel_mismatch', 'comparison_policy_disabled', 'comparison_policy_mode_not_normal',
+    'comparison_experiment_expired', 'comparison_admission_day_changed', 'comparison_daily_attempt_cap'})
+
+
 def _same_day(value, day_kst) -> bool:
     try:
         return _kst_day(value) == day_kst
@@ -398,14 +406,32 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
     unknown, reconciled_ids, lookup_failed = [], [], []
     ledger_by_id = {la['attempt_id']: la for la in ledger_attempts
                     if isinstance(la, Mapping) and isinstance(la.get('attempt_id'), str)}
-    ledger_used = []
+    ledger_used, subscription_known, not_sent = [], [], []
     for attempt_id, a in sorted(unique.items()):
-        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
-        if estimate is not None:
-            estimated += estimate
         la = ledger_by_id.get(attempt_id)
         ledger_state = la.get('state') if la is not None else None
         ledger_cost = la.get('cost_usd') if la is not None else None
+        if (la is not None and la.get('billing_channel') == 'subscription'
+                and (ledger_state == 'known' or (ledger_state == 'blocked' and la.get('dispatch_entered') is False
+                                                 and la.get('block_reason') in _SUBSCRIPTION_PRE_DISPATCH_BLOCKS))):
+            # 구독 전송은 API 지출이 아니다. 완료(known)와 확인된 전송 전 차단(blocked)은 비용 None 을 불명으로 세지 않고
+            # 상태·사유·표시 추정비만 따로 남긴다. 그 밖의 차단(전송 뒤 불일치·중단·저장 실패)은 아래 불명 집계에 둔다.
+            subscription_known.append({'attempt_id': attempt_id, 'state': ledger_state, 'block_reason': la.get('block_reason'),
+                                       'subscription_estimated_cost_usd': la.get('subscription_estimated_cost_usd')})
+            continue
+        if la is not None and la.get('billing_channel') == 'subscription':
+            # 구독 채널의 그 밖 상태(전송 뒤 불일치·중단·저장 실패·미확정)는 pair 행의 API 추정액(0 포함)으로 대체하지 않고
+            # 명시적으로 불명이다. 추정액 대체 경로는 유료 채널 전용이다.
+            unknown.append(attempt_id)
+            continue
+        if ledger_state == 'blocked' and la.get('dispatch_entered') is False:
+            # 유료 채널의 전송 전 차단(슬롯 상태 blocked 로 영속): 공급자 호출·과금이 없고 예약은 not_sent 로 해제됐다.
+            # 확정 0원이므로 불명으로 세지 않는다. 합계에는 더할 금액이 없다.
+            not_sent.append(attempt_id)
+            continue
+        estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
+        if estimate is not None:
+            estimated += estimate
         if ledger_state in ('pending', 'pending_reconciliation', 'unknown'):
             unknown.append(attempt_id)                      # 원장이 미확정이면 추정액으로 메우지 않는다
             continue
@@ -438,6 +464,8 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'unknown_attempts': unknown, 'lookup_failed_attempts': lookup_failed,
              'ledger_attempts_outside_pair_rows': outside_rows, 'unaccounted_attempts': unaccounted,
              'ledger_cost_used_attempts': ledger_used,
+             'subscription_attempts': subscription_known,   # API 합계 밖. 표시 추정비는 청구액이 아니다.
+             'not_sent_attempts': not_sent,                 # 전송 전 차단된 유료 시도 — 확정 0원, 불명 아님
              'incomplete_pairs_without_result': incomplete_pairs,
              'ledger_attempts_supplied': bool(ledger_attempts),
              'known_subtotal_usd': str(used),
@@ -446,6 +474,7 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
              'basis': 'unique attempt_id once across all pair runs of the day; '
                       'unresolved ledger stays unknown; otherwise ledger(known|known_reconciled) > '
                       'reconciliation lookup > original estimate > unknown; arm scenario costs are not summed; '
+                      'subscription-channel attempts are listed separately and never added to USD totals; '
                       'known_subtotal_usd is computable cost including any original estimates used, '
                       'not verified invoice charges'}
     economics = Counter(r['conditional_economics']['status'] for r in rows)

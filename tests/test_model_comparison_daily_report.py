@@ -278,3 +278,66 @@ def test_cli_offers_requires_worker_reader(tmp_path, capsys, monkeypatch):
                         raising=False)
     assert report_main(['--pairs', str(pairs), '--daily', DAY, '--offers', str(offers)]) == 0
     assert json.loads(capsys.readouterr().out)['denominators']['complete'] == 1
+
+
+def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
+    row = pair('d1')
+    ledger_attempts = [
+        {'attempt_id': 'sub:bear:0', 'state': 'known', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': 0.0123, 'request_sent': True, 'block_reason': None},
+        # 전송 전 차단(실험 만료)된 구독 시도: API 비용 불명이 아니다
+        {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired',
+         'dispatch_entered': False},
+        # 전송 뒤 어댑터가 API 비용을 보고해 차단된 구독 시도: 과금 여부가 불확실하므로 불명으로 남긴다
+        {'attempt_id': 'sub:bear:2', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': True, 'block_reason': 'comparison_billing_channel_mismatch'},
+        # 가드가 전송 전에 거절한 구독 요청(미선언/다른 선언 어댑터): 호출·과금이 없어 불명이 아니다
+        {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch',
+         'dispatch_entered': False},
+        # 유료 채널의 전송 전 차단(구독 선언 어댑터에 연결): 호출·과금 0 이 확정이라 불명이 아니다
+        {'attempt_id': 'api:bull:9', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'api',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch',
+         'dispatch_entered': False},
+        # 유료 채널의 전송 뒤 차단: 과금 여부 불명
+        {'attempt_id': 'api:bull:8', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'api',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_attempt_interrupted',
+         'dispatch_entered': True},
+        # 콜백이 전송 뒤에 허용 목록 사유를 올린 경우: 사유는 같아도 전송 진입이 영속돼 있어 불명이다
+        {'attempt_id': 'sub:bear:5', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired',
+         'dispatch_entered': True},
+        # 전송·응답 뒤 저장 실패: 허용 목록 밖 사유는 응답 증거가 없어도 불명으로 남긴다
+        {'attempt_id': 'sub:bear:4', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_storage_unavailable'},
+    ]
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts)
+    spend = report['spend']
+    assert spend['subscription_attempts'] == [
+        {'attempt_id': 'sub:bear:0', 'state': 'known', 'block_reason': None, 'subscription_estimated_cost_usd': 0.0123},
+        {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'block_reason': 'comparison_experiment_expired',
+         'subscription_estimated_cost_usd': None},
+        {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'block_reason': 'comparison_adapter_channel_mismatch',
+         'subscription_estimated_cost_usd': None}]
+    assert spend['unknown_attempts'] == ['api:bull:8', 'sub:bear:2', 'sub:bear:4', 'sub:bear:5'] and spend['unaccounted_attempts'] == []
+    assert spend['not_sent_attempts'] == ['api:bull:9']
+    assert spend['total_usd'] is None                 # 불확실한 구독 차단이 남아 합계는 미확정
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
+                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])
+    spend = report['spend']
+    assert spend['unknown_attempts'] == [] and spend['total_usd'] == '0.004'
+    # 같은 ID 가 pair 행(API 추정액 있음)과 원장(구독·전송 뒤 불일치 차단) 양쪽에 있어도 추정액으로 불명을 지우지 않는다.
+    mismatched_pair_bear = [{'attempt_id': 'p:bear:0', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+                             'subscription_estimated_cost_usd': None, 'request_sent': True,
+                             'block_reason': 'comparison_billing_channel_mismatch'}]
+    for bear_cost in ('0.002', '0'):
+        tainted = pair('d1', bear_cost=bear_cost)
+        report = daily.build_daily_report([tainted], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=mismatched_pair_bear)
+        assert report['spend']['unknown_attempts'] == ['p:bear:0'] and report['spend']['total_usd'] is None
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
+                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])
+    spend = report['spend']
+    assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
+    assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다
+    assert 'sub:bear:0' in spend['ledger_attempts_outside_pair_rows']

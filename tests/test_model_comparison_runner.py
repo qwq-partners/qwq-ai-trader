@@ -561,3 +561,15 @@ def test_fallback_chain_timeout_is_required_finite_positive(tmp_path, bad):
         replace(spec, fallback_chain_timeout_seconds=bad).validate()
     with pytest.raises(TypeError):
         m.PairSpec(**{k: v for k, v in vars(spec).items() if k != 'fallback_chain_timeout_seconds'})
+
+
+def test_api_adapter_refuses_subscription_requests_before_provider_call():
+    m = api()
+    op, ge = FakeOpenAI(), FakeGemini()
+    adapter = m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW)
+    assert adapter.billing_channel == 'api'
+    req = ComparisonRequest(model='gpt-5-mini', prompt='p', system='s', max_output_tokens=10,
+                            billing_channel='subscription')
+    with pytest.raises(ValueError, match='api_adapter_requires_api_billing_channel'):
+        asyncio.run(adapter(req))
+    assert op.calls == [] and ge.calls == []

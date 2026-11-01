@@ -105,7 +105,7 @@ class ComparisonExecutionPolicy:
     def serialized(self) -> str:
         return json.dumps({**asdict(self), "schema_version": SCHEMA_VERSION,
                            "currency": "USD", "timezone": "Asia/Seoul",
-                           "adapter_contract": "single-provider-attempt-v1"},
+                           "adapter_contract": "single-provider-attempt-v2"},
                           sort_keys=True, separators=(",", ":"))
 
 
@@ -119,10 +119,15 @@ class ComparisonRequest:
     temperature: float = 0.3
     seed: int | None = None
     timeout_seconds: float = 12.0
+    # api: 공유 월 원장에 예약·정산하는 유료 전송. subscription: 구독 CLI 같은 비과금 전송 —
+    # 일 슬롯·요청 지문은 같이 소비하지만 월 원장은 건드리지 않는다(LLMManager 의 CLI 시도와 같은 소유권).
+    billing_channel: str = "api"
 
     def __post_init__(self):
         if not isinstance(self.model, str) or not self.model:
             raise ValueError("model은 비어 있지 않은 문자열이어야 한다")
+        if self.billing_channel not in _BILLING_CHANNELS:
+            raise ValueError("billing_channel은 api 또는 subscription이어야 한다")
         if not isinstance(self.prompt, str) or not isinstance(self.system, str):
             raise ValueError("prompt와 system은 문자열이어야 한다")
         _integer(self.max_output_tokens, "max_output_tokens", 1)
@@ -140,7 +145,9 @@ class ComparisonRequest:
             raise ValueError("timeout_seconds는 유한한 양수여야 한다")
 
 
-_SETTLEMENTS = ("measured", "rejected_before_generation")
+_BILLING_CHANNELS = ("api", "subscription")
+# subscription: 구독 전송의 응답. 월 원장 USD 는 항상 None 이며 구독 표시 추정비는 value 안에만 남긴다.
+_SETTLEMENTS = ("measured", "rejected_before_generation", "subscription")
 
 
 @dataclass(frozen=True)
@@ -196,6 +203,8 @@ def _result_json(result: ComparisonAttemptResult) -> str:
     if result.settlement not in _SETTLEMENTS:
         raise ValueError("settlement 값이 허용 집합 밖이다")
     cost = result.actual_cost_usd
+    if result.settlement == "subscription" and cost is not None:
+        raise ValueError("subscription 정산은 월 원장 비용을 가질 수 없다")
     kind = "decimal" if isinstance(cost, Decimal) else type(cost).__name__
     return json.dumps({"value": result.value, "cost_type": kind,
                        "cost": str(cost) if isinstance(cost, Decimal) else cost,
@@ -312,9 +321,15 @@ class ComparisonCallGuard:
         if hashlib.sha256(row["request_json"].encode()).hexdigest() != row["request_sha256"]:
             raise BudgetStateError("comparison_storage_corrupt")
         result = _read_result(row["result_json"]) if row["result_json"] is not None else None
+        stored_request = json.loads(row["request_json"]).get("request")
+        channel = stored_request.get("billing_channel", "api") if isinstance(stored_request, dict) else "api"
         token = row["reservation_token"]
         reservation = (db.execute("SELECT state,actual_units FROM reservations WHERE token=?", (token,)).fetchone()
                        if token is not None else None)
+        # 실패 시도의 전송 진입 여부는 슬롯 상태로 영속된다: 전송 전 차단은 'blocked', 전송 진입 뒤 실패는 'unknown'.
+        # 오류 사유 문자열만으로는 전송 전/후를 가를 수 없으므로(콜백이 같은 사유를 올릴 수 있음) 보고서는 이 값을 함께 본다.
+        slot_row = db.execute("SELECT state FROM comparison_attempts WHERE slot=?", (row["slot"],)).fetchone()
+        dispatch_entered = None if slot_row is None else slot_row[0] != "blocked"
         reconciled = self._reconciled(db, token, reservation)
         state, reason = "pending", "comparison_attempt_pending"
         if row["block_reason"]:
@@ -326,7 +341,13 @@ class ComparisonCallGuard:
         if result is not None:
             state, reason = "pending_reconciliation", "comparison_pending_reconciliation"
             cost = _ledger_cost(result.actual_cost_usd)
-            if reservation is not None:
+            if result.settlement == "subscription" or channel == "subscription":
+                # 구독 전송은 구독 요청·구독 정산·예약 토큰 없음이 모두 맞아야 한다. 하나라도 어긋나면 손상된 저장이다.
+                if (result.settlement != "subscription" or channel != "subscription"
+                        or token is not None or reservation is not None or cost is not None):
+                    raise BudgetStateError("comparison_settlement_mismatch")
+                state, reason = "known", None
+            elif reservation is not None:
                 if reconciled is not None:
                     # 검증된 감사 대사가 원래 응답의 정산 유형보다 우선한다. 원래 응답/추정액은 보존한다.
                     state, reason = "known_reconciled", None
@@ -342,7 +363,8 @@ class ComparisonCallGuard:
                     state, reason = "known", None
         estimate = result.value.get("api_cost_usd") if result is not None and isinstance(result.value, dict) else None
         return {"attempt_id": row["attempt_id"], "request_sha256": row["request_sha256"],
-                "state": state, "reservation_token": token,
+                "state": state, "reservation_token": token, "billing_channel": channel,
+                "dispatch_entered": dispatch_entered,
                 "result": result, "block_reason": reason,
                 "original_estimated_cost_usd": estimate, "reconciled": reconciled}
 
@@ -542,6 +564,16 @@ class ComparisonCallGuard:
         if used + units > self._ceiling:
             raise BudgetBlocked("comparison_experiment_ceiling")
 
+    def _subscription_admission_check(self, day: str):
+        """구독 전송 입장. 월 예약이 없어 80%/실험 상한은 대상이 아니고 정책 단계·실험 유효기간만 읽는다."""
+        status = self.ledger.status()
+        if not self.ledger.policy_enabled or "policy_mode" not in status:
+            raise BudgetBlocked("comparison_policy_disabled")
+        if status["policy_mode"] != self.policy.required_policy_mode:
+            raise BudgetBlocked("comparison_policy_mode_not_normal")
+        if not self.policy.valid_from <= day <= self.policy.valid_until:
+            raise BudgetBlocked("comparison_experiment_expired")
+
     async def call(self, request: ComparisonRequest, *,
                    dispatch: Callable[[ComparisonRequest], Awaitable[ComparisonAttemptResult]],
                    attempt_id: str | None = None) -> ComparisonAttemptResult:
@@ -563,19 +595,32 @@ class ComparisonCallGuard:
         slot, day, recovered = self._admit(attempt_id, payload)
         if recovered is not None:
             return recovered
+        subscription = request.billing_channel == "subscription"
         token = None
         entered_dispatch = settlement_attempted = False
         outcome, cost = "unknown", None
         try:
-            # 예약과 같은 트랜잭션에서 시도 ID↔토큰을 영속한다(별도 쓰기 트랜잭션 없음 — 잠금 경합이 미전송 unknown 을
-            # 만들지 않고, 호출 중 강제 종료돼도 월 원장의 예약 대사가 이 시도에 연결된다) (6회차 P1).
-            token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
-                                        policy_priority="research", task="model_comparison",
-                                        role=self.policy.experiment_id,
-                                        admission_check=self._admission_check,
-                                        link_reservation=lambda db, tok: self._link_in_transaction(db, attempt_id, slot, tok))
+            if subscription:
+                # 구독 전송은 월 원장을 예약·정산하지 않는다. 일 슬롯·지문은 _admit 이 이미 고정했고,
+                # 실험 유효기간·정책 단계만 읽기로 확인한다. 어댑터가 API 비용을 보고하면 아래에서 거절한다.
+                self._subscription_admission_check(day)
+            else:
+                # 예약과 같은 트랜잭션에서 시도 ID↔토큰을 영속한다(별도 쓰기 트랜잭션 없음 — 잠금 경합이 미전송 unknown 을
+                # 만들지 않고, 호출 중 강제 종료돼도 월 원장의 예약 대사가 이 시도에 연결된다) (6회차 P1).
+                token = self.ledger.reserve(request.model, request.prompt, request.system, request.max_output_tokens,
+                                            policy_priority="research", task="model_comparison",
+                                            role=self.policy.experiment_id,
+                                            admission_check=self._admission_check,
+                                            link_reservation=lambda db, tok: self._link_in_transaction(db, attempt_id, slot, tok))
             if self.ledger.today().isoformat() != day:
                 raise BudgetBlocked("comparison_admission_day_changed")
+            declared = getattr(dispatch, "billing_channel", None)
+            if declared != request.billing_channel and not (declared is None and not subscription):
+                # 전송 전 채널 대조. 구독 요청은 어댑터가 subscription 을 **명시 선언**해야 한다 — 미선언 콜백은
+                # 유료 API 일 수 있어 월 예약 없는 과금이 된다(재리뷰 P1). 유료 요청은 미선언 콜백을 허용하고
+                # 선언이 다르면 거절한다. 미전송이므로 API 예약은 not_sent 로 해제된다. 전송 뒤 응답 정산 불일치
+                # (comparison_billing_channel_mismatch)와 사유를 구분해 보고서가 과금 불확실로 세지 않게 한다.
+                raise BudgetBlocked("comparison_adapter_channel_mismatch")
             entered_dispatch = True
             result = await dispatch(request)
             if not isinstance(result, ComparisonAttemptResult):
@@ -584,7 +629,15 @@ class ComparisonCallGuard:
                 cost = _ledger_cost(result.actual_cost_usd)
             except (ValueError, ArithmeticError):
                 raise BudgetBlocked("comparison_invalid_measured_cost") from None
-            if result.settlement == "rejected_before_generation":
+            if (result.settlement == "subscription") != subscription:
+                # 요청 채널과 응답 정산이 다르면 과금 여부를 알 수 없다. API 예약은 unknown 으로 남고
+                # 구독 시도는 월 원장 없이 실패 기록만 남긴다. 어느 쪽도 다른 채널로 바꿔 복구하지 않는다.
+                raise BudgetBlocked("comparison_billing_channel_mismatch")
+            if subscription:
+                if cost is not None:
+                    raise BudgetBlocked("comparison_invalid_measured_cost")
+                outcome = "known"                    # 월 원장 정산 없음 — 비용 None 이 '불명' 이 아니라 '비과금' 이다
+            elif result.settlement == "rejected_before_generation":
                 if cost not in (None, 0.0):
                     raise BudgetBlocked("comparison_invalid_measured_cost")
                 cost, outcome = 0.0, "rejected"      # 예약 해제, 과금 없음 — 공유 원장을 unknown 으로 막지 않는다
@@ -599,7 +652,8 @@ class ComparisonCallGuard:
             # 월 정산 전에 응답·토큰을 보존한다. 그 뒤 중단돼도 재전송 없이 대사한다.
             self._store_result(attempt_id, token, result_payload)
             settlement_attempted = True
-            self.ledger.settle(token, outcome=outcome, actual_cost_usd=cost if outcome == "known" else None)
+            if token is not None:
+                self.ledger.settle(token, outcome=outcome, actual_cost_usd=cost if outcome == "known" else None)
             try:
                 self._record(slot, token, "known" if outcome == "rejected" else outcome)
             except Exception:
@@ -639,8 +693,13 @@ def _day_attempt_rows(guard, db, day: str) -> list[dict]:
             cost = record["reconciled"]["actual_cost_usd"]
         elif record["state"] == "known" and result is not None and result.actual_cost_usd is not None:
             cost = str(_d(result.actual_cost_usd, "actual_cost_usd"))
+        channel = record["billing_channel"]
         out.append({"attempt_id": record["attempt_id"], "admission_day": day, "state": record["state"],
                     "reservation_token": record["reservation_token"], "cost_usd": cost,
+                    "billing_channel": channel, "dispatch_entered": record["dispatch_entered"],
+                    # 구독 표시 추정비는 어댑터 value 의 보고값이며 API 비용(cost_usd)에 더하지 않는다.
+                    "subscription_estimated_cost_usd": (value.get("subscription_estimated_cost_usd")
+                                                        if channel == "subscription" else None),
                     "original_estimated_cost_usd": record["original_estimated_cost_usd"],
                     "request_sent": value.get("request_sent"), "block_reason": record["block_reason"]})
     return out
