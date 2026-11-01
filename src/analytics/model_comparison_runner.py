@@ -194,6 +194,8 @@ class PairSpec:
                 or bear_provider not in (LLMProvider.GEMINI, LLMProvider.ANTHROPIC)
                 or any(_provider(c.model) == LLMProvider.ANTHROPIC for c in fallback_chain)):
             raise ValueError('role_provider_mismatch')
+        if bear_empty_retries is not None and (type(bear_empty_retries) is not int or not 0 <= bear_empty_retries <= 1):
+            raise ValueError('invalid_aggregation_policy')      # False/0.0 은 0 이 아니다 — 공용 검사라 worker/발행도 거른다
         if bear_provider == LLMProvider.ANTHROPIC and bear_empty_retries != 0:
             raise ValueError('claude_bear_empty_retries_must_be_zero')
         for value, label in ((bear_internal_timeout_seconds, 'bear_internal_timeout_seconds'),

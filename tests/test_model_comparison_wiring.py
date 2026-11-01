@@ -112,6 +112,8 @@ def test_current_profile_manifest_freezes_producer_controls_and_matches_worker_c
     (lambda c: {**c, 'bear_transport_order': ['claude_cli']}, 'bear_transport_order'),
     (lambda c: {**c, 'bear_internal_timeout_seconds': None}, 'operating_control_missing'),
     (lambda c: {k: v for k, v in c.items() if k != 'strict_on_disagreement'}, 'operating_control_missing'),
+    (lambda c: {**c, 'bear_empty_retries': False}, 'invalid_aggregation_policy'),
+    (lambda c: {**c, 'bear_empty_retries': 0.0}, 'invalid_aggregation_policy'),
 ])
 def test_manifest_issuance_refuses_unsupported_or_missing_producer_values_without_substitution(mutate, match):
     with pytest.raises(ValueError, match=match):
@@ -282,7 +284,8 @@ def test_invalid_profile_is_rejected_before_any_policy_is_pinned_in_the_shared_l
 @pytest.mark.parametrize('bad,match', [
     (dict(horizon_seconds=0), 'horizon_seconds'), (dict(fixed_at=''), 'fixed_at'), (dict(empty_retries=2), 'empty_retries'),
     (dict(strict_on_disagreement='no'), 'strict_on_disagreement'), (dict(fallback_chain_timeout_seconds=0), 'fallback_chain_timeout'),
-    (dict(experiment_id=' '), 'experiment_id'),
+    (dict(experiment_id=' '), 'experiment_id'), (dict(bear_empty_retries=False), 'invalid_aggregation_policy'),
+    (dict(bear_empty_retries=0.0), 'invalid_aggregation_policy'),
 ])
 def test_invalid_common_values_are_rejected_at_issuance_and_before_policy_pinning(tmp_path, monkeypatch, bad, match):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
