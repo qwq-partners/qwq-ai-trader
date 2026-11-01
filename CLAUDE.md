@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/1 E04 후속:** PR #322 CI 통과·main `e71ebc32` 병합 완료. 공식 GPT snapshot 신원 판독 v2를 보완하며 기존 계약·설정·매수 중지는 보존한다. [독립 리뷰·실제 WSL 검증·현재 NEXT](docs/operations/execution-roadmap.md#e04-snapshot-identity-20261101)를 따른다. 아래 이전 승인/미병합 표기는 당시 이력이다.
+
 > **11/1 E04 현행 비교 계약:** GPT/Claude entry 독립 검토를 별도 버전의 오프라인 파일 검사로 표현한다. 과거 비교기·실제 worker/R1 OFF·설정·매수 중지는 유지한다. [단일 원장의 구현·독립 리뷰·실제 WSL 검증·NEXT](docs/operations/execution-roadmap.md#e04-current-contract-20261101)를 따르며 계약 검사 통과를 실제 모델 우위나 순수익 증거로 해석하지 않는다. 이번 승인 범위는 검증 후 커밋/푸시다.
 
 > **11/1 04:35 운영 인수·발송 완료:** 실제 사용자 WSL 전체10,040검사와 PR #320/main CI·서버 전체를 통과해 고정cfc9bc20/PID4157369로 배포했다. 인수32/32PASS, 설정·매수중지·기존예약 유지. 보호47파일 동일과 승인된 소스1파일의 주석 전환을 구분하며 최초 실패 영수증도 보존했다. 정상 분석 텍스트 단발1회 API accepted, 모바일 내용 수락·11/2 자연 출력은 WAIT다. 완료 문서는 재배포하지 않는다. [단일 원장/NEXT](docs/operations/execution-roadmap.md#r02-validation-rejection-20261101).

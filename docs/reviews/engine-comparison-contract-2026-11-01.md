@@ -73,3 +73,15 @@ CLI는 명시한 일반 JSON 파일만 최대1MiB 읽고 결과를 표준 출력
 비용은 공유 Bear를 한 번만 계수한 관측 입력 범위다. 알려진 API 추정 부분합과 미상 건수·완전 합계를 구분하고, 구독 표시 추정비는 API에 더하지 않는다. 구독 추가 청구액·전체 실제 청구액·순수익은null이다. `actual_execution=false`, `economic_evaluable=false`, `live_activation_supported=false`를 항상 보존한다. 입력 지문의 진위·완전성, 입장/정산·예산 정책, 응답 후 실행 가능한 가격은 이번 검증 대상이 아니다.
 
 시도 기록이 없는 success/error/timeout/cancelled는 별도 `missing_trace_count`로 남기고 API 합계를null로 유지한다. 미전송 표기와 응답/토큰/신원 증거가 모순될 때도 누락 비용을0으로 확정하지 않는다. 정상 timeout/cancelled는 보류하되 위반과 구별한다. 관측 모델/effort의 비정형 값은 원문 비교 후 출력에서 치환하여 다른 시도의 비용을 보존한다.
+
+
+<a id="offline-contract-v2"></a>
+## 공식 snapshot 신원 판독 v2
+
+v1은 요청/응답 모델명의 완전 일치를 계속 요구한다. v2를 명시적으로 선택하려면 입력의 `schema_version`을 `model-comparison-offline-contract-v2`로 설정한다. 기존 파일 CLI와 나머지 필드는 같으며 profile `entry-independent-review-v1`의 판단·제어·시한·비용 규칙도 유지한다. 출력 버전은 `model-comparison-offline-report-v2`다. v1 입력을 자동 승격하지 않는다.
+
+2026-11-01 확인한 [OpenAI 공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5-mini)가 `gpt-5-mini`의 snapshot으로 `gpt-5-mini-2025-08-07`을 명시한다. v2의 고정 `identity_policy_version=documented-model-identity-v1`은 `openai_chat`에서 이 요청 alias→응답 snapshot 조합만 추가로 인정한다. 접두사/날짜 패턴이나 입력 whitelist는 사용하지 않는다. 후보 모델명만 같은 공식 snapshot으로 바꾸는 입력은 v2에서 `one_comparison_variable_required`로 거절한다(v1 의미는 유지). 새 문서 관계는 별도 검토·버전 정책을 거쳐야 하며 실행 중 네트워크 갱신은 없다.
+
+각 시도 관측의 `identity_match`는 `exact`, `documented_snapshot`, `unknown`, `mismatch` 중 하나다. 요청과 응답 이름은 별도로 보존한다(비정형 관측은 기존 정제 규칙 유지). 마지막 응답뿐 아니라 앞선 시도에도 같은 판정을 적용하며 원래 refusal/identity_mismatch·시간/전송 위반을 정상으로 복구하지 않는다. 이 분류는 제공된 문자열 관계이며 입력 진위·실효 effort·실시간 alias 포인터·모델 가용성을 인증하지 않는다. v2 `limitations`에도 `documented_identity_not_current_attestation`을 명시한다.
+
+예를 들어 합성 fixture의 GPT 응답 이름만 공식 snapshot으로 바꾸면 v1은 신원 불일치로hold, v2는 다른 조건이 모두 정상이면conformant다. 임의 날짜/다른 모델·반대 방향의 관계는 계속hold다. 실제 앱 모델을 바꾸거나 API를 호출하는 기능이 아니며 `actual_execution=false`, `economic_evaluable=false`, `live_activation_supported=false`, 순수익null은 유지한다. [검증·운영/NEXT](../operations/execution-roadmap.md#e04-snapshot-identity-20261101).

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.analytics.model_comparison_contract import evaluate_contract, _parse_verdict
+from src.analytics.model_comparison_contract import evaluate_contract, _identity_match, _parse_verdict
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -466,3 +466,191 @@ def test_bull_success_unknown_attempt_timing_under_deadline_remains_conformant(r
     assert r["contract_status"] == "conformant"
     arm = "current" if role == "bull_current" else "candidate"
     assert r["arms"][arm]["verdict"] == "approve"
+
+
+SNAPSHOT = "gpt-5-mini-2025-08-07"
+V2 = "model-comparison-offline-contract-v2"
+
+
+def test_v1_snapshot_regression_preserves_complete_report():
+    import hashlib
+    p = payload(); p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = SNAPSHOT
+    r = evaluate_contract(p)
+    encoded = json.dumps(r, sort_keys=True, separators=(",", ":")).encode()
+    # Captured from the unmodified v1 implementation, before adding v2.
+    assert hashlib.sha256(encoded).hexdigest() == "cf71a0f12b9fd44c51182bdce8bc814c47b3ede4d0a51206390320d5a10f9a22"
+    assert r["arms"]["current"]["verdict"] == "hold"
+
+
+def test_v2_documented_snapshot_and_exact_identities_are_accepted():
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = SNAPSHOT
+    before = copy.deepcopy(p); r = evaluate_contract(p)
+    assert p == before
+    assert r["schema_version"] == "model-comparison-offline-report-v2"
+    assert r["identity_policy_version"] == "documented-model-identity-v1"
+    assert r["contract_status"] == "conformant" and r["arms"]["current"]["verdict"] == "approve"
+    assert r["observations"]["bull_current"]["attempts"][0]["identity_match"] == "documented_snapshot"
+    assert r["observations"]["bull_current"]["attempts"][0]["resolved_model"] == SNAPSHOT
+    assert r["observations"]["bear"]["attempts"][0]["identity_match"] == "exact"
+    assert r["actual_execution"] is False and r["economic_evaluable"] is False
+    assert r["costs"]["api_estimated_cost_usd_total"] == "0.02"
+
+
+@pytest.mark.parametrize("model,match,status", [("gpt-5-mini-2025-08-08", "mismatch", "nonconformant"), ("gpt-5-other-2025-08-07", "mismatch", "nonconformant"), (None, "unknown", "unverified"), ("private text", "mismatch", "nonconformant")])
+def test_v2_unrecognized_identity_holds_and_safe_output(model, match, status):
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = model
+    r = evaluate_contract(p); obs = r["observations"]["bull_current"]["attempts"][0]
+    assert (r["contract_status"], r["arms"]["current"]["verdict"], obs["identity_match"]) == (status, "hold", match)
+    if model == "private text": assert obs["resolved_model"] == "other" and model not in json.dumps(r)
+
+
+def test_v2_snapshot_mapping_is_directional_and_transport_specific():
+    p = payload(); p["schema_version"] = V2
+    c = p["calls"]["bull_candidate"]; c["controls"].update(requested_model=SNAPSHOT, reasoning_effort="minimal")
+    c["attempts"][0].update(requested_model=SNAPSHOT, requested_reasoning_effort="minimal", resolved_model="gpt-5-mini")
+    assert _identity_match(c["attempts"][0], True) == "mismatch"
+    with pytest.raises(ValueError, match="one_comparison_variable_required"): evaluate_contract(p)
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0]["transport"] = "anthropic_messages"
+    with pytest.raises(ValueError): evaluate_contract(p)
+
+
+def test_v2_prior_mismatch_cannot_be_revived_by_snapshot():
+    p = payload(); p["schema_version"] = V2; c = p["calls"]["bull_current"]
+    c["attempts"][0].update(status="empty", resolved_model="gpt-other")
+    second = attempt("retry", "gpt-5-mini", "minimal", "openai_chat", "api")
+    second.update(started_ms=1000, finished_ms=2000, resolved_model=SNAPSHOT)
+    c["attempts"].append(second); c["whole_call_elapsed_ms"] = 2000
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "nonconformant" and r["arms"]["current"]["verdict"] == "hold"
+    assert [a["identity_match"] for a in r["observations"]["bull_current"]["attempts"]] == ["mismatch", "documented_snapshot"]
+
+
+@pytest.mark.parametrize("status", ["identity_mismatch", "refusal"])
+def test_v2_explicit_failure_cannot_be_revived_by_snapshot(status):
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0].update(status=status, resolved_model=SNAPSHOT)
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "nonconformant" and r["arms"]["current"]["verdict"] == "hold"
+
+
+def test_v2_cli_and_unknown_version_and_whitelist(tmp_path):
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = SNAPSHOT
+    f = tmp_path / "synthetic.json"; f.write_text(json.dumps(p))
+    result = subprocess.run([sys.executable, str(ROOT / "scripts/check_model_comparison_contract.py"), "--input", str(f)], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0 and json.loads(result.stdout)["arms"]["current"]["verdict"] == "approve"
+    p["schema_version"] = "model-comparison-offline-contract-v3"
+    with pytest.raises(ValueError): evaluate_contract(p)
+    p["schema_version"] = V2; p["identity_whitelist"] = [SNAPSHOT]
+    with pytest.raises(ValueError): evaluate_contract(p)
+
+
+@pytest.mark.parametrize("status", ["identity_mismatch", "refusal"])
+def test_v2_explicit_prior_failure_cannot_be_revived_by_final_snapshot(status):
+    p = payload(); p["schema_version"] = V2; c = p["calls"]["bull_current"]
+    c["attempts"][0].update(status=status, resolved_model=SNAPSHOT)
+    retry = attempt("retry", "gpt-5-mini", "minimal", "openai_chat", "api")
+    retry.update(started_ms=1000, finished_ms=2000, resolved_model=SNAPSHOT)
+    c["attempts"].append(retry); c["whole_call_elapsed_ms"] = 2000
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "nonconformant" and r["arms"]["current"]["verdict"] == "hold"
+    assert any(x["code"] == "bull_retry_not_authorized" for x in r["violations"])
+
+
+def test_v2_documented_snapshot_is_valid_for_prior_empty_attempt():
+    p = payload(); p["schema_version"] = V2; c = p["calls"]["bull_current"]
+    c["attempts"][0].update(status="empty", resolved_model=SNAPSHOT)
+    retry = attempt("retry", "gpt-5-mini", "minimal", "openai_chat", "api")
+    retry.update(started_ms=1000, finished_ms=2000)
+    c["attempts"].append(retry); c["whole_call_elapsed_ms"] = 2000
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "conformant" and r["arms"]["current"]["verdict"] == "approve"
+    assert [a["identity_match"] for a in r["observations"]["bull_current"]["attempts"]] == ["documented_snapshot", "exact"]
+
+
+def test_v2_candidate_other_requested_model_does_not_inherit_mini_snapshot():
+    p = payload(); p["schema_version"] = V2; c = p["calls"]["bull_candidate"]
+    c["controls"].update(requested_model="gpt-other", reasoning_effort="minimal")
+    c["attempts"][0].update(requested_model="gpt-other", requested_reasoning_effort="minimal", resolved_model=SNAPSHOT)
+    r = evaluate_contract(p)
+    assert r["arms"]["candidate"]["verdict"] == "hold"
+    assert r["observations"]["bull_candidate"]["attempts"][0]["identity_match"] == "mismatch"
+
+
+@pytest.mark.parametrize("variable,value", [("reasoning_effort", "low"), ("max_output_tokens", 500)])
+def test_v2_candidate_same_model_snapshot_with_changed_effort_or_cap(variable, value):
+    p = payload(); p["schema_version"] = V2; c = p["calls"]["bull_candidate"]
+    c["controls"]["reasoning_effort"] = "minimal"
+    c["controls"][variable] = value
+    c["attempts"][0].update(requested_reasoning_effort=c["controls"]["reasoning_effort"], resolved_model=SNAPSHOT)
+    r = evaluate_contract(p)
+    assert r["arms"]["candidate"]["verdict"] == "approve"
+    assert r["observations"]["bull_candidate"]["attempts"][0]["identity_match"] == "documented_snapshot"
+
+
+@pytest.mark.parametrize("resolved", [SNAPSHOT, "gpt-5-mini"])
+def test_v2_candidate_cannot_compare_alias_to_documented_snapshot(resolved):
+    p = payload(); p["schema_version"] = V2
+    p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = SNAPSHOT
+    c = p["calls"]["bull_candidate"]
+    c["controls"].update(requested_model=SNAPSHOT, reasoning_effort="minimal")
+    c["attempts"][0].update(requested_model=SNAPSHOT, requested_reasoning_effort="minimal", resolved_model=resolved)
+    with pytest.raises(ValueError, match="one_comparison_variable_required"):
+        evaluate_contract(p)
+
+
+def test_v2_reports_documented_identity_is_not_current_attestation():
+    p = payload(); p["schema_version"] = V2
+    assert "documented_identity_not_current_attestation" in evaluate_contract(p)["limitations"]
+
+
+def _boundary_payload(case):
+    p = payload(); c = p["calls"]["bull_current"]; a = c["attempts"][0]
+    if case == "deadline": c["whole_call_elapsed_ms"] = 12000
+    elif case == "not_sent": a["request_sent"] = False
+    elif case == "sent_unknown": a["request_sent"] = None
+    elif case == "missing_trace": c["attempts"] = []
+    elif case == "unknown_cost": a["api_estimated_cost_usd"] = None
+    return p
+
+
+def _without_v2_metadata(report):
+    report = copy.deepcopy(report)
+    report["schema_version"] = "model-comparison-offline-report-v1"
+    report.pop("identity_policy_version")
+    report["limitations"].remove("documented_identity_not_current_attestation")
+    for role in report["observations"].values():
+        for a in role["attempts"]: a.pop("identity_match")
+    return report
+
+
+@pytest.mark.parametrize("case", ["deadline", "not_sent", "sent_unknown", "missing_trace", "unknown_cost"])
+def test_v2_non_snapshot_boundaries_preserve_v1_report(case):
+    p = _boundary_payload(case)
+    v1 = evaluate_contract(p)
+    p["schema_version"] = V2
+    assert _without_v2_metadata(evaluate_contract(p)) == v1
+
+
+@pytest.mark.parametrize("case", ["deadline", "not_sent", "sent_unknown", "unknown_cost"])
+def test_v2_snapshot_preserves_boundary_hold_and_costs(case):
+    p = _boundary_payload(case); p["schema_version"] = V2
+    exact = evaluate_contract(p)
+    p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = SNAPSHOT
+    snapshot = evaluate_contract(p)
+    assert snapshot["arms"] == exact["arms"]
+    assert snapshot["contract_status"] == exact["contract_status"]
+    assert snapshot["costs"] == exact["costs"]
+    assert snapshot["violations"] == exact["violations"]
+    assert snapshot["unknowns"] == exact["unknowns"]
+
+
+def test_v1_still_accepts_snapshot_as_comparison_model():
+    p = payload(); c = p["calls"]["bull_candidate"]
+    c["controls"].update(requested_model=SNAPSHOT, reasoning_effort="minimal")
+    c["attempts"][0].update(requested_model=SNAPSHOT, requested_reasoning_effort="minimal", resolved_model=SNAPSHOT)
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "conformant" and r["arms"]["candidate"]["verdict"] == "approve"
