@@ -9,6 +9,11 @@ import re
 
 INPUT_VERSION = "model-comparison-offline-contract-v1"
 REPORT_VERSION = "model-comparison-offline-report-v1"
+INPUT_VERSION_V2 = "model-comparison-offline-contract-v2"
+REPORT_VERSION_V2 = "model-comparison-offline-report-v2"
+IDENTITY_POLICY_VERSION = "documented-model-identity-v1"
+# Qualified 2026-11-01: https://developers.openai.com/api/docs/models/gpt-5-mini
+DOCUMENTED_SNAPSHOTS = frozenset({("openai_chat", "gpt-5-mini", "gpt-5-mini-2025-08-07")})
 PROFILE = "entry-independent-review-v1"
 POLICY = {"requires_independent_review": True, "missing_review_policy": "hold",
           "single_model_fallback": False, "strict_on_disagreement": False,
@@ -88,10 +93,22 @@ def _same(actual, expected):
     return type(actual) is type(expected) and actual == expected
 
 
+def _identity_match(attempt, v2):
+    resolved = attempt["resolved_model"]
+    if resolved is None:
+        return "unknown"
+    if resolved == attempt["requested_model"]:
+        return "exact"
+    if v2 and (attempt["transport"], attempt["requested_model"], resolved) in DOCUMENTED_SNAPSHOTS:
+        return "documented_snapshot"
+    return "mismatch"
+
+
 def evaluate_contract(payload):
     """Validate offline evidence without I/O, mutation, or raw-content output."""
     _fields(payload, {"schema_version", "profile", "evidence_kind", "comparison_id", "common_input_sha256", "policy", "calls"}, "payload")
-    if payload["schema_version"] != INPUT_VERSION: _error("schema_version", "unsupported")
+    if payload["schema_version"] not in (INPUT_VERSION, INPUT_VERSION_V2): _error("schema_version", "unsupported")
+    v2 = payload["schema_version"] == INPUT_VERSION_V2
     if payload["profile"] != PROFILE: _error("profile", "unsupported")
     if payload["evidence_kind"] not in ("synthetic", "caller_supplied_recording"): _error("evidence_kind")
     _identifier(payload["comparison_id"], "comparison_id")
@@ -124,7 +141,8 @@ def evaluate_contract(payload):
             _identifier(controls["reasoning_effort"], path + ".controls.reasoning_effort")
             cap = controls["max_output_tokens"]
             if type(cap) is not int or not 1 <= cap <= 1000000: _error(path + ".controls.max_output_tokens")
-            if sum(controls[k] != BULL[k] for k in ("requested_model", "reasoning_effort", "max_output_tokens")) != 1:
+            if (sum(controls[k] != BULL[k] for k in ("requested_model", "reasoning_effort", "max_output_tokens")) != 1
+                    or (v2 and ("openai_chat", BULL["requested_model"], controls["requested_model"]) in DOCUMENTED_SNAPSHOTS)):
                 _error(path + ".controls", "one_comparison_variable_required")
         elapsed = call["whole_call_elapsed_ms"]
         _number(elapsed, path + ".whole_call_elapsed_ms", True)
@@ -159,7 +177,7 @@ def evaluate_contract(payload):
             for key in ("resolved_model", "effective_reasoning_effort"):
                 _string(a[key], ap + "." + key, True)
             _string(a["transport_error_kind"], ap + ".transport_error_kind", True)
-            if a["resolved_model"] is not None and a["resolved_model"] != controls["requested_model"]:
+            if _identity_match(a, v2) == "mismatch":
                 issue("attempt_identity_mismatch")
             if not isinstance(a["status"], str) or a["status"] not in STATUSES: _error(ap + ".status")
             if a["request_sent"] is not None and type(a["request_sent"]) is not bool: _error(ap + ".request_sent")
@@ -233,8 +251,8 @@ def evaluate_contract(payload):
             elif attempts[-1]["status"] != "success": issue("terminal_attempt_inconsistent")
             else:
                 final = attempts[-1]
-                if final["resolved_model"] is None: issue("resolved_identity_unknown", unknown=True)
-                elif final["resolved_model"] != controls["requested_model"]: issue("resolved_identity_mismatch")
+                if _identity_match(final, v2) == "unknown": issue("resolved_identity_unknown", unknown=True)
+                elif _identity_match(final, v2) == "mismatch": issue("resolved_identity_mismatch")
                 if final["request_sent"] is False: issue("successful_attempt_not_sent")
                 elif final["request_sent"] is None: issue("successful_transmission_unknown", unknown=True)
         attempt_observations = []
@@ -246,6 +264,7 @@ def evaluate_contract(payload):
                 observation[key] = _safe_observation(a[key])
             kind = a["transport_error_kind"]
             observation["transport_error_kind"] = kind if kind in FALLBACK or kind is None else "other"
+            if v2: observation["identity_match"] = _identity_match(a, v2)
             attempt_observations.append(observation)
         observations[role] = {"whole_call_elapsed_ms": elapsed, "outcome": call["outcome"],
                               "attempts": attempt_observations}
@@ -269,10 +288,15 @@ def evaluate_contract(payload):
         costs[key] = format(costs[key], "f")
     costs["api_estimated_cost_usd_total"] = None if costs["api_possibly_sent_unknown_estimate_count"] or costs["missing_trace_count"] else costs["api_estimated_cost_usd_known_subtotal"]
     costs.update(subscription_incremental_billed_cost_usd=None, total_billed_cost_usd=None, scope="observed_supplied_input_only")
-    return {"schema_version": REPORT_VERSION, "profile": PROFILE, "evidence_kind": payload["evidence_kind"],
+    report = {"schema_version": REPORT_VERSION_V2 if v2 else REPORT_VERSION, "profile": PROFILE, "evidence_kind": payload["evidence_kind"],
             "comparison_id": payload["comparison_id"], "common_input_sha256": payload["common_input_sha256"],
             "controls": {role: copy.deepcopy(calls[role]["controls"]) for role in calls}, "arms": arms,
             "contract_status": "nonconformant" if violations else "unverified" if unknowns else "conformant",
             "violations": violations, "unknowns": unknowns, "attempt_count": len(ids), "observations": observations,
             "costs": costs, "actual_execution": False, "economic_evaluable": False, "net_delta_krw": None,
             "live_activation_supported": False, "contract_scope": "supplied_controls_and_attempt_evidence_only", "limitations": ["admission_and_settlement_not_checked", "offline_contract_only", "caller_supplied_evidence_not_attested", "response_after_price_not_joined"] + (["synthetic_evidence"] if payload["evidence_kind"] == "synthetic" else [])}
+
+    if v2:
+        report["identity_policy_version"] = IDENTITY_POLICY_VERSION
+        report["limitations"].append("documented_identity_not_current_attestation")
+    return report

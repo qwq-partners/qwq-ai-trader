@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-01 — E04 공식 GPT snapshot 판독 v2
+
+- 오프라인 비교 계약 v2에서 공식 GPT mini alias→날짜형 snapshot 관계만 명시적으로 인정한다. v1 출력·판정은 보존하고 각 시도의 exact/documented_snapshot/unknown/mismatch를 구분한다.
+- 원래 요청/응답 이름, 실패 상태·시간·비용 경계는 유지한다. 실제 worker/모델 설정·매수 중지는 변경하지 않는다.
+- [PR #322 병합·후속 검증·NEXT](docs/operations/execution-roadmap.md#e04-snapshot-identity-20261101), [사용법](docs/reviews/engine-comparison-contract-2026-11-01.md#offline-contract-v2).
+
 ## 2026-11-01 — E04 현행 GPT/Claude 오프라인 비교 계약
 
 - 현재 entry 독립 검토의 요청 제어·역할별 재시도·전체 제한시간·CLI→API 순서를 별도 버전의 오프라인 계약으로 검사한다. 검토 누락·신원/시간 결측은 보류하며 투표만의 정책 판단과 구분한다.

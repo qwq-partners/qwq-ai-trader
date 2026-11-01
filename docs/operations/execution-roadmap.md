@@ -1,5 +1,21 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-snapshot-identity-20261101"></a>
+### E04-SNAPSHOT-IDENTITY — 공식 GPT snapshot 신원 판독 (구현·독립 리뷰·실제 WSL DONE)
+
+**Plan:** 사용자 “PR #322 CI 확인하고 통과했으면 병합해줘. 그다음 남은 엔진 개선 task 중 지금 가능한 것부터 이어가자.” [PR #322](https://github.com/qwq-partners/qwq-ai-trader/pull/322)는 필수 verify run41286412715의 **10,153 passed / 2 skipped / 2 xfailed**·격리0·문법/비밀정보 PASS 뒤11/1 16:58:14 KST에 고정 head f699c2f8로 squash 병합했다. main `e71ebc3255f710f331ccb777c420f8edb29397c9`과 PR 소스 tree는 동일하다. main CI run41286872638도 **10,153 passed / 2 skipped / 2 xfailed**(488.73초)·격리0·문법/비밀정보 PASS로 종료했다.
+
+**우선순위 대조:** 이미 판독한 구간은 재조회하지 않고11/1 10:31:00.157165 이상~17:03:16.662937 미만 KST만 read-only/5초 시한/10,000행 상한으로 집계했다. 새 signal_events0행·RR문맥0행이며 E02-RR/F1/W1·E01의 새 유효 입력은 WAIT다. E03/A01/E05 결측도 그대로다. 기존 안전 집계에서 GPT24건의 요청 alias와 응답 날짜형 이름이 다름을 확인했고 공식 모델 문서로 그 관계를 검증했으므로 이번 보완을 실행한다. 이는 새 실험이나 새48행 재조회가 아니다.
+
+**Do:** [계획](../superpowers/plans/2026-11-01-comparison-snapshot-identity.md)에 따라 v1의 완전 일치/출력 의미를 보존하고 명시 input/report v2에서 공식 `(openai_chat, gpt-5-mini, gpt-5-mini-2025-08-07)`만 인정한다. 요청/응답 신원과 분류를 함께 남기며 다른 이름·임의 날짜·역방향·실패 상태를 승인으로 바꾸지 않는다. Terra6.1/high 한정 구현은 별도 같은 base worktree, coordinator는 통합/문서를 담당한다(정책5.6 대체, native actual/effective 미노출). 합성 RED1failed/1passed(기존 v1 대조 통과) 뒤 worker와 통합 worktree의 정본 관련130검사·격리0·문법/비밀정보 PASS다(AWS 보조 검증). 독립 Sol6.1/high 문서 검토는 APPROVE이며 실제/실효 metadata는 미노출이다. 실제 Opus5.5/high 정적 소스 리뷰는132.186초에 APPROVE(P0/P1 0, 비차단P2 3)였으며 같은 모델의 후보 중복·v2 경계 대조·문서 관계의 비보증 표시를 현재 작업의 하위 보완으로 반영했다. RED3건 뒤 관련143검사·격리0·문법/비밀정보 PASS이며 실제 Opus5.5/high 재리뷰84.122초에서 APPROVE·미해결P0/P1/P2 0이다. 두 리뷰 모두 실제 응답 모델을 검증했고 실효 effort는 미노출이다. v1 전체 결과 지문은 coordinator도 수정 전 base 소스에서 독립 재계산해 일치를 확인했다. 사용자가 임시 키를 재등록했고 저장된 호스트키와 실제 WSL2를 확인했다. 기존 WSL 저장소 두 곳은 깨끗하며 별도 task worktree에서 최종 전체를 진행한다.
+
+**운영/예약:**17:03 읽기 대조에서 운영cfc9bc20·evolved 미커밋만의 상태·보호config2개 바이트 동일·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재를 확인했다. 최초 repo-root의 잘못된 경로 점검은 비공개 영수증에 정정 이력으로 남겼으며 실제 매수 중지는 변경되지 않았다. 설정/주문/배포/발송/새예약/관측연장0, R1 OFF·Gemini 차단 유지. T04 만료 종료·O02 기존11/4·5 사전점검 및11/5·6 정리·11/2 자연 보고 수락은 별도다.
+
+**See/실제 WSL PASS — 11/1 17:18:45 KST:** 별도 `/home/user/projects/qwq-e04-snapshot-identity-20261101`의 고정 tree `08d1ffc27fddfeafa6a0aa5cea2f402cc1e2904e`에서 정본 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행했다. **10,183 passed / 2 skipped / 2 xfailed**, 검사383.45초·전체392.184초·rc0·격리0·문법/비밀정보 PASS다(경고14건). 실행 전후 tree동일·unstaged변경0·기존 WSL 작업본 상태 동일이며 원본 로그 SHA256을 대조했다. 검증 뒤 변경은 완료 근거 Markdown뿐이다.17:19:10 운영 재대조도 동일 버전·설정2파일·미커밋 evolved·매수 중지 보존이다. 비공개 `~/.local/state/qwq-task-audit/20261101/e04-snapshot-identity/`에 소스 지문·리뷰·WSL 원본/영수증·보존 점검을 둔다.
+
+**소스 인계/NEXT:** 검증된 소스는 `feature/e04-snapshot-identity-20261101`의 커밋/푸시·PR로 인계하고 필수 verify 결과는 해당 PR 영수증을 따른다. 운영 적용·실제 모델 비교·경제성 입증은 이번 완료에 포함하지 않는다. **NEXT=E02-RR/E01 새 유효 자연 입력 판독 우선**, E04 실제 adapter·입장/정산·대안 비교는 별도 조건 대기·R1 OFF다. 기존 O02 일정과11/2 자연 보고 수락은 유지한다.
+
+
 <a id="e04-current-contract-20261101"></a>
 ### E04-CURRENT-CONTRACT — GPT/Claude 오프라인 비교 계약 (구현·독립 리뷰·실제 WSL 검증 DONE)
 
