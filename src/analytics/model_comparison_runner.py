@@ -608,14 +608,16 @@ class PairedComparisonRunner:
             async with asyncio.timeout(bear.timeout_seconds):       # 역할(패널) 총 시한 — 소유자는 이 역할
                 started = loop.time()                                # Bear 내부 예산의 시작점(절대 시한을 여기서 고정)
                 internal_deadline = started + spec.bear_internal_timeout_seconds
-                # 가드 입장·월 예약에 걸린 시간이 요청의 상대 시한에 더해지지 않도록 어댑터가 전송 직전 이 상한을 적용한다.
-                token = DEADLINE_AT.set(internal_deadline)
+                # 가드 입장·월 예약에 걸린 시간이 요청의 상대 시한에 더해지지 않도록 어댑터가 전송 직전 절대 상한을 적용한다.
+                # CLI 단계 상한은 운영 `started + min(8, total/2)` 과 같이 체인 시작 기준 CLI 시한(내부 시한을 넘지 않음)이다.
+                token = DEADLINE_AT.set(min(internal_deadline, started + spec.bear_cli_timeout_seconds))
                 cli = replace(bear, timeout_seconds=spec.bear_cli_timeout_seconds)
                 attempt = await self._attempt(pair_id, 'bear', 0, cli, prompt, system)
                 attempts.append(attempt)
                 remaining = internal_deadline - loop.time()
                 if spec.bear_api_fallback is not None and _api_fallback_authorized(attempt) and remaining > 0:
                     index = 1
+                    DEADLINE_AT.set(internal_deadline)                   # API 단계 상한은 Bear 내부 시한
                     api = replace(spec.bear_api_fallback,
                                   timeout_seconds=min(spec.bear_api_fallback.timeout_seconds, remaining))
                     attempts.append(await self._attempt(pair_id, 'bear', 1, api, prompt, system))

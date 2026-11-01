@@ -252,16 +252,18 @@ def test_admission_latency_cannot_extend_the_bear_internal_deadline(tmp_path, mo
     ledger, guard, runner, spec, op, cli, api = setup(tmp_path, cli=SCRIPTS['timeout'], cli_delay=0.2)
     original = guard._admit
 
-    def slow_admit(attempt_id, request_json):          # 가드 입장(원장 쓰기)에 걸리는 시간을 흉내 낸다
-        if attempt_id.endswith(':bear:1'):
+    def slow_admit(attempt_id, request_json):          # 가드 입장(원장 쓰기)에 걸리는 시간을 흉내 낸다 — CLI·API 양쪽
+        if attempt_id.endswith((':bear:0', ':bear:1')):
             time.sleep(0.15)
         return original(attempt_id, request_json)
     monkeypatch.setattr(guard, '_admit', slow_admit)
     asyncio.run(runner.run(spec))
     (cli_call,), (api_call,) = cli.calls, api.calls
+    # CLI 상한은 체인 시작 기준 5.75초다: 입장 0.15초 뒤 호출됐으므로 남은 상대 시한은 5.75-0.15 를 넘지 못한다.
+    assert cli_call['deadline'] - cli_call['loop_time'] <= 5.75 - 0.15 + 0.02
     # 내부 예산은 Bear 체인 시작에서 고정된 절대 시한이다. CLI 호출 시각은 시작 이후이므로 API 시한은 그보다 11.5초 뒤를 넘지 못한다.
-    assert api_call['deadline'] <= cli_call['loop_time'] + 11.5
-    assert api_call['deadline'] - api_call['loop_time'] < 11.5 - 0.2 - 0.15 + 0.02
+    assert api_call['deadline'] <= cli_call['loop_time'] + 11.5 - 0.15
+    assert api_call['deadline'] - api_call['loop_time'] < 11.5 - 0.15 - 0.2 - 0.15 + 0.02
 
 
 def test_identity_certification_does_not_default_an_explicit_empty_transport():
