@@ -176,6 +176,24 @@ class ComparisonWorker:
         self.config_sha256 = hashlib.sha256(mci._canon(self.manifest).encode()).hexdigest()
         self._roles = {k: RoleControls(**self.manifest[k]) for k in ("current", "candidate", "bear")}
         self._fallback = tuple(RoleControls(**c) for c in self.manifest.get("fallback_chain", []))
+        # 현행 프로필(판정 정책·Bear 내부/CLI 시한·명시 API 대체)은 manifest 에서 읽고 봉투를 받기 전에 PairSpec 과 같은 규칙으로
+        # 검증한다 — 잘못된 프로필은 worker 생성 단계에서 끝나고 어떤 전송도 일어나지 않는다. 키가 없으면 역사적 의미 그대로다.
+        from .model_comparison_runner import LEGACY_REVIEW_POLICY, PairSpec
+        api_fallback = self.manifest.get("bear_api_fallback")
+        self._profile = {
+            "review_policy": self.manifest.get("review_policy", LEGACY_REVIEW_POLICY),
+            "bear_empty_retries": self.manifest.get("bear_empty_retries"),
+            "bear_internal_timeout_seconds": self.manifest.get("bear_internal_timeout_seconds"),
+            "bear_cli_timeout_seconds": self.manifest.get("bear_cli_timeout_seconds"),
+            "bear_api_fallback": RoleControls(**api_fallback) if api_fallback is not None else None,
+        }
+        if (self._profile["review_policy"] != LEGACY_REVIEW_POLICY
+                or any(self._profile[k] is not None for k in ("bear_empty_retries", "bear_internal_timeout_seconds",
+                                                               "bear_cli_timeout_seconds", "bear_api_fallback"))):
+            # 역사적 manifest(새 키 없음)는 종전처럼 각 쌍의 PairSpec.validate(claim 전)에서 검사한다 — 의미·시점 보존.
+            PairSpec.validate_profile(current=self._roles["current"], candidate=self._roles["candidate"], bear=self._roles["bear"],
+                                      fallback_chain=self._fallback, strict_on_disagreement=self.manifest["strict_on_disagreement"],
+                                      **self._profile)
         self.max_input_age_seconds = float(max_input_age_seconds)
         self.shutdown_deadline_seconds = shutdown_deadline_seconds
         self.clock = clock or _kst_now
@@ -210,6 +228,14 @@ class ComparisonWorker:
             "empty_retries": self.manifest["empty_retries"],
             "strict_on_disagreement": self.manifest["strict_on_disagreement"],
         }
+        if self._profile["review_policy"] != LEGACY_REVIEW_POLICY:
+            # 현행 프로필은 생산자(operating_role_controls)가 적는 Bear 재시도·내부 시한·전송 순서도 같아야 비교다.
+            self._expected_controls.update({
+                "bear_empty_retries": self._profile["bear_empty_retries"],
+                "bear_internal_timeout_seconds": self._profile["bear_internal_timeout_seconds"],
+                "bear_transport_order": (["claude_cli", "anthropic_messages"] if self._profile["bear_api_fallback"] is not None
+                                         else ["claude_cli"]),
+            })
 
     # ── 생산자 쪽(운영 루프) ─────────────────────────────────
     def producer_config(self) -> dict:
@@ -443,7 +469,7 @@ class ComparisonWorker:
                                          if self._fallback else None),
                         fallback_system=controls["fallback_system"], fallback_chain=self._fallback,
                         empty_retries=self.manifest["empty_retries"],
-                        horizon_seconds=self.manifest["horizon_seconds"],
+                        horizon_seconds=self.manifest["horizon_seconds"], **self._profile,
                         max_input_age_seconds=self.max_input_age_seconds,
                         evaluation_anchor="input_available_at", live_provenance="in_process_attested",
                         attestation=mci.attest_pair(**fields))

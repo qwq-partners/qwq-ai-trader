@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import hashlib
@@ -19,6 +19,7 @@ import sqlite3
 from typing import Any
 
 from .decision_quote_join import join_decisions
+from .model_comparison_contract import FALLBACK as BEAR_API_FALLBACK_KINDS
 from .model_comparison_execution import ComparisonAttemptResult, ComparisonCallGuard, ComparisonRequest
 from ..core.adversarial_validator import BULL_SUFFIX, BULL_SYSTEM, BEAR_SUFFIX, BEAR_SYSTEM, _parse_verdict
 from ..utils.llm import OpenAIClient, GeminiClient, LLMProvider, LLMResponse, _validate_controls
@@ -28,6 +29,14 @@ from ..utils.llm_pricing import rate_quote
 VERSION = 'model-comparison-pair-v2'
 LEGACY_VERSION = 'model-comparison-pair-v1'  # requested_at+horizon 기준. 보고서가 그 의미 그대로 읽는다.
 ANCHORS = ('requested_at', 'input_available_at')
+# 판정 정책. legacy: 한쪽 의견으로 approve·양쪽 실패 시 명시 단일 모델 폴백(역사적 GPT/Gemini 쌍의 의미 그대로).
+# current: 운영 AdversarialValidator(requires_independent_review)·오프라인 계약 POLICY 와 같이 양쪽 유효 의견이 있어야
+# approve/reject, 아니면 hold. 단일 모델 폴백 없음, strict_on_disagreement False.
+LEGACY_REVIEW_POLICY = 'legacy-single-opinion-v1'
+CURRENT_REVIEW_POLICY = 'entry-independent-review-v1'
+REVIEW_POLICIES = (LEGACY_REVIEW_POLICY, CURRENT_REVIEW_POLICY)
+# LLMManager.complete_with 와 같은 Bear CLI 시한 규칙: 내부 예산의 절반, 최대 8초.
+BEAR_CLI_TIMEOUT_CAP_SECONDS = 8.0
 
 
 def _now():
@@ -113,6 +122,13 @@ class PairSpec:
     empty_retries: int = 1
     # None: 공통 Bear 도 empty_retries 를 따른다(역사적 GPT/Gemini 쌍). Claude Bear 는 운영 entry Bear 처럼 0 을 명시한다.
     bear_empty_retries: int | None = None
+    review_policy: str = LEGACY_REVIEW_POLICY
+    # 현행 Bear 시한 소유권: bear.timeout_seconds 는 역할(패널) 총 시한, bear_internal_timeout_seconds 는 그 안의 Bear 체인
+    # 예산(운영 call_timeout_seconds 11.5), bear_cli_timeout_seconds 는 CLI 단일 시도 시한(≤ min(8, 내부/2)).
+    # bear_api_fallback 은 허용된 CLI 실패 뒤 **남은 내부 예산**으로 한 번 보내는 명시 API 제어(채널 api, 같은 모델).
+    bear_internal_timeout_seconds: float | None = None
+    bear_cli_timeout_seconds: float | None = None
+    bear_api_fallback: RoleControls | None = None
     horizon_seconds: int = 900
     max_input_age_seconds: float = 5.0
     # v2: 평가 기준시각. live 는 공통 입력 구성 시각(input_available_at)+horizon 이다(연구 계약).
@@ -151,26 +167,71 @@ class PairSpec:
             from .model_comparison_input import verify_pair_attestation
             if self.enqueued_at is None or not verify_pair_attestation(self):
                 raise ValueError('live_provenance_unattested')
-        if not all(isinstance(c, RoleControls) for c in (self.current, self.candidate, self.bear)):
-            raise ValueError('explicit_role_controls_required')
-        # Bull 두 arm 은 OpenAI, Bear 는 Gemini(역사적 쌍) 또는 Claude(현행 entry Bear). 명시 폴백 체인의 공급자는
-        # 역사적 의미 그대로(OpenAI/Gemini)이며 Claude 만 제외한다 — CLI→API 대체는 상위 흐름의 몫이다.
-        if (_provider(self.current.model) != LLMProvider.OPENAI or _provider(self.candidate.model) != LLMProvider.OPENAI
-                or _provider(self.bear.model) not in (LLMProvider.GEMINI, LLMProvider.ANTHROPIC)
-                or any(_provider(c.model) == LLMProvider.ANTHROPIC for c in self.fallback_chain)):
-            raise ValueError('role_provider_mismatch')
-        if _provider(self.bear.model) == LLMProvider.ANTHROPIC and self.bear_empty_retries != 0:
-            raise ValueError('claude_bear_empty_retries_must_be_zero')
-        changed = {k for k in asdict(self.current) if getattr(self.current, k) != getattr(self.candidate, k)}
-        if len(changed) != 1 or not changed <= {'model', 'reasoning_effort', 'max_output_tokens'}:
-            raise ValueError('one_comparison_variable_required')
         if not isinstance(self.fallback_chain, tuple) or len(self.fallback_chain) > 2:
             raise ValueError('invalid_fallback_chain')
         if self.fallback_chain and (not isinstance(self.fallback_prompt, str) or not self.fallback_prompt):
             raise ValueError('explicit_fallback_prompt_required')
-        for control in (self.current, self.candidate, self.bear, *self.fallback_chain):
-            control.request('validate', '')
+        self.validate_profile(current=self.current, candidate=self.candidate, bear=self.bear, fallback_chain=self.fallback_chain,
+                              strict_on_disagreement=self.strict_on_disagreement, bear_empty_retries=self.bear_empty_retries,
+                              review_policy=self.review_policy, bear_internal_timeout_seconds=self.bear_internal_timeout_seconds,
+                              bear_cli_timeout_seconds=self.bear_cli_timeout_seconds, bear_api_fallback=self.bear_api_fallback)
         _json(asdict(self))  # Reject non-JSON snapshots and nonfinite numbers before admission.
+
+    @staticmethod
+    def validate_profile(*, current, candidate, bear, fallback_chain, strict_on_disagreement, bear_empty_retries,
+                         review_policy, bear_internal_timeout_seconds, bear_cli_timeout_seconds, bear_api_fallback):
+        """역할·판정 정책·Bear 시한/전송 프로필 규칙. worker 도 manifest 를 받을 때 같은 검사를 쓴다."""
+        extra = (bear_api_fallback,) if bear_api_fallback is not None else ()
+        controls = (current, candidate, bear, *fallback_chain, *extra)
+        if not all(isinstance(c, RoleControls) for c in controls):
+            raise ValueError('explicit_role_controls_required')
+        if review_policy not in REVIEW_POLICIES:
+            raise ValueError('invalid_review_policy')
+        # Bull 두 arm 은 OpenAI, Bear 는 Gemini(역사적 쌍) 또는 Claude(현행 entry Bear). 명시 폴백 체인의 공급자는
+        # 역사적 의미 그대로(OpenAI/Gemini)이며 Claude 만 제외한다 — CLI→API 대체는 상위 흐름(_bear_role)의 몫이다.
+        bear_provider = _provider(bear.model)
+        if (_provider(current.model) != LLMProvider.OPENAI or _provider(candidate.model) != LLMProvider.OPENAI
+                or bear_provider not in (LLMProvider.GEMINI, LLMProvider.ANTHROPIC)
+                or any(_provider(c.model) == LLMProvider.ANTHROPIC for c in fallback_chain)):
+            raise ValueError('role_provider_mismatch')
+        if bear_provider == LLMProvider.ANTHROPIC and bear_empty_retries != 0:
+            raise ValueError('claude_bear_empty_retries_must_be_zero')
+        for value, label in ((bear_internal_timeout_seconds, 'bear_internal_timeout_seconds'),
+                             (bear_cli_timeout_seconds, 'bear_cli_timeout_seconds')):
+            if value is not None:
+                _positive(value, label)
+        if bear_internal_timeout_seconds is not None and bear_internal_timeout_seconds > bear.timeout_seconds:
+            raise ValueError('bear_internal_timeout_exceeds_role_timeout')
+        if bear_cli_timeout_seconds is not None:
+            if bear_internal_timeout_seconds is None:
+                raise ValueError('bear_cli_timeout_requires_internal_timeout')
+            if bear_cli_timeout_seconds > min(BEAR_CLI_TIMEOUT_CAP_SECONDS, bear_internal_timeout_seconds / 2):
+                raise ValueError('bear_cli_timeout_exceeds_contract')      # 운영 min(8, 내부/2) 보다 늘릴 수 없다
+        if bear_api_fallback is not None:
+            if bear_provider != LLMProvider.ANTHROPIC or bear.billing_channel != 'subscription':
+                raise ValueError('bear_api_fallback_requires_cli_primary_claude_bear')
+            if (_provider(bear_api_fallback.model) != LLMProvider.ANTHROPIC or bear_api_fallback.billing_channel != 'api'
+                    or bear_api_fallback.model != bear.model or bear_api_fallback.reasoning_effort != 'low'
+                    or bear_api_fallback.temperature is not None or bear_api_fallback.seed is not None):
+                raise ValueError('bear_api_fallback_controls_invalid')
+            if bear_cli_timeout_seconds is None:
+                raise ValueError('bear_cli_timeout_required_for_api_fallback')
+            if bear_api_fallback.timeout_seconds > bear_internal_timeout_seconds:
+                raise ValueError('bear_api_fallback_timeout_exceeds_internal')
+        if review_policy == CURRENT_REVIEW_POLICY:
+            if bear_provider != LLMProvider.ANTHROPIC or bear.billing_channel != 'subscription':
+                raise ValueError('current_policy_requires_claude_bear_cli_primary')
+            if fallback_chain:
+                raise ValueError('current_policy_has_no_single_model_fallback')
+            if strict_on_disagreement:
+                raise ValueError('current_policy_requires_strict_on_disagreement_false')
+            if bear_internal_timeout_seconds is None:
+                raise ValueError('current_policy_requires_bear_internal_timeout')
+        changed = {k for k in asdict(current) if getattr(current, k) != getattr(candidate, k)}
+        if len(changed) != 1 or not changed <= {'model', 'reasoning_effort', 'max_output_tokens'}:
+            raise ValueError('one_comparison_variable_required')
+        for control in controls:
+            control.request('validate', '')
 
     def snapshot(self):
         """Persisted spec: the per-process attestation is evidence of this run, not pair identity.
@@ -182,6 +243,11 @@ class PairSpec:
         value.pop('attestation')
         if value['bear_empty_retries'] is None:
             value.pop('bear_empty_retries')
+        if value['review_policy'] == LEGACY_REVIEW_POLICY:
+            value.pop('review_policy')
+        for key in ('bear_internal_timeout_seconds', 'bear_cli_timeout_seconds', 'bear_api_fallback'):
+            if value[key] is None:
+                value.pop(key)
         for role in (value['current'], value['candidate'], value['bear'], *value['fallback_chain']):
             if role.get('billing_channel') == 'api':
                 role.pop('billing_channel')
@@ -254,6 +320,14 @@ class SingleAttemptAdapter:
                  'cost_basis': cost_basis, 'api_cost_usd': str(cost) if cost is not None else None,
                  'finish_reason': response.finish_reason}
         return ComparisonAttemptResult(value, cost, settlement)
+
+
+def _api_fallback_authorized(attempt) -> bool:
+    """LLMManager.complete_with 와 같은 API 대체 인가: 가드 예외·역할 시한 없이 전송된 CLI 시도가 성공·거절이 아니고
+    허용된 실패 종류일 때만. 신원 불일치·정책 위반·취소·차단은 대체하지 않는다."""
+    return (attempt.get('error') is None and attempt.get('success') is not True
+            and attempt.get('refusal_detected') is not True
+            and attempt.get('transport_error_kind') in BEAR_API_FALLBACK_KINDS)
 
 
 def _sum_cost(attempts):
@@ -331,18 +405,31 @@ class PairedComparisonRunner:
     individual durable attempts are inspectable via guard.lookup, never resent.
     This conservative boundary does not repair ambiguous crash outcomes.
     """
-    def __init__(self, *, guard: ComparisonCallGuard, adapter: SingleAttemptAdapter, clock=_now, claude_adapter=None):
+    def __init__(self, *, guard: ComparisonCallGuard, adapter: SingleAttemptAdapter, clock=_now, claude_adapter=None,
+                 claude_api_adapter=None):
         if not isinstance(guard, ComparisonCallGuard) or not isinstance(adapter, SingleAttemptAdapter):
             raise ValueError('explicit_guard_and_single_attempt_adapter_required')
-        if claude_adapter is not None:
-            from .model_comparison_claude import ClaudeSingleAttemptAdapter
-            if not isinstance(claude_adapter, ClaudeSingleAttemptAdapter):
+        from .model_comparison_claude import ClaudeSingleAttemptAdapter
+        # 채널별 Claude 단일 시도 전송(subscription=CLI, api=Anthropic API). 각 요청은 자기 채널의 어댑터로만 간다.
+        self._claude_adapters = {}
+        for candidate in (claude_adapter, claude_api_adapter):
+            if candidate is None:
+                continue
+            if not isinstance(candidate, ClaudeSingleAttemptAdapter):
                 raise ValueError('claude_single_attempt_adapter_required')
+            if candidate.billing_channel in self._claude_adapters:
+                raise ValueError('claude_adapter_channel_duplicate')
+            self._claude_adapters[candidate.billing_channel] = candidate
         self.guard, self.adapter, self.clock = guard, adapter, clock
-        self.claude_adapter = claude_adapter     # Claude Bear 전용 단일 시도 전송. 없으면 Claude 역할은 claim 전에 거절.
+        self.claude_adapter, self.claude_api_adapter = claude_adapter, claude_api_adapter
 
-    def _dispatch_for(self, model):
-        return self.claude_adapter if _provider(model) == LLMProvider.ANTHROPIC else self.adapter
+    def _dispatch_for(self, request):
+        if _provider(request.model) != LLMProvider.ANTHROPIC:
+            return self.adapter
+        adapter = self._claude_adapters.get(request.billing_channel)
+        if adapter is None:
+            raise ValueError('claude_adapter_required:' + request.billing_channel)
+        return adapter
 
     def pair_id(self, decision_id) -> str:
         return hashlib.sha256(_json([self.guard.policy.experiment_id, decision_id]).encode()).hexdigest()
@@ -439,7 +526,7 @@ class PairedComparisonRunner:
         attempt_id = f'{pair_id}:{role}:{index}'
         req = controls.request(prompt, system)
         try:
-            result = await self.guard.call(req, dispatch=self._dispatch_for(req.model), attempt_id=attempt_id)
+            result = await self.guard.call(req, dispatch=self._dispatch_for(req), attempt_id=attempt_id)
             value = dict(result.value)
         except asyncio.CancelledError:
             raise
@@ -487,9 +574,103 @@ class PairedComparisonRunner:
             attempts.append(self._timed_out(pair_id, name, index, controls.model))
         return attempts
 
+    async def _bear_role(self, pair_id, spec, prompt, system):
+        """공통 Bear. 현행 Claude 프로필이면 CLI 단일 시도 뒤 허용된 전송 실패에서만 남은 내부 예산으로 API 단일 시도 1회.
+
+        각 시도는 guard.call 1회(별도 attempt_id·영수증)이고 어댑터 안에 숨은 retry/fallback 은 없다. 가드 예외·역할 시한·
+        취소·거절·신원 불일치·정책 위반은 대체하지 않는다. 시한은 늘리지 않는다 — API 에는 내부 예산에서 CLI 완료(정리 포함)
+        까지의 경과를 뺀 나머지만 전달한다.
+        """
+        bear = spec.bear
+        if spec.bear_api_fallback is None:
+            retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
+            return await self._role(pair_id, 'bear', bear, prompt, system, retries)
+        attempts, index = [], 0
+        loop = asyncio.get_running_loop()
+        try:
+            async with asyncio.timeout(bear.timeout_seconds):       # 역할(패널) 총 시한 — 소유자는 이 역할
+                started = loop.time()                                # Bear 내부 예산의 시작점
+                cli = replace(bear, timeout_seconds=spec.bear_cli_timeout_seconds)
+                attempt = await self._attempt(pair_id, 'bear', 0, cli, prompt, system)
+                attempts.append(attempt)
+                remaining = spec.bear_internal_timeout_seconds - (loop.time() - started)
+                if _api_fallback_authorized(attempt) and remaining > 0:
+                    index = 1
+                    api = replace(spec.bear_api_fallback,
+                                  timeout_seconds=min(spec.bear_api_fallback.timeout_seconds, remaining))
+                    attempts.append(await self._attempt(pair_id, 'bear', 1, api, prompt, system))
+        except TimeoutError:
+            model = (spec.bear_api_fallback if index else bear).model
+            attempts.append(self._timed_out(pair_id, 'bear', index, model))
+        return attempts
+
+    def _attempt_reasons(self, attempts):
+        reasons = []
+        if any(a.get('requested_model_match') is not True for a in attempts if a.get('request_sent') is True):
+            reasons.append('resolved_model_unverified_or_mismatch')
+        if any(a.get('ledger_state') == 'pending_reconciliation' for a in attempts):
+            reasons.append('budget_reconciliation_pending')
+        if any(a.get('billing_channel') == 'subscription' for a in attempts):
+            reasons.append('subscription_attempt_cost_not_api_billed')   # 구독 표시 추정비는 attempts 의 값으로만 남는다
+        if _sum_cost(attempts) is None:
+            reasons.append('api_cost_unknown')
+        if not all(a.get('timing_valid') is True for a in attempts):
+            reasons.append('attempt_timing_unverified')
+        return reasons
+
+    def _current_arm(self, spec, bull, bear):
+        """현행 entry 독립 검토 정책(운영 AdversarialValidator·오프라인 계약 POLICY 와 같은 의미).
+
+        policy_verdict 는 파싱된 의견만의 판정, verdict 는 신원 검증된 성공 응답·시한까지 고려한 판정이다. 한쪽이라도 없으면
+        hold 이며 단일 모델 폴백은 없다. hold 는 진입 차단이라 sizing 재생을 하지 않는다.
+        """
+        def opinion(attempt, yes, no):
+            content = attempt.get('content') if isinstance(attempt.get('content'), str) else ''
+            return _parse_verdict(content, yes, no) if content.strip() else None
+        pb, pr = opinion(bull[-1], 'APPROVE', 'REJECT'), opinion(bear[-1], 'ACCEPT', 'REJECT')
+        b = pb if bull[-1]['success'] else None
+        r = pr if bear[-1]['success'] else None
+        timed_out = any(a.get('error') == 'TimeoutError' for a in (bull[-1], bear[-1]))
+        policy_verdict = ('approve' if (pb or pr) else 'reject') if pb is not None and pr is not None else 'hold'
+        verdict = ('approve' if (b or r) else 'reject') if b is not None and r is not None and not timed_out else 'hold'
+        attempts = bull + bear
+        reasons = []
+        if verdict == 'hold':
+            reasons.append('independent_review_unavailable')
+        if spec.bear_api_fallback is not None:
+            if len(bear) == 2:
+                reasons.append('bear_api_fallback_dispatched')
+            elif _api_fallback_authorized(bear[0]):
+                reasons.append('bear_api_fallback_skipped_time_exhausted')
+            elif not bear[0]['success']:
+                reasons.append('bear_api_fallback_not_authorized')
+        replay = None
+        if verdict == 'hold':
+            reasons.append('independent_review_hold_no_entry')
+        elif spec.neutral_sizing is None:
+            reasons.append('neutral_sizing_missing')
+        else:
+            try:
+                from .model_comparison_sizing import replay_policy_sizing
+                replay = replay_policy_sizing(spec.neutral_sizing, verdict)
+                reasons.extend(replay.get('exclusions', ['downstream_admission_not_replayed']))
+            except (ValueError, TypeError, KeyError):
+                reasons.append('neutral_sizing_invalid')
+        reasons.extend(self._attempt_reasons(attempts))
+        return {'verdict': verdict, 'validation_verdict': verdict, 'policy_verdict': policy_verdict,
+                'review_policy': spec.review_policy, 'approval_basis': 'entry_independent_review_v1',
+                'unavailable_policy': 'hold_blocks_entry',
+                'api_cost_scope': 'scenario_cost_including_shared_bear_do_not_sum_arms',
+                'bull_verdict': b, 'bear_verdict': r,
+                'independent_review_status': 'unavailable' if verdict == 'hold' else 'available',
+                'decision_available_at': self.clock().isoformat(), 'attempts': attempts,
+                'api_cost_usd': _sum_cost(attempts), 'sizing_replay': replay, 'reasons': reasons}
+
     async def _arm(self, pair_id, name, controls, spec, bear_task):
         bull = await self._role(pair_id, 'bull_' + name, controls, spec.common_context + BULL_SUFFIX, BULL_SYSTEM, spec.empty_retries)
         bear = await asyncio.shield(bear_task)
+        if spec.review_policy == CURRENT_REVIEW_POLICY:
+            return self._current_arm(spec, bull, bear)
         b = _parse_verdict(bull[-1]['content'], 'APPROVE', 'REJECT') if bull[-1]['success'] else None
         r = _parse_verdict(bear[-1]['content'], 'ACCEPT', 'REJECT') if bear[-1]['success'] else None
         attempts = bull + bear
@@ -546,16 +727,7 @@ class PairedComparisonRunner:
                 reasons.append('neutral_sizing_invalid')
         if approval_basis == 'legacy_single_fallback_policy' and validation_verdict == 'unavailable':
             reasons.append('fallback_policy_without_explicit_model_verdict')
-        if any(a.get('requested_model_match') is not True for a in attempts if a.get('request_sent') is True):
-            reasons.append('resolved_model_unverified_or_mismatch')
-        if any(a.get('ledger_state') == 'pending_reconciliation' for a in attempts):
-            reasons.append('budget_reconciliation_pending')
-        if any(a.get('billing_channel') == 'subscription' for a in attempts):
-            reasons.append('subscription_attempt_cost_not_api_billed')   # 구독 표시 추정비는 attempts 의 값으로만 남는다
-        if _sum_cost(attempts) is None:
-            reasons.append('api_cost_unknown')
-        if not all(a.get('timing_valid') is True for a in attempts):
-            reasons.append('attempt_timing_unverified')
+        reasons.extend(self._attempt_reasons(attempts))
         return {'verdict': verdict, 'validation_verdict': verdict if validation_verdict is None else validation_verdict,
                 'approval_basis': approval_basis, 'unavailable_policy': 'fail_open_size_preserved',
                 'api_cost_scope': 'scenario_cost_including_shared_bear_do_not_sum_arms',
@@ -567,9 +739,13 @@ class PairedComparisonRunner:
         if not isinstance(spec, PairSpec):
             raise ValueError('PairSpec_required')
         spec.validate()
-        if _provider(spec.bear.model) == LLMProvider.ANTHROPIC and self.claude_adapter is None:
-            raise ValueError('claude_adapter_required')      # claim·슬롯 소비 전에 거절한다
-        for control in (spec.current, spec.candidate, spec.bear, *spec.fallback_chain):
+        if _provider(spec.bear.model) == LLMProvider.ANTHROPIC:      # claim·슬롯 소비 전에 채널별 어댑터를 확인한다
+            if spec.bear.billing_channel not in self._claude_adapters:
+                raise ValueError('claude_adapter_required:' + spec.bear.billing_channel)
+            if spec.bear_api_fallback is not None and 'api' not in self._claude_adapters:
+                raise ValueError('claude_api_adapter_required')
+        extra = (spec.bear_api_fallback,) if spec.bear_api_fallback is not None else ()
+        for control in (spec.current, spec.candidate, spec.bear, *spec.fallback_chain, *extra):
             if control.model not in self.guard.policy.allowed_models:
                 raise BudgetBlocked('comparison_model_not_allowed')
             if control.max_output_tokens > self.guard.policy.max_output_tokens:
@@ -583,8 +759,7 @@ class PairedComparisonRunner:
             return cached
         tasks = []
         try:
-            bear_retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
-            bear = asyncio.create_task(self._role(pair_id, 'bear', spec.bear, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM, bear_retries))
+            bear = asyncio.create_task(self._bear_role(pair_id, spec, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM))
             tasks.append(bear)
             current = asyncio.create_task(self._arm(pair_id, 'current', spec.current, spec, bear))
             candidate = asyncio.create_task(self._arm(pair_id, 'candidate', spec.candidate, spec, bear))
@@ -685,6 +860,6 @@ def report_pairs(pairs, *, payloads, ledger_status, max_delay_seconds=5.0, max_s
         rows.append(row)
     return {'schema_version': 'model-comparison-report-v3',
             'summary': {'pairs': len(rows), 'economic_evaluable': 0,
-                        'current_verdicts': {v: sum(r['current']['verdict'] == v for r in rows) for v in ('approve', 'reject', 'unavailable')},
-                        'candidate_verdicts': {v: sum(r['candidate']['verdict'] == v for r in rows) for v in ('approve', 'reject', 'unavailable')}},
+                        'current_verdicts': {v: sum(r['current']['verdict'] == v for r in rows) for v in ('approve', 'reject', 'unavailable', 'hold')},
+                        'candidate_verdicts': {v: sum(r['candidate']['verdict'] == v for r in rows) for v in ('approve', 'reject', 'unavailable', 'hold')}},
             'rows': rows}

@@ -1,5 +1,18 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-current-flow-20261101"></a>
+### E04-CURRENT-FLOW — 현행 독립 검토 판정·CLI→API 상위 비교 흐름 (구현 진행 · worker 비활성)
+
+**Plan:** 사용자 “현행 GPT/Claude 독립 검토 정책에 맞는 상위 비교 흐름 구현. Claude CLI→API 대체를 명시적인 단일 시도들의 조합으로 처리. 필요한 worker 입력 검증·선택 주입 준비. 합성 검증·독립 리뷰·실제 WSL 검증·커밋/푸시·PR 작성.” [실행 계획](../superpowers/plans/2026-11-01-current-review-flow.md). 11/1 23:01 KST 확인: origin/main `6e38a371`(PR #325 병합, main CI 10,250 PASS), 운영 checkout `cfc9bc20`(detached)·미커밋 `config/evolved_overrides.yml`만·실제 `KILL_SWITCH_KR` 존재·서비스 active. 개발은 별도 worktree의 `feature/e04-current-flow-20261101`(기준 `6e38a371`). PR #325의 검증·리뷰는 반복하지 않고 영수증(`~/.local/state/qwq-task-audit/20261101/e04-claude-adapter/`)을 사용한다.
+
+**의존성·완료 조건:** E04-GUARD-BILLING(채널 소유권)·E04-CLAUDE-ADAPTER(단일 시도 어댑터) 위에서, runner의 레거시 단독 의견 승인 규칙을 현행 정책(`requires_independent_review`: 한쪽 의견 없음 → hold, 단일 모델 fallback 없음, strict False 합의)으로 표현하고 Bear의 CLI→API 대체를 러너 수준의 명시 단일 시도 조합으로 조정한다. 완료 조건은 합성 검사·관련 회귀·Codex 독립 리뷰·실제 WSL 직렬 전체·PR 필수 verify이며, worker의 실제 Claude 연결·R1 활성화는 포함하지 않는다(`_raw_clients` 차단 유지).
+
+**경계 대조(소스·오프라인 계약):** 운영 `AdversarialValidator.validate`는 `requires_independent_review`면 Bull/Bear 한쪽 의견이 없을 때 `_review_unavailable`(hold)이고 둘 다 있으면 `STRICT_ON_DISAGREEMENT=False`로 하나라도 긍정이면 approve다. `LLMManager.complete_with`의 Bear는 `call_timeout_seconds=11.5` 안에서 CLI `min(8, 11.5/2)=5.75`, 허용 실패 `{cli_unavailable, cli_timeout, cli_rate_limited, cli_auth_unavailable, cli_incomplete}`에서만 남은 시한으로 API 1회이며 거절·성공은 대체하지 않는다. 오프라인 계약 `POLICY/BEAR/FALLBACK`·생산자 `operating_role_controls`(패널 12.0·Bear 내부 11.5·`bear_transport_order`·`bear_empty_retries 0`)와 같다. 현재 runner는 한쪽 의견으로 approve하고 양쪽 실패 시 레거시 폴백 체인을 쓰며 Bear는 어댑터 1개로 1회 전송만 한다 — 이 차이가 이번 범위다.
+
+**Do/See:** 아래에 구현·검사·리뷰·검증을 이어 적는다.
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/실제 모델 호출/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. E02-RR/E01 새 입력은 평일 자료 생성 뒤 판독(마지막 경계 11/1 17:42:10 KST, 일요일 밤 조회 없음). 11/2 07:40 자연 보고 수락·O02 11/4·5 사전점검·11/5·6 정리는 별도다.
+
 <a id="e04-claude-adapter-20261101"></a>
 ### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증·독립 리뷰·AWS 보조·실제 WSL 전체 DONE · PR 영수증 참조)
 
