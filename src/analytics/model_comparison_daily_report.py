@@ -27,10 +27,11 @@ STOP_REASONS = frozenset({
 })
 
 
-# 구독 시도가 전송 뒤에 받는 차단 사유 — 어댑터가 API 비용을 보고했거나 중단돼 실제 과금 여부를 모른다.
-# 전송 전 거절(comparison_adapter_channel_mismatch 등 나머지 사유)은 호출·과금이 없어 구독 목록에 남긴다.
-_SUBSCRIPTION_UNCERTAIN_BLOCKS = frozenset({'comparison_billing_channel_mismatch', 'comparison_invalid_measured_cost',
-                                            'comparison_attempt_interrupted', 'comparison_invalid_result'})
+# 가드가 구독 시도를 **전송 전에** 거절할 때만 남기는 사유(허용 목록). 이 사유의 blocked 는 호출·과금이 없다.
+# 그 밖의 사유(전송 뒤 정산 불일치·중단·저장 실패 등)는 응답 증거가 없어도 과금 여부를 모르므로 불명으로 둔다.
+_SUBSCRIPTION_PRE_DISPATCH_BLOCKS = frozenset({
+    'comparison_adapter_channel_mismatch', 'comparison_policy_disabled', 'comparison_policy_mode_not_normal',
+    'comparison_experiment_expired', 'comparison_admission_day_changed', 'comparison_daily_attempt_cap'})
 
 
 def _same_day(value, day_kst) -> bool:
@@ -411,9 +412,9 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
         ledger_cost = la.get('cost_usd') if la is not None else None
         if (la is not None and la.get('billing_channel') == 'subscription'
                 and (ledger_state == 'known' or (ledger_state == 'blocked'
-                                                 and la.get('block_reason') not in _SUBSCRIPTION_UNCERTAIN_BLOCKS))):
-            # 구독 전송은 API 지출이 아니다. 완료(known)와 전송 전 차단(blocked)은 비용 None 을 불명으로 세지 않고
-            # 상태·사유·표시 추정비만 따로 남긴다. 전송 뒤 과금 여부가 불확실한 차단은 아래 불명 집계에 그대로 둔다.
+                                                 and la.get('block_reason') in _SUBSCRIPTION_PRE_DISPATCH_BLOCKS))):
+            # 구독 전송은 API 지출이 아니다. 완료(known)와 확인된 전송 전 차단(blocked)은 비용 None 을 불명으로 세지 않고
+            # 상태·사유·표시 추정비만 따로 남긴다. 그 밖의 차단(전송 뒤 불일치·중단·저장 실패)은 아래 불명 집계에 둔다.
             subscription_known.append({'attempt_id': attempt_id, 'state': ledger_state, 'block_reason': la.get('block_reason'),
                                        'subscription_estimated_cost_usd': la.get('subscription_estimated_cost_usd')})
             continue

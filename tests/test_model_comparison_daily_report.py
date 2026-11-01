@@ -294,6 +294,9 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
         # 가드가 전송 전에 거절한 구독 요청(미선언/다른 선언 어댑터): 호출·과금이 없어 불명이 아니다
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch'},
+        # 전송·응답 뒤 저장 실패: 허용 목록 밖 사유는 응답 증거가 없어도 불명으로 남긴다
+        {'attempt_id': 'sub:bear:4', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_storage_unavailable'},
     ]
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts)
     spend = report['spend']
@@ -303,10 +306,10 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
          'subscription_estimated_cost_usd': None},
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'block_reason': 'comparison_adapter_channel_mismatch',
          'subscription_estimated_cost_usd': None}]
-    assert spend['unknown_attempts'] == ['sub:bear:2'] and spend['unaccounted_attempts'] == []
-    assert spend['total_usd'] is None                 # 불확실한 구독 차단 1건이 남아 합계는 미확정
+    assert spend['unknown_attempts'] == ['sub:bear:2', 'sub:bear:4'] and spend['unaccounted_attempts'] == []
+    assert spend['total_usd'] is None                 # 불확실한 구독 차단이 남아 합계는 미확정
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
-                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:])
+                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])
     spend = report['spend']
     assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다
