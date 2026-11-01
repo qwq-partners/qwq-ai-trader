@@ -362,6 +362,7 @@ def test_current_flow_rows_survive_storage_failure_and_recovery_recomputes_ident
     (lambda s: replace(s, bear_api_fallback=bear_controls('subscription', timeout_seconds=11.5)), 'bear_api_fallback'),
     (lambda s: replace(s, bear_api_fallback=bear_controls('api', timeout_seconds=12.0)), 'bear_api_fallback'),
     (lambda s: replace(s, bear_api_fallback=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, None, 11.5)), 'bear_api_fallback'),
+    (lambda s: replace(s, bear_api_fallback=bear_controls('api', timeout_seconds=11.5, max_output_tokens=100)), 'bear_api_fallback'),
     (lambda s: replace(s, bear=bear_controls('api', timeout_seconds=12.0)), 'cli_primary'),
     (lambda s: replace(s, review_policy='something-else'), 'review_policy'),
 ])
@@ -464,7 +465,8 @@ def test_worker_validates_current_profile_at_init_before_any_transport(tmp_path)
     build_current_worker(tmp_path, current_manifest())            # 올바른 프로필은 생성된다
     for i, bad in enumerate((dict(bear_cli_timeout_seconds=6.0), dict(strict_on_disagreement=True),
                              dict(fallback_chain=[dict(model='gpt-5.6-sol', max_output_tokens=100, reasoning_effort=None, temperature=0.3, seed=None, timeout_seconds=10.0)]),
-                             dict(bear_api_fallback=dict(current_manifest()['bear_api_fallback'], billing_channel='subscription')))):
+                             dict(bear_api_fallback=dict(current_manifest()['bear_api_fallback'], billing_channel='subscription')),
+                             dict(bear_api_fallback=dict(current_manifest()['bear_api_fallback'], max_output_tokens=100)))):
         with pytest.raises(ValueError):
             build_current_worker(tmp_path / f'bad{i}', current_manifest(**bad))
     with pytest.raises(ValueError, match='provider_disabled'):

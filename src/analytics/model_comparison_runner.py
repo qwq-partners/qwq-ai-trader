@@ -212,6 +212,7 @@ class PairSpec:
                 raise ValueError('bear_api_fallback_requires_cli_primary_claude_bear')
             if (_provider(bear_api_fallback.model) != LLMProvider.ANTHROPIC or bear_api_fallback.billing_channel != 'api'
                     or bear_api_fallback.model != bear.model or bear_api_fallback.reasoning_effort != 'low'
+                    or bear_api_fallback.max_output_tokens != bear.max_output_tokens      # 운영 대체와 같은 출력 상한
                     or bear_api_fallback.temperature is not None or bear_api_fallback.seed is not None):
                 raise ValueError('bear_api_fallback_controls_invalid')
             if bear_cli_timeout_seconds is None:
