@@ -418,6 +418,11 @@ def build_daily_report(pair_rows: Iterable[Mapping], *, day_kst: str, offered_en
             subscription_known.append({'attempt_id': attempt_id, 'state': ledger_state, 'block_reason': la.get('block_reason'),
                                        'subscription_estimated_cost_usd': la.get('subscription_estimated_cost_usd')})
             continue
+        if la is not None and la.get('billing_channel') == 'subscription':
+            # 구독 채널의 그 밖 상태(전송 뒤 불일치·중단·저장 실패·미확정)는 pair 행의 API 추정액(0 포함)으로 대체하지 않고
+            # 명시적으로 불명이다. 추정액 대체 경로는 유료 채널 전용이다.
+            unknown.append(attempt_id)
+            continue
         estimate = Decimal(str(a['api_cost_usd'])) if a.get('api_cost_usd') is not None and a.get('source') != 'ledger_only' else None
         if estimate is not None:
             estimated += estimate

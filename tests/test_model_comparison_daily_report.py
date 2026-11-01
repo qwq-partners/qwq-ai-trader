@@ -311,6 +311,18 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
                                       ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])
     spend = report['spend']
+    assert spend['unknown_attempts'] == [] and spend['total_usd'] == '0.004'
+    # 같은 ID 가 pair 행(API 추정액 있음)과 원장(구독·전송 뒤 불일치 차단) 양쪽에 있어도 추정액으로 불명을 지우지 않는다.
+    mismatched_pair_bear = [{'attempt_id': 'p:bear:0', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+                             'subscription_estimated_cost_usd': None, 'request_sent': True,
+                             'block_reason': 'comparison_billing_channel_mismatch'}]
+    for bear_cost in ('0.002', '0'):
+        tainted = pair('d1', bear_cost=bear_cost)
+        report = daily.build_daily_report([tainted], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=mismatched_pair_bear)
+        assert report['spend']['unknown_attempts'] == ['p:bear:0'] and report['spend']['total_usd'] is None
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
+                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])
+    spend = report['spend']
     assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다
     assert 'sub:bear:0' in spend['ledger_attempts_outside_pair_rows']
