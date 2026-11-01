@@ -23,5 +23,6 @@
 
 - [x] 합성 검사(`tests/test_model_comparison_wiring.py`, 30검사): import/기본 생성/승인 없음/잘못된 manifest에서 생성·자격·전송 0, 올바른 입력에서 역할·채널·제어가 정확한 어댑터로 전달, 생산자 제어→manifest 동결과 봉투 대조 일치, 실제 `CrossValidator` 발행→attach된 worker→CLI→API→영수증·복구(`inspect_pair`) E2E, owned/공유 전송 종료 경계, 기존 활성화 차단 회귀.
 - [x] 관련 21파일 804 passed(AWS 보조) · Codex 독립 리뷰(요청 gpt-6-astra/high) 1~4회차 P1 2·P2 4 전부 반영 → 5회차(57c710bb) **P0/P1/P2 0**.
-- [ ] 실제 WSL 직렬 전체 → 커밋/푸시·PR·필수 CI. 결과는 원장.
-- [ ] See: 원장·CHANGELOG·검토 문서. 실호출 인수안(승인 범위·호출 횟수/비용 상한·시한·중단 조건)은 준비만 한다.
+- [x] AWS 보조 직렬 전체(fe5639b7): 10,335 passed / 2 skipped / 2 xfailed·rc0·격리0 — 사용자 WSL을 대신하지 않는다.
+- [x] 실제 WSL 직렬 전체(fe5639b7/tree ee6567aa, bundle 전달·미푸시): 10,335 passed / 2 skipped / 2 xfailed·423.4초·rc0·격리0 → 커밋/푸시·PR(필수 verify는 PR 영수증).
+- [x] See: 원장·CHANGELOG·검토 문서. 실호출 인수안(승인 범위·호출 횟수/비용 상한·시한·중단 조건)은 원장에 준비만 했다.
