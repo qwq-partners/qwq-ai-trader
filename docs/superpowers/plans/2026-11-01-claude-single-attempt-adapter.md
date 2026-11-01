@@ -20,7 +20,7 @@
 - 정산: 구독은 `settlement=subscription`·`actual_cost_usd=None`·`cost_basis=subscription_not_api_billed`, CLI 표시 추정비는 value `subscription_estimated_cost_usd`로만 남긴다. API는 `SingleAttemptAdapter`와 같은 규칙(미전송 0·생성 전 거절 추론 0/released·신원 검증+사용량 확인 시 가격표·그 밖은 None→unknown 예약).
 - 응답 상태: `success`는 전송 성공과 신원 `verified`가 함께일 때만. `transport_error_kind`·`refusal_detected`·`model_identity_status`·`request_sent`·`http_status`를 그대로 보존하고 `effective_reasoning_effort=None`으로 요청 effort와 구분한다. 취소는 원형 전파(가드가 `dispatch_entered` 상태로 남김).
 - runner: `PairedComparisonRunner(claude_adapter=…)` 선택 주입, Claude 역할은 `_dispatch_for`로 그 어댑터에만 간다. 없으면 `claim`·슬롯 소비 전에 `claude_adapter_required`. 구독 시도는 `_sum_cost`에서 제외하고 arm 사유 `subscription_attempt_cost_not_api_billed`, 행 `subscription_attempts`(구독 시도가 있을 때만)로 구분한다(불명이 아니다).
-- 리뷰 반영(복구 계약): 어댑터 value에 러너 예외 필드 `error`를 넣지 않는다(전송 실패는 `transport_error_kind`). 러너 `_failure`와 복구 `_verify_attempt`는 같은 규칙으로 미전송을 판정한다 — 슬롯 blocked·토큰 없음·가드 `dispatch_entered=False`일 때만 0원, 구독 채널 실패는 `billing_channel`을 보존해 전송 불명/API 비용 해당 없음으로 남긴다. `PairSpec.snapshot()`은 Claude용 새 필드가 기본값이면 생략해 역사적 GPT/Gemini manifest·행을 바이트 동일하게 유지한다.
+- 리뷰 반영(복구 계약): 어댑터 value에 러너 예외 필드 `error`를 넣지 않는다(전송 실패는 `transport_error_kind`). 러너 `_failure`와 복구 `_verify_attempt`는 같은 규칙으로 미전송을 판정한다 — 슬롯 blocked·토큰 없음·가드 `dispatch_entered`가 True가 아닐 때(슬롯 blocked의 False, 슬롯 없는 일일 한도 차단의 None)만 0원, 구독 채널 실패는 `billing_channel`을 보존해 전송 불명/API 비용 해당 없음으로 남긴다. `PairSpec.snapshot()`은 Claude용 새 필드가 기본값이면 생략해 역사적 GPT/Gemini manifest·행을 바이트 동일하게 유지한다.
 
 ## 순서와 수락 기준
 

@@ -450,10 +450,11 @@ class PairedComparisonRunner:
 
     def _failure(self, attempt_id, requested_model, error):
         record = self.guard.lookup(attempt_id)
-        # Only a persisted pre-dispatch block (slot state blocked, dispatch never entered) without a reservation proves
-        # zero. 구독 시도는 토큰이 없어도 전송 뒤 중단될 수 있으므로 가드의 dispatch_entered 를 함께 본다(복구와 같은 규칙).
+        # Only a persisted pre-dispatch block without a reservation proves zero: slot state blocked(dispatch_entered False)
+        # 또는 슬롯조차 없는 일일 한도 차단(dispatch_entered None). 전송에 진입한 뒤 중단(True)은 구독 시도처럼 토큰이
+        # 없어도 미전송이 아니다 — 복구 _verify_attempt 와 같은 규칙.
         not_sent = bool(record and record.get('state') == 'blocked' and record.get('reservation_token') is None
-                        and record.get('dispatch_entered') is False)
+                        and record.get('dispatch_entered') is not True)
         return failed_attempt_value(record.get('result') if record else None, not_sent=not_sent,
                                     requested_model=requested_model, error=error,
                                     billing_channel=record.get('billing_channel') if record else None)

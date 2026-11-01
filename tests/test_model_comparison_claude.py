@@ -459,3 +459,31 @@ def test_claude_pair_row_survives_storage_failure_and_recovery_recomputes_identi
     bear = [a for a in attempts.values() if a['role'] == 'bear'][0]
     assert bear['billing_channel'] == ('api' if api else 'subscription') and 'error' not in bear
     assert bear['success'] is (case == 'ok')
+
+
+def test_daily_attempt_cap_block_without_slot_is_still_proven_not_sent_for_both_channels(tmp_path):
+    from src.analytics import model_comparison_recovery as recovery
+    ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
+    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
+        experiment_id='C', daily_attempt_cap=1, allowed_models=('gpt-5-mini', CLAUDE), max_output_tokens=400,
+        experiment_usd_ceiling='100', valid_from='2026-01-01', valid_until='2027-12-31',
+        pairs_per_day=20, max_common_context_bytes=65536))
+    op, ge, client = FakeOpenAI(), FakeGemini(), FakeCLI()
+    runner = m.PairedComparisonRunner(guard=guard, adapter=m.SingleAttemptAdapter(openai=op, gemini=ge, clock=lambda: NOW),
+                                      claude_adapter=ClaudeSingleAttemptAdapter(client, clock=lambda: NOW), clock=lambda: NOW)
+    spec = m.PairSpec(decision_id='decision-cap', signal_id='signal-1', symbol='005490',
+                      common_context='same immutable facts', input_available_at=NOW.isoformat(),
+                      current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803),
+                      candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803),
+                      bear=bear_controls(), bear_empty_retries=0, neutral_sizing=None, pricing_basis='offline_replay',
+                      fixed_at=NOW.isoformat(), strict_on_disagreement=True, fallback_chain_timeout_seconds=10.0)
+    row = asyncio.run(runner.run(spec))
+    attempts = recovery._row_attempts(row, row['pair_id'])
+    capped = [a for a in attempts.values() if a.get('error') == 'comparison_daily_attempt_cap']
+    assert len(capped) == 2 and len(op.calls) + len(client.calls) == 1       # 한도 1: 첫 시도만 전송
+    for attempt in capped:
+        record = guard.lookup(attempt['attempt_id'])
+        assert record['dispatch_entered'] is None and record['state'] == 'blocked'  # 슬롯 없는 전송 전 차단
+        assert (attempt['api_cost_usd'], attempt['request_sent']) == ('0', False)
+        recovery._verify_attempt(guard, spec.snapshot(), row['pair_id'], attempt)
+    assert ledger.status()['unresolved_count'] == 0
