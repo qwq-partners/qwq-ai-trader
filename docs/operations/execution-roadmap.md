@@ -19,6 +19,8 @@
 
 **See/AWS 보조 전체 검증:** 리뷰 반영 1차 tree `ce9b376c`(HEAD 03ee9b69)에서 정본 `QWQ_VERIFY_PYTHON=…/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행했다 — **10,198 passed / 2 skipped / 2 xfailed**, 검사844.31초·rc0·격리0·문법/비밀정보 PASS(AWS 개발 worktree, 사용자 WSL 아님). Codex 재리뷰(요청 gpt-6-astra/high)는 **P1 1·P2 1**: 채널을 선언하지 않은 콜백에 구독 요청을 연결하면 예약 없는 유료 호출이 가능하다는 지적과, 전송 전 차단된 구독 시도가 보고에서 API 비용 불명으로 집계된다는 지적. 반영: 구독 요청은 어댑터의 **명시 `billing_channel="subscription"` 선언**이 없으면 전송 전에 거절하고(유료 요청의 미선언 콜백은 기존 계약 유지), 일별 보고는 완료·전송 전 차단 구독 시도를 상태·사유와 함께 `subscription_attempts`로 적고 전송 뒤 과금 여부가 불확실한 차단(`comparison_billing_channel_mismatch` 등)만 불명에 남긴다. 관련 12파일 **463 passed**·격리0. 최종 tree의 Codex 재리뷰·AWS 전체·실제 WSL 결과는 아래에 적는다.
 
+**See/Codex 3차:** tree `92176560`(HEAD bd45f038) 재리뷰(요청 gpt-6-astra/high)는 **P0/P1 0·P2 1** — 전송 전 거절과 전송 뒤 정산 불일치가 같은 사유라 보고서가 전송 전 거절도 과금 불확실로 센다는 지적. 반영: 전송 전 거절은 `comparison_adapter_channel_mismatch`로 사유를 분리해 보고의 구독 목록에 남기고, 전송 뒤 `comparison_billing_channel_mismatch`만 불명에 둔다.
+
 **See/최종 검증:** (최종 tree의 Codex 재리뷰·AWS 직렬 전체·실제 WSL 결과를 이 절에 갱신한다.)
 
 **운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 자연 보고 수락은 별도다.

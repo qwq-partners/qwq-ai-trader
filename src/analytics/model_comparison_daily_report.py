@@ -28,6 +28,7 @@ STOP_REASONS = frozenset({
 
 
 # 구독 시도가 전송 뒤에 받는 차단 사유 — 어댑터가 API 비용을 보고했거나 중단돼 실제 과금 여부를 모른다.
+# 전송 전 거절(comparison_adapter_channel_mismatch 등 나머지 사유)은 호출·과금이 없어 구독 목록에 남긴다.
 _SUBSCRIPTION_UNCERTAIN_BLOCKS = frozenset({'comparison_billing_channel_mismatch', 'comparison_invalid_measured_cost',
                                             'comparison_attempt_interrupted', 'comparison_invalid_result'})
 

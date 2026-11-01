@@ -291,16 +291,22 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
         # 전송 뒤 어댑터가 API 비용을 보고해 차단된 구독 시도: 과금 여부가 불확실하므로 불명으로 남긴다
         {'attempt_id': 'sub:bear:2', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': True, 'block_reason': 'comparison_billing_channel_mismatch'},
+        # 가드가 전송 전에 거절한 구독 요청(미선언/다른 선언 어댑터): 호출·과금이 없어 불명이 아니다
+        {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch'},
     ]
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts)
     spend = report['spend']
     assert spend['subscription_attempts'] == [
         {'attempt_id': 'sub:bear:0', 'state': 'known', 'block_reason': None, 'subscription_estimated_cost_usd': 0.0123},
         {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'block_reason': 'comparison_experiment_expired',
+         'subscription_estimated_cost_usd': None},
+        {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'block_reason': 'comparison_adapter_channel_mismatch',
          'subscription_estimated_cost_usd': None}]
     assert spend['unknown_attempts'] == ['sub:bear:2'] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] is None                 # 불확실한 구독 차단 1건이 남아 합계는 미확정
-    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')], ledger_attempts=ledger_attempts[:2])
+    report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
+                                      ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:])
     spend = report['spend']
     assert spend['unknown_attempts'] == [] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] == '0.004'             # 쌍 행의 API 추정 합(0.001+0.001+0.002)만; 구독 추정비는 더하지 않는다

@@ -548,14 +548,14 @@ class _DeclaredAdapter:
 def test_adapter_declared_channel_is_checked_before_any_dispatch(tmp_path):
     ledger, policy, guard = setup_guard(tmp_path, cap=5)
     api_adapter = _DeclaredAdapter("api", measured())
-    # 구독 요청 → 유료 API 어댑터: 월 예약 없는 과금이 되므로 공급자 호출 0 으로 차단한다.
-    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+    # 구독 요청 → 유료 API 어댑터: 월 예약 없는 과금이 되므로 공급자 호출 0 으로 차단한다(전송 전 사유).
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
         asyncio.run(guard.call(subscription_request(), dispatch=api_adapter, attempt_id="sub-to-api"))
     assert api_adapter.calls == 0
     assert guard.lookup("sub-to-api")["state"] == "blocked"
     # 유료 요청 → 구독 어댑터: 미전송이므로 예약은 not_sent 로 해제되고 불명이 남지 않는다.
     sub_adapter = _DeclaredAdapter("subscription", subscription_result())
-    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
         asyncio.run(guard.call(request(), dispatch=sub_adapter, attempt_id="api-to-sub"))
     assert sub_adapter.calls == 0
     status = ledger.status()
@@ -601,11 +601,12 @@ def test_subscription_request_requires_declared_subscription_adapter(tmp_path):
         calls.append(req.billing_channel)
         return measured()
 
-    with pytest.raises(BudgetBlocked, match="comparison_billing_channel_mismatch"):
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
         asyncio.run(guard.call(subscription_request(), dispatch=undeclared, attempt_id="sub-undeclared"))
     assert calls == []
     record = guard.lookup("sub-undeclared")
     assert (record["state"], record["reservation_token"], record["billing_channel"]) == ("blocked", None, "subscription")
+    assert record["block_reason"] == "comparison_adapter_channel_mismatch"      # 전송 전 사유 — 보고서가 과금 불명으로 세지 않는다
     with sqlite3.connect(ledger.path) as db:
         assert db.execute("SELECT COUNT(*) FROM reservations").fetchone()[0] == 0
     # 유료 요청의 미선언 콜백은 기존 계약대로 허용된다.
