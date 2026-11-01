@@ -9,6 +9,7 @@ worker 연결은 이 모듈 밖이다. import·생성만으로는 자격을 읽�
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -20,6 +21,11 @@ from ..utils.llm_pricing import rate_quote
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+# 호출자(러너 Bear 체인)가 고정한 절대 monotonic 시한 상한. 가드 입장·월 예약에 걸린 시간이 요청의 상대 시한에 더해져
+# Bear 내부 예산을 넘기지 않도록 전송 직전 min(상대 시한, 상한)을 적용한다. 설정되지 않으면 상대 시한만 쓴다.
+DEADLINE_AT: contextvars.ContextVar = contextvars.ContextVar('qwq_comparison_deadline_at', default=None)
 
 
 class ClaudeSingleAttemptAdapter:
@@ -45,10 +51,14 @@ class ClaudeSingleAttemptAdapter:
         loop = asyncio.get_running_loop()
         start = self.clock()
         # 호출자 시한만 전달한다. 전송은 자기 자식 프로세스/요청만 정리하며 시한·토큰 상한을 늘리지 않는다.
+        deadline = loop.time() + request.timeout_seconds
+        cap = DEADLINE_AT.get()
+        if cap is not None:
+            deadline = min(deadline, cap)      # 절대 상한이 이미 지났으면 전송은 미전송 timeout 으로 끝난다
         response = await self.client.complete(
             request.prompt, system=request.system, model=request.model,
             max_tokens=request.max_output_tokens, reasoning_effort=request.reasoning_effort,
-            deadline=loop.time() + request.timeout_seconds)
+            deadline=deadline)
         end = self.clock()
         if not isinstance(response, LLMResponse):
             raise ValueError('invalid_provider_response')

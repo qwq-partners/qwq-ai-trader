@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-01 — E04 현행 독립 검토 판정·Bear CLI→API 상위 비교 흐름 (PR #325 후속, worker 비활성)
+
+- `PairSpec.review_policy`(`legacy-single-opinion-v1` 기본 | `entry-independent-review-v1`), `bear_internal_timeout_seconds`, `bear_cli_timeout_seconds`, `bear_api_fallback`(명시 API 채널 Claude 제어)을 추가했다. 기본값은 스냅샷에서 생략해 역사적 GPT/Gemini manifest·행은 바이트 동일하다. 프로필 규칙은 `PairSpec.validate_profile`로 분리해 worker init이 같은 검사를 쓴다.
+- 현행 정책 arm: 양쪽 신원 인증(요청 모델 정확 일치 또는 계약 v2 공식 snapshot)된 성공 의견이 있어야 approve/reject(strict False), 아니면 `hold`. 파싱 의견만의 `policy_verdict`와 근거까지 본 `verdict`를 분리하고 단일 모델 폴백 체인을 금지하며 hold는 sizing 재생을 하지 않는다(`unavailable_policy=hold_blocks_entry`). 레거시 arm 형식·의미는 그대로다. `report_pairs` 요약에 `hold` 계수를 더했다.
+- 러너 `_bear_role`: CLI 단일 시도(`pair:bear:0`, 시한 ≤ min(8, 내부/2)) 뒤 운영 `complete_with`와 같은 허용 실패 종류(`cli_unavailable/cli_timeout/cli_rate_limited/cli_auth_unavailable/cli_incomplete`)에서만 내부 예산의 **남은 시간**으로 API 단일 시도 1회(`pair:bear:1`). 거절·신원 불일치·정책 위반·가드 차단·취소·시한 소진은 API 0회. 각 시도는 가드 1회 호출·별도 영수증이고 최종 Bear 의견은 마지막 시도 1회만 계수한다. 채널별 Claude 어댑터(`claude_adapter`/`claude_api_adapter`)는 claim 전에 확인한다.
+- worker: 새 프로필 키가 있는 manifest를 init에서 검증하고 `_spec`에 전달하며, 현행 프로필이면 봉투를 생산자 `operating_role_controls()` 계약(Bull/Bear 제어 채널 제외·공통 재시도/strict·Bear 재시도/내부 시한/전송 순서, 레거시 폴백 체인 제외)으로 대조한다. `_raw_clients()`/`install_from_env` 활성화 거부·R1 OFF·Gemini 차단·설정·매수 중지는 불변이며 실제 CLI/API 호출은 없다.
+- 검증·독립 리뷰·실제 WSL·PR 상태는 [원장](docs/operations/execution-roadmap.md#e04-current-flow-20261101) · [계획](docs/superpowers/plans/2026-11-01-current-review-flow.md) · [검토](docs/reviews/engine-comparison-contract-2026-11-01.md#current-flow).
+
 ## 2026-11-01 — E04 Claude 단일 시도 어댑터 (PR #324 병합 후속, 운영 비활성)
 
 - PR #324는 이미 main `6261c323`에 병합됐고 main CI run41299009048 10,200 passed / 2 skipped / 2 xfailed를 확인했다(반복 병합 없음). 운영 재배포 없음.
