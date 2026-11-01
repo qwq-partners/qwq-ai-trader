@@ -57,6 +57,8 @@ def _provider(model):
         return LLMProvider.OPENAI
     if model.startswith('gemini-'):
         return LLMProvider.GEMINI
+    if model.startswith('claude-'):
+        return LLMProvider.ANTHROPIC
     raise ValueError('unsupported_provider_model')
 
 
@@ -65,14 +67,25 @@ class RoleControls:
     model: str
     max_output_tokens: int
     reasoning_effort: str | None = None
-    temperature: float = 0.3
+    temperature: float | None = 0.3     # Claude 역할만 None(전송 미지원 → 요청에서 제외). GPT/Gemini 는 숫자 필수.
     seed: int | None = None
     timeout_seconds: float = 12.0
+    # subscription 은 Claude CLI 전송만 선언한다. 기존 GPT/Gemini 역할·역사적 manifest 는 기본 api 그대로다.
+    billing_channel: str = 'api'
 
     def request(self, prompt, system):
         request = ComparisonRequest(prompt=prompt, system=system, **asdict(self))
-        _validate_controls(self.model, _provider(self.model),
-                           {'reasoning_effort': self.reasoning_effort, 'seed': self.seed})
+        provider = _provider(self.model)
+        if provider == LLMProvider.ANTHROPIC:
+            # 운영 entry Bear 와 같은 Claude 역할 제어(low effort·temperature/seed 없음). Team Bear 의 제어는 여기 없다.
+            if self.reasoning_effort != 'low' or self.temperature is not None or self.seed is not None:
+                raise ValueError('claude_controls_require_low_effort_without_temperature_or_seed')
+            return request
+        if self.billing_channel != 'api':
+            raise ValueError('subscription_requires_claude_cli_role')
+        if self.temperature is None:
+            raise ValueError('temperature_required_for_openai_gemini_role')
+        _validate_controls(self.model, provider, {'reasoning_effort': self.reasoning_effort, 'seed': self.seed})
         return request
 
 
@@ -98,6 +111,8 @@ class PairSpec:
     fallback_system: str = ''
     fallback_chain: tuple[RoleControls, ...] = ()
     empty_retries: int = 1
+    # None: 공통 Bear 도 empty_retries 를 따른다(역사적 GPT/Gemini 쌍). Claude Bear 는 운영 entry Bear 처럼 0 을 명시한다.
+    bear_empty_retries: int | None = None
     horizon_seconds: int = 900
     max_input_age_seconds: float = 5.0
     # v2: 평가 기준시각. live 는 공통 입력 구성 시각(input_available_at)+horizon 이다(연구 계약).
@@ -117,6 +132,9 @@ class PairSpec:
         _time(self.fixed_at)
         if type(self.strict_on_disagreement) is not bool or type(self.empty_retries) is not int or not 0 <= self.empty_retries <= 1:
             raise ValueError('invalid_aggregation_policy')
+        if self.bear_empty_retries is not None and (type(self.bear_empty_retries) is not int
+                                                    or not 0 <= self.bear_empty_retries <= 1):
+            raise ValueError('invalid_aggregation_policy')
         if type(self.horizon_seconds) is not int or not 0 < self.horizon_seconds <= 86400:
             raise ValueError('invalid_horizon')
         _positive(self.max_input_age_seconds, 'max_input_age_seconds')
@@ -135,8 +153,14 @@ class PairSpec:
                 raise ValueError('live_provenance_unattested')
         if not all(isinstance(c, RoleControls) for c in (self.current, self.candidate, self.bear)):
             raise ValueError('explicit_role_controls_required')
-        if _provider(self.current.model) != LLMProvider.OPENAI or _provider(self.candidate.model) != LLMProvider.OPENAI or _provider(self.bear.model) != LLMProvider.GEMINI:
+        # Bull 두 arm 은 OpenAI, Bear 는 Gemini(역사적 쌍) 또는 Claude(현행 entry Bear). 명시 폴백 체인의 공급자는
+        # 역사적 의미 그대로(OpenAI/Gemini)이며 Claude 만 제외한다 — CLI→API 대체는 상위 흐름의 몫이다.
+        if (_provider(self.current.model) != LLMProvider.OPENAI or _provider(self.candidate.model) != LLMProvider.OPENAI
+                or _provider(self.bear.model) not in (LLMProvider.GEMINI, LLMProvider.ANTHROPIC)
+                or any(_provider(c.model) == LLMProvider.ANTHROPIC for c in self.fallback_chain)):
             raise ValueError('role_provider_mismatch')
+        if _provider(self.bear.model) == LLMProvider.ANTHROPIC and self.bear_empty_retries != 0:
+            raise ValueError('claude_bear_empty_retries_must_be_zero')
         changed = {k for k in asdict(self.current) if getattr(self.current, k) != getattr(self.candidate, k)}
         if len(changed) != 1 or not changed <= {'model', 'reasoning_effort', 'max_output_tokens'}:
             raise ValueError('one_comparison_variable_required')
@@ -173,6 +197,10 @@ class SingleAttemptAdapter:
             # 구독 요청은 월 예약이 없으므로 이 어댑터가 호출하면 예약 없는 과금이 된다. 공급자 호출 전에 거절한다.
             raise ValueError('api_adapter_requires_api_billing_channel')
         provider = _provider(request.model)
+        if provider not in (LLMProvider.OPENAI, LLMProvider.GEMINI):
+            raise ValueError('unsupported_provider_model')      # Claude 는 ClaudeSingleAttemptAdapter 가 맡는다
+        if request.temperature is None:
+            raise ValueError('temperature_required_for_openai_gemini_role')
         _validate_controls(request.model, provider, {'reasoning_effort': request.reasoning_effort, 'seed': request.seed})
         client = self.openai if provider == LLMProvider.OPENAI else self.gemini
         start = self.clock()
@@ -220,7 +248,8 @@ class SingleAttemptAdapter:
 
 
 def _sum_cost(attempts):
-    values = [a.get('api_cost_usd') for a in attempts]
+    """API 채널 시도만 합산한다. 구독 전송은 API 청구 대상이 아니라 None 도 0 도 아닌 '해당 없음' 이다(별도 사유로 표시)."""
+    values = [a.get('api_cost_usd') for a in attempts if a.get('billing_channel') != 'subscription']
     return None if any(v is None for v in values) else str(sum((Decimal(v) for v in values), Decimal('0')))
 
 
@@ -271,6 +300,7 @@ def finalize_row(pair_id, snapshot, requested_at, current, candidate):
            'actual_provider_attempts': sum(att.get('request_sent') is True for att in unique.values()),
            'unknown_transmission_attempts': sum(att.get('request_sent') is None for att in unique.values()),
            'admitted_attempts': len(unique), 'total_comparison_cost_usd': _sum_cost(list(unique.values())),
+           'subscription_attempts': sum(att.get('billing_channel') == 'subscription' for att in unique.values()),
            'economic_evaluable': False, 'net_delta_krw': None, 'actual_execution': False,
            'reasons': ['downstream_admission_not_replayed', 'continuous_session_not_certified']}
     if snapshot['pricing_basis'] != 'paired_live_shadow':
@@ -285,10 +315,18 @@ class PairedComparisonRunner:
     individual durable attempts are inspectable via guard.lookup, never resent.
     This conservative boundary does not repair ambiguous crash outcomes.
     """
-    def __init__(self, *, guard: ComparisonCallGuard, adapter: SingleAttemptAdapter, clock=_now):
+    def __init__(self, *, guard: ComparisonCallGuard, adapter: SingleAttemptAdapter, clock=_now, claude_adapter=None):
         if not isinstance(guard, ComparisonCallGuard) or not isinstance(adapter, SingleAttemptAdapter):
             raise ValueError('explicit_guard_and_single_attempt_adapter_required')
+        if claude_adapter is not None:
+            from .model_comparison_claude import ClaudeSingleAttemptAdapter
+            if not isinstance(claude_adapter, ClaudeSingleAttemptAdapter):
+                raise ValueError('claude_single_attempt_adapter_required')
         self.guard, self.adapter, self.clock = guard, adapter, clock
+        self.claude_adapter = claude_adapter     # Claude Bear 전용 단일 시도 전송. 없으면 Claude 역할은 claim 전에 거절.
+
+    def _dispatch_for(self, model):
+        return self.claude_adapter if _provider(model) == LLMProvider.ANTHROPIC else self.adapter
 
     def pair_id(self, decision_id) -> str:
         return hashlib.sha256(_json([self.guard.policy.experiment_id, decision_id]).encode()).hexdigest()
@@ -385,7 +423,7 @@ class PairedComparisonRunner:
         attempt_id = f'{pair_id}:{role}:{index}'
         req = controls.request(prompt, system)
         try:
-            result = await self.guard.call(req, dispatch=self.adapter, attempt_id=attempt_id)
+            result = await self.guard.call(req, dispatch=self._dispatch_for(req.model), attempt_id=attempt_id)
             value = dict(result.value)
         except asyncio.CancelledError:
             raise
@@ -492,6 +530,8 @@ class PairedComparisonRunner:
             reasons.append('resolved_model_unverified_or_mismatch')
         if any(a.get('ledger_state') == 'pending_reconciliation' for a in attempts):
             reasons.append('budget_reconciliation_pending')
+        if any(a.get('billing_channel') == 'subscription' for a in attempts):
+            reasons.append('subscription_attempt_cost_not_api_billed')   # 구독 표시 추정비는 attempts 의 값으로만 남는다
         if _sum_cost(attempts) is None:
             reasons.append('api_cost_unknown')
         if not all(a.get('timing_valid') is True for a in attempts):
@@ -507,6 +547,8 @@ class PairedComparisonRunner:
         if not isinstance(spec, PairSpec):
             raise ValueError('PairSpec_required')
         spec.validate()
+        if _provider(spec.bear.model) == LLMProvider.ANTHROPIC and self.claude_adapter is None:
+            raise ValueError('claude_adapter_required')      # claim·슬롯 소비 전에 거절한다
         for control in (spec.current, spec.candidate, spec.bear, *spec.fallback_chain):
             if control.model not in self.guard.policy.allowed_models:
                 raise BudgetBlocked('comparison_model_not_allowed')
@@ -521,7 +563,8 @@ class PairedComparisonRunner:
             return cached
         tasks = []
         try:
-            bear = asyncio.create_task(self._role(pair_id, 'bear', spec.bear, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM, spec.empty_retries))
+            bear_retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
+            bear = asyncio.create_task(self._role(pair_id, 'bear', spec.bear, spec.common_context + BEAR_SUFFIX, BEAR_SYSTEM, bear_retries))
             tasks.append(bear)
             current = asyncio.create_task(self._arm(pair_id, 'current', spec.current, spec, bear))
             candidate = asyncio.create_task(self._arm(pair_id, 'candidate', spec.candidate, spec, bear))

@@ -1,5 +1,20 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-claude-adapter-20261101"></a>
+### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증 DONE · 독립 리뷰/실제 WSL/PR은 아래 See)
+
+**Plan:** 사용자 “PR #324의 HEAD·필수 CI·리뷰 영수증을 확인하고 문제가 없으면 병합. 다음 단위 E04-CLAUDE-ADAPTER의 최소 소스 구현. 독립 리뷰·실제 WSL 검증·커밋/푸시·PR 작성까지 완료.” [실행 계획](../superpowers/plans/2026-11-01-claude-single-attempt-adapter.md). 11/1 20:25 KST 확인: 운영 checkout `cfc9bc20`(detached)·미커밋 `config/evolved_overrides.yml`만·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재·서비스 active. 같은 요청의 선행 작업으로 운영 Anthropic API 키 파일(`~/.config/qwq-ai-trader/anthropic-api-key`, 600)을 사용자 제공 값으로 교체했다(이전 파일은 같은 디렉터리에 600 백업, 지연 읽기라 재시작 불필요, 값은 기록하지 않음). 개발은 별도 worktree의 `feature/e04-claude-adapter-20261101`(기준 main `6261c323`)에서 한다.
+
+**PR #324 대조:** 인계 보고의 OPEN 상태와 달리 이미 11/1 19:47:19 KST merge commit으로 병합돼 있었다(main `6261c32344159a0909e42f46537017e35dc7f7d8`, 최종 HEAD `4eb3266c`, 비공개 영수증 `~/.local/state/qwq-task-audit/20261101/e04-guard-billing/pr324-merge.json`의 PR tree=main tree `4acec758`). main CI run41299009048 **10,200 passed / 2 skipped / 2 xfailed**를 `gh run list`로 재확인했고 병합·전체 검사를 반복하지 않았다. 오프라인 도구 병합이므로 운영 재배포는 없다.
+
+**경계 확인:** `ComparisonCallGuard.call`은 어댑터 선언 채널을 전송 전에 대조하고 구독은 월 `reserve` 없이 일 슬롯·지문만 소비한다(E04-GUARD-BILLING). `SingleAttemptAdapter`는 raw OpenAI/Gemini만, `PairSpec`은 Bear=Gemini·temperature 숫자 고정, `_provider`는 gpt-/gemini-만 안다. `ClaudeCLIClient`/`AnthropicAPIClient`는 각각 단일 전송(CLI `CLAUDE_CODE_MAX_RETRIES=0`·`--max-turns 1`·`start_new_session`+자기 그룹만 `killpg`, API 단일 POST·`trust_env=False`·aiohttp 재시도 없음)이며 신원 불일치·거절·불완전 출력·인증 실패를 `transport_error_kind`로 분류하고 키 파일은 호출 시 fd 검사로 읽는다. `LLMManager.complete_with`가 CLI 시한 `min(8, total/2)`·API 대체 1회·쿨다운·월 예약을 소유하므로 감싸면 이중 예약·숨은 대체가 된다. worker `_raw_clients()`는 `provider_disabled`로 활성화를 거부한다.
+
+**Do:** [계획](../superpowers/plans/2026-11-01-claude-single-attempt-adapter.md) 설계대로 `src/analytics/model_comparison_claude.py`(`ClaudeSingleAttemptAdapter`)를 추가하고 `model_comparison_runner.py`(`_provider` claude-, `RoleControls.billing_channel`/`temperature=None`, `PairSpec.bear_empty_retries`, Bear만 Claude, `claude_adapter` 주입·`_dispatch_for`, `_sum_cost` 구독 제외·`subscription_attempts`·arm 사유, `SingleAttemptAdapter`의 Claude/temperature None 거절)와 `model_comparison_execution.py`(`ComparisonRequest.temperature` None 허용)를 최소로 바꿨다. 정책 `adapter_contract` v2·기존 요청 지문·역사적 GPT/Gemini manifest 의미(기본 api·폴백 체인 공급자)·worker·R1/Gemini·주문·예약은 변경하지 않았다. 구현 중 두 번 과잉 변경을 되돌렸다: 폴백 체인을 OpenAI 전용으로 막은 규칙은 역사적 Gemini 폴백 manifest를 깨뜨려 Claude만 제외로 완화했고, 러너 `_stamp`에 `billing_channel`을 덧붙인 것은 복구 `_verify_attempt`의 저장 원본 대조를 깨뜨려 제거했다(채널은 어댑터 value와 가드 `lookup`에 이미 있다).
+
+**See/합성 검사(AWS 보조):** 새 `tests/test_model_comparison_claude.py` 44검사 — 어댑터·가드 양쪽의 채널 불일치 전송 전 차단(`claude_adapter_billing_channel_mismatch`/`comparison_adapter_channel_mismatch`, 호출 0·예약 released/없음), dispatch 1회·같은 ID 복구 재전송 0, CLI 경로 `reservations` 0행·spent 0·`day_attempts` 구독 known/비용 None/표시 추정비, API 경로 가드 예약 1회·어댑터 단독 예약 0·가격표 일치, 전송 인자(모델·low·출력 상한·호출자 시한 이내·temperature/seed 미전달), 정상/신원 불일치/거절/불완전/timeout/미전송/생성 전 거절/취소의 상태·비용 결측 보존(유료 전송 뒤 불명은 기존 계약대로 unknown 예약), 실제 전송 클래스의 무자격 미전송(CLI disabled·키 파일 부재 → 호출 0), Claude Bear 쌍의 Bear 1회 dispatch·GPT 2예약·`subscription_attempts`·`api_cost_unknown` 아님, 빈 응답 재시도 0·timeout Bear의 known/미차단, PairSpec Claude 규칙 10종·역사적 Gemini 쌍 보존·어댑터 없는 러너의 claim 전 거절, worker 활성화 거부. 관련 19파일(execution/boundaries/admission/recovery/daily_report/runner/worker/lifecycle/contract/input/incomplete/diagnostics/e2e/claude_transport/claude_engine_contract/claude_manager_routing/claude_review_consumers 포함) **713 passed**·격리 0(AWS 개발 worktree, venv pytest). 전체 직렬·실제 WSL은 아래에 기록한다.
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/실제 CLI·API 호출/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. E02-RR/E01은 새 유효 입력이 생길 때 판독하며 이번 턴에는 조회하지 않았다(마지막 경계 17:42:10 KST 유지). T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 07:40 자연 보고 수락은 별도다.
+
 <a id="e04-guard-billing-20261101"></a>
 ### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합·구현·독립 리뷰·AWS/실제 WSL 전체 검증 DONE · PR 대기)
 
