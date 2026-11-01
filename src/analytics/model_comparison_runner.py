@@ -267,8 +267,9 @@ class SingleAttemptAdapter:
     """
     billing_channel = 'api'   # 유료 API 전송만 한다. 가드가 전송 전에 요청 채널과 대조한다.
 
-    def __init__(self, *, openai: OpenAIClient, gemini: GeminiClient, clock=_now):
-        if not isinstance(openai, OpenAIClient) or not isinstance(gemini, GeminiClient):
+    def __init__(self, *, openai: OpenAIClient, gemini: GeminiClient | None, clock=_now):
+        # gemini=None: Gemini 전송을 조립하지 않은 현행 GPT/Claude 흐름. Gemini 요청은 전송 전에 거절된다(인스턴스 생성 없음).
+        if not isinstance(openai, OpenAIClient) or (gemini is not None and not isinstance(gemini, GeminiClient)):
             raise ValueError('raw_provider_clients_required; LLMManager forbidden')
         self.openai, self.gemini, self.clock = openai, gemini, clock
 
@@ -279,6 +280,8 @@ class SingleAttemptAdapter:
         provider = _provider(request.model)
         if provider not in (LLMProvider.OPENAI, LLMProvider.GEMINI):
             raise ValueError('unsupported_provider_model')      # Claude 는 ClaudeSingleAttemptAdapter 가 맡는다
+        if provider == LLMProvider.GEMINI and self.gemini is None:
+            raise ValueError('provider_disabled: gemini transport not assembled')
         if request.temperature is None:
             raise ValueError('temperature_required_for_openai_gemini_role')
         _validate_controls(request.model, provider, {'reasoning_effort': request.reasoning_effort, 'seed': request.seed})

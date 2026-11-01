@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-02 — E04 worker 클라이언트 조립 경로·생산자 현행 프로필 발행 (PR #326 후속, 운영 worker/R1 OFF)
+
+- 새 `src/analytics/model_comparison_wiring.py`: `ComparisonTransports`(호출자가 만든 raw OpenAI/Claude CLI/Anthropic API 전송과 소유권 플래그), `ComparisonActivationApproval`(실험 ID·동결 manifest sha256·KST 날짜 창·전송 집합·승인자 — 파일/환경변수에서 자동 생성 없음), `current_profile_manifest`(생산자 `operating_role_controls`에서 현행 GPT/Claude 프로필 manifest를 동결: 요청 모델만, CLI 시한 `min(8, 내부/2)`, API 대체 채널 api, 기본 `enabled=False`, `validate_profile` 검사), `build_comparison_runner`(Gemini 인스턴스 없이 현행 흐름 조립), `assemble_comparison_worker`(승인·지문·날짜·전송 집합이 전부 맞을 때만 worker 조립·시작·attach, 실패는 소유권 이전 전).
+- `SingleAttemptAdapter(gemini=None)` 허용(Gemini 요청은 전송 전 `provider_disabled`), worker `_owned_transports`(공유 전송은 stop 때 닫지 않음). `install_from_env`/`_raw_clients`의 무조건 거부·R1 OFF·Gemini 차단·설정·매수 중지는 불변이며 실제 CLI/API 호출은 없다.
+- 합성 E2E: 실제 `CrossValidator._offer_comparison` 발행 → 조립된 worker 수락 → Bull 2·CLI 1(허용 실패)·API 1 → 가드 예약 3(구독 0) → `inspect_pair` 복구·동일 봉투 재실행 재전송 0. [원장](docs/operations/execution-roadmap.md#e04-worker-wiring-20261102) · [계획](docs/superpowers/plans/2026-11-02-worker-wiring.md) · [검토](docs/reviews/engine-comparison-contract-2026-11-01.md#worker-wiring).
+
 ## 2026-11-01 — E04 현행 독립 검토 판정·Bear CLI→API 상위 비교 흐름 (PR #325 후속, worker 비활성)
 
 - `PairSpec.review_policy`(`legacy-single-opinion-v1` 기본 | `entry-independent-review-v1`), `bear_internal_timeout_seconds`, `bear_cli_timeout_seconds`, `bear_api_fallback`(명시 API 채널 Claude 제어)을 추가했다. 기본값은 스냅샷에서 생략해 역사적 GPT/Gemini manifest·행은 바이트 동일하다. 프로필 규칙은 `PairSpec.validate_profile`로 분리해 worker init이 같은 검사를 쓴다.

@@ -1,5 +1,18 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-worker-wiring-20261102"></a>
+### E04-WORKER-WIRING — worker 클라이언트 조립 경로·생산자 현행 프로필 발행 (구현 진행 · 운영 worker/R1 OFF)
+
+**Plan:** 사용자 “worker의 GPT/Claude 클라이언트 생성·조립 경로 구현. 생산자의 현행 비교 프로필 발행 연결. 실제 호출 없이 합성 입력으로 생산자→worker→상위 비교 흐름→시도별 guard→복구까지 연결 검증. 독립 리뷰·실제 WSL 검증·커밋/푸시·PR 작성.” [실행 계획](../superpowers/plans/2026-11-02-worker-wiring.md). 11/2 00:56 KST 확인: origin/main `c8b38798`(PR #326 병합, main CI 10,303 PASS), 운영 checkout `cfc9bc20`(detached)·미커밋 `config/evolved_overrides.yml`만·실제 `KILL_SWITCH_KR` 존재·서비스 active. 개발은 별도 worktree의 `feature/e04-worker-wiring-20261102`(기준 `c8b38798`). PR #326의 검증·리뷰·병합은 반복하지 않고 영수증(`~/.local/state/qwq-task-audit/20261101/e04-current-flow/`)을 사용한다.
+
+**의존성·완료 조건:** E04-CURRENT-FLOW의 현행 판정·CLI→API 흐름 위에서 (1) 주입 가능한 전송 묶음으로 runner/worker를 조립하는 명시 경로, (2) 생산자 제어에서 현행 프로필 manifest를 동결하는 발행 함수, (3) 실제 `CrossValidator` 발행→worker→guard→복구의 합성 E2E를 추가한다. `install_from_env`/`_raw_clients`의 무조건 거부는 그대로이며 환경변수·기존 승인·과거 슬롯은 새 실행 권한이 아니다. 완료 조건은 합성 검사·관련 회귀·Codex 독립 리뷰·실제 WSL 직렬 전체·PR 필수 verify이고 운영 활성화는 포함하지 않는다.
+
+**Do:** [계획](../superpowers/plans/2026-11-02-worker-wiring.md) 설계대로 새 `src/analytics/model_comparison_wiring.py`에 `ComparisonTransports`(raw OpenAI/Claude CLI/Anthropic API + `owned`), `ComparisonActivationApproval`(실험 ID·동결 manifest sha256·KST 날짜 창·전송 집합·승인자; 파일/환경변수 자동 생성 없음), `manifest_sha256`(worker `config_sha256`과 동일), `current_profile_manifest`(생산자 `operating_role_controls`에서 현행 프로필 동결: 요청 모델만, Bear 채널 subscription, API 대체 채널 api·시한 내부 예산, CLI `min(8, 내부/2)`, 폴백 체인 없음, 기본 `enabled=False`, 원천 None·지원하지 않는 전송 순서는 치환 없이 거부, `validate_profile` 검사), `required_transports`, `build_comparison_runner`(Gemini 인스턴스 없이 `SingleAttemptAdapter(gemini=None)`+채널별 Claude 어댑터), `assemble_comparison_worker`(비활성 manifest·승인 실험/지문/날짜/전송 집합 불일치·Gemini 포함·레거시 프로필·전송 누락/초과는 어댑터·worker 생성 전 `ValueError`; 통과 시 guard→runner→worker 조립·`_owned_transports` 설정·start·attach, start/attach 실패 시 자기 worker만 stop)를 넣었다. runner `SingleAttemptAdapter`는 `gemini=None`을 허용하고 Gemini 요청을 전송 전 `provider_disabled`로 거절하며, worker는 `_owned_transports=False`면 stop 때 전송을 닫지 않는다. `install_from_env`/`_raw_clients`·cross_validator 발행 조건(attach)·설정·R1은 변경하지 않았다.
+
+**See/합성 검사(AWS 보조):** 새 `tests/test_model_comparison_wiring.py` 16검사 — 생산자 제어→manifest 동결·worker 지문/봉투 대조 일치, 원천 결측/전송 순서/후보 변경 규칙의 치환 없는 거부, 조립 fail-closed 7종(전송 호출·종료·예약 0), import/기본 생성/환경변수 설치의 생성 0과 `_raw_clients` 거부 회귀, runner 조립의 역할·채널 라우팅과 Gemini 전송 전 거절, **실제 `CrossValidator._offer_comparison` 발행 → 조립 worker 수락 → Bull 2·CLI 1(허용 실패)·API 1 → 가드 예약 3(구독 0)·unresolved 0 → `inspect_pair` 완료 4시도·현행 행 → 같은 봉투 재실행 재전송 0 → owned 전송 종료**, 공유(`owned=False`) 전송은 stop 때 닫히지 않음. 관련 6파일 210 passed·격리 0. 관련 전체·독립 리뷰·WSL은 아래에 적는다.
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/실제 모델 호출/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. E02-RR/E01 새 입력은 평일 자료 생성 뒤 판독(마지막 경계 11/1 17:42:10 KST). 11/2 07:40 자연 보고 수락·O02 11/4·5 사전점검·11/5·6 정리는 별도다.
+
 <a id="e04-current-flow-20261101"></a>
 ### E04-CURRENT-FLOW — 현행 독립 검토 판정·CLI→API 상위 비교 흐름 (구현·합성 검증·독립 리뷰·AWS 보조·실제 WSL 전체 DONE · PR 영수증 참조 · worker 비활성)
 
