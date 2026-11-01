@@ -287,13 +287,19 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
          'subscription_estimated_cost_usd': 0.0123, 'request_sent': True, 'block_reason': None},
         # 전송 전 차단(실험 만료)된 구독 시도: API 비용 불명이 아니다
         {'attempt_id': 'sub:bear:1', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
-         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired'},
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired',
+         'dispatch_entered': False},
         # 전송 뒤 어댑터가 API 비용을 보고해 차단된 구독 시도: 과금 여부가 불확실하므로 불명으로 남긴다
         {'attempt_id': 'sub:bear:2', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': True, 'block_reason': 'comparison_billing_channel_mismatch'},
         # 가드가 전송 전에 거절한 구독 요청(미선언/다른 선언 어댑터): 호출·과금이 없어 불명이 아니다
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
-         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch'},
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_adapter_channel_mismatch',
+         'dispatch_entered': False},
+        # 콜백이 전송 뒤에 허용 목록 사유를 올린 경우: 사유는 같아도 전송 진입이 영속돼 있어 불명이다
+        {'attempt_id': 'sub:bear:5', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
+         'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_experiment_expired',
+         'dispatch_entered': True},
         # 전송·응답 뒤 저장 실패: 허용 목록 밖 사유는 응답 증거가 없어도 불명으로 남긴다
         {'attempt_id': 'sub:bear:4', 'state': 'blocked', 'cost_usd': None, 'billing_channel': 'subscription',
          'subscription_estimated_cost_usd': None, 'request_sent': None, 'block_reason': 'comparison_storage_unavailable'},
@@ -306,7 +312,7 @@ def test_subscription_ledger_attempts_are_listed_outside_usd_totals():
          'subscription_estimated_cost_usd': None},
         {'attempt_id': 'sub:bear:3', 'state': 'blocked', 'block_reason': 'comparison_adapter_channel_mismatch',
          'subscription_estimated_cost_usd': None}]
-    assert spend['unknown_attempts'] == ['sub:bear:2', 'sub:bear:4'] and spend['unaccounted_attempts'] == []
+    assert spend['unknown_attempts'] == ['sub:bear:2', 'sub:bear:4', 'sub:bear:5'] and spend['unaccounted_attempts'] == []
     assert spend['total_usd'] is None                 # 불확실한 구독 차단이 남아 합계는 미확정
     report = daily.build_daily_report([row], day_kst=DAY, offered_envelopes=[env('d1')],
                                       ledger_attempts=ledger_attempts[:2] + ledger_attempts[3:4])

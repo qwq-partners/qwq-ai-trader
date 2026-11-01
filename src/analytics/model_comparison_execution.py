@@ -326,6 +326,10 @@ class ComparisonCallGuard:
         token = row["reservation_token"]
         reservation = (db.execute("SELECT state,actual_units FROM reservations WHERE token=?", (token,)).fetchone()
                        if token is not None else None)
+        # 실패 시도의 전송 진입 여부는 슬롯 상태로 영속된다: 전송 전 차단은 'blocked', 전송 진입 뒤 실패는 'unknown'.
+        # 오류 사유 문자열만으로는 전송 전/후를 가를 수 없으므로(콜백이 같은 사유를 올릴 수 있음) 보고서는 이 값을 함께 본다.
+        slot_row = db.execute("SELECT state FROM comparison_attempts WHERE slot=?", (row["slot"],)).fetchone()
+        dispatch_entered = None if slot_row is None else slot_row[0] != "blocked"
         reconciled = self._reconciled(db, token, reservation)
         state, reason = "pending", "comparison_attempt_pending"
         if row["block_reason"]:
@@ -360,6 +364,7 @@ class ComparisonCallGuard:
         estimate = result.value.get("api_cost_usd") if result is not None and isinstance(result.value, dict) else None
         return {"attempt_id": row["attempt_id"], "request_sha256": row["request_sha256"],
                 "state": state, "reservation_token": token, "billing_channel": channel,
+                "dispatch_entered": dispatch_entered,
                 "result": result, "block_reason": reason,
                 "original_estimated_cost_usd": estimate, "reconciled": reconciled}
 
@@ -691,7 +696,7 @@ def _day_attempt_rows(guard, db, day: str) -> list[dict]:
         channel = record["billing_channel"]
         out.append({"attempt_id": record["attempt_id"], "admission_day": day, "state": record["state"],
                     "reservation_token": record["reservation_token"], "cost_usd": cost,
-                    "billing_channel": channel,
+                    "billing_channel": channel, "dispatch_entered": record["dispatch_entered"],
                     # 구독 표시 추정비는 어댑터 value 의 보고값이며 API 비용(cost_usd)에 더하지 않는다.
                     "subscription_estimated_cost_usd": (value.get("subscription_estimated_cost_usd")
                                                         if channel == "subscription" else None),

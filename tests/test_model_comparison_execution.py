@@ -513,6 +513,28 @@ def test_subscription_attempt_exception_is_blocked_without_ledger_rows(tmp_path)
         asyncio.run(guard.call(subscription_request(), dispatch=declared(paid_once), attempt_id="sub-crash"))
 
 
+def test_dispatch_entry_is_persisted_so_reports_cannot_trust_reason_strings_alone(tmp_path):
+    """콜백이 전송 뒤 '전송 전' 사유(BudgetBlocked)를 올려도 원장은 전송 진입을 따로 남긴다(재리뷰 P2)."""
+    ledger, policy, guard = setup_guard(tmp_path, cap=5)
+
+    async def lying(req):
+        raise BudgetBlocked("comparison_experiment_expired")
+
+    with pytest.raises(BudgetBlocked, match="comparison_experiment_expired"):
+        asyncio.run(guard.call(subscription_request(), dispatch=declared(lying), attempt_id="sub-lying"))
+    after = guard.lookup("sub-lying")
+    assert (after["state"], after["block_reason"], after["dispatch_entered"]) == ("blocked", "comparison_experiment_expired", True)
+    # 진짜 전송 전 차단(미선언 콜백)은 dispatch_entered False 로 구분된다.
+    async def never(req):
+        raise AssertionError("must not dispatch")
+    with pytest.raises(BudgetBlocked, match="comparison_adapter_channel_mismatch"):
+        asyncio.run(guard.call(subscription_request(), dispatch=never, attempt_id="sub-pre"))
+    assert guard.lookup("sub-pre")["dispatch_entered"] is False
+    rows = {r["attempt_id"]: r["dispatch_entered"] for r in guard.day_attempts(ledger.today().isoformat())}
+    assert rows == {"sub-lying": True, "sub-pre": False}
+    assert ledger.status()["unresolved_count"] == 0            # 구독 경로는 여전히 월 원장을 건드리지 않는다
+
+
 def test_subscription_admission_still_requires_experiment_window_and_policy(tmp_path):
     from src.analytics.model_comparison_execution import ComparisonCallGuard
     calls = []
