@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-guard-billing-20261101"></a>
-### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합 DONE · 구현/관련 검사 DONE · 독립 리뷰/전체 검증 진행)
+### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합·구현·독립 리뷰·AWS/실제 WSL 전체 검증 DONE · PR 대기)
 
 **Plan:** 사용자 “PR #323의 현재 CI·리뷰·HEAD를 확인하고 문제가 없으면 병합한다. 최신 실행 원장에 따라 지금 가능한 엔진 개선을 이어간다. … 기존 설정과 매수 중지는 유지한다. 이번 요청에 운영 배포·재시작·실주문·유료 비교 활성화는 포함하지 않는다.” [실행 계획](../superpowers/plans/2026-11-01-comparison-guard-billing-channel.md). 11/1 17:36 KST 확인: 운영 checkout `cfc9bc20`·미커밋 `config/evolved_overrides.yml`만·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재. 개발은 운영 checkout이 아닌 별도 worktree의 `feature/e04-guard-billing-channel-20261101`(기준 main `c022ef36`)에서 한다.
 
@@ -21,7 +21,9 @@
 
 **See/Codex 3차:** tree `92176560`(HEAD bd45f038) 재리뷰(요청 gpt-6-astra/high)는 **P0/P1 0·P2 1** — 전송 전 거절과 전송 뒤 정산 불일치가 같은 사유라 보고서가 전송 전 거절도 과금 불확실로 센다는 지적. 반영: 전송 전 거절은 `comparison_adapter_channel_mismatch`로 사유를 분리해 보고의 구독 목록에 남기고, 전송 뒤 `comparison_billing_channel_mismatch`만 불명에 둔다. Codex 4차(tree `20a14729`)는 **P0/P1 0·P2 1** — 전송 뒤 저장 실패(`comparison_storage_unavailable`)가 전송 전 차단으로 분류된다는 지적. 반영: 확인된 전송 전 사유만 허용 목록(`_SUBSCRIPTION_PRE_DISPATCH_BLOCKS`)으로 구독 목록에 남기고 그 밖의 차단은 전부 불명으로 둔다. Codex 5차(HEAD 676b10d9)는 **P0/P1 0·P2 1** — 구독 채널의 그 밖 상태가 같은 ID pair 행의 API 추정액(0 포함)으로 대체되어 불명이 사라질 수 있다는 지적. 반영: 구독 채널은 정상 완료·확인된 전송 전 차단 외 상태를 명시적으로 불명 처리하고 추정액 대체 경로를 타지 않는다(같은 ID pair/원장 양쪽 회귀 검사 추가). Codex 6차(HEAD bc691d99)는 **P0/P1 0·P2 1** — 콜백이 전송 뒤 허용 목록 사유를 올리면 보고서가 전송 전 차단으로 오인한다는 지적. 반영: 가드가 슬롯 상태(blocked/unknown)로 영속하던 전송 진입 여부를 `dispatch_entered`로 조회·일별 행에 노출하고, 보고서는 `dispatch_entered=False`이면서 허용 사유일 때만 전송 전 차단으로 본다. Codex 7차(HEAD 8efdf15e)는 **P0/P1 0·P2 1** — 전송 전 차단된 유료 시도(예: 구독 선언 어댑터에 연결)가 보고에서 불명으로 집계된다는 지적. 반영: 유료 채널도 `dispatch_entered=False`인 blocked 는 확정 0원 `not_sent_attempts`로 적고 불명에 넣지 않는다(원장 행→일별 보고 통합 검사 추가).
 
-**See/최종 검증:** (최종 tree의 Codex 재리뷰·AWS 직렬 전체·실제 WSL 결과를 이 절에 갱신한다.)
+**See/최종 검증 — HEAD `9bb227bce058aef33310c7da83f181587a60eadf`·tree `7a991071332b11aa4f0b288d2dd6383a9b778431`:** Codex 8차(요청 gpt-6-astra/high, actual/effective 미노출)는 **P0/P1/P2 0** — 코드 승인, 검증 완료까지 병합 보류. AWS 보조 직렬 전체는 **10,200 passed / 2 skipped / 2 xfailed**(검사846.42초·rc0·격리0·문법/비밀정보 PASS). **실제 WSL(WSL2 6.6.87·Python3.12.3)** 은 사용자가 새 임시 클라이언트 키를 등록한 뒤 저장 호스트키와 일치를 확인하고, 푸시된 같은 커밋을 별도 `/home/user/projects/qwq-e04-guard-billing-20261101`(detached, write-tree 일치 확인)에서 정본 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행했다 — **10,200 passed / 2 skipped / 2 xfailed**, 검사380.73초·전체388.966초·rc0·격리0·문법/비밀정보 PASS(18:54:02~19:00:15 KST), 실행 전후 tree 동일·unstaged 0·원본 작업본 상태 보존. 중간에 리뷰 반영으로 중단한 AWS 전체 실행 4회는 PASS로 세지 않는다. 검증 뒤 변경은 이 완료 근거 Markdown뿐이다. 비공개 `~/.local/state/qwq-task-audit/20261101/e04-guard-billing/`에 판독 predicate·PR #323 영수증·리뷰 체인·AWS/WSL 영수증을 둔다.
+
+**소스 인계:** `feature/e04-guard-billing-channel-20261101`을 푸시했고 PR의 필수 verify는 해당 PR 영수증을 따른다. 이번 범위는 병합/배포가 아니다.
 
 **운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 자연 보고 수락은 별도다.
 
