@@ -2,6 +2,8 @@
 
 기준 main `1eb023a940b52820261f129402b24f3789fceb02`, 2026-11-01 KST. 이 점검은 기존 실행 원장의 E04 “현재 Claude 계약용 manifest/runner 지원부터 확인”을 수행한다. 실제 비교 실행·유료 호출·모델 변경·운영 활성화는 포함하지 않는다.
 
+후속 구현의 사용법은 [현행 오프라인 계약 v1](#offline-contract-v1), 검증/푸시 상태는 [실행 원장](../operations/execution-roadmap.md#e04-current-contract-20261101)을 따른다. 아래 초기 감사의 미래형 표현은 착수 당시 기록이다.
+
 ## 결론
 
 현재 운영의 독립 검토 정책을 옛 비교기로 재생할 수 없다. Claude 모델명만 허용해 해결할 문제가 아니라, 요청 제어·역할별 재시도·전체 판단 시한·검토 누락 처리·전송별 비용 계약이 다르다. 현재 비교 활성화 차단은 유지해야 한다. 이는 실행 중인 거래 엔진의 같은 결함을 확인했다는 뜻이 아니다.
@@ -49,3 +51,25 @@
 실제 전송 adapter·입장/정산·일 시도 상한·동일 입력 및 응답 이후 가격의 결합은 별도 검증 대상이다. 이 단계에서 실제 worker 연결, 기존 월 원장 생성/초기화, R1 활성화, Gemini 재활성화, 관측 기간 연장, 매수 재개는 하지 않는다. 오프라인 계약의 적합성만으로 경제 비교가 가능해졌다고 판정하지 않는다.
 
 주 순서는 E02 선정 근거 → E01 진입 가격 → E03 청산 → E05 통합이며 E04/A01은 병행한다. 새 유효 RR/진입 입력이 생기면 그 실제 자료 판독이 비교 도구 보완보다 우선한다.
+
+<a id="offline-contract-v1"></a>
+## 현행 오프라인 계약 v1
+
+사용자 후속 승인으로 `model-comparison-offline-contract-v1` 입력과 `model-comparison-offline-report-v1` 출력을 추가한다. 구형 pair-v1/v2 독자·worker는 변경하지 않는다. [실행/검증 상태 정본](../operations/execution-roadmap.md#e04-current-contract-20261101).
+
+저장소 루트에서 다음 합성 예시를 실행할 수 있다. 예시의 모델 응답·시간·비용은 모두 검사값이며 실제 호출 결과가 아니다.
+
+```bash
+python scripts/check_model_comparison_contract.py \
+  --input docs/examples/model-comparison-offline-synthetic.json
+```
+
+CLI는 명시한 일반 JSON 파일만 최대1MiB 읽고 결과를 표준 출력으로 보낸다. 기존 DB/로그·환경·자격·외부 API를 자동 탐색하거나 결과를 저장하지 않는다. 중복 JSON 키·비유한 수치·알 수 없는 필드/버전은 거부한다. exit0은 결과 생성이며 `contract_status`와 각 arm의 `verdict`를 함께 읽어야 한다. 정상 형식의 보류 결과도 exit0이고 잘못된 입력은 exit2다.
+
+입력은 `profile=entry-independent-review-v1`, 합성/호출자 제공 자료 구분, 공통 입력 지문, 고정 정책과 `bull_current`/`bull_candidate`/공유 `bear`를 갖는다. 후보 Bull은 모델·effort·출력 상한 중 한 항목만 바꾸며 이것이 모델 지원/호출 승인이라는 뜻은 아니다. 각 역할의 요청 제어·전체 경과시간·결과·본문·전송 시도를 받는다. 예시 파일에 전체 필드를 명시했다. 전체 경과시간이 없으면 최종 응답 지연이나 시도 합으로 채우지 않는다. Team Bear의19.5초/API800 계약은 지원하지 않는다.
+
+보고의 `policy_verdict`는 두 파싱 결과에 현재 불일치 허용 정책을 적용한 값이다. 기본 `verdict`는 신원·전송 순서·시한 근거까지 확인한 보수적 오프라인 판정이므로 결측 시hold다. 이를 과거 엔진이 실제로 같은 hold를 했다는 증거로 해석하지 않는다. 원문 응답은 출력하지 않고 요청 effort와 확인된 실효 effort를 구분한다.
+
+비용은 공유 Bear를 한 번만 계수한 관측 입력 범위다. 알려진 API 추정 부분합과 미상 건수·완전 합계를 구분하고, 구독 표시 추정비는 API에 더하지 않는다. 구독 추가 청구액·전체 실제 청구액·순수익은null이다. `actual_execution=false`, `economic_evaluable=false`, `live_activation_supported=false`를 항상 보존한다. 입력 지문의 진위·완전성, 입장/정산·예산 정책, 응답 후 실행 가능한 가격은 이번 검증 대상이 아니다.
+
+시도 기록이 없는 success/error/timeout/cancelled는 별도 `missing_trace_count`로 남기고 API 합계를null로 유지한다. 미전송 표기와 응답/토큰/신원 증거가 모순될 때도 누락 비용을0으로 확정하지 않는다. 정상 timeout/cancelled는 보류하되 위반과 구별한다. 관측 모델/effort의 비정형 값은 원문 비교 후 출력에서 치환하여 다른 시도의 비용을 보존한다.

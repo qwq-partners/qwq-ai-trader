@@ -1,7 +1,26 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-current-contract-20261101"></a>
+### E04-CURRENT-CONTRACT — GPT/Claude 오프라인 비교 계약 (구현·독립 리뷰·실제 WSL 검증 DONE)
+
+**Plan:** 사용자 “E04 GPT/Claude 비교 계약 보완부터 ㄱㄱ. 기존 설정과 매수 중지는 유지하고, WSL에서 검증 후 커밋/푸시까지 진행해줘.” [실행 계획](../superpowers/plans/2026-11-01-current-comparison-contract.md). 기준 main1eb023a9와 감사36a44126에서 시작한다. 기존 GPT/Gemini 비교기의 의미와 정산을 바꾸지 않고 현행 entry 독립 검토를 별도 버전의 순수 오프라인 계약으로 표현한다. Astra/high 설계·Terra6.1/high 한정 구현(정책5.6 대체, native actual/effective 미노출), coordinator는 문서·통합·WSL 검증을 담당한다.
+
+**Do:** `model_comparison_contract.evaluate_contract`와 명시 파일 CLI를 추가했다. GPT Bull의 요청 제어·빈 응답 재시도1, Claude Bear 재시도0·CLI→API 허용 실패 종류·12/11.5초 전체 제한과 CLI 내부 시한을 구분한다. 누락 검토·모델 신원/시각 결측은 보수적으로 hold하고 두 표만의 `policy_verdict`를 별도로 보존한다. 이는 기존 엔진의 판단을 재현했다고 인증하는 도구가 아니다. 공유 Bear는 한 번만 계수하며 API 추정치·구독 표시 추정치·미상 추가 과금을 나눈다. 입력의 진위·실제 입장/정산·응답 후 가격·순수익은 인증하지 않는다. [사용법과 합성 예시](../reviews/engine-comparison-contract-2026-11-01.md#offline-contract-v1).
+
+**See/소스:** 최초 합성43검사와 역사적 비교/현행 Claude 소비자 포함573검사를 AWS 개발 worktree에서 통과했다(격리0). 독립 리뷰 지적으로 비종단 신원 불일치·미전송과 응답/비용의 모순, 누락 trace의 비용 완전성, 관측 신원 비유출, 정상 timeout과 시한 위반 구분을 보완했다. RED19/17/3/8건과 대조 입력을 거쳐 최종 관련113검사·문법/비밀정보 GREEN이다. 각 실패는 합성 회귀 검사이며 운영 실패가 아니다. 명시 `claude-opus-5-5`/high의 도구·MCP 없는 누적 소스 리뷰와 마지막55.079초 재리뷰가 **APPROVE·미해결 지적0**이다. 매 응답의 실제 모델은Opus5.5로 확인했고 실효 effort는미노출이다. 정제된 소스·합성 검사만 제공했다. 별도 Sol6.1/high 문서 검토도APPROVE이며 native actual/effective는미노출이다.
+
+**See/실제 WSL 진행:** 사용자 제공 새 공개 호스트키와 실제 WSL2/Python3.12.3을 대조하고 `/home/user/projects/qwq-e04-contract-20261101`을 별도로 만들었다. 99검사 버전과103검사 버전에서 시작한 전체 실행은 재리뷰 수정 반영을 위해 coordinator가 각각197.026초/218.433초에 중단했다(rc143, 관측된 테스트 실패0). 두 원본 로그·중단 사유·소스 tree를 보존하며 PASS로 세지 않는다. 최종113검사 버전의 고정 tree `373bef1b43dce4af0d5c7c5ee1d1da0d5531c9ce`에서16:40:51 KST에 정본 직렬 전체를 시작했다. AWS 부분 검사는 이 결과의 대체가 아니다. 선택/병렬/skip 없이 실제 WSL 원본의 민감 경로를 격리하고 운영 자격은 복사하지 않았다.
+
+**See/실제 WSL 최종 PASS — 11/1 16:47:06 KST:** 승인된 고정 tree `373bef1b43dce4af0d5c7c5ee1d1da0d5531c9ce`에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`를 직렬 전체 실행했다. **10,153 passed / 2 skipped / 2 xfailed**, 검사372.36초·전체390.779초·rc0·격리0·문법/비밀정보 PASS다(경고14건 포함). 실행 전후 tree동일·unstaged변경0이고 원본 로그 SHA256을 재확인했다. 검증 뒤 변경은 이 완료 근거를 적는 Markdown뿐이다. 비공개 `~/.local/state/qwq-task-audit/20261101/engine-resume/`에 WSL 영수증/중단 이력/소스 지문·누적 리뷰를 보존한다. 원문 계좌/자격/운영 DB는 커밋·외부 리뷰에 넣지 않는다.
+
+**운영/예약:**16:46:47 읽기 대조에서 운영cfc9bc20·미커밋 evolved만의 동일 상태·보호 config2개 바이트 동일·매수 중지를 확인했다. runtime worker/R1 OFF·Gemini 차단·기존 예약은 그대로다. 앱 LLM 실험·배포·관측 연장·발송0. 개발 리뷰용 구독 CLI와 엔진 호출은 구분한다.
+
+**소스 인계:** `feature/e04-current-contract-20261101`에서 검증된 소스를 커밋/푸시한다. PR의 필수 verify 상태는 해당 PR 영수증을 따르며 이번 범위는 병합/배포가 아니다.
+
+**NEXT:** **E02-RR/E01 새 유효 자연 입력 판독을 우선**, E04 실제 전송·입장/정산 연결과 경제성 비교는 별도 조건 대기·R1 OFF다. 기존 O02 일정과11/2 자연 보고 수락은 별도다. WSL 공개 호스트키 확인/재접속 위치는 비공개 `~/.local/state/qwq-wsl/host-pin.json`에 보존하며 사용자 원본 SSH 키/설정은 변경하지 않았다.
+
 <a id="engine-resume-20261101"></a>
-### 엔진 과제 재개 — 11/1 10:31 KST (현재 우선순위)
+### 엔진 과제 재개 — 11/1 10:31 KST (착수 근거; 현재 E04 상태는 위 절)
 
 **Plan:** 사용자 “기존에 엔진 개선 남아 있는 task 확인 해서 순서대로 다시 가보자.” 최신main1eb023a9/PR321 main CI10,040PASS와 운영cfc9bc20/PID4157369를 대조했다. 보고서 개발·배포를 반복하지 않고 선정→진입→청산→총비용 후 결과라는 기존 순서를 재개한다. 원장/완료 근거 감사와 코드/비교 도구 감사를 독립 Sol6.1/high 두 작업자로 나눴다(정책의5.6 가용 대체, actual/effective 미노출). 운영은active/NRestarts0·브로커 연결·복구ready·미체결0·매수중지, Toss starts/tokens0이다. 운영 evolved 미커밋은 보존한다.
 

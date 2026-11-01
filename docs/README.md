@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+> **11/1 E04 현재 작업:** [GPT/Claude 오프라인 비교 계약·검증 상태·NEXT](operations/execution-roadmap.md#e04-current-contract-20261101). 현행 entry 검토의 재시도·시한·신원·전송별 비용을 명시 파일로 검사한다. 실제 WSL 검증 후 커밋/푸시하며 기존 설정·매수 중지·worker/R1 OFF는 유지한다. [사용법·합성 예시](reviews/engine-comparison-contract-2026-11-01.md#offline-contract-v1). 아래 R02 WAIT는 당시 이력이며04:35 예시의 모바일 수락과11/1 O02 영수증은 원장 후속에 반영됐다.
+
 > **11/1 현재 작업:** [R02-VALIDATE 완료·NEXT](operations/execution-roadmap.md#r02-validation-rejection-20261101). 실제 WSL/PR/main/서버10,040검사·운영cfc9bc20 인수32/32PASS·04:35 정상 분석 텍스트 단발 API 수락 DONE. 설정/매수중지/기존예약 유지, 모바일 내용 수락·11/2 자연 출력 WAIT. O02는 기존11/1 09:46:10 실행 후 영수증을 확인하며 문서 마감 재배포는 없다.
 
 > **10/31 분석 문장 반영 완료:** [R02-INSIGHT](operations/execution-roadmap.md#r02-analyst-prose-20261031)는 근거/출처 복잡성과 인사이트 부족 피드백을 반영했다. PR #315의 관련317·전체9,990검사와 독립 리뷰/CI를 통과했고, 통합 운영5af43e48에 동일 소스가 포함됨을22:24의42항목 읽기 점검으로 인수했다. 기존 설정·매수중지는 유지하며 추가 시험 발송0, 자연 LLM/모바일 내용 수락은 WAIT다. 완료 문서만으로 재배포하지 않는다.
