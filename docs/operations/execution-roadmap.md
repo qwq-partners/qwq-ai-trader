@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-claude-adapter-20261101"></a>
-### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증·독립 리뷰·AWS 보조 전체 DONE · 실제 WSL은 사용자 키 등록 WAIT · 푸시/PR은 WSL 뒤)
+### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증·독립 리뷰·AWS 보조·실제 WSL 전체 DONE · PR 영수증 참조)
 
 **Plan:** 사용자 “PR #324의 HEAD·필수 CI·리뷰 영수증을 확인하고 문제가 없으면 병합. 다음 단위 E04-CLAUDE-ADAPTER의 최소 소스 구현. 독립 리뷰·실제 WSL 검증·커밋/푸시·PR 작성까지 완료.” [실행 계획](../superpowers/plans/2026-11-01-claude-single-attempt-adapter.md). 11/1 20:25 KST 확인: 운영 checkout `cfc9bc20`(detached)·미커밋 `config/evolved_overrides.yml`만·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재·서비스 active. 같은 요청의 선행 작업으로 운영 Anthropic API 키 파일(`~/.config/qwq-ai-trader/anthropic-api-key`, 600)을 사용자 제공 값으로 교체했다(이전 파일은 같은 디렉터리에 600 백업, 지연 읽기라 재시작 불필요, 값은 기록하지 않음). 개발은 별도 worktree의 `feature/e04-claude-adapter-20261101`(기준 main `6261c323`)에서 한다.
 
@@ -17,11 +17,13 @@
 
 **See/AWS 보조 전체 검증 — HEAD `cd34912cec6c50d87f303940ea2af69a72b5601e`·tree `a6f9b4bbaf2f2a24cf04f429be9cd1de7a410d3e`(리뷰 완료 소스 `7e354668`에 문서 커밋만 더한 tree):** 별도 detached worktree에서 정본 `QWQ_VERIFY_PYTHON=…/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행 — **10,250 passed / 2 skipped / 2 xfailed**, 검사850.99초·rc0·격리0·문법/비밀정보 PASS(21:31:19~21:45:46 KST, 사용자 WSL 아님). 비공개 `aws-full-verify.log`.
 
-**실제 WSL — WAIT(사용자 단계 1개):** AWS→WSL 역방향 터널(127.0.0.1:22222)은 살아 있고 WSL 작업용 sshd 호스트키는 정본 `host-pin.json`과 일치함을 무자격 프로브로 확인했다(인증은 예상대로 거부). 이전 작업의 임시 클라이언트 키·authorized_keys가 삭제돼 이번 작업용 새 임시 클라이언트 키(비공개 `client_ed25519`, 공개키는 `wsl-user-step.txt`)를 만들었고, 사용자가 WSL 작업용 sshd의 `~/.cache/qwq-wsl-e04-20261101/authorized_keys`에 그 한 줄을 등록하면 GitHub 푸시 없이 bundle(`e04-claude-adapter-<HEAD>.bundle`)을 터널로 전달해 병합된 main 기준 별도 작업본 `/home/user/projects/qwq-e04-claude-adapter-20261101`에서 `wsl-verify-remote.py`로 직렬 전체를 실행한다. **WSL 통과 전에는 푸시·PR을 만들지 않는다**(사용자 지시). 미검증 브랜치의 GitHub 전달 없음.
+**See/실제 WSL PASS — 11/1 21:57:44 KST, HEAD `6af76f1d7356e6598b05b9de1ffd6e3d82826ecc`·tree `83a00d9560294ca20700e10d971538200b858295`:** AWS→WSL 역방향 터널(127.0.0.1:22222)의 WSL 작업용 sshd 호스트키가 정본 `host-pin.json`과 일치함을 무자격 프로브로 확인한 뒤(인증 거부 정상), 사용자가 이번 작업용 새 임시 클라이언트 공개키 한 줄을 작업용 `authorized_keys`에 등록했다(“등록했어”). GitHub 푸시 없이 bundle(sha256 접두 `1eb2e422`, 양쪽 일치)을 터널로 전달해 WSL main(깨끗, `1eb023a9`)의 객체 저장소에 fetch하고 병합 main `6261c323` 기준 별도 detached 작업본 `/home/user/projects/qwq-e04-claude-adapter-20261101`(write-tree 일치)에서 정본 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행했다(WSL2 6.6.87·Python3.12.3) — **10,250 passed / 2 skipped / 2 xfailed**, 검사389.94초·전체410.329초·rc0·격리0·문법/비밀정보 PASS(21:51:11~21:57:44 KST). 실행 전후 tree 동일·unstaged 0·원본 저장소 상태 보존·원격 로그 sha256 대조 일치. 검증 뒤 변경은 이 완료 근거 Markdown뿐이다. 비공개 `wsl-result.json`·`wsl-verify.log`.
 
 **운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/실제 CLI·API 호출/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. E02-RR/E01은 새 유효 입력이 생길 때 판독하며 이번 턴에는 조회하지 않았다(마지막 경계 17:42:10 KST 유지). T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 07:40 자연 보고 수락은 별도다.
 
-**NEXT:** ① 사용자 WSL 키 등록 → 실제 WSL 직렬 전체 → 통과 시 커밋/푸시·PR(필수 verify는 PR 영수증) → 임시 키 제거. ② E02-RR/E01 새 유효 자연 입력 판독 우선(평일 장중 자료 뒤, 마지막 경계 11/1 17:42:10 KST). ③ E04 다음 단위는 CLI→API 대체를 조정하는 상위 비교 흐름과 worker의 Claude Bear 연결(`_raw_clients` 대체)이며 별도 승인·R1 OFF 유지. 코드 준비 완료와 실제 어댑터 운영 인수·유료 비교는 구분한다.
+**소스 인계:** 검증된 소스는 `feature/e04-claude-adapter-20261101`로 푸시하고 PR을 만든다. 필수 verify·병합은 해당 PR 영수증을 따르며 이번 범위는 병합/배포가 아니다. WSL 임시 클라이언트 키는 PR CI 확인 뒤 제거한다.
+
+**NEXT:** ① PR 필수 verify 통과 확인·사용자 병합 결정. ② E02-RR/E01 새 유효 자연 입력 판독 우선(평일 장중 자료 뒤, 마지막 경계 11/1 17:42:10 KST). ③ E04 다음 단위는 CLI→API 대체를 조정하는 상위 비교 흐름과 worker의 Claude Bear 연결(`_raw_clients` 대체)이며 별도 승인·R1 OFF 유지. 코드 준비 완료와 실제 어댑터 운영 인수·유료 비교는 구분한다.
 
 <a id="e04-guard-billing-20261101"></a>
 ### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합·구현·독립 리뷰·AWS/실제 WSL 전체 검증 DONE · PR 대기)

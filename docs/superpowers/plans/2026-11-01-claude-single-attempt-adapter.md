@@ -28,5 +28,5 @@
 - [x] 관련 기존 검사(runner/execution/admission/recovery/daily_report/worker/contract/input/e2e/claude_transport 등 19파일) 회귀 0 — 결과는 원장.
 - [x] 독립 Codex 교차 리뷰(요청 gpt-6-astra/high): 1회차(HEAD 6f75ac88) P1 2·P2 2 → 반영, 재리뷰(2b2c8897) P2 1 → 반영, 최종(df60e781) **P0/P1/P2 0**. 상세·반영은 원장.
 - [x] AWS 보조 직렬 전체(HEAD cd34912c): 10,250 passed / 2 skipped / 2 xfailed·rc0·격리0 — 사용자 WSL을 대신하지 않는다.
-- [ ] 실제 WSL 직렬 전체 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` PASS 뒤 커밋/푸시·PR — 사용자 임시 키 등록 WAIT(원장).
-- [ ] See: 원장·CHANGELOG·검토 문서 갱신. 운영 적용·실제 호출·worker 연결·R1 활성화·순수익은 완료로 표시하지 않는다.
+- [x] 실제 WSL 직렬 전체(HEAD 6af76f1d/tree 83a00d95, bundle 전달·미푸시): 10,250 passed / 2 skipped / 2 xfailed·410.3초·rc0·격리0 → 커밋/푸시·PR(필수 verify는 PR 영수증).
+- [x] See: 원장·CHANGELOG·검토 문서 갱신. 운영 적용·실제 호출·worker 연결·R1 활성화·순수익은 완료로 표시하지 않는다.
