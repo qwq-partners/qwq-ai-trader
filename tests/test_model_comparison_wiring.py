@@ -279,6 +279,27 @@ def test_invalid_profile_is_rejected_before_any_policy_is_pinned_in_the_shared_l
     worker.stop(5)
 
 
+@pytest.mark.parametrize('bad,match', [
+    (dict(horizon_seconds=0), 'horizon_seconds'), (dict(fixed_at=''), 'fixed_at'), (dict(empty_retries=2), 'empty_retries'),
+    (dict(strict_on_disagreement='no'), 'strict_on_disagreement'), (dict(fallback_chain_timeout_seconds=0), 'fallback_chain_timeout'),
+    (dict(experiment_id=' '), 'experiment_id'),
+])
+def test_invalid_common_values_are_rejected_at_issuance_and_before_policy_pinning(tmp_path, monkeypatch, bad, match):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    issuance = {k: v for k, v in bad.items() if k in ('horizon_seconds', 'fixed_at', 'experiment_id')}
+    if issuance:
+        with pytest.raises(ValueError, match=match):
+            issue(**issuance)
+    man = dict(issue(), **bad)                                         # 발행 뒤 조작된 manifest 도 조립 전에 거절
+    led, tr = ledger(tmp_path), transports()
+    with pytest.raises(ValueError, match=match):
+        w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=led, transports=tr, approval=approval(man),
+                                     journal_dir=tmp_path / 'journal')
+    with led._connect(readonly=True) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert 'comparison_policy' not in names and untouched(tr)
+
+
 def test_guard_blocks_new_calls_once_the_approved_policy_window_has_passed(tmp_path, monkeypatch):
     from tests.test_model_comparison_worker import Clock
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)

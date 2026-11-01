@@ -23,7 +23,7 @@ from . import model_comparison_input as mci
 from .model_comparison_claude import ClaudeSingleAttemptAdapter
 from .model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy, _kst_date
 from .model_comparison_runner import (BEAR_CLI_TIMEOUT_CAP_SECONDS, CURRENT_REVIEW_POLICY, PairSpec, PairedComparisonRunner,
-                                      RoleControls, SingleAttemptAdapter)
+                                      RoleControls, SingleAttemptAdapter, _positive, _time)
 from .model_comparison_worker import ComparisonWorker, attach
 from ..utils.claude_transport import AnthropicAPIClient, ClaudeCLIClient
 from ..utils.llm import OpenAIClient
@@ -156,12 +156,7 @@ def current_profile_manifest(operating_controls, *, experiment_id, fixed_at, hor
         # 일별 보고(scripts/report_model_comparison.py)가 읽는 최상위 한도. pairs_per_day 는 policy 와 같은 값이다.
         'max_input_age_seconds': float(max_input_age_seconds), 'pairs_per_day': execution_policy['pairs_per_day'],
     }
-    PairSpec.validate_profile(current=RoleControls(**bull), candidate=RoleControls(**cand),
-                              bear=RoleControls(**manifest['bear']), fallback_chain=(),
-                              strict_on_disagreement=manifest['strict_on_disagreement'],
-                              bear_empty_retries=manifest['bear_empty_retries'], review_policy=CURRENT_REVIEW_POLICY,
-                              bear_internal_timeout_seconds=internal, bear_cli_timeout_seconds=cli_timeout,
-                              bear_api_fallback=RoleControls(**manifest['bear_api_fallback']))
+    prevalidate_manifest(manifest)      # 조립 전 검사와 같은 규칙(공통 값·역할 프로필)으로 발행 시점에 거부한다
     return json.loads(mci._canon(manifest))
 
 
@@ -189,6 +184,27 @@ def prevalidate_manifest(manifest) -> None:
     for key in _MANIFEST_SCALARS + ('current', 'candidate', 'bear'):
         if key not in manifest:
             raise ValueError('manifest_key_missing:' + key)
+    # 공통 값은 PairSpec.validate 와 같은 규칙으로 미리 검사한다 — 잘못된 값이 정책 저장·worker 시작까지 가지 않게.
+    if not isinstance(manifest['experiment_id'], str) or not manifest['experiment_id'].strip():
+        raise ValueError('manifest_invalid:experiment_id')
+    try:
+        _time(manifest['fixed_at'])
+    except ValueError:
+        raise ValueError('manifest_invalid:fixed_at') from None
+    horizon = manifest['horizon_seconds']
+    if type(horizon) is not int or not 0 < horizon <= 86400:
+        raise ValueError('manifest_invalid:horizon_seconds')
+    if type(manifest['strict_on_disagreement']) is not bool:
+        raise ValueError('manifest_invalid:strict_on_disagreement')
+    retries = manifest['empty_retries']
+    if type(retries) is not int or not 0 <= retries <= 1:
+        raise ValueError('manifest_invalid:empty_retries')
+    try:
+        _positive(manifest['fallback_chain_timeout_seconds'], 'fallback_chain_timeout_seconds')
+    except ValueError:
+        raise ValueError('manifest_invalid:fallback_chain_timeout_seconds') from None
+    if not isinstance(manifest['execution_policy'], dict):
+        raise ValueError('manifest_invalid:execution_policy')
     roles = {k: RoleControls(**manifest[k]) for k in ('current', 'candidate', 'bear')}
     fallback = tuple(RoleControls(**c) for c in manifest.get('fallback_chain', []))
     api = manifest.get('bear_api_fallback')
