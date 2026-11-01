@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-claude-adapter-20261101"></a>
-### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증·독립 리뷰 DONE · 실제 WSL/PR은 아래 See)
+### E04-CLAUDE-ADAPTER — Claude 단일 시도 어댑터 (구현·합성 검증·독립 리뷰·AWS 보조 전체 DONE · 실제 WSL은 사용자 키 등록 WAIT · 푸시/PR은 WSL 뒤)
 
 **Plan:** 사용자 “PR #324의 HEAD·필수 CI·리뷰 영수증을 확인하고 문제가 없으면 병합. 다음 단위 E04-CLAUDE-ADAPTER의 최소 소스 구현. 독립 리뷰·실제 WSL 검증·커밋/푸시·PR 작성까지 완료.” [실행 계획](../superpowers/plans/2026-11-01-claude-single-attempt-adapter.md). 11/1 20:25 KST 확인: 운영 checkout `cfc9bc20`(detached)·미커밋 `config/evolved_overrides.yml`만·실제 `~/.cache/ai_trader/KILL_SWITCH_KR` 존재·서비스 active. 같은 요청의 선행 작업으로 운영 Anthropic API 키 파일(`~/.config/qwq-ai-trader/anthropic-api-key`, 600)을 사용자 제공 값으로 교체했다(이전 파일은 같은 디렉터리에 600 백업, 지연 읽기라 재시작 불필요, 값은 기록하지 않음). 개발은 별도 worktree의 `feature/e04-claude-adapter-20261101`(기준 main `6261c323`)에서 한다.
 
@@ -15,7 +15,13 @@
 
 **See/독립 리뷰(Codex, 요청 gpt-6-astra/high, actual/effective 미노출):** 1회차는 백그라운드 실행에서 stdin이 닫히지 않아 `Reading additional input from stdin...` 뒤 출력 0줄로 1500초 시한에 걸렸고(프로브 단독도 180초 rc124), 샌드박스/모델/인증을 바꾸지 않은 채 `</dev/null` 통제 호출(8초, `OK`)로 원인을 stdin 대기로 확정했다(비공개 `codex-review-diagnosis.json`). 같은 HEAD `6f75ac88`·tree `388fcd03` 재실행(2분49초)은 **P1 2·P2 2**, 병합 보류 — ① 어댑터가 성공 응답에도 `error=None`을 넣어 복구 `_verify_attempt`가 러너 실패 기록으로 오판(저장 실패→복구 불가), ② `_failure`가 토큰 없음만으로 미전송을 추정해 전송 뒤 중단된 구독 시도를 `request_sent=False`·`'0'`으로 기록하고 채널을 잃음, ③ 새 기본 필드로 역사적 쌍의 manifest·행 형식이 달라져 완전 일치 복구가 깨짐, ④ 테스트 헬퍼의 `or` 기본값. coordinator가 전부 반영했다: 어댑터 value에서 `error` 키 제거(전송 실패는 `transport_error_kind`), 러너 `_failure`와 복구 `_verify_attempt`를 같은 규칙(슬롯 blocked·토큰 없음·`dispatch_entered=False`일 때만 0원, 구독 실패는 `billing_channel` 보존)으로 통일, `PairSpec.snapshot()`이 기본값 새 필드를 생략하고 `subscription_attempts`는 구독 시도가 있을 때만 적어 역사적 manifest·행 바이트 동일, 헬퍼 None 검사. 회귀 검사 추가: 실제 비동기 시한(0.2초 vs 1초 지연)으로 끊긴 Claude Bear가 `request_sent None`·`api_cost None`·`billing_channel subscription`·`ledger_state blocked`·`dispatch_entered True`로 남고 월 원장 unresolved 0, CLI/API×정상/실패 4조합의 저장 실패 행이 `finalize_row`·`_verify_attempt` 재계산과 완전 일치, 역사적 스냅샷·행에 새 키 없음. 반영 뒤 새 파일 49검사 포함 관련 19파일 **718 passed**·격리 0(AWS 개발 worktree). Codex 재리뷰(HEAD `2b2c8897`·tree `31233dac`, 3분37초)는 **P0/P1 0·P2 1** — 슬롯 없이 요청만 저장되는 일일 시도 한도 차단은 `dispatch_entered=None`이라 새 규칙(`False`만 미전송)이 확실한 전송 전 차단을 불명으로 바꾸고 기존 `'0'/False` 행의 복구가 깨진다는 지적. 반영: 러너 `_failure`·복구 `_verify_attempt` 모두 `dispatch_entered is not True`(슬롯 blocked의 False와 슬롯 없는 None은 미전송, 전송 진입 True는 제외)로 통일하고 한도 1 정책에서 차단된 유료/구독 시도가 `'0'/False`로 남고 복구 재계산이 일치하는 검사를 추가했다. 반영 뒤 관련 19파일 **719 passed**·격리 0. Codex 4회차(HEAD `df60e781`·tree `7e354668`, 2분04초)는 **P0/P1/P2 0** — 단일 전송·채널 차단·구독 월 예약 제외·API 가드 예약, 복구 네 항목, 거래 안전성·문서를 확인했고 “기존 runner의 단독 의견 승인 규칙은 남아 있어 현행 독립 검토 정책의 완전한 재현으로 해석하면 안 된다”는 범위 주의를 남겼다(이 작업의 주장과 같다). 매 회차 실제 모델/실효 effort는 미노출이며 테스트는 리뷰어가 실행하지 않았다. 리뷰 체인은 비공개 `~/.local/state/qwq-task-audit/20261101/e04-claude-adapter/`(codex-review-1~4.log·진단·체인 JSON)에 둔다. AWS 보조 전체·실제 WSL·PR은 아래에 적는다.
 
+**See/AWS 보조 전체 검증 — HEAD `cd34912cec6c50d87f303940ea2af69a72b5601e`·tree `a6f9b4bbaf2f2a24cf04f429be9cd1de7a410d3e`(리뷰 완료 소스 `7e354668`에 문서 커밋만 더한 tree):** 별도 detached worktree에서 정본 `QWQ_VERIFY_PYTHON=…/venv/bin/python bash scripts/dev/verify.sh`를 선택/병렬/skip 없이 직렬 전체 실행 — **10,250 passed / 2 skipped / 2 xfailed**, 검사850.99초·rc0·격리0·문법/비밀정보 PASS(21:31:19~21:45:46 KST, 사용자 WSL 아님). 비공개 `aws-full-verify.log`.
+
+**실제 WSL — WAIT(사용자 단계 1개):** AWS→WSL 역방향 터널(127.0.0.1:22222)은 살아 있고 WSL 작업용 sshd 호스트키는 정본 `host-pin.json`과 일치함을 무자격 프로브로 확인했다(인증은 예상대로 거부). 이전 작업의 임시 클라이언트 키·authorized_keys가 삭제돼 이번 작업용 새 임시 클라이언트 키(비공개 `client_ed25519`, 공개키는 `wsl-user-step.txt`)를 만들었고, 사용자가 WSL 작업용 sshd의 `~/.cache/qwq-wsl-e04-20261101/authorized_keys`에 그 한 줄을 등록하면 GitHub 푸시 없이 bundle(`e04-claude-adapter-<HEAD>.bundle`)을 터널로 전달해 병합된 main 기준 별도 작업본 `/home/user/projects/qwq-e04-claude-adapter-20261101`에서 `wsl-verify-remote.py`로 직렬 전체를 실행한다. **WSL 통과 전에는 푸시·PR을 만들지 않는다**(사용자 지시). 미검증 브랜치의 GitHub 전달 없음.
+
 **운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/실제 CLI·API 호출/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. E02-RR/E01은 새 유효 입력이 생길 때 판독하며 이번 턴에는 조회하지 않았다(마지막 경계 17:42:10 KST 유지). T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 07:40 자연 보고 수락은 별도다.
+
+**NEXT:** ① 사용자 WSL 키 등록 → 실제 WSL 직렬 전체 → 통과 시 커밋/푸시·PR(필수 verify는 PR 영수증) → 임시 키 제거. ② E02-RR/E01 새 유효 자연 입력 판독 우선(평일 장중 자료 뒤, 마지막 경계 11/1 17:42:10 KST). ③ E04 다음 단위는 CLI→API 대체를 조정하는 상위 비교 흐름과 worker의 Claude Bear 연결(`_raw_clients` 대체)이며 별도 승인·R1 OFF 유지. 코드 준비 완료와 실제 어댑터 운영 인수·유료 비교는 구분한다.
 
 <a id="e04-guard-billing-20261101"></a>
 ### E04-GUARD-BILLING — 비교 호출 경계의 전송 채널 소유권 (PR #323 병합·구현·독립 리뷰·AWS/실제 WSL 전체 검증 DONE · PR 대기)
@@ -44,7 +50,7 @@
 
 **운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지 보존, 배포/재시작/주문/시험 발송/새 예약/관측 연장 0, worker/R1 OFF·Gemini 차단 유지. T04 만료 종료·O02 11/4·5 사전점검·11/5·6 정리·11/2 자연 보고 수락은 별도다.
 
-**NEXT:** E02-RR/E01 새 유효 자연 입력 판독 우선(평일 장중 자료 생성 뒤). E04는 이 소유권 위에 실제 Claude 어댑터(raw `ClaudeCLIClient`/`AnthropicAPIClient` 단일 시도, PairSpec Bear 공급자·temperature None 제어, 구독 시도 보고 집계)를 별도 승인 범위에서 설계하며 R1 OFF를 유지한다.
+**NEXT(당시):** E02-RR/E01 새 유효 자연 입력 판독 우선. E04 실제 Claude 어댑터는 [E04-CLAUDE-ADAPTER](#e04-claude-adapter-20261101)에서 구현했다(운영 비활성). R1 OFF 유지.
 
 <a id="e04-snapshot-identity-20261101"></a>
 ### E04-SNAPSHOT-IDENTITY — 공식 GPT snapshot 신원 판독 (구현·독립 리뷰·실제 WSL DONE)
