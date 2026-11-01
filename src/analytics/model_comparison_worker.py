@@ -551,6 +551,17 @@ class ComparisonWorker:
                     await session.close()
                 except Exception:
                     pass
+        # 선택 주입된 Claude 단일 시도 어댑터의 raw 전송(CLI/API)도 중복 없이 닫는다 — 열린 aiohttp 세션·진행 중 호출 정리.
+        seen = set()
+        for claude in getattr(self.runner, "_claude_adapters", {}).values():
+            client = getattr(claude, "client", None)
+            if client is None or id(client) in seen:
+                continue
+            seen.add(id(client))
+            try:
+                await client.close()
+            except Exception:
+                pass
 
     def stop(self, deadline_seconds: float | None = None) -> dict:
         """새 수락을 닫고 시한까지 drain. 늦은 생산자는 계속 살아 있는 저널에 기록하고 종료 시 자동 봉인한다."""

@@ -266,6 +266,37 @@ def test_admission_latency_cannot_extend_the_bear_internal_deadline(tmp_path, mo
     assert api_call['deadline'] - api_call['loop_time'] < 11.5 - 0.15 - 0.2 - 0.15 + 0.02
 
 
+@pytest.mark.parametrize('role', ['bear', 'bull_current'])
+def test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted(tmp_path, monkeypatch, role):
+    import time
+    if role == 'bear':   # Bear 내부 예산만 짧게. (동기 sleep 은 루프 전체를 멈추므로 역할별로 한쪽 시한만 좁힌다)
+        spec = current_spec(bear=bear_controls('subscription', timeout_seconds=0.6), bear_internal_timeout_seconds=0.3,
+                            bear_cli_timeout_seconds=0.1, bear_api_fallback=bear_controls('api', timeout_seconds=0.3))
+    else:
+        spec = current_spec(current=m.RoleControls('gpt-5-mini', 400, 'minimal', 0.3, 20260803, 0.3),
+                            candidate=m.RoleControls('gpt-5-mini', 400, 'low', 0.3, 20260803, 0.3))
+    ledger, guard, runner, _, op, cli, api = setup(tmp_path, cli=SCRIPTS['timeout'], spec=spec)
+    original = guard._store_result
+
+    def slow_store(attempt_id, token, payload):       # 응답 수신 뒤 저장·정산에 걸리는 동기 시간을 흉내 낸다
+        if attempt_id.endswith(':bear:1' if role == 'bear' else ':bull_current:0'):
+            time.sleep(0.35)
+        return original(attempt_id, token, payload)
+    monkeypatch.setattr(guard, '_store_result', slow_store)
+    row = asyncio.run(runner.run(spec))
+    arm = row['current']
+    assert arm['verdict'] == 'hold' and role.split('_')[0] + '_role_deadline_exceeded_after_response' in arm['reasons']
+    assert arm['policy_verdict'] != 'hold'                      # 의견 자체는 파싱됐다 — 시한 때문에 채택되지 않았을 뿐
+    late = [a for a in arm['attempts'] if a['attempt_id'].endswith(':bear:1' if role == 'bear' else ':bull_current:0')][0]
+    assert late['success'] is True and late['ledger_state'] == 'known'      # 영수증·정산은 보존된다
+    assert ledger.status()['unresolved_count'] == 0
+    other = row['candidate']
+    # 공유 Bear 가 늦으면 두 arm 모두 hold. Bull 사례에서도 동기 저장 지연이 루프를 멈춰 candidate 의 Bull 역할 벽시계가
+    # 0.3초를 넘기므로 같은 사유로 hold 다 — 역할 전체 벽시계 재검사의 의도된 의미(운영 whole-call deadline).
+    assert other['verdict'] == 'hold'
+    assert (role.split('_')[0] + '_role_deadline_exceeded_after_response') in other['reasons']
+
+
 def test_identity_certification_does_not_default_an_explicit_empty_transport():
     assert m._identity_certified({'requested_model_match': False, 'provider': 'openai', 'requested_model': 'gpt-5-mini',
                                   'resolved_model': 'gpt-5-mini-2025-08-07'}) is True
@@ -460,6 +491,7 @@ def test_worker_with_injected_synthetic_adapters_runs_cli_then_api_chain_and_rej
         worker.stop(5)
     assert len(cli.calls) == 1 and len(api.calls) == 1
     assert len(reservations(ledger)) == 3
+    assert cli._closed and api._closed                       # 종료 시 주입된 Claude 전송도 닫힌다
 
 
 def test_install_from_env_with_current_manifest_still_refuses_activation(tmp_path, monkeypatch):

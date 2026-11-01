@@ -599,7 +599,7 @@ class PairedComparisonRunner:
         bear = spec.bear
         if spec.bear_cli_timeout_seconds is None:
             retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
-            return await self._role(pair_id, 'bear', bear, prompt, system, retries)
+            return await self._role(pair_id, 'bear', bear, prompt, system, retries), False
         from .model_comparison_claude import DEADLINE_AT
         attempts, index = [], 0
         loop = asyncio.get_running_loop()
@@ -627,7 +627,10 @@ class PairedComparisonRunner:
         finally:
             if token is not None:
                 DEADLINE_AT.reset(token)
-        return attempts
+        # 가드는 응답 뒤 저장·정산을 동기로 처리하므로 asyncio.timeout 이 그 구간에 개입하지 못한다. 반환 뒤 monotonic 으로
+        # 내부 시한을 재검사한다 — 늦은 결과는 영수증을 보존한 채 의견으로 세지 않는다(운영 whole-call deadline 과 같은 의미).
+        late = loop.time() > internal_deadline if attempts and attempts[-1].get('error') != 'TimeoutError' else False
+        return attempts, late
 
     def _attempt_reasons(self, attempts, certified=None):
         """certified: 전송된 시도의 신원 판정 함수. 레거시는 정확한 이름 일치, 현행은 _identity_certified(공식 snapshot 포함)."""
@@ -647,7 +650,7 @@ class PairedComparisonRunner:
             reasons.append('attempt_timing_unverified')
         return reasons
 
-    def _current_arm(self, spec, bull, bear):
+    def _current_arm(self, spec, bull, bear, bull_late=False, bear_late=False):
         """현행 entry 독립 검토 정책(운영 AdversarialValidator·오프라인 계약 POLICY 와 같은 의미).
 
         policy_verdict 는 파싱된 의견만의 판정, verdict 는 신원 검증된 성공 응답·시한까지 고려한 판정이다. 한쪽이라도 없으면
@@ -660,8 +663,8 @@ class PairedComparisonRunner:
 
         def certified(attempt):   # 전송 성공 + 응답 모델 신원(정확 일치 또는 공식 snapshot). 미확인·불일치는 의견으로 세지 않는다.
             return attempt.get('success') is True and _identity_certified(attempt)
-        b = pb if certified(bull[-1]) else None
-        r = pr if certified(bear[-1]) else None
+        b = pb if certified(bull[-1]) and not bull_late else None
+        r = pr if certified(bear[-1]) and not bear_late else None
         timed_out = any(a.get('error') == 'TimeoutError' for a in (bull[-1], bear[-1]))
         policy_verdict = ('approve' if (pb or pr) else 'reject') if pb is not None and pr is not None else 'hold'
         verdict = ('approve' if (b or r) else 'reject') if b is not None and r is not None and not timed_out else 'hold'
@@ -669,9 +672,11 @@ class PairedComparisonRunner:
         reasons = []
         if verdict == 'hold':
             reasons.append('independent_review_unavailable')
-            for role, attempt, parsed in (('bull', bull[-1], pb), ('bear', bear[-1], pr)):
+            for role, attempt, parsed, late in (('bull', bull[-1], pb, bull_late), ('bear', bear[-1], pr, bear_late)):
                 if attempt.get('success') is True and parsed is not None and not _identity_certified(attempt):
                     reasons.append(role + '_identity_unverified_or_mismatch')
+                if late:
+                    reasons.append(role + '_role_deadline_exceeded_after_response')
         if spec.bear_cli_timeout_seconds is not None:
             if len(bear) == 2:
                 reasons.append('bear_api_fallback_dispatched')
@@ -703,10 +708,14 @@ class PairedComparisonRunner:
                 'api_cost_usd': _sum_cost(attempts), 'sizing_replay': replay, 'reasons': reasons}
 
     async def _arm(self, pair_id, name, controls, spec, bear_task):
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         bull = await self._role(pair_id, 'bull_' + name, controls, spec.common_context + BULL_SUFFIX, BULL_SYSTEM, spec.empty_retries)
-        bear = await asyncio.shield(bear_task)
+        # Bull 도 가드의 동기 저장·정산 뒤 역할 시한을 재검사한다(현행 정책에서만 판정에 쓴다).
+        bull_late = loop.time() - started > controls.timeout_seconds and bull[-1].get('error') != 'TimeoutError'
+        bear, bear_late = await asyncio.shield(bear_task)
         if spec.review_policy == CURRENT_REVIEW_POLICY:
-            return self._current_arm(spec, bull, bear)
+            return self._current_arm(spec, bull, bear, bull_late, bear_late)
         b = _parse_verdict(bull[-1]['content'], 'APPROVE', 'REJECT') if bull[-1]['success'] else None
         r = _parse_verdict(bear[-1]['content'], 'ACCEPT', 'REJECT') if bear[-1]['success'] else None
         attempts = bull + bear
