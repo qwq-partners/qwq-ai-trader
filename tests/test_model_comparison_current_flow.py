@@ -23,6 +23,18 @@ def _empty(response):
     return response
 
 
+class CertifiedOpenAI(FakeOpenAI):
+    """현행 정책용 Bull: 공급자 보고 모델이 요청과 정확히 같다(기본). resolved 로 snapshot/불일치/미확인을 흉내 낸다."""
+    def __init__(self, resolved='exact', **kw):
+        super().__init__(**kw)
+        self.resolved = resolved
+
+    async def complete(self, prompt, system='', model=None, **kw):
+        response = await super().complete(prompt, system, model, **kw)
+        response.resolved_model = model if self.resolved == 'exact' else self.resolved
+        return response
+
+
 def guard_for(tmp_path, *, daily_attempt_cap=40):
     ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
     return ledger, ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(
@@ -48,7 +60,7 @@ def current_spec(**over):
 def setup(tmp_path, *, cli=_ok, api=_ok, cli_delay=0.0, api_delay=0.0, bull=None, spec=None, cli_channel='subscription',
           daily_attempt_cap=40):
     ledger, guard = guard_for(tmp_path, daily_attempt_cap=daily_attempt_cap)
-    op, ge = bull or FakeOpenAI(), FakeGemini()
+    op, ge = bull or CertifiedOpenAI(), FakeGemini()
     cli_client = (FakeAPI if cli_channel == 'api' else FakeCLI)(cli, delay=cli_delay)
     api_client = FakeAPI(api, delay=api_delay)
     runner = m.PairedComparisonRunner(
@@ -82,7 +94,7 @@ def test_current_policy_decides_only_with_both_valid_reviews(tmp_path):
 def test_current_policy_holds_when_either_review_is_missing_or_invalid(tmp_path, case):
     kwargs = {}
     if case == 'bull_empty':
-        kwargs['bull'] = FakeOpenAI(empty=True)
+        kwargs['bull'] = CertifiedOpenAI(empty=True)
     elif case == 'bear_empty':
         kwargs['cli'] = _empty
     elif case == 'bear_identity_mismatch':
@@ -105,6 +117,31 @@ def test_current_policy_holds_when_either_review_is_missing_or_invalid(tmp_path,
             assert a['bear_verdict'] is None
     # 거절·신원 불일치·빈 응답은 API 대체 대상이 아니고, 허용 실패(cli_timeout)만 API 1회다.
     assert len(api.calls) == (1 if case == 'bear_cli_timeout_api_incomplete' else 0)
+
+
+@pytest.mark.parametrize('resolved,decided', [('exact', True), ('gpt-5-mini-2025-08-07', True),
+                                              ('provider-reported-version', False), (None, False)])
+def test_current_policy_counts_bull_opinion_only_with_certified_identity(tmp_path, resolved, decided):
+    ledger, guard, runner, spec, op, cli, api = setup(tmp_path, bull=CertifiedOpenAI(resolved))
+    row = asyncio.run(runner.run(spec))
+    arm = row['candidate']                                  # bull APPROVE, bear REJECT
+    assert arm['policy_verdict'] == 'approve'               # 파싱된 의견만의 판정은 그대로 남는다
+    if decided:
+        assert arm['verdict'] == 'approve' and arm['bull_verdict'] is True
+    else:
+        assert arm['verdict'] == 'hold' and arm['bull_verdict'] is None
+        assert 'bull_identity_unverified_or_mismatch' in arm['reasons'] and arm['sizing_replay'] is None
+    assert api.calls == []
+
+
+def test_current_profile_without_api_fallback_still_applies_cli_and_internal_deadlines(tmp_path):
+    spec = current_spec(bear_api_fallback=None)
+    ledger, guard, runner, _, op, cli, api = setup(tmp_path, cli=SCRIPTS['timeout'], spec=spec)
+    row = asyncio.run(runner.run(spec))
+    (call,) = cli.calls
+    assert 0 < call['deadline'] - call['loop_time'] <= 5.75 and api.calls == []
+    assert row['current']['verdict'] == 'hold' and 'bear_api_fallback_not_configured' in row['current']['reasons']
+    assert len(bear_attempts(row)) == 1 and 'bear_api_fallback' not in spec.snapshot()
 
 
 def test_legacy_policy_rows_keep_single_opinion_semantics_and_shape(tmp_path):
@@ -325,6 +362,28 @@ def current_role_controls(man):
             'bear_transport_order': ['claude_cli', 'anthropic_messages'], 'strict_on_disagreement': False}
 
 
+def test_worker_accepts_envelope_built_from_real_operating_role_controls(tmp_path, monkeypatch):
+    from pathlib import Path
+    from src.analytics import model_comparison_input as mci
+    from src.utils.llm import LLMProvider
+    from tests.test_model_comparison_worker import envelope, wait
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+
+    class Manager:   # 생산자가 읽는 최소 표면: light 모델명만. 네트워크·자격 없음.
+        def _get_model(self, provider, weight):
+            return CLAUDE if provider == LLMProvider.ANTHROPIC else 'gpt-5-mini'
+    controls = mci.operating_role_controls(Manager(), fallback_prompt_suffix='\nYES/NO', fallback_timeout=10.0)
+    assert controls['bear_transport_order'] == ['claude_cli', 'anthropic_messages'] and 'billing_channel' not in controls['bear']
+    worker, ledger, op, cli, api = build_current_worker(tmp_path, current_manifest(), cli=SCRIPTS['timeout'])
+    worker.start()
+    try:
+        assert worker.offer(envelope(worker, role_controls=controls)) == 'accepted'
+        assert wait(lambda: worker.health()['finished'] == 1)
+    finally:
+        worker.stop(5)
+    assert len(cli.calls) == 1 and len(api.calls) == 1 and len(reservations(ledger)) == 3
+
+
 def build_current_worker(tmp_path, man, *, cli=_ok, api=_ok):
     from src.analytics import model_comparison_worker as w
     from tests.test_model_comparison_worker import Clock
@@ -332,7 +391,7 @@ def build_current_worker(tmp_path, man, *, cli=_ok, api=_ok):
     policy = dict(man['execution_policy'], experiment_id=man['experiment_id'])
     policy['allowed_models'] = tuple(policy['allowed_models'])
     guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
-    op, cli_client, api_client = FakeOpenAI(), FakeCLI(cli), FakeAPI(api)
+    op, cli_client, api_client = CertifiedOpenAI(), FakeCLI(cli), FakeAPI(api)
     runner = m.PairedComparisonRunner(guard=guard, adapter=m.SingleAttemptAdapter(openai=op, gemini=FakeGemini(), clock=lambda: NOW),
                                       claude_adapter=ClaudeSingleAttemptAdapter(cli_client, clock=lambda: NOW),
                                       claude_api_adapter=ClaudeSingleAttemptAdapter(api_client, clock=lambda: NOW), clock=lambda: NOW)

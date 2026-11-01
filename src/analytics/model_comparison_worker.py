@@ -34,7 +34,7 @@ from uuid import uuid4
 from loguru import logger
 
 from . import model_comparison_input as mci
-from .model_comparison_runner import (PAIR_BLOCK_REASONS, PairResultPersistenceError, PairSpec,
+from .model_comparison_runner import (LEGACY_REVIEW_POLICY, PAIR_BLOCK_REASONS, PairResultPersistenceError, PairSpec,
                                       PairedComparisonRunner, RoleControls, _json, context_bytes)
 
 COUNTERS = ("offered", "accepted", "rejected_full", "rejected_disabled", "rejected_stale", "rejected_duplicate",
@@ -59,6 +59,10 @@ def _time(value):
 def row_sha256(row) -> str:
     """pair 행의 정규화 JSON(sha256). 원장 저장 바이트와 같은 직렬화다."""
     return hashlib.sha256(_json(row).encode()).hexdigest()
+
+
+def _without_channel(role):
+    return {k: v for k, v in role.items() if k != "billing_channel"} if isinstance(role, dict) else role
 
 
 def _record_stamp(record) -> str:
@@ -178,7 +182,6 @@ class ComparisonWorker:
         self._fallback = tuple(RoleControls(**c) for c in self.manifest.get("fallback_chain", []))
         # 현행 프로필(판정 정책·Bear 내부/CLI 시한·명시 API 대체)은 manifest 에서 읽고 봉투를 받기 전에 PairSpec 과 같은 규칙으로
         # 검증한다 — 잘못된 프로필은 worker 생성 단계에서 끝나고 어떤 전송도 일어나지 않는다. 키가 없으면 역사적 의미 그대로다.
-        from .model_comparison_runner import LEGACY_REVIEW_POLICY, PairSpec
         api_fallback = self.manifest.get("bear_api_fallback")
         self._profile = {
             "review_policy": self.manifest.get("review_policy", LEGACY_REVIEW_POLICY),
@@ -229,13 +232,18 @@ class ComparisonWorker:
             "strict_on_disagreement": self.manifest["strict_on_disagreement"],
         }
         if self._profile["review_policy"] != LEGACY_REVIEW_POLICY:
-            # 현행 프로필은 생산자(operating_role_controls)가 적는 Bear 재시도·내부 시한·전송 순서도 같아야 비교다.
-            self._expected_controls.update({
+            # 현행 프로필은 생산자(operating_role_controls)의 계약과 대조한다: Bull/Bear 제어(채널은 생산자에 없는 manifest·
+            # 전송 개념이라 제외), 공통 재시도·strict, Bear 재시도·내부 시한·전송 순서. 레거시 단일 모델 폴백 체인은 현행
+            # 정책(hold, 폴백 없음)의 운영 조건이 아니므로 대조하지 않는다.
+            self._expected_controls = {
+                "bull": _without_channel(self.manifest["current"]), "bear": _without_channel(self.manifest["bear"]),
+                "empty_retries": self.manifest["empty_retries"],
+                "strict_on_disagreement": self.manifest["strict_on_disagreement"],
                 "bear_empty_retries": self._profile["bear_empty_retries"],
                 "bear_internal_timeout_seconds": self._profile["bear_internal_timeout_seconds"],
                 "bear_transport_order": (["claude_cli", "anthropic_messages"] if self._profile["bear_api_fallback"] is not None
                                          else ["claude_cli"]),
-            })
+            }
 
     # ── 생산자 쪽(운영 루프) ─────────────────────────────────
     def producer_config(self) -> dict:
@@ -278,8 +286,7 @@ class ComparisonWorker:
             return note("rejected_invalid", "clock_reversal")
         controls = envelope["role_controls"]
         producer = envelope["producer"] if isinstance(envelope.get("producer"), dict) else {}
-        if (not isinstance(controls, dict)
-                or any(controls.get(k) != v for k, v in self._expected_controls.items())
+        if (not self._controls_match(controls)
                 or producer.get("experiment_id") != self.manifest["experiment_id"]
                 or producer.get("config_sha256") != self.config_sha256
                 or producer.get("source_sha256") != mci.source_sha256()
@@ -310,6 +317,18 @@ class ComparisonWorker:
         while len(self._seen) > 4096:
             self._seen.popitem(last=False)
         return note("accepted")
+
+    def _controls_match(self, controls) -> bool:
+        if not isinstance(controls, dict):
+            return False
+        current = self._profile["review_policy"] != LEGACY_REVIEW_POLICY
+        for key, expected in self._expected_controls.items():
+            value = controls.get(key)
+            if current and key in ("bull", "bear"):
+                value = _without_channel(value)
+            if value != expected:
+                return False
+        return True
 
     def _resync(self, decision_id):
         """러너가 claim 전에 실패했으면(원장 입장 없음) 그날 수에서 뺀다. 작업자 스레드에서만 원장을 읽는다."""

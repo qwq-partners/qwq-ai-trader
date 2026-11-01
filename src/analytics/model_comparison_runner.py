@@ -19,7 +19,7 @@ import sqlite3
 from typing import Any
 
 from .decision_quote_join import join_decisions
-from .model_comparison_contract import FALLBACK as BEAR_API_FALLBACK_KINDS
+from .model_comparison_contract import DOCUMENTED_SNAPSHOTS, FALLBACK as BEAR_API_FALLBACK_KINDS
 from .model_comparison_execution import ComparisonAttemptResult, ComparisonCallGuard, ComparisonRequest
 from ..core.adversarial_validator import BULL_SUFFIX, BULL_SYSTEM, BEAR_SUFFIX, BEAR_SYSTEM, _parse_verdict
 from ..utils.llm import OpenAIClient, GeminiClient, LLMProvider, LLMResponse, _validate_controls
@@ -227,6 +227,8 @@ class PairSpec:
                 raise ValueError('current_policy_requires_strict_on_disagreement_false')
             if bear_internal_timeout_seconds is None:
                 raise ValueError('current_policy_requires_bear_internal_timeout')
+            if bear_cli_timeout_seconds is None:
+                raise ValueError('current_policy_requires_bear_cli_timeout')   # API 대체가 없어도 CLI 시한은 계약대로
         changed = {k for k in asdict(current) if getattr(current, k) != getattr(candidate, k)}
         if len(changed) != 1 or not changed <= {'model', 'reasoning_effort', 'max_output_tokens'}:
             raise ValueError('one_comparison_variable_required')
@@ -320,6 +322,17 @@ class SingleAttemptAdapter:
                  'cost_basis': cost_basis, 'api_cost_usd': str(cost) if cost is not None else None,
                  'finish_reason': response.finish_reason}
         return ComparisonAttemptResult(value, cost, settlement)
+
+
+_CONTRACT_TRANSPORTS = {'openai': 'openai_chat'}   # 계약 v2 의 전송 이름(공식 snapshot 표의 키)
+
+
+def _identity_certified(attempt) -> bool:
+    """현행 정책의 응답 신원: 요청 모델과 정확히 같거나 공식 문서화된 snapshot(계약 v2)만 인정한다. None 은 미확인이다."""
+    if attempt.get('requested_model_match') is True:
+        return True
+    transport = attempt.get('transport') or _CONTRACT_TRANSPORTS.get(attempt.get('provider'))
+    return (transport, attempt.get('requested_model'), attempt.get('resolved_model')) in DOCUMENTED_SNAPSHOTS
 
 
 def _api_fallback_authorized(attempt) -> bool:
@@ -582,7 +595,7 @@ class PairedComparisonRunner:
         까지의 경과를 뺀 나머지만 전달한다.
         """
         bear = spec.bear
-        if spec.bear_api_fallback is None:
+        if spec.bear_cli_timeout_seconds is None:
             retries = spec.empty_retries if spec.bear_empty_retries is None else spec.bear_empty_retries
             return await self._role(pair_id, 'bear', bear, prompt, system, retries)
         attempts, index = [], 0
@@ -594,7 +607,7 @@ class PairedComparisonRunner:
                 attempt = await self._attempt(pair_id, 'bear', 0, cli, prompt, system)
                 attempts.append(attempt)
                 remaining = spec.bear_internal_timeout_seconds - (loop.time() - started)
-                if _api_fallback_authorized(attempt) and remaining > 0:
+                if spec.bear_api_fallback is not None and _api_fallback_authorized(attempt) and remaining > 0:
                     index = 1
                     api = replace(spec.bear_api_fallback,
                                   timeout_seconds=min(spec.bear_api_fallback.timeout_seconds, remaining))
@@ -628,8 +641,11 @@ class PairedComparisonRunner:
             content = attempt.get('content') if isinstance(attempt.get('content'), str) else ''
             return _parse_verdict(content, yes, no) if content.strip() else None
         pb, pr = opinion(bull[-1], 'APPROVE', 'REJECT'), opinion(bear[-1], 'ACCEPT', 'REJECT')
-        b = pb if bull[-1]['success'] else None
-        r = pr if bear[-1]['success'] else None
+
+        def certified(attempt):   # 전송 성공 + 응답 모델 신원(정확 일치 또는 공식 snapshot). 미확인·불일치는 의견으로 세지 않는다.
+            return attempt.get('success') is True and _identity_certified(attempt)
+        b = pb if certified(bull[-1]) else None
+        r = pr if certified(bear[-1]) else None
         timed_out = any(a.get('error') == 'TimeoutError' for a in (bull[-1], bear[-1]))
         policy_verdict = ('approve' if (pb or pr) else 'reject') if pb is not None and pr is not None else 'hold'
         verdict = ('approve' if (b or r) else 'reject') if b is not None and r is not None and not timed_out else 'hold'
@@ -637,11 +653,15 @@ class PairedComparisonRunner:
         reasons = []
         if verdict == 'hold':
             reasons.append('independent_review_unavailable')
-        if spec.bear_api_fallback is not None:
+            for role, attempt, parsed in (('bull', bull[-1], pb), ('bear', bear[-1], pr)):
+                if attempt.get('success') is True and parsed is not None and not _identity_certified(attempt):
+                    reasons.append(role + '_identity_unverified_or_mismatch')
+        if spec.bear_cli_timeout_seconds is not None:
             if len(bear) == 2:
                 reasons.append('bear_api_fallback_dispatched')
             elif _api_fallback_authorized(bear[0]):
-                reasons.append('bear_api_fallback_skipped_time_exhausted')
+                reasons.append('bear_api_fallback_skipped_time_exhausted' if spec.bear_api_fallback is not None
+                               else 'bear_api_fallback_not_configured')
             elif not bear[0]['success']:
                 reasons.append('bear_api_fallback_not_authorized')
         replay = None
