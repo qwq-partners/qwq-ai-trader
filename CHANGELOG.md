@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-01 — E04 Claude 단일 시도 어댑터 (PR #324 병합 후속, 운영 비활성)
+
+- PR #324는 이미 main `6261c323`에 병합됐고 main CI run41299009048 10,200 passed / 2 skipped / 2 xfailed를 확인했다(반복 병합 없음). 운영 재배포 없음.
+- `src/analytics/model_comparison_claude.py` `ClaudeSingleAttemptAdapter`: raw `ClaudeCLIClient`(subscription)/`AnthropicAPIClient`(api) 하나만 감싸 채널을 전송 클래스에서 선언하고, 요청 채널 불일치·비Claude 모델·temperature/seed·low 외 effort는 공급자 호출 전 거절한다. dispatch 1회·호출자 시한만 전달·월 예약/정산 없음(가드 소유)·LLMManager 비사용. 구독은 `settlement=subscription`/비용 None/표시 추정비만, API는 기존 측정 규칙. 신원 미확인·거절·불완전 출력·timeout·취소는 그 상태 그대로 남긴다.
+- runner: `PairedComparisonRunner(claude_adapter=…)` 선택 주입, `RoleControls.billing_channel`(기본 api)·`temperature=None`(Claude만)·`PairSpec.bear_empty_retries`(Claude Bear 0 명시) 추가, Bear만 Claude 허용(Bull·폴백은 역사적 의미 유지), 구독 시도를 API 합계에서 분리(`subscription_attempts`·사유). `ComparisonRequest.temperature`는 None 허용. worker 활성화 거부·R1 OFF·Gemini 차단·설정·매수 중지 불변.
+- 검증·독립 리뷰·실제 WSL·PR 상태는 [원장](docs/operations/execution-roadmap.md#e04-claude-adapter-20261101) · [계획](docs/superpowers/plans/2026-11-01-claude-single-attempt-adapter.md) · [검토](docs/reviews/engine-comparison-contract-2026-11-01.md#claude-adapter). 실제 CLI/API 호출·worker 연결·유료 비교 활성화는 포함하지 않는다.
+
 ## 2026-11-01 — E04 비교 호출 경계의 전송 채널 소유권 (PR #323 병합 후속)
 
 - PR #323(공식 GPT snapshot 신원 v2)을 main `c022ef36`으로 병합했다(main CI 10,183 passed / 2 skipped / 2 xfailed). 17:03 이후 새 `signal_events` 0행이라 E02-RR/E01 판독은 WAIT다.

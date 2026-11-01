@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/1 E04-CLAUDE-ADAPTER:** PR #324는 main `6261c323`에 병합 완료(main CI 10,200 PASS). 새 `ClaudeSingleAttemptAdapter`가 raw CLI(subscription)/API(api) 전송 하나를 가드 dispatch로 노출하며 채널 불일치는 전송 전 거절, 월 예약은 가드만 소유한다. runner는 Claude Bear만 선택 주입으로 허용하고 worker/R1 OFF·설정·매수 중지는 그대로다. 실제 호출·활성화는 하지 않았다. [원장](docs/operations/execution-roadmap.md#e04-claude-adapter-20261101).
+
 > **11/1 E04 후속(guard 소유권):** PR #323 병합 완료(main `c022ef36`). `ComparisonCallGuard`가 전송 채널(api|subscription)을 소유해 구독 시도는 월 원장을 예약·정산하지 않는다. 실제 Claude 어댑터·worker/R1 OFF·설정·매수 중지는 그대로다. [원장](docs/operations/execution-roadmap.md#e04-guard-billing-20261101).
 
 > **11/1 E04 후속:** PR #322 CI 통과·main `e71ebc32` 병합 완료. 공식 GPT snapshot 신원 판독 v2를 보완하며 기존 계약·설정·매수 중지는 보존한다. [독립 리뷰·실제 WSL 검증·현재 NEXT](docs/operations/execution-roadmap.md#e04-snapshot-identity-20261101)를 따른다. 아래 이전 승인/미병합 표기는 당시 이력이다.

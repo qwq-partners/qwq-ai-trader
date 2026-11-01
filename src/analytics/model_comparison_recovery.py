@@ -181,10 +181,13 @@ def _verify_attempt(guard, spec, pair_id, attempt):
             reason = record['block_reason']
             if not (error == reason or (reason == _INTERRUPTED and _EXCEPTION_NAME.fullmatch(error))):
                 raise ValueError('result_row_error_mismatch')
-        # 구독 시도는 전송 뒤 실패해도 토큰이 없으므로 "토큰 없음 = 미전송" 추정은 유료 채널에만 적용한다.
+        # 구독 시도는 전송 뒤 실패해도 토큰이 없다. "토큰 없음 = 미전송" 은 전송에 진입하지 않은 차단(슬롯 blocked 의
+        # dispatch_entered False, 슬롯 없는 일일 한도 차단의 None)에만 적용한다 — 러너 _failure 와 같은 규칙이어야
+        # 저장 원본에서 같은 행이 재계산된다.
         not_sent = (record['state'] == 'blocked' and record['reservation_token'] is None
-                    and record.get('billing_channel', 'api') == 'api')
-        expected = failed_attempt_value(saved, not_sent=not_sent, error=error, requested_model=requested_model)
+                    and record.get('dispatch_entered') is not True)
+        expected = failed_attempt_value(saved, not_sent=not_sent, error=error, requested_model=requested_model,
+                                        billing_channel=record.get('billing_channel'))
     if body != expected:
         raise ValueError('result_row_response_mismatch')
 

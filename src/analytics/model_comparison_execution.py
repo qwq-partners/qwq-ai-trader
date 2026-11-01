@@ -116,7 +116,8 @@ class ComparisonRequest:
     system: str
     max_output_tokens: int
     reasoning_effort: str | None = None
-    temperature: float = 0.3
+    # None: 전송이 temperature 를 지원하지 않아 요청에서 제외한다(Claude). 숫자 요구 여부는 어댑터가 전송 전에 검사한다.
+    temperature: float | None = 0.3
     seed: int | None = None
     timeout_seconds: float = 12.0
     # api: 공유 월 원장에 예약·정산하는 유료 전송. subscription: 구독 CLI 같은 비과금 전송 —
@@ -134,9 +135,10 @@ class ComparisonRequest:
         if self.reasoning_effort is not None and (
                 not isinstance(self.reasoning_effort, str) or not self.reasoning_effort.strip()):
             raise ValueError("reasoning_effort는 비어 있지 않은 문자열 또는 None이어야 한다")
-        if (isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float))
+        if self.temperature is not None and (
+                isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float))
                 or not math.isfinite(self.temperature) or not 0 <= self.temperature <= 2):
-            raise ValueError("temperature는 유한한 0~2 숫자여야 한다")
+            raise ValueError("temperature는 유한한 0~2 숫자 또는 None이어야 한다")
         if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)
                                       or not -(2 ** 63) <= self.seed < 2 ** 63):
             raise ValueError("seed는 signed64 정수 또는 None이어야 한다")
