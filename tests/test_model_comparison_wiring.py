@@ -260,6 +260,25 @@ def test_owned_transports_are_closed_on_stop_and_shared_ones_are_never_assembled
     assert tr.claude_cli._closed and tr.anthropic_api._closed and len(tr.claude_cli.calls) == 1 and tr.anthropic_api.calls == []
 
 
+def test_invalid_profile_is_rejected_before_any_policy_is_pinned_in_the_shared_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    led = ledger(tmp_path)
+    man = issue()
+    man['candidate'] = dict(man['candidate'], max_output_tokens=300)   # 두 변수 변경: 지문은 맞지만 프로필 규칙 위반
+    tr = transports()
+    with pytest.raises(ValueError, match='one_comparison_variable'):
+        w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=led, transports=tr, approval=approval(man),
+                                     journal_dir=tmp_path / 'journal')
+    with led._connect(readonly=True) as db:
+        names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert 'comparison_policy' not in names and untouched(tr)        # 원장에 정책 행이 남지 않는다
+    # 같은 원장에서 다른 실험 ID·허용 모델의 올바른 manifest 가 조립된다.
+    fixed = issue(experiment_id='W2', execution_policy=dict(POLICY, allowed_models=['gpt-5-mini', CLAUDE]))
+    worker = w.assemble_comparison_worker(SimpleNamespace(), manifest=fixed, ledger=led, transports=tr, approval=approval(fixed),
+                                          journal_dir=tmp_path / 'journal')
+    worker.stop(5)
+
+
 def test_guard_blocks_new_calls_once_the_approved_policy_window_has_passed(tmp_path, monkeypatch):
     from tests.test_model_comparison_worker import Clock
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)

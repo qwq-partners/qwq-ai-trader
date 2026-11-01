@@ -175,6 +175,32 @@ def _contains_gemini(value) -> bool:
     return False
 
 
+_MANIFEST_SCALARS = ('experiment_id', 'fixed_at', 'horizon_seconds', 'strict_on_disagreement', 'empty_retries',
+                     'fallback_chain_timeout_seconds', 'execution_policy')
+
+
+def prevalidate_manifest(manifest) -> None:
+    """부작용 없는 사전 검증 — worker 가 쓰는 키와 역할 프로필을 가드(원장에 정책을 저장) 생성 **전에** 확인한다.
+
+    잘못된 manifest 가 공유 원장에 정책 행을 남겨 뒤의 수정본을 `comparison_policy_mismatch` 로 막는 일을 피한다.
+    """
+    if not isinstance(manifest, dict):
+        raise ValueError('manifest_required')
+    for key in _MANIFEST_SCALARS + ('current', 'candidate', 'bear'):
+        if key not in manifest:
+            raise ValueError('manifest_key_missing:' + key)
+    roles = {k: RoleControls(**manifest[k]) for k in ('current', 'candidate', 'bear')}
+    fallback = tuple(RoleControls(**c) for c in manifest.get('fallback_chain', []))
+    api = manifest.get('bear_api_fallback')
+    PairSpec.validate_profile(current=roles['current'], candidate=roles['candidate'], bear=roles['bear'], fallback_chain=fallback,
+                              strict_on_disagreement=manifest['strict_on_disagreement'],
+                              bear_empty_retries=manifest.get('bear_empty_retries'),
+                              review_policy=manifest.get('review_policy', 'legacy-single-opinion-v1'),
+                              bear_internal_timeout_seconds=manifest.get('bear_internal_timeout_seconds'),
+                              bear_cli_timeout_seconds=manifest.get('bear_cli_timeout_seconds'),
+                              bear_api_fallback=RoleControls(**api) if api is not None else None)
+
+
 def required_transports(manifest) -> tuple[str, ...]:
     """현행 manifest 가 필요로 하는 전송 집합. 레거시(Gemini Bear) 프로필은 조립 대상이 아니다."""
     if not isinstance(manifest, dict) or manifest.get('review_policy') != CURRENT_REVIEW_POLICY:
@@ -234,6 +260,7 @@ def assemble_comparison_worker(cross_validator, *, manifest, ledger, transports:
             raise ValueError('transport_missing:' + name)
     if set(transports.names()) != set(required):
         raise ValueError('transport_unexpected')
+    prevalidate_manifest(manifest)                      # 가드가 원장에 정책을 저장하기 전에 역할 프로필을 거절한다
     policy = dict(manifest['execution_policy'], experiment_id=manifest['experiment_id'])
     policy['allowed_models'] = tuple(policy['allowed_models'])
     execution_policy = ComparisonExecutionPolicy(**policy)
