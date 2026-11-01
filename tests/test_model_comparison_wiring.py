@@ -33,7 +33,7 @@ def controls():
 
 def issue(c=None, **over):
     fields = dict(experiment_id='W', fixed_at=(NOW - timedelta(hours=1)).isoformat(), horizon_seconds=900,
-                  execution_policy=POLICY, candidate={'reasoning_effort': 'low'}, enabled=True)
+                  execution_policy=POLICY, candidate={'reasoning_effort': 'low'}, max_input_age_seconds=30.0, enabled=True)
     fields.update(over)
     return w.current_profile_manifest(controls() if c is None else c, **fields)
 
@@ -80,7 +80,15 @@ def test_current_profile_manifest_freezes_producer_controls_and_matches_worker_c
     assert (man['bear_internal_timeout_seconds'], man['bear_cli_timeout_seconds']) == (11.5, 5.75)
     assert man['fallback_chain'] == [] and man['strict_on_disagreement'] is False and man['bear_empty_retries'] == 0
     assert man['fallback_chain_timeout_seconds'] == 10.0 and man['empty_retries'] == 1
+    assert man['max_input_age_seconds'] == 30.0 and man['pairs_per_day'] == POLICY['pairs_per_day']
     assert 'resolved_model' not in json.dumps(man)                     # 요청 모델만 적는다
+    from src.analytics.model_comparison_daily_report import build_daily_report   # 일별 보고 스크립트와 같은 한도 읽기
+    limits = {'max_input_age_seconds': man['max_input_age_seconds'], 'pairs_per_day': man['pairs_per_day'],
+              'max_common_context_bytes': man['execution_policy']['max_common_context_bytes'], 'limits_from_manifest': True}
+    assert isinstance(build_daily_report([], day_kst='2026-10-13', **limits), dict)   # 생성 manifest 의 한도를 그대로 받는다
+    for bad in ({'max_input_age_seconds': 0}, {'max_input_age_seconds': 61}, {'max_input_age_seconds': True}):
+        with pytest.raises(ValueError, match='max_input_age_seconds'):
+            issue(c, **bad)
     assert issue(c, enabled=False)['enabled'] is False
     with pytest.raises(ValueError):
         issue(c, enabled='yes')
@@ -93,6 +101,7 @@ def test_current_profile_manifest_freezes_producer_controls_and_matches_worker_c
                                           journal_dir=tmp_path / 'journal')
     try:
         assert worker.config_sha256 == w.manifest_sha256(man) and worker._controls_match(c)
+        assert worker.max_input_age_seconds == 30.0                  # 입장 신선도는 manifest(지문)가 소유한다
         assert cross._comparison_handoff == worker.offer and cross._comparison_producer_config == worker.producer_config()
     finally:
         worker.stop(5)
@@ -119,6 +128,8 @@ def test_manifest_issuance_refuses_unsupported_or_missing_producer_values_withou
     ('disabled', 'manifest_disabled'), ('sha', 'approval_manifest_mismatch'), ('experiment', 'approval_experiment_mismatch'),
     ('expired', 'approval_expired'), ('approval_transports', 'approval_transports_mismatch'),
     ('missing_api', 'transport_missing:anthropic_messages'), ('legacy', 'provider_disabled'),
+    ('policy_window', 'approval_window_narrower_than_policy'), ('shared', 'shared_transports_unsupported'),
+    ('age_override', 'max_input_age_from_manifest_only'), ('pairs_mismatch', 'manifest_pairs_per_day_mismatch'),
 ])
 def test_assembly_is_fail_closed_and_touches_no_transport(tmp_path, case, match):
     man = issue()
@@ -139,10 +150,17 @@ def test_assembly_is_fail_closed_and_touches_no_transport(tmp_path, case, match)
     elif case == 'legacy':
         from tests.test_model_comparison_worker import manifest as legacy_manifest
         man = legacy_manifest(); ap = approval(man)
+    elif case == 'policy_window':
+        ap = approval(man, valid_until='2026-12-31')                 # policy 는 2027-12-31 까지 → 승인이 더 좁다
+    elif case == 'shared':
+        tr = transports(owned=False)
+    elif case == 'pairs_mismatch':
+        man = dict(man, pairs_per_day=3); ap = approval(man)
     cross = SimpleNamespace()
     led = ledger(tmp_path)
+    extra = {'max_input_age_seconds': 5.0} if case == 'age_override' else {}
     with pytest.raises(ValueError, match=match):
-        w.assemble_comparison_worker(cross, manifest=man, ledger=led, transports=tr, approval=ap, journal_dir=tmp_path / 'journal')
+        w.assemble_comparison_worker(cross, manifest=man, ledger=led, transports=tr, approval=ap, journal_dir=tmp_path / 'journal', **extra)
     assert not hasattr(cross, '_comparison_handoff') and untouched(tr) and reservations(led) == []
 
 
@@ -194,7 +212,7 @@ def test_producer_envelope_flows_through_assembled_worker_to_receipts_and_recove
     tr = transports(cli=SCRIPTS['timeout'])
     led = ledger(tmp_path)
     worker = w.assemble_comparison_worker(cross, manifest=man, ledger=led, transports=tr, approval=approval(man),
-                                          journal_dir=tmp_path / 'journal', max_input_age_seconds=30.0)
+                                          journal_dir=tmp_path / 'journal')
     try:
         asyncio.run(cross.llm_second_check('005930', 'momentum', 90, {}, 'sideways', signal_id='sig-wiring'))
         decision = dict(cross.last_llm_decision)
@@ -221,19 +239,43 @@ def test_producer_envelope_flows_through_assembled_worker_to_receipts_and_recove
     assert tr.claude_cli._closed and tr.anthropic_api._closed                 # owned=True → 종료 시 닫힌다
 
 
-def test_shared_transports_are_not_closed_on_stop_but_owned_are(tmp_path, monkeypatch):
+def test_owned_transports_are_closed_on_stop_and_shared_ones_are_never_assembled(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', lambda: tmp_path)
     man = issue()
-    for owned in (False, True):
-        tr = transports(owned=owned)
-        led = ledger(tmp_path / str(owned))
-        worker = w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=led, transports=tr, approval=approval(man),
-                                              journal_dir=tmp_path / str(owned) / 'journal', max_input_age_seconds=30.0)
-        try:
-            at = datetime.now(timezone(timedelta(hours=9)))              # 실시간 runner 시계에 맞는 신선한 봉투
-            assert worker.offer(envelope(worker, at=at, role_controls=controls())) == 'accepted'
-            assert wait(lambda: worker.health()['finished'] == 1)
-        finally:
-            worker.stop(5)
-        assert tr.claude_cli._closed is owned and tr.anthropic_api._closed is owned
-        assert len(tr.claude_cli.calls) == 1 and tr.anthropic_api.calls == []
+    shared = transports(owned=False)
+    with pytest.raises(ValueError, match='shared_transports_unsupported'):
+        w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=ledger(tmp_path / 'shared'), transports=shared,
+                                     approval=approval(man), journal_dir=tmp_path / 'shared' / 'journal')
+    assert untouched(shared)                                         # 공유 전송은 쓰지도 닫지도 않는다
+    tr = transports(owned=True)
+    led = ledger(tmp_path / 'owned')
+    worker = w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=led, transports=tr, approval=approval(man),
+                                          journal_dir=tmp_path / 'owned' / 'journal')
+    try:
+        at = datetime.now(timezone(timedelta(hours=9)))              # 실시간 runner 시계에 맞는 신선한 봉투
+        assert worker.offer(envelope(worker, at=at, role_controls=controls())) == 'accepted'
+        assert wait(lambda: worker.health()['finished'] == 1)
+    finally:
+        worker.stop(5)
+    assert tr.claude_cli._closed and tr.anthropic_api._closed and len(tr.claude_cli.calls) == 1 and tr.anthropic_api.calls == []
+
+
+def test_guard_blocks_new_calls_once_the_approved_policy_window_has_passed(tmp_path, monkeypatch):
+    from tests.test_model_comparison_worker import Clock
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    clock = Clock()                                                  # 원장의 KST 오늘 = NOW(2026-10-13)
+    led = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=clock, policy_enabled=True)
+    man = issue(execution_policy=dict(POLICY, valid_from='2026-10-01', valid_until='2026-10-13'))
+    tr = transports()
+    worker = w.assemble_comparison_worker(SimpleNamespace(), manifest=man, ledger=led, transports=tr,
+                                          approval=approval(man, valid_from='2026-10-01', valid_until='2026-10-13'),
+                                          journal_dir=tmp_path / 'journal')
+    try:
+        clock.at = NOW + timedelta(days=1)                            # 승인·policy 창이 끝난 다음 날
+        at = datetime.now(timezone(timedelta(hours=9)))
+        assert worker.offer(envelope(worker, at=at, role_controls=controls())) == 'accepted'
+        assert wait(lambda: worker.health()['finished'] == 1)
+    finally:
+        worker.stop(5)
+    assert tr.openai.calls == [] and tr.claude_cli.calls == [] and tr.anthropic_api.calls == []   # 전송 0
+    assert all(s == 'released' for (s,) in reservations(led)) and led.status()['unresolved_count'] == 0

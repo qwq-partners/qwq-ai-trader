@@ -6,8 +6,11 @@
 그 합성 검증을 제공한다: 호출자가 raw 전송(`ComparisonTransports`)과 승인 기록(`ComparisonActivationApproval`)을
 직접 만들어 넘기고, 조립은 동결 manifest 지문·실험 ID·날짜 창·전송 집합이 전부 맞을 때만 worker 를 만든다.
 
-소유권: `ComparisonTransports.owned=True` 인 전송만 worker 가 stop 때 닫는다. 조립 실패는 소유권 이전(worker 생성) 전에
-끝나므로 호출자가 만든 전송을 건드리지 않는다. Gemini 는 생성하지 않으며 Gemini 가 섞인 manifest 는 조립하지 않는다.
+소유권·수명: worker 는 자기 스레드의 이벤트 루프에서 돌고 raw 전송은 aiohttp 세션을 캐시하므로, **worker 전용으로 새로 만든
+전송(`owned=True`)만** 조립한다. 다른 루프에서 쓰이는 공유 전송(`owned=False`)은 조립을 거부한다(닫지도 쓰지도 않음). 조립
+실패는 소유권 이전(worker 생성) 전에 끝나므로 호출자가 만든 전송을 건드리지 않는다. Gemini 는 생성하지 않으며 Gemini 가
+섞인 manifest 는 조립하지 않는다. 승인 날짜 창은 manifest 의 execution_policy 창을 포함해야 하며, 그 뒤로는 가드가 매 시도의
+입장에서 policy 창을 검사하므로 승인이 끝난 날에는 새 전송·예약이 생기지 않는다.
 """
 from __future__ import annotations
 
@@ -39,7 +42,7 @@ class ComparisonTransports:
     openai: OpenAIClient
     claude_cli: ClaudeCLIClient | None = None
     anthropic_api: AnthropicAPIClient | None = None
-    owned: bool = False     # True: worker 가 stop 때 닫는다. False: 공유 전송 — 호출자가 수명을 소유하며 worker 는 닫지 않는다
+    owned: bool = False     # True: worker 전용 — stop 때 닫는다. False: 다른 루프의 공유 전송 — 조립 대상이 아니다(거부)
 
     def __post_init__(self):
         if not isinstance(self.openai, OpenAIClient):
@@ -109,7 +112,7 @@ def _role_dict(controls, key):
 
 
 def current_profile_manifest(operating_controls, *, experiment_id, fixed_at, horizon_seconds, execution_policy,
-                             candidate, enabled=False) -> dict:
+                             candidate, max_input_age_seconds, enabled=False) -> dict:
     """생산자 제어(`operating_role_controls`)에서 현행 GPT/Claude 비교 프로필 manifest 를 동결한다.
 
     Bull/Bear 요청 제어·공통 재시도·strict·Bear 재시도/내부 시한/전송 순서를 그대로 옮기고, CLI 시한은 운영 규칙
@@ -124,6 +127,12 @@ def current_profile_manifest(operating_controls, *, experiment_id, fixed_at, hor
         raise ValueError('enabled_must_be_bool')
     if not isinstance(candidate, dict) or not candidate:
         raise ValueError('candidate_change_required')
+    # worker 의 입장 신선도(install_from_env 와 같은 범위)는 승인 지문에 들어가야 하므로 manifest 가 소유한다.
+    if (isinstance(max_input_age_seconds, bool) or not isinstance(max_input_age_seconds, (int, float))
+            or not 0 < float(max_input_age_seconds) <= 60):
+        raise ValueError('max_input_age_seconds must be a number in (0, 60]')
+    if not isinstance(execution_policy, dict) or 'pairs_per_day' not in execution_policy:
+        raise ValueError('execution_policy.pairs_per_day_required')
     for key in _REQUIRED_CONTROLS:
         if _control(operating_controls, key) is None:
             raise ValueError('operating_control_missing:' + key)
@@ -144,6 +153,8 @@ def current_profile_manifest(operating_controls, *, experiment_id, fixed_at, hor
         'bear_internal_timeout_seconds': internal, 'bear_cli_timeout_seconds': cli_timeout,
         'bear_api_fallback': dict(bear, billing_channel='api', timeout_seconds=internal),
         'execution_policy': dict(execution_policy),
+        # 일별 보고(scripts/report_model_comparison.py)가 읽는 최상위 한도. pairs_per_day 는 policy 와 같은 값이다.
+        'max_input_age_seconds': float(max_input_age_seconds), 'pairs_per_day': execution_policy['pairs_per_day'],
     }
     PairSpec.validate_profile(current=RoleControls(**bull), candidate=RoleControls(**cand),
                               bear=RoleControls(**manifest['bear']), fallback_chain=(),
@@ -194,11 +205,18 @@ def assemble_comparison_worker(cross_validator, *, manifest, ledger, transports:
                                approval: ComparisonActivationApproval, today=None, **worker_kwargs) -> ComparisonWorker:
     """명시 승인 아래 worker 를 조립·시작·attach 한다. 모든 대조는 worker/어댑터 생성 전에 끝난다(fail-closed).
 
-    승인 기록의 실험 ID·동결 manifest 지문·날짜 창·전송 집합이 manifest 와 정확히 맞고 전송 묶음이 그 집합과 같아야 한다.
-    `today` 는 KST date(기본 원장의 오늘). 운영 스케줄·승인 파일은 만들지 않는다.
+    승인 기록의 실험 ID·동결 manifest 지문·전송 집합이 manifest 와 정확히 맞고, 승인 날짜 창이 manifest 의
+    execution_policy 창을 포함하며, 전송 묶음이 worker 전용(owned=True)이고 필요한 집합과 같아야 한다. 입장 신선도
+    `max_input_age_seconds` 는 manifest 가 소유한다(인자로 덮어쓸 수 없음). `today` 는 KST date(기본 원장의 오늘).
+    운영 스케줄·승인 파일은 만들지 않는다.
     """
     if not isinstance(approval, ComparisonActivationApproval) or not isinstance(transports, ComparisonTransports):
         raise ValueError('explicit_approval_and_transports_required')
+    if transports.owned is not True:
+        # worker 는 자기 루프에서 돈다. 다른 루프에 묶인 aiohttp 세션을 가진 공유 전송은 쓰지도 닫지도 않는다.
+        raise ValueError('shared_transports_unsupported: pass worker-dedicated transports (owned=True)')
+    if 'max_input_age_seconds' in worker_kwargs:
+        raise ValueError('max_input_age_from_manifest_only')
     if not isinstance(manifest, dict) or manifest.get('enabled') is not True:
         raise ValueError('manifest_disabled')
     if approval.experiment_id != manifest.get('experiment_id'):
@@ -218,9 +236,18 @@ def assemble_comparison_worker(cross_validator, *, manifest, ledger, transports:
         raise ValueError('transport_unexpected')
     policy = dict(manifest['execution_policy'], experiment_id=manifest['experiment_id'])
     policy['allowed_models'] = tuple(policy['allowed_models'])
-    guard = ComparisonCallGuard(ledger=ledger, policy=ComparisonExecutionPolicy(**policy))
+    execution_policy = ComparisonExecutionPolicy(**policy)
+    if not (approval.valid_from <= execution_policy.valid_from and execution_policy.valid_until <= approval.valid_until):
+        # 가드는 매 시도 입장에서 policy 창을 검사한다. 승인 창이 policy 창을 포함해야 승인 만료 뒤 새 전송이 없다.
+        raise ValueError('approval_window_narrower_than_policy')
+    age = manifest.get('max_input_age_seconds')
+    if isinstance(age, bool) or not isinstance(age, (int, float)) or not 0 < float(age) <= 60:
+        raise ValueError('manifest.max_input_age_seconds must be a number in (0, 60]')
+    if manifest.get('pairs_per_day') != execution_policy.pairs_per_day:
+        raise ValueError('manifest_pairs_per_day_mismatch')
+    guard = ComparisonCallGuard(ledger=ledger, policy=execution_policy)
     runner = build_comparison_runner(guard, manifest, transports)
-    worker = ComparisonWorker(runner, manifest=manifest, **worker_kwargs)
+    worker = ComparisonWorker(runner, manifest=manifest, max_input_age_seconds=float(age), **worker_kwargs)
     worker._owned_transports = transports.owned          # 여기서부터 소유권 이전(owned=True 일 때만)
     mci.source_sha256()
     try:
