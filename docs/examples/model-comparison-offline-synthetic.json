@@ -1,0 +1,123 @@
+{
+  "schema_version": "model-comparison-offline-contract-v1",
+  "profile": "entry-independent-review-v1",
+  "evidence_kind": "synthetic",
+  "comparison_id": "synthetic-1",
+  "common_input_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "policy": {
+    "requires_independent_review": true,
+    "missing_review_policy": "hold",
+    "single_model_fallback": false,
+    "strict_on_disagreement": false,
+    "panel_timeout_seconds": 12.0,
+    "bear_internal_timeout_seconds": 11.5,
+    "bear_transport_order": [
+      "claude_cli",
+      "anthropic_messages"
+    ]
+  },
+  "calls": {
+    "bull_current": {
+      "controls": {
+        "requested_model": "gpt-5-mini",
+        "reasoning_effort": "minimal",
+        "max_output_tokens": 400,
+        "temperature": 0.3,
+        "seed": 20260803,
+        "empty_retries": 1
+      },
+      "whole_call_elapsed_ms": 1000,
+      "outcome": "success",
+      "content": "APPROVE",
+      "attempts": [
+        {
+          "attempt_id": "current",
+          "transport": "openai_chat",
+          "billing_channel": "api",
+          "requested_model": "gpt-5-mini",
+          "resolved_model": "gpt-5-mini",
+          "requested_reasoning_effort": "minimal",
+          "effective_reasoning_effort": null,
+          "status": "success",
+          "transport_error_kind": null,
+          "request_sent": true,
+          "usage_known": true,
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "started_ms": 0,
+          "finished_ms": 1000,
+          "api_estimated_cost_usd": "0.01",
+          "subscription_estimated_cost_usd": null
+        }
+      ]
+    },
+    "bull_candidate": {
+      "controls": {
+        "requested_model": "gpt-5-mini",
+        "reasoning_effort": "low",
+        "max_output_tokens": 400,
+        "temperature": 0.3,
+        "seed": 20260803,
+        "empty_retries": 1
+      },
+      "whole_call_elapsed_ms": 1000,
+      "outcome": "success",
+      "content": "APPROVE",
+      "attempts": [
+        {
+          "attempt_id": "candidate",
+          "transport": "openai_chat",
+          "billing_channel": "api",
+          "requested_model": "gpt-5-mini",
+          "resolved_model": "gpt-5-mini",
+          "requested_reasoning_effort": "low",
+          "effective_reasoning_effort": null,
+          "status": "success",
+          "transport_error_kind": null,
+          "request_sent": true,
+          "usage_known": true,
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "started_ms": 0,
+          "finished_ms": 1000,
+          "api_estimated_cost_usd": "0.01",
+          "subscription_estimated_cost_usd": null
+        }
+      ]
+    },
+    "bear": {
+      "controls": {
+        "requested_model": "claude-opus-5-5",
+        "reasoning_effort": "low",
+        "max_output_tokens": 400,
+        "temperature": null,
+        "seed": null,
+        "empty_retries": 0
+      },
+      "whole_call_elapsed_ms": 1000,
+      "outcome": "success",
+      "content": "ACCEPT",
+      "attempts": [
+        {
+          "attempt_id": "bear",
+          "transport": "claude_cli",
+          "billing_channel": "subscription",
+          "requested_model": "claude-opus-5-5",
+          "resolved_model": "claude-opus-5-5",
+          "requested_reasoning_effort": "low",
+          "effective_reasoning_effort": null,
+          "status": "success",
+          "transport_error_kind": null,
+          "request_sent": true,
+          "usage_known": true,
+          "input_tokens": 10,
+          "output_tokens": 2,
+          "started_ms": 0,
+          "finished_ms": 1000,
+          "api_estimated_cost_usd": null,
+          "subscription_estimated_cost_usd": "0"
+        }
+      ]
+    }
+  }
+}
