@@ -188,8 +188,8 @@ def test_stored_pair_with_unverified_identity_is_not_an_acceptance_pass(tmp_path
     assert receipt["offer"] == "accepted" and receipt["pair"]["complete"] is True
     assert receipt["status"] == "completed_with_findings"
     assert "review_verdict_hold_or_missing" in receipt["findings"]
-    # 신원 불일치 응답은 신원 사유·불명 API 비용(unknown 예약)으로도 드러난다 — 둘 다 인수 중단 조건이다
-    assert any("unverified_or_mismatch" in f for f in receipt["findings"])
+    # 신원 불일치 응답은 독립 검토 불가 판정·불명 API 비용(unknown 예약)으로 드러난다 — 모두 인수 중단 조건이다
+    assert "reason:independent_review_unavailable" in receipt["findings"]
     assert "reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved:1" in receipt["findings"]
     assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
 

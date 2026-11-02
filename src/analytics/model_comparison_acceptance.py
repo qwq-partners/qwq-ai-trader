@@ -35,8 +35,10 @@ ACCEPTANCE_POLICY = {"daily_attempt_cap": 4, "max_output_tokens": 400, "experime
                      "pairs_per_day": 1, "max_common_context_bytes": 65536, "required_policy_mode": "normal"}
 MANIFEST_FILE, APPROVAL_FILE, INPUT_FILE = "manifest.json", "approval.json", "input.json"
 RECEIPT_GLOB = "receipt-*.json"          # 실행(decision_id)별 영수증 — 덮어쓰지 않으며, 하나라도 있으면 같은 디렉터리 재실행을 거부한다
-# 인수 성공(finished)으로 세지 않는 runner 사유 — 저장 완료와 인수 통과를 구분한다.
-_FINDING_REASON_MARKERS = ("unverified_or_mismatch", "role_deadline_exceeded_after_response", "api_cost_unknown")
+# 인수 성공(finished)으로 세지 않는 runner 사유 — 저장 완료와 인수 통과를 구분한다. 신원은 검토 판정이 집행한다
+# (인증된 성공 의견이 양쪽에 있어야 approve/reject, 아니면 hold) — 시도 단위 `resolved_model_unverified_or_mismatch` 는
+# CLI 시한 초과(응답 없음)에도 붙으므로 판정 차단 사유만 센다.
+_FINDING_REASON_MARKERS = ("independent_review_unavailable", "role_deadline_exceeded_after_response", "api_cost_unknown")
 _INPUT_KEYS = ("symbol", "strategy", "score", "market_regime", "sector", "indicators")
 # 영속 영수증에서 제거하는 키 — 프롬프트·응답 원문·공통 입력 본문은 어떤 경로로도 남기지 않는다.
 _SCRUB_KEYS = frozenset({"prompt", "system", "content", "response", "text", "common_context", "raw", "messages",
