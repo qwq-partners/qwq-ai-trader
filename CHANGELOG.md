@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-02 — E02-RR/E01 자연 입력 판독 (문서 전용, 소스 변경 0)
+
+- 11/1 17:42:10 KST 이후 `signal_events` READ ONLY 집계: 새 2행 = 코어 리밸런싱 011200 한 신호(G2 지표결손 -8/패널 +10 → G5 가용 현금 부족). rr_context target·수량·판단 null, 비교쌍 0. 장중 75+ 후보(최대 9)는 스케줄러 `가용현금=0` 제외로 엔진 미도달, 배치 SEPA/VCP는 하락장 차단. 실행 제약 상태로 분류, 선정 실패·수익률 0으로 해석하지 않음.
+- 팀 심의 Bear(운영 cfc9bc20) 48건: CLI 9 성공·33 시한·6 불완전 → API 39 대체, 시도 지연 합 중앙값 12.8초. 2거래일 표본이라 시한·모델 변경 근거로 쓰지 않음.
+- 11/2 보고: Telegram 3건 수락, market morning `unsupported_date`·web 3/3 `invalid_output`(웹 경로는 거절 사유 미기록 → 원인 재현 불가, 수정은 별도 승인). 운영·설정·매수 중지·R1 OFF 불변. 원장 `#e02-e01-readout-20261102`.
+
 ## 2026-11-02 — E04 worker 클라이언트 조립 경로·생산자 현행 프로필 발행 (PR #326 후속, 운영 worker/R1 OFF)
 
 - 새 `src/analytics/model_comparison_wiring.py`: `ComparisonTransports`(호출자가 만든 raw OpenAI/Claude CLI/Anthropic API 전송과 소유권 플래그), `ComparisonActivationApproval`(실험 ID·동결 manifest sha256·KST 날짜 창·전송 집합·승인자 — 파일/환경변수에서 자동 생성 없음), `current_profile_manifest`(생산자 `operating_role_controls`에서 현행 GPT/Claude 프로필 manifest를 동결: 요청 모델만, CLI 시한 `min(8, 내부/2)`, API 대체 채널 api, 기본 `enabled=False`, `validate_profile` 검사), `build_comparison_runner`(Gemini 인스턴스 없이 현행 흐름 조립), `assemble_comparison_worker`(승인·지문·날짜·전송 집합이 전부 맞을 때만 worker 조립·시작·attach, 실패는 소유권 이전 전).

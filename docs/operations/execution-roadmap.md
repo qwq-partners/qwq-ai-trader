@@ -1,5 +1,28 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e02-e01-readout-20261102"></a>
+### E02-RR/E01 자연 입력 판독 — 11/2 (판독 DONE / 비교쌍 0 · 실행 제약 상태 / 소스 변경 0)
+
+**Plan:** 사용자 “E04-WORKER-WIRING 완료를 이어받아 E02-RR/E01 새 자연 입력으로 선정·진입·비용의 실제 병목을 판독하고, 재현 결함이 있을 때만 최소 수정하며, 도래한 보고·예약은 기존 영수증으로만 확인.” 시작 상태(읽기 전용): origin/main `a3aabff1`(PR #327 병합), 작업 worktree 깨끗, 운영 checkout `cfc9bc20`+`config/evolved_overrides.yml` 미커밋 보존, `KILL_SWITCH_KR` 존재, 서비스 active PID 4157369/NRestarts 0. PR #327 재병합·전체 검사·독립 리뷰는 반복하지 않았다. 새 수집·반복 폴링·유료 호출·시험 발송·배포·재시작·새 예약 0.
+
+**Do/① E02 새 구간:** 마지막 경계 11/1 17:42:10.256971 KST 이상~11/2 20:39:12.308 KST 미만의 `signal_events`를 READ ONLY 트랜잭션·`statement_timeout` 5초·10,001행 상한으로 집계했다(이전 구간 재조회 0, 상한 미초과, 실패 조회 0). **새 2행**, 모두 11/2 09:07:44 `core_holding` 011200(HMM) 한 신호의 기록이다: `penalized/G2_cross`(73→75: 지표결손(ATR,PER,PBR,수급) -8 + 전문가패널 추천 +10) → `blocked/G5_cash`(가용 현금 부족). `rr_context`는 `captured`이나 source `core_rebalance`·entry 23,600·stop 20,060(설정 `stop_loss_pct` 15)·**target 없음**·selection `not_captured`·요청/계획/size_trace 수량 전부 null, `llm_decision`·`wiki_context_used` null. 코어 전략에는 RR gate가 없어 비용 전/후 손익비·수량별 비용 민감도·선정 당시 대비 현재 가격 비교쌍은 0이다. 운영 `/api/portfolio` 읽기: 현금 83,045원·`cash_ratio` 0.52%·보유 1종목(최소 포지션 20만원 미달, 매수 중지 유지) — 실제 주문 의도·접수·체결 0.
+
+**Do/① 분모와 차단 원인(운영 로그 중복 제거 요약):** 배치 08:20/13:30 — SEPA 점수분포 전체 9/10·통과 0(평균 37.9/34.2·최고 45.7/54.0)·R/R차단 0, 하락장 감지(KOSPI 20일 -16.2%/-15.8%) → SEPA/VCP 0개 차단·RSI2 0 → **시장 국면·전략 조건 제외**. 장중 09:00~15:30 — 스크리닝 후보 1→36개, “75+후보” 1~9개가 매 주기 **`자동진입 체크: 가용현금=0 … 제외`**로 엔진 `on_signal` 전에 끝나 `signal_events`·rr_context·LLM 2차·수량 기록이 생기지 않았다 → **선정 조건 통과 후 실행 제약으로 미평가**. `passed` 신호·계획 수량·체결은 0이며 매수 중지/현금 부족을 선정 실패나 수익률 0으로 바꾸지 않는다.
+
+**Do/② E01:** 판단 완료 기록 0(`llm_decision` null; `~/.cache/ai_trader/llm_decisions/`는 이 호스트에 존재한 적 없음 — 10/27 W1 기록과 동일, 부재만으로 호출 0을 뜻하지 않음). 오늘 `llm_ledger/llm_20261102.jsonl` 96행은 팀 심의 `debate-v2-2026-09-15`(10:31/11:31/13:01/14:01 4슬롯·심의 6건·round 1/2·11종목) shadow이며 entry 2차 검증이 아니다. 판단 완료 뒤 첫 유효 ask·수량·같은 연결 세대 장 상태·비교 bid 입력 없음 → WAIT.
+
+**Do/③ E04 자연 호출(운영 `cfc9bc20`의 팀 심의 Bear, 새 wiring 아님):** Bull gpt-5-mini 48/48 완료·최종 지연 중앙값 1.67초·추정 USD 0.0159(48회). Bear claude-opus-5-5 48/48 완료: CLI 시도 48 → 성공 9(18.8%)·`cli_timeout` 33·`cli_incomplete` 6(end_turn·불완전) → API 대체 39/39 성공. 최종 응답 지연 중앙값 5.24초, **시도 지연 합 중앙값 12.81초·최대 15.52초**(CLI 시한 ≈7.85초 + API 중앙값 5.26초). CLI 성공 지연 중앙값 5.19초·최대 7.18초, 시한 초과 33건은 7.85초 전후(2.40초 1건 포함). API 추정 USD 0.6124(39회, `log_and_continue`), 구독 표시 추정 USD 0.4950(23회, 청구액 아님), CLI 24회 usage unknown·1회 not_sent. 신원 `model_identity_status`: API verified 39, CLI verified 39/unverified 9. 10/30 표본(CLI 7/24)과 합쳐도 2거래일 자료라 시한·모델·정책 변경 근거로 쓰지 않으며, 새 wiring의 운영 인수나 대안 모델 A/B로 해석하지 않는다.
+
+**Do/④ F1/W1·E03/A01/E05:** 코어 신호 `wiki_context_used` null, 장중 후보는 엔진 미도달 → 구별 가능한 연구/위키 소비 입력 0. 새 진입·청산·체결·비용·계좌 기준선 자료 0 → 전부 WAIT, 순손익/TWR null 유지, 가상자금 없음.
+
+**Do/⑤ 11/2 도래 보고(기존 영수증만):** `report_delivery/reports.sqlite3` 읽기 — 슬롯 market morning/midday/after 3건 `accepted`(**저장 성공·Telegram API 수락**, 07:41:44 로그 accepted), HTML `2026-11-02.html`/`index.html` 16:41 생성. 자연 LLM 분석: market midday/after `ready/validated`(gpt-6.1-sol, 자연 본문 발송), **market morning `failed/invalid_output` `unsupported_date` @ `issues[0].event`** → 결정론 대체 본문 발송. **web morning/midday/after 3/3 `failed/invalid_output`**(gpt-6-astra, request_sent·finish stop·출력 1.7~2.1k 토큰, 입력 9.0~9.6k) → 페이지 “분석 미확보” 3건. 웹 경로는 검증 예외를 `type(error).__name__`(ValueError)만 로그하고 메시지·원응답을 저장하지 않아 **거절 사유(uncited number/date/latin·schema 등)를 오프라인에서 재현할 수 없다**(market 경로는 `validation_code/field`를 남긴다). **실제 모바일 수신·내용/가독성 수락·웹 링크 열림은 사용자 확인 없음 → 미확정.** 11/1 예시 수락을 옮기지 않는다. 시험 발송·슬롯 재실행·새 LLM 생성 0. O02 11/4·5 18:00 사전점검·11/5·6 09:34:10 정리는 아직 도래하지 않았고 T04는 종료 완료다.
+
+**See/결함 분류:** (a) 재현 가능·오늘 효과 0 — 코어 리밸런싱 BUY `Signal.metadata`에 `indicators`가 없어(`CoreCandidate`는 symbol/name/score/entry_price만 보유, PER/수급은 `reasons` 문자열) 크로스검증 지표결손 -8이 코어 신호마다 붙는다. core 배분 0%·현금 차단이라 결과 불변이며 배분 재개 결정 때 하위 수정으로 다룬다. (b) 재현 가능·관측성 — 웹 리포트 검증 거절 사유 미기록으로 3/3 실패 원인을 판정할 수 없다. R02 범위이고 보고 후속이 엔진 주 작업을 대신하지 않도록 이번 턴에는 수정하지 않았다(최소 수정안: `validate_web_analysis` 예외 메시지를 metadata `validation_code`로 보존·로그, 판정 동작 변경 0, 별도 승인·WSL·PR). (c) market morning `unsupported_date`는 인용 근거 밖 날짜를 거절하는 설계대로의 fail-closed이며 원응답 미보존으로 모델 오류/근거 누락을 구분할 수 없다. **소스 변경 0** → WSL 전체 검증·독립 코드 리뷰 불요, 문서 검사(참조·비밀 패턴·diff)만 수행.
+
+**판정:** 선정 근거 자체의 문제, 판단 지연으로 가격 조건이 달라진 문제, 비용 포함 시 기대 조건 불성립 중 어느 것도 아직 판정할 수 없다. 현재는 **실행 제약(현금 0.52%·매수 중지) 때문에 거래 성과를 평가할 수 없는 상태**이며, 스케줄러가 가용현금 0에서 75+ 후보를 엔진 게이트 전에 제외하므로 **기다려도 rr_context·LLM 판단·E01 입력은 생기지 않는다.** 단일 사례로 임계값·모델·시한을 바꾸지 않는다.
+
+**NEXT(우선 1개):** 사용자 결정 — 신규 매수용 현금/매수 중지 상태가 그대로면 E02-RR/E01 자연 인수는 구조적으로 WAIT다. 코드 없이 가능한 추가 판독은 없다(장중 75+ 후보의 선정 당시 가격·ATR 손절·비용 후 RR을 기존 오프라인 계산기로 보려면 엔진 전에 끊기는 rr_context를 대신할 새 기록 경로가 필요하며, 비교 코드 추가 목적화를 피하기 위해 승인 전 구현하지 않는다). E04 실호출 인수안(KST 하루 창·pairs_per_day 1·daily_attempt_cap 4·max_output_tokens 400·USD 0.50·현행 시한·worker 전용 raw 클라이언트·불일치 시 중단)은 승인 대기 그대로이며 이번 판독은 승인이 아니다. 운영 `cfc9bc20`·미커밋 evolved·매수 중지·R1 OFF·worker 비활성·Gemini 차단·월 USD100/`log_and_continue` 보존, 배포/재시작/새 예약 0. 영수증: 비공개 `~/.local/state/qwq-task-audit/20261102/e02-readout/`(구간 집계·새 2행·요약 JSON; 원문/계좌/자격 미커밋).
+
 <a id="e04-worker-wiring-20261102"></a>
 ### E04-WORKER-WIRING — worker 클라이언트 조립 경로·생산자 현행 프로필 발행 (구현·합성 검증·독립 리뷰·AWS 보조·실제 WSL 전체 DONE · PR 영수증 참조 · 운영 worker/R1 OFF)
 
