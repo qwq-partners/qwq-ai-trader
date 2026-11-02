@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/2 E02-CORE-INDICATORS:** 코어 리밸런싱 BUY 신호가 후보의 기존 지표(PER/PBR·5일 수급·MA)를 `Signal.metadata["indicators"]` 로 전달하도록 최소 수정했다(즉시·pending·재시도 경로 공통 헬퍼, 수급은 관측 일수 ≥1 인 측만, ATR 결손 유지). 크로스검증 결손 -8→-2이며 규칙·문턱·core 배분 0%·현금/매수 중지 불변. 운영 미배포. [원장](docs/operations/execution-roadmap.md#e02-core-indicators-20261102).
+
 > **11/2 E02-RR/E01 판독:** 11/1 17:42:10 이후 새 `signal_events` 2행(코어 리밸런싱 011200: G2 +2 → G5 현금 차단, target/수량/판단 null)·장중 75+ 후보 최대 9개는 가용현금 0으로 엔진 미도달 → 비교쌍 0·E01 입력 0. 실행 제약 상태이며 선정 실패가 아니고, 현금/매수 중지가 그대로면 기다려도 입력은 생기지 않는다. 팀 심의 Bear CLI 9/48 성공·API 대체 39/39. 11/2 보고: Telegram 3건 수락, market morning·web 3/3 검증 거절(web 사유 미기록), 수신/내용 수락 미확정. 소스 변경 0·운영 불변. [원장](docs/operations/execution-roadmap.md#e02-e01-readout-20261102).
 
 > **11/2 E04-WORKER-WIRING:** PR #326 병합(main `c8b38798`) 위에 raw 전송 묶음·명시 승인 기록·동결 현행 manifest로만 worker를 조립하는 `model_comparison_wiring`을 추가했다(실제 `CrossValidator` 발행→worker→guard→복구 합성 E2E). `install_from_env`/`_raw_clients` 거부·R1 OFF·설정·매수 중지는 그대로이며 실제 호출·활성화는 없다. [원장](docs/operations/execution-roadmap.md#e04-worker-wiring-20261102).

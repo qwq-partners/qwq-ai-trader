@@ -22,10 +22,12 @@ for _p in (ROOT, ROOT / "tests"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from src.analytics.swing_supply import KST, daily_evidence, previous_session, utc_now  # noqa: E402
 from src.core.batch_analyzer import BatchAnalyzer, core_signal_indicators  # noqa: E402
 from src.core.cross_validator import CrossStrategyValidator as CrossValidator  # noqa: E402
+from src.core.entry_llm_context import build_entry_context  # noqa: E402
 from src.core.types import OrderSide, Position  # noqa: E402
-from src.signals.screener.core_screener import CoreCandidate  # noqa: E402
+from src.signals.screener.core_screener import CoreCandidate, CoreScreener  # noqa: E402
 from src.strategies.exit_manager import ExitConfig, ExitManager  # noqa: E402
 from test_risk_sizing import home  # noqa: E402,F401
 
@@ -41,6 +43,7 @@ def _ind(**over):
         "avg_trading_value": 4.2e10, "per": 16.2, "pbr": 0.9, "eps": 1450.0, "bps": 26000.0,
         "rank": 40, "market_cap_eok": 120000, "sector": "운송",
         "foreign_net_buy_5d": 312000, "inst_net_buy_5d": -45000,
+        "foreign_net_buy_5d_observed_days": 5, "inst_net_buy_5d_observed_days": 5,
     }
     base.update(over)
     return base
@@ -65,7 +68,7 @@ def _ba(tmp_path, candidates, positions=None):
 
     ba = object.__new__(BatchAnalyzer)
     ba._config = {"core_holding": {"enabled": True, "max_positions": 3}}
-    ba._engine = SimpleNamespace(portfolio=SimpleNamespace(positions=positions or {}),
+    ba._engine = SimpleNamespace(portfolio=SimpleNamespace(positions=positions if positions is not None else {}),
                                  emit=_emit, risk_manager=None)
     ba._broker = SimpleNamespace(get_daily_prices=_no_daily)
     ba._exit_manager = ExitManager(ExitConfig())
@@ -126,8 +129,19 @@ def test_helper_zero_sentinel_and_empty_input():
     out = core_signal_indicators(ind)
     assert "foreign_net_buy" not in out and "supply_window_days" not in out
     # 수급 키가 있고 값이 None 이면 None 보존(크로스검증은 결손으로 읽는다)
-    out = core_signal_indicators(_ind(foreign_net_buy_5d=None, inst_net_buy_5d=None))
+    out = core_signal_indicators(_ind(foreign_net_buy_5d=None, inst_net_buy_5d=None,
+                                      foreign_net_buy_5d_observed_days=None, inst_net_buy_5d_observed_days=None))
     assert out["foreign_net_buy"] is None and out["inst_net_buy"] is None
+    # 원천이 미관측 일자를 0 으로 채운 합계(관측 일수 0)는 소비자 키에 "0" 으로 싣지 않는다 — 원키는 보존
+    out = core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed_days=0,
+                                      inst_net_buy_5d=-45000, inst_net_buy_5d_observed_days=3))
+    assert out["foreign_net_buy"] is None and out["foreign_net_buy_5d"] == 0 and out["foreign_net_buy_5d_observed_days"] == 0
+    assert out["inst_net_buy"] == -45000 and out["inst_net_buy_5d_observed_days"] == 3
+    # 관측 일수 키가 없거나 bool/비정수면 미확인 → None
+    legacy = _ind()
+    del legacy["foreign_net_buy_5d_observed_days"]
+    assert core_signal_indicators(legacy)["foreign_net_buy"] is None
+    assert core_signal_indicators(_ind(foreign_net_buy_5d_observed_days=True))["foreign_net_buy"] is None
     # 빈 입력 → 빈 dict (출처 표시도 없음)
     assert core_signal_indicators({}) == {} and core_signal_indicators(None) == {}
     # Decimal 은 JSON 가능한 float 로, 직렬화 불가 객체는 None
@@ -233,3 +247,82 @@ def test_pending_buys_persist_indicators_and_retry_restores_them(home, tmp_path)
     _, adj_retry, _ = _validate(by_symbol[SYMBOL].metadata)
     _, adj_retry_legacy, _ = _validate(_legacy(by_symbol[SYMBOL].metadata))
     assert adj_retry == adj_retry_legacy + MISSING_ALL - MISSING_ATR
+
+
+# ── 생산자(코어 스크리너) 수급 보강: 관측 일수 ───────────────────────────────
+
+def _daily_rows(now, spec):
+    """spec: [(foreign_raw|None, inst_raw|None), ...] 최근 거래일부터. None 은 원천 미관측(수량 0 채움·evidence None)."""
+    captured = now.isoformat()
+    day = now.astimezone(KST).date()
+    rows = {}
+    for foreign_raw, inst_raw in spec:
+        day = previous_session(day)
+        key = day.strftime("%Y%m%d")
+        foreign = daily_evidence(foreign_raw, key, captured) if foreign_raw is not None else None
+        inst = daily_evidence(inst_raw, key, captured) if inst_raw is not None else None
+        rows[key] = {"foreign_net_buy": foreign["value"] if foreign is not None else 0,
+                     "inst_net_buy": inst["value"] if inst is not None else 0,
+                     "_supply_evidence": {"foreign": foreign, "institution": inst}}
+    return rows
+
+
+def test_core_screener_supply_enrichment_counts_observed_days(home):
+    now = utc_now()
+    observed = _daily_rows(now, [(1000, -200), (2000, None), (None, None), (0, 50), (-500, 10)])
+    unobserved = _daily_rows(now, [(None, None)] * 5)
+
+    async def _fetch(symbol, days=5):
+        return {"011200": observed, "033780": unobserved}[symbol]
+
+    screener = object.__new__(CoreScreener)
+    screener._kis_market_data = SimpleNamespace(fetch_stock_investor_daily=_fetch)
+    a = CoreCandidate(symbol="011200", name="HMM", indicators={})
+    b = CoreCandidate(symbol="033780", name="KT&G", indicators={})
+    asyncio.run(screener._enrich_supply_demand([a, b]))
+
+    # 합계는 기존 그대로(원천 0 채움 포함) — 점수 입력 불변
+    assert a.indicators["foreign_net_buy_5d"] == 2500 and a.indicators["inst_net_buy_5d"] == -140
+    # 관측 일수는 유효 evidence 가 있는 날만 센다(값 0 인 관측일도 관측일)
+    assert a.indicators["foreign_net_buy_5d_observed_days"] == 4
+    assert a.indicators["inst_net_buy_5d_observed_days"] == 3
+    assert b.indicators["foreign_net_buy_5d"] == 0 and b.indicators["foreign_net_buy_5d_observed_days"] == 0
+    # 신호 전달: 관측된 종목은 소비자 키에 실리고, 전부 미관측인 종목은 None(결손 유지)
+    assert core_signal_indicators(a.indicators)["foreign_net_buy"] == 2500
+    out_b = core_signal_indicators(b.indicators)
+    assert out_b["foreign_net_buy"] is None and out_b["inst_net_buy"] is None and out_b["foreign_net_buy_5d"] == 0
+
+
+def test_unobserved_supply_sum_stays_missing_for_cross_validation(home, tmp_path):
+    cand = _candidate(_ind(foreign_net_buy_5d=0, inst_net_buy_5d=0,
+                           foreign_net_buy_5d_observed_days=0, inst_net_buy_5d_observed_days=0))
+    ba, emitted = _ba(tmp_path, [cand])
+    asyncio.run(ba.execute_core_rebalance())
+    meta = emitted[0].metadata
+    _, adj_new, _ = _validate(meta)
+    _, adj_old, _ = _validate(_legacy(meta))
+    # PER·PBR 만 채워지고 ATR·수급은 결손 유지 → -8 → -4
+    assert adj_new == adj_old + MISSING_ALL - 4
+
+
+# ── entry LLM 공통 입력: 집계 창·출처 보존 ──────────────────────────────────
+
+def _facts(context):
+    return json.loads(context.split("<entry_facts>\n", 1)[1].split("\n</entry_facts>", 1)[0])
+
+
+def test_entry_llm_input_keeps_supply_window_and_source(home, tmp_path):
+    ba, emitted = _ba(tmp_path, [_candidate(_ind())])
+    asyncio.run(ba.execute_core_rebalance())
+    ind = emitted[0].metadata["indicators"]
+    flow = _facts(build_entry_context(SYMBOL, "core_holding", 85, ind, "neutral", "운송"))["indicators"]["foreign_net_buy"]
+    assert flow["value"] == "312000" and flow["direction"] == "net_buy"
+    assert flow["window_days"] == 5 and flow["source"] == "core_screener"
+    # 스윙 경로(당일 값, 창/출처 미기재)는 None=미확인으로 남는다
+    flow_swing = _facts(build_entry_context("005930", "sepa_trend", 80, {"foreign_net_buy": 120}, "bull", ""))["indicators"]["foreign_net_buy"]
+    assert flow_swing["window_days"] is None and flow_swing["source"] is None
+    # 미관측 코어 수급은 direction=unknown 으로 전달된다(balanced 아님)
+    flow_none = _facts(build_entry_context(SYMBOL, "core_holding", 85,
+                                           core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed_days=0)),
+                                           "neutral", "운송"))["indicators"]["foreign_net_buy"]
+    assert flow_none["direction"] == "unknown" and flow_none["status"] == "missing" and flow_none["window_days"] == 5

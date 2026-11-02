@@ -392,6 +392,8 @@ class CoreScreener:
         symbols = [c.symbol for c in candidates]
 
         try:
+            from src.analytics.swing_supply import utc_now, valid_evidence
+            now = utc_now()
             # 배치 수급 조회 (5일간 합산, 10건씩 병렬)
             investor_data: Dict[str, Dict] = {}
             batch_size = 10
@@ -404,9 +406,24 @@ class CoreScreener:
                         continue
                     total_foreign = sum(d.get("foreign_net_buy", 0) for d in daily.values())
                     total_inst = sum(d.get("inst_net_buy", 0) for d in daily.values())
+                    # E02-CORE-INDICATORS: 원천(FHKST01010900)은 미관측 수량을 호환용 0 으로 채우고 실제 관측·중복
+                    # 충돌은 `_supply_evidence` 에 따로 둔다. 합계는 기존 점수 입력 그대로 두되, 측별로 유효 evidence 가
+                    # 있는 날 수를 함께 적어 신호 소비자가 "관측값 0" 과 "미관측" 을 구분하게 한다.
+                    foreign_days = 0
+                    inst_days = 0
+                    for d in daily.values():
+                        proofs = d.get("_supply_evidence") if isinstance(d, dict) else None
+                        if not isinstance(proofs, dict):
+                            continue
+                        if valid_evidence(proofs.get("foreign"), now) is not None:
+                            foreign_days += 1
+                        if valid_evidence(proofs.get("institution"), now) is not None:
+                            inst_days += 1
                     investor_data[sym] = {
                         "foreign_net_buy_5d": total_foreign,
                         "inst_net_buy_5d": total_inst,
+                        "foreign_net_buy_5d_observed_days": foreign_days,
+                        "inst_net_buy_5d_observed_days": inst_days,
                     }
                 if bi + batch_size < len(symbols):
                     await asyncio.sleep(0.5)
@@ -416,6 +433,8 @@ class CoreScreener:
                 sd = investor_data.get(c.symbol, {})
                 c.indicators["foreign_net_buy_5d"] = sd.get("foreign_net_buy_5d")
                 c.indicators["inst_net_buy_5d"] = sd.get("inst_net_buy_5d")
+                c.indicators["foreign_net_buy_5d_observed_days"] = sd.get("foreign_net_buy_5d_observed_days")
+                c.indicators["inst_net_buy_5d_observed_days"] = sd.get("inst_net_buy_5d_observed_days")
 
             logger.info(f"[코어스크리너] 수급 데이터 보강 완료: {len(investor_data)}/{len(candidates)}개")
 
