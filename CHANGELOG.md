@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-03 — 운영 배포 a399c297 (cfc9bc20→a399c297 누적, 01:29:44 KST 기동)
+
+- 사용자 승인(1안 01:30~05:30)으로 WSL 정본 `deploy_lightsail.sh --check/--deploy/--postcheck` 수행. 서버 전체 verify 10,367 passed / 2 skipped / 2 xfailed(848.89초), 재시작 PID 346880·NRestarts 0, postcheck rc 0(KIS 오류 0·pending []·원장 ready), 롤백 없음.
+- 보존: 운영 tree = 후보 tree, 보호 48파일·crontab·evolved_overrides(미커밋)·KILL_SWITCH_KR·Toss disabled·O02 timer 그대로. 비교 worker 미설치(env 게이트 부재), R1 OFF, 매수 중지·배분·예산 정책 불변.
+- 포함 변경: E04 비교 계약/과금 채널/Claude 어댑터/현행 흐름/worker 조립(모두 비활성), E02-CORE-INDICATORS 코어 지표 전달, R02-WEB-REJECTION-DIAGNOSTICS 웹 거절 진단. 자연 슬롯 발송·웹 거절 자연 기록·코어 지표 운영 효과는 WAIT. 영수증 `~/.local/state/qwq-task-audit/20261103/deploy-prep/`.
+
 ## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
 
 - `src/analytics/web_report.py`: `validate_web_analysis`/`_check_text`가 `ValueError('문장')` 대신 시장 보고와 같은 `AnalysisValidationError(code, field)`를 올린다(ValueError 하위 → 기존 호출자 호환). 코드는 고정 11종(`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`), 필드는 스키마 경로 고정 집합(`summary[0..3]`, `issues[0..3].title|event|impact|counterpoint|watch|evidence_ids`, `market_view|sector_view|macro_view(.text|.evidence_ids)`, `outlook(.base|.upside|.downside|.evidence_ids)`, `checklist[0..4]`, `headline/stance/response` 등).

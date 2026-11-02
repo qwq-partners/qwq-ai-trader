@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="deploy-prep-20261103"></a>
-### 운영 배포 준비 — 고정 후보 `a399c297` (누적분 cfc9bc20→a399c297) · 승인 대기 / --deploy 미실행
+### 운영 배포 — 고정 `a399c297` (누적분 cfc9bc20→a399c297) · 11/3 01:29:44 KST 인수 DONE
 
 **Plan:** 사용자 “PR #330 병합 상태를 이어받아 누적 변경의 고정 SHA 운영 배포를 준비.” 허용 범위는 읽기 대조·누적 변경/위험 검토·정본 `--check`·실행/롤백/인수 계획 작성이며 `--deploy`·재시작·예약 등록은 승인 전 실행하지 않는다. 과거 PR 병합 승인을 배포 승인으로 읽지 않는다. 시작 상태(11/3 00:58 KST, 읽기 전용): origin/main `a399c297`(이후 변경 0), 운영 `cfc9bc20bbc02e5478825936a4225049dc64fd0e`+`config/evolved_overrides.yml` 미커밋, `KILL_SWITCH_KR`, active PID 4157369/NRestarts 0, pending `[]`, 실행 원장 ready, `.env` 에 `COMPARISON_WORKER`/`COMPARISON_EXPERIMENT_MANIFEST` 없음.
 
@@ -21,7 +21,9 @@
 
 **배포 뒤 자연 인수(웹 진단):** 기존 미소비 정기 슬롯(다음 07:40/13:10/16:40)에서만 — 실패 행의 `validation_code/field` 가 허용 목록 안이고 재조회 동일, 원응답·프롬프트·예외 전문 미노출, 성공/실패 판정·대체 본문·claim·호출/발송 횟수 유지, Telegram/웹 본문에 진단 미노출. 자연 거절이 없으면 WAIT(실패 유발·시험 생성/발송·슬롯 재실행 없음). 진단 영속화는 분석 복구가 아니며 11/2 웹 실패 원인은 미확정이다. 저장 성공·API 수락·실제 수신·내용 수락은 계속 구분한다.
 
-**결정 요청:** 위 고정 SHA·누적 범위·실행창·롤백·보존 기준으로 `--deploy` 승인 1회. 승인 전까지 `--deploy`·재시작·예약 0. E02-RR/E01(경계 11/2 20:39:12)·E04 실호출 인수·현금/매수 중지·core 배분은 이번 배포와 별개로 유지하며 O02 11/4·5 18:00 사전점검·11/5·6 정리는 그대로다.
+**승인·실행(DONE):** 사용자 “1안 승인·키 등록함”(11/3 ~01:12 KST). WSL main 을 `1eb023a9→a399c297` ff-only 로 맞춘 뒤 정본 `--check` rc 0(01:14, 운영 HEAD cfc9bc20·pending []·active·health OK), 배포 직전 스냅샷 기준선과 동일. **`--deploy a399c29792e36839a1b23e79904aa54cebc420a2`** 01:15:03~01:29:59 — 서버 전체 `verify.sh` **10,367 passed / 2 skipped / 2 xfailed**(848.89초) → 재시작 → health, `[완료] 배포 a399c29792e3 (이전 cfc9bc20bbc0)` rc 0, 롤백 없음. 서비스 01:29:44 기동 **PID 346880**(이전 4157369)·NRestarts 0, `KIS API 연결 완료` 01:29:45·`통합 트레이딩 엔진 시작` 01:29:53, 자동매도 금지 087010 복원. 150초 뒤 정본 `--postcheck "01:29"` rc 0: KIS 오류 0·앱 ERROR 0·pending []·실행 원장 ready·루프 정체/실패 없음·현금 0.52%/보유 1종목 그대로. **보존:** 운영 tree = 후보 tree `cc928e18`, 보호 48파일 변경 0, crontab·evolved 지문 동일(미커밋 수정 보존), `KILL_SWITCH_KR` 존재, Toss 유닛 disabled, timer 는 O02 11/5·6 뿐. 비교 worker 설치/활성 로그 없음(`.env` 게이트 부재 → None). 배포 중 이 호스트에서 다른 pytest·합성 실험 0. 영수증: 비공개 `~/.local/state/qwq-task-audit/20261103/deploy-prep/`(`wsl-check.txt`·`pre-deploy-snapshot.json`·`deploy.log`·`postcheck.log`·`post-deploy-fingerprint.json`·`deploy-receipt.json`). 사용자 등록 임시 WSL 키는 이번 후속 단계(②~④)의 WSL 검증 가능성 때문에 유지하며 요청 종료 시 제가 추가한 등록만 제거한다.
+
+**미인수(자연 결과 대기):** 배포 뒤 첫 정기 슬롯(07:40/13:10/16:40)의 생성·발송 횟수, 웹 거절 진단의 자연 거절 기록(없으면 WAIT), 코어 지표 전달의 실제 크로스검증 효과(현금 0.52%·매수 중지라 주문 없음). 완료 문서만의 재배포는 하지 않는다. E02-RR/E01(경계 11/2 20:39:12)·E04 실호출 인수·현금/매수 중지·core 배분은 이번 배포와 별개로 유지하며 O02 11/4·5 18:00 사전점검·11/5·6 정리는 그대로다.
 
 <a id="r02-web-rejection-diagnostics-20261102"></a>
 ### R02-WEB-REJECTION-DIAGNOSTICS — 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR CI 영수증 참조 / 운영 미배포)
