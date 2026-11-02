@@ -7,7 +7,7 @@
 
 **Do:** 실패 시에만 `close_diagnostics`(접수/영속 건수·큐 잔량·writer 생존·바이트·시한/경과·sealed_at) 추가, 성공 result 키 집합 불변, 로그 sink 미대기(리뷰 P1: 디스크 정체 시 종료 경로의 동기 로그가 시한을 무력화할 수 있음 → 반환값으로만 전달). 검사: 시한 초과 진단 필드 집합·값, 성공 형태 유지; `test_first_scan_volume.py` 포함 40 passed(AWS 보조). 규약 문서·CHANGELOG 갱신.
 
-**See/독립 리뷰(Codex gpt-6-astra/high, 읽기 전용):** 1회차 HEAD `bd142b71` **P0 0·P1 1·P2 1**(동기 로그, 문서) → 반영. 2회차 HEAD `9589d3eb` **P0/P1 0·P2 2** — ① 대량 검사의 `assert …, runtime.result` 가 여전히 repr 생략으로 진단을 잃을 수 있음 → `close_failure_message()` 명시 JSON 문자열 + 8필드 보존 검사, ② 취소 경로 설명 오류 → 결과를 돌려주는 실패(`journal_close_timeout`)로 한정하고 취소는 예외 전파로 명시. 3회차·실제 WSL·PR·CI 는 아래에 적는다.
+**See/독립 리뷰(Codex gpt-6-astra/high, 읽기 전용):** 1회차 HEAD `bd142b71` **P0 0·P1 1·P2 1**(동기 로그, 문서) → 반영. 2회차 HEAD `9589d3eb` **P0/P1 0·P2 2** — ① 대량 검사의 `assert …, runtime.result` 가 여전히 repr 생략으로 진단을 잃을 수 있음 → `close_failure_message()` 명시 JSON 문자열 + 8필드 보존 검사, ② 취소 경로 설명 오류 → 결과를 돌려주는 실패(`journal_close_timeout`)로 한정하고 취소는 예외 전파로 명시. 3회차 HEAD `a2546ff2` **P0/P1 0·P2 1** — 진단 반환 조건을 timeout 으로 한정한 문서 불일치 → “오류가 기록된 close 반환 결과 전부(대표 timeout)”로 정정하고 writer 실패 경로 진단 검사 추가. 실제 WSL·PR·CI 는 아래에 적는다.
 
 **미해결:** 최초 실패의 원인(I/O 여부·당시 부하·diff 인과)은 unresolved 로 유지한다. 다음 자연 실패 때 `close_diagnostics`의 접수 대비 영속 건수·큐 잔량·writer 생존으로 writer 정체(디스크)인지 생산 과다/큐 적체인지 가른다. 운영 `a399c297`(11/3 01:29 배포)에는 포함되지 않았고 다음 고정 SHA 대상이다.
 

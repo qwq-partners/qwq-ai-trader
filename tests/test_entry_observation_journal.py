@@ -401,3 +401,19 @@ async def test_clean_close_result_keeps_prior_shape_without_diagnostics(tmp_path
     assert result["sealed"] and result["fsync_confirmed"] and result["error"] is None
     assert set(result) == {"sealed", "fsync_confirmed", "persisted_records", "error", "path"}
     assert result["persisted_records"] == 1 and read(path)["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_writer_failure_result_also_carries_close_diagnostics(tmp_path, monkeypatch):
+    """진단은 timeout 전용이 아니라 오류가 기록된 모든 close 반환 결과에 붙는다(writer 실패 포함)."""
+    buffer, journal, path = await opened(tmp_path)
+    def broken(rows):
+        raise OSError("disk gone")
+    monkeypatch.setattr(journal, "_write_batch", broken)
+    buffer.publish(record())
+    result = await journal.close(timeout_seconds=5.0)
+    assert result["error"] == "journal_writer_failed" and not result["sealed"] and not result["fsync_confirmed"]
+    diag = result["close_diagnostics"]
+    assert diag["accepted_records"] == 1 and diag["persisted_records"] == 0 and diag["writer_alive"] is False
+    assert set(diag) == {"accepted_records", "persisted_records", "queue_pending", "writer_alive", "bytes_written",
+                         "close_timeout_seconds", "close_elapsed_seconds", "sealed_at"}
