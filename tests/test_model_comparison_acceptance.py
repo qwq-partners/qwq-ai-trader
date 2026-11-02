@@ -5,6 +5,8 @@ run 은 승인자·같은 날짜·manifest 지문·owned 전송이 맞을 때만
 전송은 끝나면 닫히고, 같은 날 두 번째 쌍은 가드가 막는다. 1쌍 결과를 모델 우위로 해석하지 않는다.
 """
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -157,7 +159,7 @@ def test_run_sends_one_pair_and_leaves_a_scrubbed_receipt(tmp_path):
     assert SENTINEL not in scrubbed and "<entry_facts>" not in scrubbed and '"prompt"' not in scrubbed and '"content"' not in scrubbed
     assert "<entry_facts>" not in (acc_dir / acc.INPUT_FILE).read_text(encoding="utf-8")
     # 전송은 닫혔고 승인 서명이 기록됐다
-    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
+    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True, "openai": True}
     appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
     assert appr["approved_by"] == "user" and appr["approved_at"] == now.isoformat()
     assert json.loads(receipt_file.read_text())["status"] == "finished"
@@ -187,16 +189,45 @@ def test_stored_pair_with_unverified_identity_is_not_an_acceptance_pass(tmp_path
                                  now=datetime.now(acc.KST), deadline_seconds=30)
     assert receipt["offer"] == "accepted" and receipt["pair"]["complete"] is True
     assert receipt["status"] == "completed_with_findings"
-    assert "review_verdict_hold_or_missing" in receipt["findings"]
+    assert "current_verdict_hold_or_missing" in receipt["findings"] and "candidate_verdict_hold_or_missing" in receipt["findings"]
     # 신원 불일치 응답은 독립 검토 불가 판정·불명 API 비용(unknown 예약)으로 드러난다 — 모두 인수 중단 조건이다
-    assert "reason:independent_review_unavailable" in receipt["findings"]
-    assert "reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved:1" in receipt["findings"]
-    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
+    assert "current:reason:independent_review_unavailable" in receipt["findings"]
+    assert "current:reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved:1" in receipt["findings"]
+    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True, "openai": True}
+
+
+class CandidateBrokenOpenAI(CertifiedOpenAI):
+    """기준 Bull(minimal)은 정상, 후보 Bull(low)만 판정 불가(빈 본문) — 후보 arm 만 hold 가 된다."""
+    async def complete(self, prompt, system='', model=None, **kw):
+        response = await super().complete(prompt, system, model, **kw)
+        if kw.get("reasoning_effort") == "low":
+            response.content = ""
+        return response
+
+
+def test_candidate_only_failure_is_not_an_acceptance_pass(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = w.ComparisonTransports(openai=CandidateBrokenOpenAI(), claude_cli=FakeCLI(_ok), anthropic_api=FakeAPI(_ok), owned=True)
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["pair"]["complete"] is True and receipt["pair"]["result"]["current"]["verdict"] in ("approve", "reject")
+    assert receipt["status"] == "completed_with_findings"
+    assert "candidate_verdict_hold_or_missing" in receipt["findings"] and "current_verdict_hold_or_missing" not in receipt["findings"]
+
+
+def test_open_openai_session_after_stop_is_a_finding(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=_ok)
+    tr.openai._session = SimpleNamespace(closed=False, close=AsyncMock(side_effect=RuntimeError("stuck")))   # worker 가 닫지 못하는 세션
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["transports_closed"]["openai"] is False
+    assert receipt["status"] == "completed_with_findings" and "transport_not_closed" in receipt["findings"]
 
 
 def test_unclosed_transport_or_undrained_worker_is_a_finding(tmp_path, monkeypatch):
     led, day, _ = prepared(tmp_path)
-    monkeypatch.setattr(acc, "_closed", lambda transports: {"claude_cli": True, "anthropic_api": False})
+    monkeypatch.setattr(acc, "_closed", lambda transports: {"claude_cli": True, "anthropic_api": False, "openai": True})
     receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=transports(cli=_ok),
                                  now=datetime.now(acc.KST), deadline_seconds=30)
     assert receipt["status"] == "completed_with_findings" and "transport_not_closed" in receipt["findings"]

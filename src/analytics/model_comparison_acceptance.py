@@ -234,14 +234,16 @@ def _acceptance_findings(receipt: dict) -> list[str]:
         if not isinstance(pair, dict) or pair.get("complete") is not True:
             findings.append("pair_incomplete")
         row = pair.get("result") if isinstance(pair, dict) else None
-        current = row.get("current") if isinstance(row, dict) else None
-        verdict = current.get("verdict") if isinstance(current, dict) else None
-        if verdict not in ("approve", "reject"):
-            findings.append("review_verdict_hold_or_missing")
-        reasons = current.get("reasons") if isinstance(current, dict) else None
-        for reason in reasons if isinstance(reasons, list) else []:
-            if isinstance(reason, str) and any(marker in reason for marker in _FINDING_REASON_MARKERS):
-                findings.append("reason:" + reason)
+        # baseline(current)·candidate 두 arm 모두 판정이 서야 한다 — 후보 Bull 만 판정 불가여도 인수 통과가 아니다.
+        for arm in ("current", "candidate"):
+            branch = row.get(arm) if isinstance(row, dict) else None
+            verdict = branch.get("verdict") if isinstance(branch, dict) else None
+            if verdict not in ("approve", "reject"):
+                findings.append(arm + "_verdict_hold_or_missing")
+            reasons = branch.get("reasons") if isinstance(branch, dict) else None
+            for reason in reasons if isinstance(reasons, list) else []:
+                if isinstance(reason, str) and any(marker in reason for marker in _FINDING_REASON_MARKERS):
+                    findings.append(arm + ":reason:" + reason)
         status = receipt.get("ledger_status_after")
         unresolved = status.get("unresolved_count") if isinstance(status, dict) else None
         if unresolved != 0:
@@ -256,8 +258,12 @@ def _acceptance_findings(receipt: dict) -> list[str]:
 
 
 def _closed(transports) -> dict:
-    return {name: bool(getattr(client, "_closed", False)) for name, client in
-            (("claude_cli", transports.claude_cli), ("anthropic_api", transports.anthropic_api)) if client is not None}
+    """소유 전송의 정리 상태 — Claude CLI/API 는 `_closed`, OpenAI 는 aiohttp 세션이 없거나 닫혔는지로 본다."""
+    closed = {name: bool(getattr(client, "_closed", False)) for name, client in
+              (("claude_cli", transports.claude_cli), ("anthropic_api", transports.anthropic_api)) if client is not None}
+    session = getattr(transports.openai, "_session", None)
+    closed["openai"] = session is None or bool(getattr(session, "closed", False))
+    return closed
 
 
 def main(argv=None) -> int:
