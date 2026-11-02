@@ -2,7 +2,7 @@
 
 ## 2026-11-03 — 관측 저널 종료 실패 진단 `close_diagnostics` (PR 대기, 운영 미배포)
 
-- `src/analytics/entry_observation_journal.py`: `close()`가 실패(`journal_close_timeout`/`journal_shutdown_cancelled`)할 때만 result에 `close_diagnostics`{accepted_records, persisted_records, queue_pending, writer_alive, bytes_written, close_timeout_seconds, close_elapsed_seconds, sealed_at}를 추가한다(순간 관측값, `persisted_records`는 fsync 확인과 별개). 성공 result 키 집합 불변, 이 경로는 로그 sink를 기다리지 않음(독립 리뷰 P1 반영). 11/2 WSL 1차의 `journal_close_timeout`이 persisted 4,300 외 계측 없이 끝나 원인을 가를 수 없던 공백 보완. 시한·skip·수집 한도는 바꾸지 않았고 원인 판정은 다음 실패 때 이 값으로 한다.
+- `src/analytics/entry_observation_journal.py`: `close()`가 결과를 돌려주는 실패 경로(`journal_close_timeout`)에서만 result에 `close_diagnostics`{accepted_records, persisted_records, queue_pending, writer_alive, bytes_written, close_timeout_seconds, close_elapsed_seconds, sealed_at}를 추가한다(순간 관측값, `persisted_records`는 fsync 확인과 별개). 성공 result 키 집합 불변, 취소(`journal_shutdown_cancelled`)는 예외를 그대로 전파해 진단을 회수하지 않으며, 이 경로는 로그 sink를 기다리지 않음(독립 리뷰 P1 반영). `tests/test_first_scan_volume.py` 실패 메시지를 명시 JSON 문자열로 바꿔 pytest repr 생략으로 진단이 잘리지 않게 했다(2회차 P2). 11/2 WSL 1차의 `journal_close_timeout`이 persisted 4,300 외 계측 없이 끝나 원인을 가를 수 없던 공백 보완. 시한·skip·수집 한도는 바꾸지 않았고 원인 판정은 다음 실패 때 이 값으로 한다.
 - 검사: `tests/test_entry_observation_journal.py` 시한 초과 진단 필드 집합·성공 형태 유지. 규약 문서 `docs/research/current-engine-selection-entry-protocol-2026-09-30.md` 원장 close 절 갱신.
 
 ## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
