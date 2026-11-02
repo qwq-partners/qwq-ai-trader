@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/3 01:29 운영 배포 DONE:** 사용자 승인(1안)으로 고정 `a399c297`(PR #321·#323~#330 누적: E04 비활성 비교 계층, 코어 지표 전달, 웹 거절 진단; 설정/스키마/스케줄러 변경 0)을 WSL 정본 절차로 배포했다 — 서버 verify 10,367 passed·PID 346880·postcheck rc 0·보호 48파일/crontab/evolved/KILL 보존·롤백 없음. 첫 자연 슬롯 발송·웹 거절 자연 기록·코어 지표 운영 효과는 WAIT. [원장](docs/operations/execution-roadmap.md#deploy-prep-20261103).
+
 > **11/2 R02-WEB-REJECTION-DIAGNOSTICS:** 웹 분석 검증 거절을 시장 보고와 같은 `AnalysisValidationError(code, field)`로 올리고, 실패 행 metadata에 허용 목록으로 걸러진 `validation_code/validation_field`만 영속화했다(응답 본문·예외 전문 미저장, 판정·대체 본문·호출 횟수·과거 행 불변, 스키마 변경 0). 11/2 웹 실패 3건의 원인은 여전히 미확정. 운영 미배포. [원장](docs/operations/execution-roadmap.md#r02-web-rejection-diagnostics-20261102).
 
 > **11/2 E02-CORE-INDICATORS:** 코어 리밸런싱 BUY 신호가 후보의 기존 지표(PER/PBR·5일 수급·MA)를 `Signal.metadata["indicators"]` 로 전달하도록 최소 수정했다(즉시·pending·재시도 경로 공통 헬퍼, 수급은 관측 일수 ≥1 인 측만, ATR 결손 유지). 크로스검증 결손 -8→-2이며 규칙·문턱·core 배분 0%·현금/매수 중지 불변. 운영 미배포. [원장](docs/operations/execution-roadmap.md#e02-core-indicators-20261102).
