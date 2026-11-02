@@ -1,13 +1,13 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="journal-close-diagnostics-20261103"></a>
-### JOURNAL-CLOSE-DIAGNOSTICS — 관측 저널 종료 실패 계측 (구현·합성 검증·독립 리뷰 DONE / 실제 WSL·PR·CI 아래 기록 / 운영 미배포)
+### JOURNAL-CLOSE-DIAGNOSTICS — 관측 저널 종료 실패 계측 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR CI 영수증 참조 / 운영 미배포)
 
 **Plan(후속 순서 단계③):** 사용자 “journal_close_timeout의 기존 실패 근거 판독과 필요한 원인 조사.” 기존 근거 판독: 11/2 WSL 1차 `runtime.result`는 `error=journal_close_timeout·fsync_confirmed=False·persisted_records=4,300`뿐이고 pytest 단정 repr이 나머지를 `...`로 잘라 생산/접수/봉인 건수·큐·writer 상태는 **로그에도 미보존**(WSL run1 `verify.log` 292행 확인). 사후 부하 0.53/0.87/0.54·동시 pytest 없음·단독 13.97초 통과·같은 SHA 2차 10,367 passed 는 원인 증명이 아니다. 구조적으로 `EntryObservationJournal._finish`가 실패 시 `sealed/fsync_confirmed/persisted_records/error/path`만 돌려주므로 다음 실패도 같은 공백이 생긴다 → 가설 없는 재현 반복 대신 계측 보완을 택했다(시한 연장·skip·수집 한도 변경 없음).
 
 **Do:** 실패 시에만 `close_diagnostics`(접수/영속 건수·큐 잔량·writer 생존·바이트·시한/경과·sealed_at) 추가, 성공 result 키 집합 불변, 로그 sink 미대기(리뷰 P1: 디스크 정체 시 종료 경로의 동기 로그가 시한을 무력화할 수 있음 → 반환값으로만 전달). 검사: 시한 초과 진단 필드 집합·값, 성공 형태 유지; `test_first_scan_volume.py` 포함 40 passed(AWS 보조). 규약 문서·CHANGELOG 갱신.
 
-**See/독립 리뷰(Codex gpt-6-astra/high, 읽기 전용):** 1회차 HEAD `bd142b71` **P0 0·P1 1·P2 1**(동기 로그, 문서) → 반영. 2회차 HEAD `9589d3eb` **P0/P1 0·P2 2** — ① 대량 검사의 `assert …, runtime.result` 가 여전히 repr 생략으로 진단을 잃을 수 있음 → `close_failure_message()` 명시 JSON 문자열 + 8필드 보존 검사, ② 취소 경로 설명 오류 → 결과를 돌려주는 실패(`journal_close_timeout`)로 한정하고 취소는 예외 전파로 명시. 3회차 HEAD `a2546ff2` **P0/P1 0·P2 1** — 진단 반환 조건을 timeout 으로 한정한 문서 불일치 → “오류가 기록된 close 반환 결과 전부(대표 timeout)”로 정정하고 writer 실패 경로 진단 검사 추가. 실제 WSL·PR·CI 는 아래에 적는다.
+**See/독립 리뷰(Codex gpt-6-astra/high, 읽기 전용):** 1회차 HEAD `bd142b71` **P0 0·P1 1·P2 1**(동기 로그, 문서) → 반영. 2회차 HEAD `9589d3eb` **P0/P1 0·P2 2** — ① 대량 검사의 `assert …, runtime.result` 가 여전히 repr 생략으로 진단을 잃을 수 있음 → `close_failure_message()` 명시 JSON 문자열 + 8필드 보존 검사, ② 취소 경로 설명 오류 → 결과를 돌려주는 실패(`journal_close_timeout`)로 한정하고 취소는 예외 전파로 명시. 3회차 HEAD `a2546ff2` **P0/P1 0·P2 1** — 진단 반환 조건을 timeout 으로 한정한 문서 불일치 → “오류가 기록된 close 반환 결과 전부(대표 timeout)”로 정정하고 writer 실패 경로 진단 검사 추가. **See/실제 WSL 전체:** 핀 호스트키 라이브 대조 일치, 사용자 등록 임시 키 재사용, 미푸시 bundle(전제 `a399c297`) ssh 스트림·해시 일치, 별도 작업본 `/home/user/projects/qwq-journal-close-diagnostics-20261103`(detached `ec53e3b6`·tree `634b162c`)에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 직렬 전체 — **10,370 passed / 2 skipped / 2 xfailed**, 검사 419.64초·rc 0·FAILED 0·격리 0·문법/비밀 검사 실행, 원격 로그 SHA256 일치, 실행 전후 tree 동일(`wsl-result.json`). 검증 뒤 이 커밋은 Markdown 전용이며 필수 verify 는 PR 영수증을 따른다. 병합은 사용자 결정.
 
 **미해결:** 최초 실패의 원인(I/O 여부·당시 부하·diff 인과)은 unresolved 로 유지한다. 다음 자연 실패 때 `close_diagnostics`의 접수 대비 영속 건수·큐 잔량·writer 생존으로 writer 정체(디스크)인지 생산 과다/큐 적체인지 가른다. 운영 `a399c297`(11/3 01:29 배포)에는 포함되지 않았고 다음 고정 SHA 대상이다.
 
