@@ -33,7 +33,10 @@ KST = ZoneInfo("Asia/Seoul")
 # 준비된 인수안의 고정 범위 — 바꾸려면 새 승인이 필요하다.
 ACCEPTANCE_POLICY = {"daily_attempt_cap": 4, "max_output_tokens": 400, "experiment_usd_ceiling": "0.50",
                      "pairs_per_day": 1, "max_common_context_bytes": 65536, "required_policy_mode": "normal"}
-MANIFEST_FILE, APPROVAL_FILE, INPUT_FILE, RECEIPT_FILE = "manifest.json", "approval.json", "input.json", "receipt.json"
+MANIFEST_FILE, APPROVAL_FILE, INPUT_FILE = "manifest.json", "approval.json", "input.json"
+RECEIPT_GLOB = "receipt-*.json"          # 실행(decision_id)별 영수증 — 덮어쓰지 않으며, 하나라도 있으면 같은 디렉터리 재실행을 거부한다
+# 인수 성공(finished)으로 세지 않는 runner 사유 — 저장 완료와 인수 통과를 구분한다.
+_FINDING_REASON_MARKERS = ("unverified_or_mismatch", "role_deadline_exceeded_after_response", "api_cost_unknown")
 _INPUT_KEYS = ("symbol", "strategy", "score", "market_regime", "sector", "indicators")
 # 영속 영수증에서 제거하는 키 — 프롬프트·응답 원문·공통 입력 본문은 어떤 경로로도 남기지 않는다.
 _SCRUB_KEYS = frozenset({"prompt", "system", "content", "response", "text", "common_context", "raw", "messages",
@@ -74,7 +77,10 @@ def common_context_for(input_spec: dict) -> str:
 def _allowed_models(controls: dict, candidate: dict) -> list[str]:
     models = []
     for role in ("bull", "bear"):
-        model = (controls.get(role) or {}).get("model")
+        role_controls = controls.get(role)
+        if not isinstance(role_controls, dict):
+            raise ValueError("operating_role_controls_invalid:" + role)
+        model = role_controls.get("model")
         if not isinstance(model, str) or not model:
             raise ValueError("operating_model_unresolved:" + role)
         models.append(model)
@@ -140,6 +146,9 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
         raise ValueError("owned_transports_required")
     if isinstance(deadline_seconds, bool) or not isinstance(deadline_seconds, (int, float)) or not 0 < deadline_seconds <= 600:
         raise ValueError("deadline_seconds_out_of_range")
+    if any(Path(out_dir).glob(RECEIPT_GLOB)):
+        # 이미 실행된 승인 디렉터리 — 실패·불명·차단 결과를 같은 승인으로 다시 시도하지 않는다(새 쌍은 새 준비·새 승인).
+        raise ValueError("receipt_exists_refusing_rerun")
     prepared = load_prepared(out_dir)
     manifest, request, spec = prepared["manifest"], prepared["approval"], prepared["input"]["input_spec"]
     recorded = request.get("approved_by")
@@ -153,7 +162,8 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
     receipt = {"task": "E04 limited live acceptance", "experiment_id": manifest["experiment_id"],
                "manifest_sha256": approval.manifest_sha256, "approved_by": approved_by, "decision_id": decision_id,
                "started_at": now.isoformat(), "status": "not_started", "offer": None, "pair": None,
-               "ledger_status_after": None, "transports_closed": None, "error": None}
+               "ledger_status_after": None, "transports_closed": None, "error": None, "findings": []}
+    receipt_path = out / f"receipt-{decision_id}.json"
     worker = None
     try:
         # 조립 거절(승인 창·지문·전송 집합·프로필)은 전송 생성 전에 끝난다. 승인 서명은 조립이 통과한 뒤에만 적는다.
@@ -206,9 +216,41 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
             except Exception as error:
                 receipt["stop"] = {"error": type(error).__name__}
         receipt["transports_closed"] = _closed(transports)
+        receipt["findings"] = _acceptance_findings(receipt)
+        if receipt["status"] == "finished" and receipt["findings"]:
+            receipt["status"] = "completed_with_findings"      # 결과 행은 저장됐지만 인수 통과 조건을 못 채움
         receipt["finished_at"] = datetime.now(KST).isoformat()
-        _write(out / RECEIPT_FILE, receipt)
+        _write(receipt_path, receipt)
     return receipt
+
+
+def _acceptance_findings(receipt: dict) -> list[str]:
+    """저장 완료(`pair.complete`)와 인수 통과를 구분한다. 어느 하나라도 있으면 `finished` 가 아니다."""
+    findings = []
+    pair = receipt.get("pair")
+    if receipt.get("offer") == "accepted":
+        if not isinstance(pair, dict) or pair.get("complete") is not True:
+            findings.append("pair_incomplete")
+        row = pair.get("result") if isinstance(pair, dict) else None
+        current = row.get("current") if isinstance(row, dict) else None
+        verdict = current.get("verdict") if isinstance(current, dict) else None
+        if verdict not in ("approve", "reject"):
+            findings.append("review_verdict_hold_or_missing")
+        reasons = current.get("reasons") if isinstance(current, dict) else None
+        for reason in reasons if isinstance(reasons, list) else []:
+            if isinstance(reason, str) and any(marker in reason for marker in _FINDING_REASON_MARKERS):
+                findings.append("reason:" + reason)
+        status = receipt.get("ledger_status_after")
+        unresolved = status.get("unresolved_count") if isinstance(status, dict) else None
+        if unresolved != 0:
+            findings.append("ledger_unresolved:" + str(unresolved))
+    stop = receipt.get("stop")
+    if receipt.get("offer") is not None and not (isinstance(stop, dict) and stop.get("drained") is True and stop.get("journal_drained") is True):
+        findings.append("worker_stop_not_drained")
+    closed = receipt.get("transports_closed")
+    if not (isinstance(closed, dict) and closed and all(v is True for v in closed.values())):
+        findings.append("transport_not_closed")
+    return findings
 
 
 def _closed(transports) -> dict:

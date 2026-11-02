@@ -44,7 +44,8 @@ def transports(cli=_ok, api=_ok, owned=True):
 
 def prepared(tmp_path, day=None, **over):
     led = ledger(tmp_path)
-    day = day or led.today().isoformat()
+    if day is None:
+        day = led.today().isoformat()
     summary = acc.prepare_acceptance(controls(), experiment_id="ACC-1", day=day, candidate={"reasoning_effort": "low"},
                                      input_spec=spec(), out_dir=tmp_path / "acc", now=prep_now(), **over)
     return led, day, summary
@@ -52,6 +53,10 @@ def prepared(tmp_path, day=None, **over):
 
 def files_text(tmp_path):
     return "\n".join(p.read_text(encoding="utf-8") for p in sorted((tmp_path / "acc").glob("*.json")))
+
+
+def receipt_files(tmp_path):
+    return sorted((tmp_path / "acc").glob(acc.RECEIPT_GLOB))
 
 
 def test_prepare_writes_fixed_scope_without_calls_or_prompt_text(tmp_path):
@@ -130,8 +135,9 @@ def test_run_sends_one_pair_and_leaves_a_scrubbed_receipt(tmp_path):
     now = datetime.now(acc.KST)
     receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=now,
                                  deadline_seconds=30)
-    assert receipt["status"] == "finished" and receipt["offer"] == "accepted"
+    assert receipt["status"] == "finished" and receipt["offer"] == "accepted" and receipt["findings"] == []
     assert receipt["worker_health"]["finished"] == 1
+    assert receipt["stop"]["drained"] is True and receipt["stop"]["journal_drained"] is True
     assert len(tr.openai.calls) == 2 and len(tr.claude_cli.calls) == 1 and len(tr.anthropic_api.calls) == 1
     assert len(reservations(led)) == 3 and led.status()["unresolved_count"] == 0      # bull 2 + API 1, 구독 0
     pair = receipt["pair"]
@@ -144,24 +150,56 @@ def test_run_sends_one_pair_and_leaves_a_scrubbed_receipt(tmp_path):
     # 원문 비유출: 공통 입력 표식(입력 사양 파일 input.json 에만 설계상 존재)·프롬프트 블록·응답 본문 키가
     # 영수증/승인/manifest 어디에도 없고, input.json 에도 조립된 프롬프트 블록은 없다(사양+지문만)
     acc_dir = tmp_path / "acc"
-    scrubbed = json.dumps(receipt, ensure_ascii=False) + "".join((acc_dir / n).read_text(encoding="utf-8")
-                                                                 for n in (acc.RECEIPT_FILE, acc.APPROVAL_FILE, acc.MANIFEST_FILE))
+    [receipt_file] = receipt_files(tmp_path)
+    assert receipt_file.name == f"receipt-{receipt['decision_id']}.json"
+    scrubbed = json.dumps(receipt, ensure_ascii=False) + receipt_file.read_text(encoding="utf-8") + "".join(
+        (acc_dir / n).read_text(encoding="utf-8") for n in (acc.APPROVAL_FILE, acc.MANIFEST_FILE))
     assert SENTINEL not in scrubbed and "<entry_facts>" not in scrubbed and '"prompt"' not in scrubbed and '"content"' not in scrubbed
     assert "<entry_facts>" not in (acc_dir / acc.INPUT_FILE).read_text(encoding="utf-8")
     # 전송은 닫혔고 승인 서명이 기록됐다
     assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
     appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
     assert appr["approved_by"] == "user" and appr["approved_at"] == now.isoformat()
-    assert json.loads((tmp_path / "acc" / acc.RECEIPT_FILE).read_text())["status"] == "finished"
-    # 같은 날 두 번째 쌍: 다른 서명자는 거절, 같은 서명자는 가드(1쌍/일)에서 막혀 새 전송 0
-    with pytest.raises(ValueError, match="approval_signer_mismatch"):
-        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="someone-else", ledger=led, transports=transports(), now=now)
+    assert json.loads(receipt_file.read_text())["status"] == "finished"
+    # 같은 승인 디렉터리 재실행은 영수증이 있으면 전송을 만지기 전에 거부한다 — 첫 영수증은 덮어쓰이지 않는다
     tr2 = transports(cli=SCRIPTS["timeout"])
-    second = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr2, now=datetime.now(acc.KST),
-                                deadline_seconds=30)
-    assert second["status"] in ("not_offered", "incomplete", "finished") and second["offer"] is not None
-    assert tr2.openai.calls == [] and tr2.claude_cli.calls == [] and tr2.anthropic_api.calls == []
-    assert tr2.claude_cli._closed and tr2.anthropic_api._closed
+    with pytest.raises(ValueError, match="receipt_exists_refusing_rerun"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr2, now=datetime.now(acc.KST))
+    assert _untouched(tr2) and receipt_files(tmp_path) == [receipt_file]
+    assert json.loads(receipt_file.read_text())["decision_id"] == receipt["decision_id"]
+
+
+def test_signer_mismatch_is_refused_before_assembly(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    appr = tmp_path / "acc" / acc.APPROVAL_FILE
+    appr.write_text(json.dumps(dict(json.loads(appr.read_text()), approved_by="user"), ensure_ascii=False))
+    tr = transports()
+    with pytest.raises(ValueError, match="approval_signer_mismatch"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="someone-else", ledger=led, transports=tr, now=datetime.now(acc.KST))
+    assert _untouched(tr)
+
+
+def test_stored_pair_with_unverified_identity_is_not_an_acceptance_pass(tmp_path):
+    """결과 행이 저장돼도(complete) 신원 미검증 의견은 hold → finished 가 아니라 completed_with_findings."""
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=SCRIPTS["timeout"], api=SCRIPTS["identity_mismatch"])
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["offer"] == "accepted" and receipt["pair"]["complete"] is True
+    assert receipt["status"] == "completed_with_findings"
+    assert "review_verdict_hold_or_missing" in receipt["findings"]
+    # 신원 불일치 응답은 신원 사유·불명 API 비용(unknown 예약)으로도 드러난다 — 둘 다 인수 중단 조건이다
+    assert any("unverified_or_mismatch" in f for f in receipt["findings"])
+    assert "reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved:1" in receipt["findings"]
+    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
+
+
+def test_unclosed_transport_or_undrained_worker_is_a_finding(tmp_path, monkeypatch):
+    led, day, _ = prepared(tmp_path)
+    monkeypatch.setattr(acc, "_closed", lambda transports: {"claude_cli": True, "anthropic_api": False})
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=transports(cli=_ok),
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["status"] == "completed_with_findings" and "transport_not_closed" in receipt["findings"]
 
 
 def test_cli_success_needs_no_api_and_reserves_only_bull(tmp_path):
