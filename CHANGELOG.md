@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-03 — 관측 저널 종료 실패 진단 `close_diagnostics` (PR 대기, 운영 미배포)
+
+- `src/analytics/entry_observation_journal.py`: `close()`가 실패(`journal_close_timeout`/`journal_shutdown_cancelled`)할 때만 result에 `close_diagnostics`{accepted_records, persisted_records, queue_pending, writer_alive, bytes_written, close_timeout_seconds, close_elapsed_seconds, sealed_at}를 추가한다(순간 관측값, `persisted_records`는 fsync 확인과 별개). 성공 result 키 집합 불변, 이 경로는 로그 sink를 기다리지 않음(독립 리뷰 P1 반영). 11/2 WSL 1차의 `journal_close_timeout`이 persisted 4,300 외 계측 없이 끝나 원인을 가를 수 없던 공백 보완. 시한·skip·수집 한도는 바꾸지 않았고 원인 판정은 다음 실패 때 이 값으로 한다.
+- 검사: `tests/test_entry_observation_journal.py` 시한 초과 진단 필드 집합·성공 형태 유지. 규약 문서 `docs/research/current-engine-selection-entry-protocol-2026-09-30.md` 원장 close 절 갱신.
+
 ## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
 
 - `src/analytics/web_report.py`: `validate_web_analysis`/`_check_text`가 `ValueError('문장')` 대신 시장 보고와 같은 `AnalysisValidationError(code, field)`를 올린다(ValueError 하위 → 기존 호출자 호환). 코드는 고정 11종(`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`), 필드는 스키마 경로 고정 집합(`summary[0..3]`, `issues[0..3].title|event|impact|counterpoint|watch|evidence_ids`, `market_view|sector_view|macro_view(.text|.evidence_ids)`, `outlook(.base|.upside|.downside|.evidence_ids)`, `checklist[0..4]`, `headline/stance/response` 등).
