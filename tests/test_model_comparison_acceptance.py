@@ -73,6 +73,7 @@ def test_prepare_writes_fixed_scope_without_calls_or_prompt_text(tmp_path):
     assert man["bear"]["billing_channel"] == "subscription" and man["bear_api_fallback"]["billing_channel"] == "api"
     appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
     assert appr["approved_by"] is None and appr["manifest_sha256"] == w.manifest_sha256(man)
+    assert len(appr["common_context_sha256"]) == 64 and len(appr["operating_controls_sha256"]) == 64
     assert set(appr["transports"]) == {"openai_chat", "claude_cli", "anthropic_messages"}
     inp = json.loads((tmp_path / "acc" / acc.INPUT_FILE).read_text())
     assert inp["input_spec"]["symbol"] == "011200" and len(inp["common_context_sha256"]) == 64
@@ -87,6 +88,13 @@ def test_prepare_writes_fixed_scope_without_calls_or_prompt_text(tmp_path):
 def test_prepare_rejects_invalid_candidate(tmp_path, candidate, match):
     with pytest.raises(ValueError, match=match):
         acc.prepare_acceptance(controls(), experiment_id="ACC-1", day="2026-11-03", candidate=candidate,
+                               input_spec=spec(), out_dir=tmp_path / "x", now=NOW)
+
+
+@pytest.mark.parametrize("bad", ["", "E04/acceptance", "a b", "x" * 65, "../x"])
+def test_prepare_rejects_unsafe_experiment_id(tmp_path, bad):
+    with pytest.raises(ValueError, match="experiment_id_invalid"):
+        acc.prepare_acceptance(controls(), experiment_id=bad, day="2026-11-03", candidate={"reasoning_effort": "low"},
                                input_spec=spec(), out_dir=tmp_path / "x", now=NOW)
 
 
@@ -118,6 +126,18 @@ def test_run_refuses_before_any_transport_is_touched(tmp_path):
     path.write_text(json.dumps(man, ensure_ascii=False))
     with pytest.raises(ValueError, match="approval_manifest_mismatch"):
         acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=NOW)
+    assert _untouched(tr)
+
+
+def test_swapped_input_file_from_another_preparation_is_refused(tmp_path):
+    """같은 제어로 준비한 다른 종목의 input.json 을 통째로 복사해도 승인서의 입력 지문과 달라 거절된다."""
+    led, day, _ = prepared(tmp_path)
+    acc.prepare_acceptance(controls(), experiment_id="ACC-2", day=day, candidate={"reasoning_effort": "low"},
+                           input_spec=spec(symbol="005930", sector="반도체"), out_dir=tmp_path / "other", now=prep_now())
+    (tmp_path / "acc" / acc.INPUT_FILE).write_text((tmp_path / "other" / acc.INPUT_FILE).read_text(encoding="utf-8"), encoding="utf-8")
+    tr = transports()
+    with pytest.raises(ValueError, match="approval_input_mismatch"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=datetime.now(acc.KST))
     assert _untouched(tr)
 
 
@@ -213,6 +233,16 @@ def test_candidate_only_failure_is_not_an_acceptance_pass(tmp_path):
     assert receipt["pair"]["complete"] is True and receipt["pair"]["result"]["current"]["verdict"] in ("approve", "reject")
     assert receipt["status"] == "completed_with_findings"
     assert "candidate_verdict_hold_or_missing" in receipt["findings"] and "current_verdict_hold_or_missing" not in receipt["findings"]
+
+
+def test_open_anthropic_session_after_stop_is_a_finding(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=SCRIPTS["timeout"])
+    tr.anthropic_api._session = SimpleNamespace(closed=False, close=AsyncMock(side_effect=RuntimeError("stuck")))
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["transports_closed"]["anthropic_api"] is False and tr.anthropic_api._closed
+    assert receipt["status"] == "completed_with_findings" and "transport_not_closed" in receipt["findings"]
 
 
 def test_open_openai_session_after_stop_is_a_finding(tmp_path):

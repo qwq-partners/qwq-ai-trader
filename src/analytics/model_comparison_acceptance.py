@@ -18,6 +18,7 @@ from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+import re
 import time
 from types import SimpleNamespace
 import uuid
@@ -44,6 +45,8 @@ _INPUT_KEYS = ("symbol", "strategy", "score", "market_regime", "sector", "indica
 _SCRUB_KEYS = frozenset({"prompt", "system", "content", "response", "text", "common_context", "raw", "messages",
                          "fallback_prompt_suffix"})
 _TERMINAL = ("finished", "incomplete", "blocked", "journal_dropped", "journal_failed", "expired")
+# 실험 ID 는 파일명(영수증·저널)에 들어가므로 안전한 문자 집합으로 제한한다.
+_EXPERIMENT_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _canon(value) -> str:
@@ -97,8 +100,8 @@ def _allowed_models(controls: dict, candidate: dict) -> list[str]:
 def prepare_acceptance(operating_controls: dict, *, experiment_id: str, day: str, candidate: dict, input_spec: dict,
                        out_dir, now: datetime, horizon_seconds: int = 900, max_input_age_seconds: float = 30.0) -> dict:
     """호출 없이 manifest·승인 요청서·입력 지문을 적는다. 반환값에도 프롬프트 본문은 없다."""
-    if not isinstance(experiment_id, str) or not experiment_id.strip():
-        raise ValueError("experiment_id_required")
+    if not isinstance(experiment_id, str) or _EXPERIMENT_ID.fullmatch(experiment_id) is None:
+        raise ValueError("experiment_id_invalid")
     datetime.strptime(day, "%Y-%m-%d")
     if not isinstance(candidate, dict) or len(candidate) != 1:
         raise ValueError("candidate_must_change_exactly_one_variable")
@@ -112,8 +115,10 @@ def prepare_acceptance(operating_controls: dict, *, experiment_id: str, day: str
                                         max_input_age_seconds=max_input_age_seconds, enabled=True)
     digest = manifest_sha256(manifest)
     context = common_context_for(input_spec)
+    # 승인서는 manifest 지문뿐 아니라 승인 대상 입력(공통 입력·생산자 제어)의 지문도 결합한다 — 다른 입력 파일로 바꿔치기 거절.
     approval = {"experiment_id": experiment_id, "manifest_sha256": digest, "valid_from": day, "valid_until": day,
                 "transports": list(required_transports(manifest)), "approved_by": None, "approved_at": None,
+                "common_context_sha256": _sha(context), "operating_controls_sha256": _sha(_canon(operating_controls)),
                 "scope": ("1 pair · daily_attempt_cap 4 · max_output_tokens 400 · experiment_usd_ceiling USD 0.50 "
                           "(guard reservation/estimate contract, not a billing guarantee)")}
     _write(out / MANIFEST_FILE, manifest)
@@ -135,6 +140,10 @@ def load_prepared(out_dir) -> dict:
     context = common_context_for(loaded[INPUT_FILE]["input_spec"])
     if _sha(context) != loaded[INPUT_FILE].get("common_context_sha256"):
         raise ValueError("input_context_changed")
+    approval = loaded[APPROVAL_FILE]
+    if (_sha(context) != approval.get("common_context_sha256")
+            or _sha(_canon(loaded[INPUT_FILE].get("operating_controls"))) != approval.get("operating_controls_sha256")):
+        raise ValueError("approval_input_mismatch")
     return {"manifest": loaded[MANIFEST_FILE], "approval": loaded[APPROVAL_FILE], "input": loaded[INPUT_FILE],
             "common_context": context}
 
@@ -259,10 +268,15 @@ def _acceptance_findings(receipt: dict) -> list[str]:
 
 def _closed(transports) -> dict:
     """소유 전송의 정리 상태 — Claude CLI/API 는 `_closed`, OpenAI 는 aiohttp 세션이 없거나 닫혔는지로 본다."""
-    closed = {name: bool(getattr(client, "_closed", False)) for name, client in
-              (("claude_cli", transports.claude_cli), ("anthropic_api", transports.anthropic_api)) if client is not None}
-    session = getattr(transports.openai, "_session", None)
-    closed["openai"] = session is None or bool(getattr(session, "closed", False))
+    def session_closed(client):
+        session = getattr(client, "_session", None)
+        return session is None or bool(getattr(session, "closed", False))
+    closed = {}
+    for name, client in (("claude_cli", transports.claude_cli), ("anthropic_api", transports.anthropic_api)):
+        if client is not None:
+            # `_closed` 는 close() 진입 표식일 뿐이라 HTTP 세션이 실제로 닫혔는지도 본다(종료 예외는 worker 가 삼킨다).
+            closed[name] = bool(getattr(client, "_closed", False)) and session_closed(client)
+    closed["openai"] = session_closed(transports.openai)
     return closed
 
 
