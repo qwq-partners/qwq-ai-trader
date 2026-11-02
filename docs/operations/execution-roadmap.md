@@ -1,5 +1,30 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e02-core-indicators-20261102"></a>
+### E02-CORE-INDICATORS — 코어 리밸런싱 BUY 신호의 선정 당시 지표 전달 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR #329 CI 영수증 참조 / 운영 미배포)
+
+**Plan:** 사용자 “코어 신호의 지표 전달 공백을 최소 수정” 승인(11/2 판독의 결함 (a)). 범위: `CoreCandidate.indicators` → `Signal.metadata` → 크로스검증·entry LLM 입력 전달 경로의 공백 재현·수정, 소비자 영향 확인, 독립 리뷰, 실제 WSL 직렬 전체, 커밋/푸시·PR·필수 CI. 설정·배분(core 0%)·현금 운용·매수 중지·월 USD100·GPT/Claude·Gemini 차단 유지, 배포/재시작/실호출/R1/주문/새 예약 0. 시작 상태(읽기 전용): origin/main `9e8d60f7`(PR #328), 운영 `cfc9bc20`+evolved 미커밋·`KILL_SWITCH_KR`·active PID 4157369.
+
+**Do/계약 추적:** 생산자 `CoreScreener._calc_indicators`/`_enrich_supply_demand` 는 `CoreCandidate.indicators` 에 MA·close·변동성·거래대금·PER/PBR/EPS/BPS(유니버스 미제공 0.0)·`foreign_net_buy_5d/inst_net_buy_5d`(KIS FHKST01010900 5거래일 합, 미관측 일자는 원천이 0 으로 채움)를 둔다. `execute_core_rebalance` 의 즉시 매수·pending 저장·재시도 세 경로는 `metadata={is_core, candidate_name, batch_signal, rebalance}` 만 실어 지표가 끊겼다. 소비자 `CrossStrategyValidator.validate` 는 `metadata.indicators` 의 `atr_pct/atr_14`·`per`·`pbr`·`foreign_net_buy/inst_net_buy` 의 None 을 결손으로 세고(2점×개수, 상한 8), 규칙 8(적자+고PBR -10·PER>50 -5)·규칙 7(MA200, sepa/theme 한정)·규칙 2(동시 순매도, 코어 비대상)를 적용한다. entry LLM 입력 `build_entry_context` 는 `rsi_14/atr_14/atr_pct/ma200_distance_pct/per/foreign_net_buy` 만 고른다. signal_events(jsonb)·core_state(JSON)가 직렬화한다.
+
+**Do/최소 재현:** 같은 합성 후보(73점·PER 16.2·PBR 0.9·수급 관측)로 실제 `execute_core_rebalance`→`validate` 를 돌리면 origin/main `9e8d60f7` 은 metadata 키 4개·지표 None·조정 65(-8), 수정본은 지표 전달·조정 71(-2)이다(11/2 실측 73-8+10=75 와 일치). 영수증 `repro-baseline.json`/`repro-fixed.json`.
+
+**Do/수정:** `batch_analyzer.core_signal_indicators()` — 소비자 키만 새 dict 로 복사(후보 비공유, None 보존, `or` 없음), PER/PBR 센티널 0→None(음수 보존), 수급은 레거시 합 `*_5d`·유효 evidence 합 `*_5d_observed`·측별 `*_observed_days` 보존 + 관측 일수 ≥1 인 측의 `*_5d_observed` 만 `foreign_net_buy/inst_net_buy`(아니면 None) + `supply_window_days=5`·`indicators_source`, Decimal→float·직렬화 불가 None, 빈 입력 {}. 세 경로 적용, 구 pending 항목은 지표를 만들지 않음. `core_screener._enrich_supply_demand` 는 레거시 합계 불변, 배치 응답 뒤 잡은 기준시각으로 `valid_evidence` 를 통과한 값만의 합·관측 일수 추가(점수 입력 불변). `entry_llm_context` 수급 metric 에 `window_days/source`(없으면 None)와 지시문 1줄. ATR 은 코어가 계산하지 않아 결손 유지(-2), 감점 규칙·문턱·배분·현금/매수 중지·주문 경로 불변.
+
+**See/수락 검사(AWS 보조):** `tests/test_core_signal_indicators.py` 9건 — 헬퍼 계약(별칭·센티널·None 보존·비공유·직렬화), E2E 전달(수정 전 대비 +6 = 결손 8→2, 기존 metadata/가격/손절 보존, 발행 뒤 후보 변경 무영향), 불리 지표(적자+고PBR -10 유지, 순효과 -4), 부분/빈 지표(-6/-8 유지), pending 저장·재시도 복원·구 항목 불변, 스크리너 관측 일수(합계 불변, 값 0 관측일 포함), 미관측 수급(-4), LLM 입력 창/출처·미관측 direction unknown. 관련 묶음(`test_entry_llm_context`·`test_exit_exempt_sell_guard`·`test_cross_validation_boost_label`·`test_rr_context*`) 결과는 아래에 적는다.
+
+**See/독립 리뷰(Codex, 요청 gpt-6-astra/high, actual/effective 미노출, 읽기 전용·테스트 미실행):** 1회차 HEAD `e527696e`(tree `8f3c5b78`) **P0 0·P1 1·P2 3** — ① 원천 0 채움·evidence 무시 합계를 관측 수급으로 전달, ② 5일 창 정보가 실제 LLM 입력에서 소실, ③ 문서 미갱신, ④ 테스트 `or {}`. 전부 반영. 2회차 HEAD `4518b2ff`(tree `69ad2dac`) **P0 0·P1 2** — ① 검증 기준시각을 조회 전에 고정해 새로 받은 evidence(`captured_at` 이 더 늦음)를 전부 거절, ② 전달 합이 레거시 합(충돌·미관측 0 포함)이라 유효 evidence 합이 아님. 반영: 기준시각은 배치 응답 뒤, 신호용 `*_5d_observed` 는 유효 evidence 값만 합산(충돌 행 섞인 회귀 검사·`_fetch` 내부 evidence 생성). 기존 계약 검사 `test_supply_missing_consumers` 의 수급 metric 완전 일치 단정에 `window_days/source=None` 을 추가했다(목적 "None→balanced 금지" 불변). 3회차 HEAD `5a62f060`(tree `2a3a9666`) **P0/P1 0·P2 1** — 부분 관측(예: 3일) 합이 LLM 입력에 `window_days=5` 로만 보여 완전한 5일 합처럼 읽힘. 반영: 헬퍼가 측별 관측 일수를 `foreign_net_buy_observed_days/inst_net_buy_observed_days` 로 적고 LLM 수급 metric 에 `observed_days`·`partial` 추가, 1·3·5일 관측 회귀 검사. 4회차 HEAD `69c577a7`(tree `05bf5827`) **P0/P1/P2 0** — 조건부 병합 가능(실제 WSL 전체·필수 CI 확인 조건). 리뷰 체인은 비공개 `review-chain.json`·`codex-review-1~4.log`.
+
+**See/관련 검사(AWS 보조, HEAD `69c577a7`):** 코어 지표/크로스검증/entry LLM/수급/팀 심의 입력 10파일 **373 passed**·격리 0(`related-tests-4.log`).
+
+**See/실제 WSL 전체:** 핀된 호스트키 라이브 대조 일치, 임시 작업 키 1회 등록, 미푸시 bundle(전제 `1eb023a9`, WSL 원본에 `9e8d60f7` 부재)을 ssh 스트림으로 전달(scp 는 `restrict` 옵션에 막힘), 별도 작업본 `/home/user/projects/qwq-e02-core-indicators-20261102`(detached `69c577a7`·tree 동일)에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 를 선택/병렬/skip 없이 직렬 실행 — **10,347 passed / 2 skipped / 2 xfailed**, 검사 406.79초·전체 425.2초·rc 0·격리 0·문법/비밀 검사 실행, 원격 로그 SHA256 일치, 원본 저장소 상태 보존·작업본 청결(`wsl-result.json`). 임시 키는 PR CI 확인 뒤 제거한다.
+
+**통합:** 검증된 `69c577a7` 을 푸시해 [PR #329](https://github.com/qwq-partners/qwq-ai-trader/pull/329)를 열었다. 이 문서 커밋은 검증 뒤 Markdown 전용이며 필수 verify 는 PR 영수증을 따른다. 병합은 사용자 결정이다.
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지·R1 OFF·worker 비활성·Gemini 차단 보존, 배포/재시작/실호출/시험 발송/새 예약 0. 영수증: 비공개 `~/.local/state/qwq-task-audit/20261102/e02-core-indicators/`.
+
+**NEXT:** 실제 WSL 직렬 전체 → 커밋/푸시·PR·필수 CI → 사용자 병합 결정. 그다음 단위는 웹 리포트 검증 거절 사유 기록 보완(reason_code/field_path, 검증 기준 완화 없음). core 배분 재개·현금/매수 중지는 사용자 결정 사항이며 이 수정은 그 전제를 바꾸지 않는다.
+
 <a id="e02-e01-readout-20261102"></a>
 ### E02-RR/E01 자연 입력 판독 — 11/2 (판독 DONE / 비교쌍 0 · 실행 제약 상태 / 소스 변경 0)
 

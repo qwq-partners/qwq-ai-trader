@@ -37,6 +37,84 @@ from ..utils.sizing import atr_position_multiplier
 from ..utils.kis_request_metrics import request_source
 
 
+# E02-CORE-INDICATORS (2026-11-02): 코어 리밸런싱 BUY 신호가 크로스검증·entry LLM 입력 소비자에게 전달하는
+# 선정 당시 지표. 이전에는 Signal.metadata 에 지표가 전혀 실리지 않아 크로스검증이 코어 신호마다
+# 지표결손(ATR,PER,PBR,수급) -8 을 적용했다(11/2 09:07:44 011200 기록). CoreCandidate.indicators 에서 소비자가
+# 읽는 기존 값만 새 dict 로 복사하며(후보 객체와 공유 없음), 없는 값은 만들지 않는다(ATR 은 코어 스크리너가
+# 계산하지 않으므로 결손 그대로).
+_CORE_SIGNAL_INDICATOR_KEYS = (
+    "close", "ma5", "ma20", "ma50", "ma200", "ma_aligned", "ma200_below_days",
+    "ret_vol_60d", "avg_trading_value", "eps", "bps", "market_cap_eok",
+    "foreign_net_buy_5d", "inst_net_buy_5d",
+    "foreign_net_buy_5d_observed", "inst_net_buy_5d_observed",
+    "foreign_net_buy_5d_observed_days", "inst_net_buy_5d_observed_days",
+)
+# 코어 수급은 KIS 투자자별 일별 순매수 수량(주)의 5거래일 합 — 스윙 경로의 당일 값과 창이 다르므로 함께 적는다.
+# 원천은 미관측 일자를 0 으로 채우고 중복 충돌은 evidence 만 지우므로, 소비자 키(`foreign_net_buy`/`inst_net_buy`)는
+# 유효 evidence 값만 더한 `*_5d_observed` 를 관측 일수 1 이상일 때만 싣고 아니면 None(미관측)으로 둔다.
+# 레거시 합 `*_5d`(점수 입력)는 기록용으로만 보존한다 — 미관측·충돌값을 "관측 순매수" 로 바꾸지 않는다.
+_CORE_SUPPLY_WINDOW_DAYS = 5
+# (레거시 합, 유효 evidence 합, 관측 일수, 소비자 값 키, 소비자 관측 일수 키)
+_CORE_SUPPLY_ALIASES = (
+    ("foreign_net_buy_5d", "foreign_net_buy_5d_observed", "foreign_net_buy_5d_observed_days",
+     "foreign_net_buy", "foreign_net_buy_observed_days"),
+    ("inst_net_buy_5d", "inst_net_buy_5d_observed", "inst_net_buy_5d_observed_days",
+     "inst_net_buy", "inst_net_buy_observed_days"),
+)
+
+
+def _core_zero_sentinel(value: Any) -> bool:
+    """코어 유니버스는 PER/PBR 미제공을 0.0 으로 채운다(core_screener 유니버스 조립). 소비자는 None 을 결측으로 읽는다."""
+    return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool) and value == 0
+
+
+def _core_json_scalar(value: Any) -> Any:
+    """signal_events(jsonb)·core_state(JSON) 직렬화 가능한 스칼라만 통과시킨다. Decimal 은 float 로 적는다."""
+    if isinstance(value, Decimal):
+        return float(value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return None
+
+
+def core_signal_indicators(indicators: Any) -> Dict[str, Any]:
+    """CoreCandidate.indicators → 코어 BUY Signal.metadata['indicators'].
+
+    - 소비자 키만 복사하고 값이 None 이면 None 을 보존한다(`or` 기본값 없음).
+    - PER/PBR 의 유니버스 센티널 0 은 결측(None)으로 되돌리고 음수(적자)는 그대로 둔다.
+    - 수급은 코어 키(레거시 합 `*_5d`·유효 evidence 합 `*_5d_observed`·관측 일수)를 보존하고, 관측 일수가
+      1 이상인 측의 `*_5d_observed` 만 소비자 키(`foreign_net_buy`/`inst_net_buy`)에 싣는다(없으면 None).
+      창 일수 `supply_window_days` 와 측별 관측 일수 `*_observed_days` 를 소비자 키로 남긴다(부분 관측 구분).
+    - 빈 입력은 빈 dict 를 돌려준다(가짜 지표·출처 표시를 만들지 않는다).
+    """
+    if not isinstance(indicators, dict) or not indicators:
+        return {}
+    out: Dict[str, Any] = {}
+    for key in _CORE_SIGNAL_INDICATOR_KEYS:
+        if key in indicators:
+            out[key] = _core_json_scalar(indicators[key])
+    for key in ("per", "pbr"):
+        if key in indicators:
+            value = indicators[key]
+            out[key] = None if _core_zero_sentinel(value) else _core_json_scalar(value)
+    supply_present = False
+    for src, observed_key, days_key, dst, dst_days in _CORE_SUPPLY_ALIASES:
+        if src in indicators or observed_key in indicators:
+            supply_present = True
+            days = indicators.get(days_key)
+            value = indicators.get(observed_key)
+            days_known = isinstance(days, int) and not isinstance(days, bool) and days >= 0
+            observed = (days_known and days > 0
+                        and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool))
+            out[dst] = _core_json_scalar(value) if observed else None
+            # 소비자(LLM 입력)가 요청 창(5일)과 실제 관측 일수를 구분하도록 측별 관측 일수를 소비자 키로도 적는다
+            out[dst_days] = days if days_known else None
+    if supply_present:
+        out["supply_window_days"] = _CORE_SUPPLY_WINDOW_DAYS
+    out["indicators_source"] = "core_screener"
+    return out
+
+
 @dataclass
 class PendingSignal:
     """대기 시그널 (JSON 직렬화 가능)"""
@@ -2756,6 +2834,10 @@ class BatchAnalyzer:
                         logger.info(f"[코어홀딩] {sym} 이미 보유 중 → 스킵")
                         continue
                     entry_price = Decimal(str(pb["entry_price"]))
+                    retry_meta = {"is_core": True, "candidate_name": pb.get("name", sym), "batch_signal": True, "rebalance": True}
+                    # 저장된 선정 당시 지표가 있으면 그대로 전달하고, 구 pending 항목(지표 없음)은 만들지 않는다.
+                    if isinstance(pb.get("indicators"), dict):
+                        retry_meta["indicators"] = dict(pb["indicators"])
                     signal = Signal(
                         symbol=sym,
                         side=OrderSide.BUY,
@@ -2766,7 +2848,7 @@ class BatchAnalyzer:
                         score=pb.get("score", 70),
                         confidence=min(pb.get("score", 70) / 100.0, 1.0),
                         reason=f"코어홀딩 리밸런싱 매수(재시도): {pb.get('name', sym)}",
-                        metadata={"is_core": True, "candidate_name": pb.get("name", sym), "batch_signal": True, "rebalance": True},
+                        metadata=retry_meta,
                     )
                     event = SignalEvent.from_signal(signal, source="core_rebalance")
                     await self._engine.emit(event)
@@ -2916,6 +2998,8 @@ class BatchAnalyzer:
                     "score": c.score,
                     "entry_price": str(c.entry_price),
                     "reasons": c.reasons[:3],
+                    # 재시도 신호도 같은 선정 당시 지표를 싣는다 (E02-CORE-INDICATORS)
+                    "indicators": core_signal_indicators(c.indicators),
                 } for c in actual_buys]
                 self._save_core_state({
                     "sold": [s for s, _ in sell_targets],
@@ -2947,6 +3031,8 @@ class BatchAnalyzer:
                         "candidate_name": candidate.name,
                         "batch_signal": True,
                         "rebalance": True,
+                        # 선정 당시 지표를 크로스검증·LLM 입력에 전달 (E02-CORE-INDICATORS)
+                        "indicators": core_signal_indicators(candidate.indicators),
                     },
                 )
                 event = SignalEvent.from_signal(signal, source="core_rebalance")

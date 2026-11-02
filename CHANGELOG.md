@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-02 — E02-CORE-INDICATORS: 코어 리밸런싱 BUY 신호에 선정 당시 지표 전달 (PR #329, 실제 WSL 10,347 passed, 운영 미배포)
+
+- `src/core/batch_analyzer.py`: 모듈 헬퍼 `core_signal_indicators()` 추가. `execute_core_rebalance` 의 즉시 매수·pending 저장(`pending_core_buys[].indicators`)·재시도 신호가 `Signal.metadata["indicators"]` 로 후보의 기존 지표(MA/close/변동성/거래대금/EPS/BPS/시총·PER/PBR·5일 수급)를 전달한다. PER/PBR 유니버스 센티널 0.0→None, 수급은 측별 관측 일수 ≥1 일 때만 유효 evidence 합 `*_5d_observed` 를 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣고 아니면 None, `supply_window_days=5`·`indicators_source` 기록. 새 dict 로 복사(후보와 비공유), Decimal→float, 직렬화 불가 값 None. 구 pending 항목(지표 없음)은 그대로.
+- `src/signals/screener/core_screener.py` `_enrich_supply_demand`: 레거시 5일 합계(점수 입력)는 그대로 두고, 응답 뒤 잡은 기준시각으로 `valid_evidence` 를 통과한 값만 더한 `*_5d_observed` 와 `*_5d_observed_days` 를 추가. 원천이 미관측 일자를 0 으로 채우거나 중복 충돌에서 숫자만 남기는 것을 "관측 순매수" 로 승격하지 않기 위함(독립 리뷰 1·2회차 P1).
+- `src/core/entry_llm_context.py`: 수급 metric 에 `window_days`(요청 창)·`observed_days`(실제 관측 일수)·`partial`(창보다 적은 부분 합 여부)·`source` 추가(없으면 None), 지시문에 창/부분 합 구분 문장. 스키마 `entry-llm-input-v1` 의 기존 키는 불변. 헬퍼는 측별 관측 일수를 소비자 키 `foreign_net_buy_observed_days/inst_net_buy_observed_days` 로도 적는다(독립 리뷰 3회차 P2).
+- 효과: 11/2 실측과 같은 73점 코어 후보가 크로스검증에서 `-8`(ATR·PER·PBR·수급 결손) 대신 `-2`(ATR 결손)로 평가된다(합성 재현: origin/main 65 → 수정본 71). 불리한 지표(적자+고PBR -10)는 그대로 감점되고, 감점 규칙·문턱·core 배분 0%·현금/매수 중지·주문 경로는 변경 없음. 실제 거래 효과·순수익 개선은 입증되지 않았다.
+- 검사: `tests/test_core_signal_indicators.py`(헬퍼 계약·E2E 생산자→크로스검증·불리 지표 비무력화·부분/빈 지표·pending 저장/재시도·스크리너 관측 일수·미관측 수급·LLM 입력 창/출처). 원장 `#e02-core-indicators-20261102`.
+
 ## 2026-11-02 — E02-RR/E01 자연 입력 판독 (문서 전용, 소스 변경 0)
 
 - 11/1 17:42:10 KST 이후 `signal_events` READ ONLY 집계: 새 2행 = 코어 리밸런싱 011200 한 신호(G2 지표결손 -8/패널 +10 → G5 가용 현금 부족). rr_context target·수량·판단 null, 비교쌍 0. 장중 75+ 후보(최대 9)는 스케줄러 `가용현금=0` 제외로 엔진 미도달, 배치 SEPA/VCP는 하락장 차단. 실행 제약 상태로 분류, 선정 실패·수익률 0으로 해석하지 않음.

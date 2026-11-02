@@ -311,6 +311,19 @@ SEPA/RSI2 후보 중 **2계층 이상 복합 시그널** (전문가패널+수급
   (10%)을 관통해 -15.9%~-19.2% 청산 (합계 -772k, 6월 최대 단일 손실원).
   종가 진입은 장중 검증 시간 없이 오버나잇 갭에 전면 노출되므로 오전~13:30
   윈도우에서만 매수.
+- **리밸런싱 BUY 신호의 선정 당시 지표 전달 (E02-CORE-INDICATORS, 2026-11-02~)**:
+  `execute_core_rebalance` 가 만드는 즉시 매수·pending 저장(`pending_core_buys[].indicators`)·재시도 신호는
+  `core_signal_indicators(candidate.indicators)` 로 `Signal.metadata["indicators"]` 를 싣는다. 11/2 09:07:44 011200
+  기록처럼 이전에는 지표가 전혀 실리지 않아 크로스검증 `지표결손(ATR,PER,PBR,수급) -8` 이 코어 신호마다 붙었다.
+  전달 범위는 후보가 실제로 가진 소비자 키뿐이다 — `close/ma5/ma20/ma50/ma200/ma_aligned/ma200_below_days/
+  ret_vol_60d/avg_trading_value/eps/bps/market_cap_eok`, `per/pbr`(유니버스 미제공 센티널 0.0 은 None 으로 복원,
+  음수=적자 보존), 수급은 레거시 합 `foreign_net_buy_5d/inst_net_buy_5d`(점수 입력, 원천 0 채움·충돌 숫자 포함)와
+  유효 evidence 값만 더한 `*_5d_observed`·측별 `*_observed_days` 를 보존하고, 관측 일수 1 이상인 측의 `*_5d_observed`
+  만 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣는다(없으면 None=미관측,
+  `supply_window_days=5`·`indicators_source="core_screener"`). ATR 은 코어 스크리너가 계산하지 않으므로 결손 그대로
+  (-2). 크로스검증 규칙 8(적자+고PBR -10·극단 PER -5)은 전달된 값에 그대로 적용되고 규칙 2(동시 순매도)는 코어 비대상
+  정책이 유지된다. entry LLM 공통 입력의 수급 metric 에 `window_days/observed_days/partial/source` 가 추가돼 5일 창·실제 관측 일수·부분 합·당일 값을 구분한다.
+  감점 규칙·문턱·배분(core 0%)·현금/매수 중지 판단은 바꾸지 않았고, 후보 dict 와 신호 metadata 는 공유하지 않는다.
 
 ### 저변동성 감점 (`core_screener.py`, 2026-08-03~)
 Low Volatility Factor(재현 Sharpe 0.717) 응용 — 코어홀딩 후보 점수에 **감점 전용** 항목 추가.
