@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/2 E04-WORKER-WIRING:** PR #326 병합(main `c8b38798`) 위에 raw 전송 묶음·명시 승인 기록·동결 현행 manifest로만 worker를 조립하는 `model_comparison_wiring`을 추가했다(실제 `CrossValidator` 발행→worker→guard→복구 합성 E2E). `install_from_env`/`_raw_clients` 거부·R1 OFF·설정·매수 중지는 그대로이며 실제 호출·활성화는 없다. [원장](docs/operations/execution-roadmap.md#e04-worker-wiring-20261102).
+
 > **11/1 E04-CURRENT-FLOW:** PR #325 병합(main `6e38a371`) 위에 현행 독립 검토 판정(`review_policy=entry-independent-review-v1`: 양쪽 유효 의견 없으면 hold, 단일 모델 폴백 없음)과 Bear CLI→API 상위 흐름(허용 실패에서만 남은 내부 시한으로 API 1회, 시도별 영수증·의견 1회 계수)을 runner/PairSpec에 구현했다. worker는 프로필을 init에서 검증하고 선택 주입만 받으며 `_raw_clients` 활성화 거부·R1 OFF·설정·매수 중지는 그대로다. [원장](docs/operations/execution-roadmap.md#e04-current-flow-20261101).
 
 > **11/1 E04-CLAUDE-ADAPTER:** PR #324는 main `6261c323`에 병합 완료(main CI 10,200 PASS). 새 `ClaudeSingleAttemptAdapter`가 raw CLI(subscription)/API(api) 전송 하나를 가드 dispatch로 노출하며 채널 불일치는 전송 전 거절, 월 예약은 가드만 소유한다. runner는 Claude Bear만 선택 주입으로 허용하고 worker/R1 OFF·설정·매수 중지는 그대로다. 실제 호출·활성화는 하지 않았다. [원장](docs/operations/execution-roadmap.md#e04-claude-adapter-20261101).

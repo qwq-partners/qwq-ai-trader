@@ -215,6 +215,9 @@ class ComparisonWorker:
         self._day_pairs: dict[str, set] = {}
         self._journal_seq: dict[str, int] = {}   # 파일 경로별 단조 번호(저널 완전성 증거, 쓰는 시점에 부여)
         self._journal_run_id = "worker-" + uuid4().hex  # distinct from process-level input attestation
+        # 전송 소유권: True 면 stop 때 adapter/Claude 전송을 닫는다. 조립 경로(model_comparison_wiring)가 공유 전송을
+        # 주입하면 False 로 바꿔 호출자 소유 자원을 닫지 않는다.
+        self._owned_transports = True
         self._producer_done = threading.Event()
         self._journal_closed = False
         self._dropped_written = 0        # 저널에 이미 남긴 journal_dropped 누계
@@ -543,6 +546,8 @@ class ComparisonWorker:
             self._end(decision_id, "finished", admitted=True)
 
     async def _close_clients(self):
+        if not self._owned_transports:
+            return                                   # 공유 전송은 호출자가 닫는다
         adapter = getattr(self.runner, "adapter", None)
         for client in (getattr(adapter, "openai", None), getattr(adapter, "gemini", None)):
             session = getattr(client, "_session", None)
