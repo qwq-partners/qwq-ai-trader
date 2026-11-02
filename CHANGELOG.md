@@ -4,6 +4,11 @@
 
 - `src/analytics/entry_observation_journal.py`: `close()`가 오류를 기록한 채 결과를 돌려줄 때(`journal_close_timeout`이 대표 사례, `journal_writer_failed`·`journal_record_rejected_or_queue_full` 포함) result에 `close_diagnostics`{accepted_records, persisted_records, queue_pending, writer_alive, bytes_written, close_timeout_seconds, close_elapsed_seconds, sealed_at}를 추가한다(순간 관측값, `persisted_records`는 fsync 확인과 별개). 성공 result 키 집합 불변, 취소(`journal_shutdown_cancelled`)는 예외를 그대로 전파해 진단을 회수하지 않으며, 이 경로는 로그 sink를 기다리지 않음(독립 리뷰 P1 반영). `tests/test_first_scan_volume.py` 실패 메시지를 명시 JSON 문자열로 바꿔 pytest repr 생략으로 진단이 잘리지 않게 했다(2회차 P2). 11/2 WSL 1차의 `journal_close_timeout`이 persisted 4,300 외 계측 없이 끝나 원인을 가를 수 없던 공백 보완. 시한·skip·수집 한도는 바꾸지 않았고 원인 판정은 다음 실패 때 이 값으로 한다.
 - 검사: `tests/test_entry_observation_journal.py` 시한 초과 진단 필드 집합·성공 형태 유지. 규약 문서 `docs/research/current-engine-selection-entry-protocol-2026-09-30.md` 원장 close 절 갱신.
+## 2026-11-03 — 운영 배포 a399c297 (cfc9bc20→a399c297 누적, 01:29:44 KST 기동)
+
+- 사용자 승인(1안 01:30~05:30)으로 WSL 정본 `deploy_lightsail.sh --check/--deploy/--postcheck` 수행. 서버 전체 verify 10,367 passed / 2 skipped / 2 xfailed(848.89초), 재시작 PID 346880·NRestarts 0, postcheck rc 0(KIS 오류 0·pending []·원장 ready), 롤백 없음.
+- 보존: 운영 tree = 후보 tree, 보호 48파일·crontab·evolved_overrides(미커밋)·KILL_SWITCH_KR·Toss disabled·O02 timer 그대로. 비교 worker 미설치(env 게이트 부재), R1 OFF, 매수 중지·배분·예산 정책 불변.
+- 포함 변경: E04 비교 계약/과금 채널/Claude 어댑터/현행 흐름/worker 조립(모두 비활성), E02-CORE-INDICATORS 코어 지표 전달, R02-WEB-REJECTION-DIAGNOSTICS 웹 거절 진단. 자연 슬롯 발송·웹 거절 자연 기록·코어 지표 운영 효과는 WAIT. 영수증 `~/.local/state/qwq-task-audit/20261103/deploy-prep/`.
 
 ## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
 
