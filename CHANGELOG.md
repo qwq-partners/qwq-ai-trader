@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-02 — E02-CORE-INDICATORS: 코어 리밸런싱 BUY 신호에 선정 당시 지표 전달 (PR 대기, 운영 미배포)
+## 2026-11-02 — E02-CORE-INDICATORS: 코어 리밸런싱 BUY 신호에 선정 당시 지표 전달 (PR #329, 실제 WSL 10,347 passed, 운영 미배포)
 
 - `src/core/batch_analyzer.py`: 모듈 헬퍼 `core_signal_indicators()` 추가. `execute_core_rebalance` 의 즉시 매수·pending 저장(`pending_core_buys[].indicators`)·재시도 신호가 `Signal.metadata["indicators"]` 로 후보의 기존 지표(MA/close/변동성/거래대금/EPS/BPS/시총·PER/PBR·5일 수급)를 전달한다. PER/PBR 유니버스 센티널 0.0→None, 수급은 측별 관측 일수 ≥1 일 때만 유효 evidence 합 `*_5d_observed` 를 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣고 아니면 None, `supply_window_days=5`·`indicators_source` 기록. 새 dict 로 복사(후보와 비공유), Decimal→float, 직렬화 불가 값 None. 구 pending 항목(지표 없음)은 그대로.
 - `src/signals/screener/core_screener.py` `_enrich_supply_demand`: 레거시 5일 합계(점수 입력)는 그대로 두고, 응답 뒤 잡은 기준시각으로 `valid_evidence` 를 통과한 값만 더한 `*_5d_observed` 와 `*_5d_observed_days` 를 추가. 원천이 미관측 일자를 0 으로 채우거나 중복 충돌에서 숫자만 남기는 것을 "관측 순매수" 로 승격하지 않기 위함(독립 리뷰 1·2회차 P1).
