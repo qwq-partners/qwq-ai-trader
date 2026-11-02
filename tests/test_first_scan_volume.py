@@ -37,6 +37,21 @@ METADATA_ALLOCATION = 201
 BUFFER_CAPACITY = 100713
 
 
+
+def close_failure_message(result):
+    """종료 실패의 판독 근거를 통째로 문자열화한다 — error·persisted_records 와 close_diagnostics 8필드가 전부 남는다."""
+    return json.dumps({'error': result.get('error'), 'sealed': result.get('sealed'), 'fsync_confirmed': result.get('fsync_confirmed'),
+                       'persisted_records': result.get('persisted_records'), 'close_diagnostics': result.get('close_diagnostics')},
+                      ensure_ascii=False, sort_keys=True, default=str)
+
+
+def test_close_failure_message_keeps_every_diagnostic_field():
+    diag = {'accepted_records': 40713, 'persisted_records': 4300, 'queue_pending': 36413, 'writer_alive': True, 'bytes_written': 1,
+            'close_timeout_seconds': 10.0, 'close_elapsed_seconds': 10.004, 'sealed_at': '2026-11-02T23:21:00+09:00'}
+    text = close_failure_message({'sealed': False, 'fsync_confirmed': False, 'persisted_records': 4300,
+                                  'error': 'journal_close_timeout', 'path': '/x', 'close_diagnostics': diag})
+    assert all(key in text for key in diag) and 'journal_close_timeout' in text and '...' not in text
+
 def synthetic_producer_pacing():
     """Bound the fake-clock producer backlog without changing the real writer."""
     pacing = {'checkpoints': 0, 'wait_seconds': 0.0, 'queue_peak': 0}
@@ -249,9 +264,10 @@ async def collect_volume(tmp_path, monkeypatch, *, fail_memory=False, plan_facto
         counts = Counter(r['kind'] for r in runtime.buffer._records)
         clock[0] = plan.end_at
         await runtime.close()
-        assert runtime.result['sealed'] and runtime.result['fsync_confirmed'], runtime.result
-        assert runtime.result['error'] is None, runtime.result
-        assert runtime.result['persisted_records'] == len(runtime.buffer._records), runtime.result
+        # 실패 메시지는 명시 문자열 — pytest 의 dict repr 생략으로 close_diagnostics 가 잘리지 않게 한다(2026-11-03).
+        assert runtime.result['sealed'] and runtime.result['fsync_confirmed'], close_failure_message(runtime.result)
+        assert runtime.result['error'] is None, close_failure_message(runtime.result)
+        assert runtime.result['persisted_records'] == len(runtime.buffer._records), close_failure_message(runtime.result)
         observed = read_observation_journal(plan.settings['journal_path'], max_bytes=256 * 1024 * 1024,
                                              expected_study_sha256=plan.study_sha256)
         return plan, study, observed, retained, counts, runtime.buffer, clock[0]

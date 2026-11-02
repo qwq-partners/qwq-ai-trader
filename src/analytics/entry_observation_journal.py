@@ -16,6 +16,7 @@ import queue
 import re
 import stat
 import threading
+import time
 from uuid import uuid4
 
 from .entry_observation import EntryObservationBuffer
@@ -406,6 +407,7 @@ class ObservationJournal:
         return await asyncio.shield(self._close_task)
 
     async def _finish(self, timeout_seconds):
+        started = time.monotonic()
         try:
             await _wait_until(lambda: not self._thread.is_alive(), timeout_seconds)
         except TimeoutError:
@@ -415,8 +417,24 @@ class ObservationJournal:
             self._fail("journal_shutdown_cancelled")
             self._abort.set()
             raise
-        return {"sealed": self._sealed, "fsync_confirmed": self._fsync_confirmed,
-                "persisted_records": self._persisted, "error": self._error, "path": str(self.path)}
+        result = {"sealed": self._sealed, "fsync_confirmed": self._fsync_confirmed,
+                  "persisted_records": self._persisted, "error": self._error, "path": str(self.path)}
+        if self._error is not None:
+            # 종료 실패의 판독 근거 — 접수/영속 건수·큐 잔량·writer 생존·경과시간만 적는다(기록 내용·경로 외 원문 없음).
+            # 2026-11-02 WSL 검증의 journal_close_timeout 은 persisted 4,300 외에 남은 계측이 없어 원인을 가를 수 없었다.
+            # 반환값에만 둔다 — 이 경로에서 로그 sink(파일 I/O)를 기다리면 디스크 정체 시 종료 시한이 무의미해진다(독립 리뷰 P1).
+            result["close_diagnostics"] = self._close_diagnostics(timeout_seconds, started)
+        return result
+
+    def _close_diagnostics(self, timeout_seconds, started):
+        try:
+            pending = self._queue.qsize()
+        except Exception:
+            pending = None
+        return {"accepted_records": self._final_count, "persisted_records": self._persisted,
+                "queue_pending": pending, "writer_alive": self._thread.is_alive(),
+                "bytes_written": self._bytes, "close_timeout_seconds": float(timeout_seconds),
+                "close_elapsed_seconds": round(time.monotonic() - started, 3), "sealed_at": self._sealed_at}
 
 
 def _unique_keys(pairs):
