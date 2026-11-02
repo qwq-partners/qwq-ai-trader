@@ -106,6 +106,9 @@ def prepare_acceptance(operating_controls: dict, *, experiment_id: str, day: str
     if not isinstance(candidate, dict) or len(candidate) != 1:
         raise ValueError("candidate_must_change_exactly_one_variable")
     out = Path(out_dir)
+    if out.exists() and (any((out / name).exists() for name in (MANIFEST_FILE, APPROVAL_FILE, INPUT_FILE)) or any(out.glob(RECEIPT_GLOB))):
+        # 준비·승인·영수증은 한 디렉터리에 한 번만 — 재준비는 새 디렉터리에서 한다(감사 기록 보존).
+        raise ValueError("prepare_dir_not_empty")
     out.mkdir(parents=True, exist_ok=True)
     out.chmod(0o700)
     policy = dict(ACCEPTANCE_POLICY, allowed_models=_allowed_models(operating_controls, candidate),
@@ -173,7 +176,8 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
     receipt = {"task": "E04 limited live acceptance", "experiment_id": manifest["experiment_id"],
                "manifest_sha256": approval.manifest_sha256, "approved_by": approved_by, "decision_id": decision_id,
                "started_at": now.isoformat(), "status": "not_started", "offer": None, "pair": None,
-               "ledger_status_after": None, "transports_closed": None, "error": None, "findings": []}
+               "ledger_status_after": None, "transports_closed": None, "error": None, "findings": [],
+               "deadline_exceeded": False}
     receipt_path = out / f"receipt-{decision_id}.json"
     worker = None
     try:
@@ -201,22 +205,8 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
                     break
                 time.sleep(poll_seconds)
             else:
-                receipt["status"] = "deadline_exceeded"
-            health = worker.health()
-            receipt["worker_health"] = {k: health.get(k) for k in _TERMINAL + ("offered", "admitted")}
-            try:
-                info = inspect_pair(worker.runner.guard, worker.runner.pair_id(decision_id))
-                receipt["pair"] = _scrub(info)
-                if receipt["status"] == "not_started":
-                    receipt["status"] = "finished" if info.get("complete") else "incomplete"
-            except Exception as error:  # 영수증 조립 실패는 유형만 남긴다
-                receipt["pair_inspect_error"] = type(error).__name__
-                if receipt["status"] == "not_started":
-                    receipt["status"] = "incomplete"
-        try:
-            receipt["ledger_status_after"] = _scrub(ledger.status())
-        except Exception as error:
-            receipt["ledger_status_after"] = {"error": type(error).__name__}
+                receipt["deadline_exceeded"] = True           # 시한 안에 끝나지 않음 — 종료 뒤 최종 상태와 별도로 보존
+            receipt["status"] = "offered"
     except Exception as error:
         receipt["status"] = "error"
         receipt["error"] = type(error).__name__ + (":" + str(error) if isinstance(error, ValueError) else "")
@@ -226,8 +216,26 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
                 receipt["stop"] = _scrub(worker.stop(5))
             except Exception as error:
                 receipt["stop"] = {"error": type(error).__name__}
+            if receipt["offer"] == "accepted":
+                # 종료 대기 중 호출·정산이 끝날 수 있으므로 pair·원장은 stop 뒤에 조회한 값이 최종 상태다.
+                health = worker.health()
+                receipt["worker_health"] = {k: health.get(k) for k in _TERMINAL + ("offered", "admitted")}
+                try:
+                    info = inspect_pair(worker.runner.guard, worker.runner.pair_id(decision_id))
+                    receipt["pair"] = _scrub(info)
+                    receipt["status"] = "finished" if info.get("complete") else "incomplete"
+                except Exception as error:  # 영수증 조립 실패는 유형만 남긴다
+                    receipt["pair_inspect_error"] = type(error).__name__
+                    receipt["status"] = "incomplete"
+        if receipt["status"] != "error" or receipt["offer"] is not None:
+            try:
+                receipt["ledger_status_after"] = _scrub(ledger.status())
+            except Exception as error:
+                receipt["ledger_status_after"] = {"error": type(error).__name__}
         receipt["transports_closed"] = _closed(transports)
         receipt["findings"] = _acceptance_findings(receipt)
+        if receipt["deadline_exceeded"]:
+            receipt["findings"].append("deadline_exceeded")
         if receipt["status"] == "finished" and receipt["findings"]:
             receipt["status"] = "completed_with_findings"      # 결과 행은 저장됐지만 인수 통과 조건을 못 채움
         receipt["finished_at"] = datetime.now(KST).isoformat()

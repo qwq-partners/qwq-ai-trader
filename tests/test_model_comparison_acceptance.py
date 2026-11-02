@@ -273,6 +273,26 @@ def test_cli_success_needs_no_api_and_reserves_only_bull(tmp_path):
     assert receipt["pair"]["result"]["subscription_attempts"] == 1
 
 
+def test_prepare_refuses_to_overwrite_an_existing_preparation(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    before = {n: (tmp_path / "acc" / n).read_text(encoding="utf-8") for n in (acc.MANIFEST_FILE, acc.APPROVAL_FILE, acc.INPUT_FILE)}
+    with pytest.raises(ValueError, match="prepare_dir_not_empty"):
+        acc.prepare_acceptance(controls(), experiment_id="ACC-9", day=day, candidate={"reasoning_effort": "low"},
+                               input_spec=spec(symbol="005930"), out_dir=tmp_path / "acc", now=prep_now())
+    assert {n: (tmp_path / "acc" / n).read_text(encoding="utf-8") for n in before} == before
+
+
+def test_completion_during_stop_is_recorded_with_deadline_flag(tmp_path):
+    """폴링 시한이 먼저 끝나도 stop 대기 중 완료된 결과·정산이 최종 영수증에 반영되고 시한 초과는 따로 남는다."""
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=_ok)
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=0.001, poll_seconds=0.001)
+    assert receipt["deadline_exceeded"] is True and "deadline_exceeded" in receipt["findings"]
+    assert receipt["pair"]["complete"] is True and receipt["ledger_status_after"]["unresolved_count"] == 0
+    assert receipt["status"] == "completed_with_findings" and receipt["stop"]["drained"] is True
+
+
 def test_future_fixed_at_is_refused_before_any_call(tmp_path):
     led = ledger(tmp_path)
     acc.prepare_acceptance(controls(), experiment_id="ACC-1", day=led.today().isoformat(), candidate={"reasoning_effort": "low"},
