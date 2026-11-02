@@ -20,7 +20,8 @@ from loguru import logger
 
 from .audience_reports import (MarketSnapshot, _midday_provider_references, current_indices,
                                indicative_indices)
-from .market_report_analysis import ResearchEvidenceUnavailable, _public_bundle, _PUBLIC_FIELDS
+from .market_report_analysis import (AnalysisValidationError, ResearchEvidenceUnavailable, _public_bundle,
+                                     _PUBLIC_FIELDS)
 from .report_delivery import durable_thread, encode_public_evidence
 from ..utils.llm_roles import LLMRole, get_role_profile
 
@@ -203,24 +204,28 @@ _HEDGE = re.compile(r'동행하거나\s*다르게|유지되거나\s*역전|일�
 _BANNED = re.compile(r'(매수|매도|비중\s*확대|비중\s*축소)\s*(추천|권고|의견|전략)|목표\s*주?가|적극\s*매[수도]|[매강]력\s*매수')
 
 
-def _check_text(value, limit, *, dates, numbers, latin):
-    if not isinstance(value, str) or not value.strip() or len(value) > limit:
-        raise ValueError('invalid prose length')
+# R02-WEB-REJECTION-DIAGNOSTICS (2026-11-02): 검증 거절은 시장 보고와 같은 AnalysisValidationError(code, field) 로
+# 올린다 — 고정 코드와 스키마 경로뿐이며 응답 본문은 절대 담지 않는다. ValueError 하위이므로 기존 호출자 호환.
+def _check_text(value, limit, *, dates, numbers, latin, field):
+    if not isinstance(value, str) or not value.strip():
+        raise AnalysisValidationError('invalid_prose', field)
+    if len(value) > limit:
+        raise AnalysisValidationError('too_long', field)
     normalized = unicodedata.normalize('NFKC', value)
     if (not re.search(r'[가-힣]', value) or re.search(r'[<>]|https?://|www\.', normalized, re.I)
             or any(unicodedata.category(c).startswith('C') or unicodedata.category(c) in {'Zl', 'Zp'} for c in value)
             or _HEDGE.search(normalized)):
-        raise ValueError('invalid prose')
+        raise AnalysisValidationError('invalid_prose', field)
     if _BANNED.search(normalized):
-        raise ValueError('recommendation vocabulary')
+        raise AnalysisValidationError('recommendation_vocabulary', field)
     if any(d not in dates for d in re.findall(_DATE, normalized)):
-        raise ValueError('uncited date')
+        raise AnalysisValidationError('unsupported_date', field)
     numbers_only = re.sub(_DATE, '', normalized)
     # A signed token must match a signed spelling: "+1.20%" in the facts never licenses "-1.20%".
     if any(n not in numbers for n in re.findall(_NUMBER, numbers_only)):
-        raise ValueError('uncited number')
+        raise AnalysisValidationError('unsupported_numeric', field)
     if any(x.casefold() not in latin for x in re.findall(r'[A-Za-z]+', normalized)):
-        raise ValueError('uncited latin')
+        raise AnalysisValidationError('unsupported_latin', field)
 
 
 def _tokens(texts):
@@ -235,57 +240,88 @@ def validate_web_analysis(text, facts, bundle) -> dict:
         result = {}
         for key, value in items:
             if key in result:
-                raise ValueError('duplicate key')
+                raise AnalysisValidationError('invalid_json', 'response')
             result[key] = value
         return result
     try:
         obj = json.loads(text, object_pairs_hook=pairs)
     except (TypeError, ValueError):
-        raise ValueError('invalid JSON') from None
+        raise AnalysisValidationError('invalid_json', 'response') from None
     expected = {'stance', 'headline', 'summary', 'market_view', 'sector_view', 'issues', 'macro_view', 'outlook', 'checklist'}
     if not isinstance(obj, dict) or set(obj) != expected:
-        raise ValueError('invalid schema')
+        raise AnalysisValidationError('invalid_schema', 'response')
     if obj['stance'] not in STANCES:
-        raise ValueError('invalid stance')
+        raise AnalysisValidationError('invalid_stance', 'stance')
     sources, numeric = _sources(facts, bundle)
     all_dates, _ = _tokens(sources.values())
     _, all_numbers = _tokens(numeric.values())
     latin = {x.casefold() for x in re.findall(r'[A-Za-z]+', ' '.join(sources.values()))} | _LATIN_ALLOWED
     event_ids = {r['id'] for r in bundle['records'] if r['kind'] in ('news', 'disclosure', 'calendar')}
 
-    def check_block(item, fields, text_limit=None):
+    def check_block(item, fields, path, text_limit=None):
         if not isinstance(item, dict) or set(item) != set(fields) | {'evidence_ids'}:
-            raise ValueError('invalid block')
+            raise AnalysisValidationError('invalid_item', path)
         ids = item['evidence_ids']
         if not isinstance(ids, list) or not ids or len(ids) > 16 or any(not isinstance(x, str) or x not in sources for x in ids):
-            raise ValueError('invalid evidence')
+            raise AnalysisValidationError('invalid_evidence', path + '.evidence_ids')
         dates, _ = _tokens(sources[x] for x in ids)
         _, numbers = _tokens(numeric[x] for x in ids)
         for key in fields:
-            _check_text(item[key], text_limit or LIMITS[key], dates=dates, numbers=numbers, latin=latin)
+            _check_text(item[key], text_limit or LIMITS[key], dates=dates, numbers=numbers, latin=latin,
+                        field=path + '.' + key)
 
     def check_list(items, key, low, high):
         if not isinstance(items, list) or not low <= len(items) <= high:
-            raise ValueError(f'invalid {key}')
-        for value in items:
-            _check_text(value, LIMITS[key], dates=all_dates, numbers=all_numbers, latin=latin)
+            raise AnalysisValidationError('invalid_item', key)
+        for index, value in enumerate(items):
+            _check_text(value, LIMITS[key], dates=all_dates, numbers=all_numbers, latin=latin,
+                        field=f'{key}[{index}]')
 
-    _check_text(obj['headline'], LIMITS['headline'], dates=all_dates, numbers=all_numbers, latin=latin)
+    _check_text(obj['headline'], LIMITS['headline'], dates=all_dates, numbers=all_numbers, latin=latin,
+                field='headline')
     check_list(obj['summary'], 'summary', 2, 4)
-    check_block(obj['market_view'], ('text',), LIMITS['market_view'])
-    check_block(obj['sector_view'], ('text',), LIMITS['sector_view'])
+    check_block(obj['market_view'], ('text',), 'market_view', LIMITS['market_view'])
+    check_block(obj['sector_view'], ('text',), 'sector_view', LIMITS['sector_view'])
     if obj['macro_view'] is not None:
-        check_block(obj['macro_view'], ('text',), LIMITS['macro_view'])
+        check_block(obj['macro_view'], ('text',), 'macro_view', LIMITS['macro_view'])
     issues = obj['issues']
     if not isinstance(issues, list) or not 1 <= len(issues) <= 4:
-        raise ValueError('invalid issues')
-    for issue in issues:
-        check_block(issue, ('title', 'event', 'impact', 'counterpoint', 'watch'))
-    check_block(obj['outlook'], ('base', 'upside', 'downside'))
+        raise AnalysisValidationError('invalid_item', 'issues')
+    for index, issue in enumerate(issues):
+        check_block(issue, ('title', 'event', 'impact', 'counterpoint', 'watch'), f'issues[{index}]')
+    check_block(obj['outlook'], ('base', 'upside', 'downside'), 'outlook')
     check_list(obj['checklist'], 'checklist', 2, 5)
     if not any(event_ids.intersection(issue['evidence_ids']) for issue in issues):
         raise ResearchEvidenceUnavailable('no event cited')
     return obj
+
+
+# 영속 metadata 에 들어갈 수 있는 거절 진단은 아래 고정 집합뿐이다(시장 보고 `_validation_diagnostic` 과 같은 규칙).
+_DIAGNOSTIC_CODES = frozenset({
+    'invalid_json', 'invalid_schema', 'invalid_stance', 'invalid_item', 'invalid_evidence', 'invalid_prose',
+    'too_long', 'recommendation_vocabulary', 'unsupported_date', 'unsupported_numeric', 'unsupported_latin',
+})
+_DIAGNOSTIC_FIELDS = frozenset(
+    {'response', 'stance', 'headline', 'summary', 'issues', 'checklist', 'outlook'}
+    | {f'summary[{i}]' for i in range(4)} | {f'checklist[{i}]' for i in range(5)}
+    | {f'{block}{suffix}' for block in ('market_view', 'sector_view', 'macro_view') for suffix in ('', '.text', '.evidence_ids')}
+    | {f'outlook{suffix}' for suffix in ('.base', '.upside', '.downside', '.evidence_ids')}
+    | {f'issues[{i}]{suffix}' for i in range(4)
+       for suffix in ('', '.evidence_ids', '.title', '.event', '.impact', '.counterpoint', '.watch')}
+)
+_DIAGNOSTIC_FALLBACK = {'validation_code': 'composition_failure', 'validation_field': 'response'}
+
+
+def _web_validation_diagnostic(error) -> dict:
+    """Only fixed codes and schema paths may enter persistent metadata; anything else is the fixed fallback."""
+    try:
+        if isinstance(error, ResearchEvidenceUnavailable):
+            return {'validation_code': 'no_event_cited', 'validation_field': 'issues'}
+        if isinstance(error, AnalysisValidationError) and error.code in _DIAGNOSTIC_CODES and error.field in _DIAGNOSTIC_FIELDS:
+            return {'validation_code': error.code, 'validation_field': error.field}
+    except Exception:
+        pass
+    return dict(_DIAGNOSTIC_FALLBACK)
 
 
 # ------------------------------------------------------------------ runner
@@ -337,6 +373,7 @@ async def prepare_web_report(store, *, kind: str, day: str, snapshot: MarketSnap
         return await durable_thread(store.analysis_receipt, 'web', kind, day)
     response, status, reason = None, 'failed', 'manager_unavailable'
     started = False
+    diagnostic = None
     try:
         if manager is None and manager_factory is not None:
             manager = manager_factory()
@@ -353,10 +390,13 @@ async def prepare_web_report(store, *, kind: str, day: str, snapshot: MarketSnap
             else:
                 try:
                     result['analysis'] = validate_web_analysis(response.content, facts, bundle)
-                except ResearchEvidenceUnavailable:
+                except ResearchEvidenceUnavailable as error:
                     reason = 'no_event_cited'
+                    diagnostic = _web_validation_diagnostic(error)
                 except Exception as error:
-                    logger.warning('[웹 리포트] 응답 검증 실패: {}', type(error).__name__)
+                    diagnostic = _web_validation_diagnostic(error)
+                    logger.warning('[웹 리포트] 응답 검증 실패: {} {} @ {}', type(error).__name__,
+                                   diagnostic['validation_code'], diagnostic['validation_field'])
                     reason = 'invalid_output'
                 else:
                     status, reason = 'ready', 'validated'
@@ -371,6 +411,9 @@ async def prepare_web_report(store, *, kind: str, day: str, snapshot: MarketSnap
         status = _failure_status(response, provider_exception=True, invocation_started=started)
         reason = 'provider_exception' if started else 'manager_unavailable'
     result['reason'] = reason
+    metadata = _safe_metadata(response, reason=reason)
+    if diagnostic is not None:
+        metadata.update(diagnostic)
     await durable_thread(store.complete_analysis, 'web', kind, day, owner=owner, status=status,
-                         final_body=_BODY, result=result, metadata=_safe_metadata(response, reason=reason))
+                         final_body=_BODY, result=result, metadata=metadata)
     return await durable_thread(store.analysis_receipt, 'web', kind, day)
