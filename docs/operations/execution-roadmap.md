@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="r02-web-rejection-diagnostics-20261102"></a>
-### R02-WEB-REJECTION-DIAGNOSTICS — 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (구현·합성 검증·독립 리뷰 DONE / 실제 WSL·PR·CI 아래 기록 / 운영 미배포)
+### R02-WEB-REJECTION-DIAGNOSTICS — 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR CI 영수증 참조 / 운영 미배포)
 
 **Plan:** 사용자 “웹 리포트 검증 거절 사유 기록을 최소 보완” 승인. 목적은 반복되는 웹 분석 거절(11/2 3/3 `invalid_output`, 로그에 ValueError 유형만)을 실제 근거로 판독할 수 있게 하는 것이며 검증 기준 완화·유료 재생성·과거 실패 원인 추정은 하지 않는다. 시작 상태(읽기 전용): origin/main `d37a95f9`(PR #329 병합, main CI run 41457041643 success 10,347 passed — 기존 실행 결과만 확인, 새 실행 0), 운영 `cfc9bc20`+evolved 미커밋·`KILL_SWITCH_KR`·active PID 4157369.
 
@@ -11,7 +11,11 @@
 
 **See/수락 검사(AWS 보조):** `tests/test_web_report_rejection_diagnostics.py` 8건(파라미터 13종 포함) — 정상 통과 불변, 거절별 고정 코드/경로·`str(error)`에 응답 본문 없음, 색인 경로·JSON/스키마 오류, 허용 목록 위조·미지 값 폴백, 실패 행 영속·재오픈 동일 조회·sentinel(저장 행·로그) 비유출·호출 1회·동결 재요청 무호출, 미분류 예외 고정 폴백, no_event/validated 형태 유지, 과거 행 추정 없음. 웹/시장 보고·저장·연구 E2E 관련 11파일 **164 passed**·격리 0(`related-tests-1.log`).
 
-**See/독립 리뷰(Codex, 요청 gpt-6-astra/high, actual/effective 미노출, 읽기 전용·테스트 미실행):** 1회차 HEAD `06eeb7ef`(tree `0e7eb9bb`) **P0/P1 0·P2 1**(문서 누락) — 이 문서·CHANGELOG·reporting.md 로 반영. 재리뷰·실제 WSL·PR·CI 는 아래에 적는다.
+**See/독립 리뷰(Codex, 요청 gpt-6-astra/high, actual/effective 미노출, 읽기 전용·테스트 미실행):** 1회차 HEAD `06eeb7ef`(tree `0e7eb9bb`) **P0/P1 0·P2 1**(문서 누락) — 이 문서·CHANGELOG·reporting.md 로 반영. 2회차 HEAD `fabd9695`(tree `1609adc8`) **P0/P1/P2 0**(WSL·CI 조건부 병합 가능). 관련 11파일 재실행 **164 passed**·격리 0(`related-tests-2.log`). 리뷰 체인은 비공개 `review-chain.json`.
+
+**See/실제 WSL 전체:** 핀된 호스트키 라이브 대조 일치, 임시 작업 키 1회 등록, 미푸시 bundle(전제 `1eb023a9`)을 ssh 스트림 전달·해시 일치, 별도 작업본에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 직렬 전체(선택/병렬/skip 없음). **1차**(`…-20261102`): rc 1 — `tests/test_oct21_capture_integration.py::test_oct21_declared_window_and_volume_reaches_observed_flow` 1건 `journal_close_timeout`(합성 대량 기록 10초 종료 시한, persisted 4,300행; 10/31 원장의 미해결 플레이크와 동일, 이번 diff 와 무관), 나머지 10,366 passed. 진단: WSL 부하 0.53·동시 pytest 없음·/tmp 720G 여유, 해당 검사 단독 실행 13.97초 통과(`wsl-failure-diagnosis.txt`). **2차**(같은 HEAD/tree, 별도 작업본 `…-run2`, 정책상 1회 재실행): **10,367 passed / 2 skipped / 2 xfailed**, 검사 438.63초·전체 461.2초·rc 0·격리 0·문법/비밀 검사 실행, 원격 로그 SHA256 일치, 작업본·원본 청결(`wsl-result.json`). 시한 연장·선택 실행은 하지 않았고 플레이크 원인 해결은 여전히 별도 후속이다.
+
+**통합:** 검증된 `fabd9695` 위의 문서 전용 커밋으로 PR 을 연다(필수 verify 는 PR 영수증). 병합은 사용자 결정이다.
 
 **과거 실패:** 11/2 web morning/midday/after 3건은 원응답·사유가 없어 원인 미확정으로 유지한다. market morning `unsupported_date`와 같은 원인이라고 단정하지 않는다. 새 자연 거절이 생기면 그때 저장된 코드·경로로 판독한다(실패를 일부러 만들거나 유료 재생성하지 않음).
 

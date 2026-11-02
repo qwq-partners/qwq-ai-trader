@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (PR 대기, 운영 미배포)
+## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
 
 - `src/analytics/web_report.py`: `validate_web_analysis`/`_check_text`가 `ValueError('문장')` 대신 시장 보고와 같은 `AnalysisValidationError(code, field)`를 올린다(ValueError 하위 → 기존 호출자 호환). 코드는 고정 11종(`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`), 필드는 스키마 경로 고정 집합(`summary[0..3]`, `issues[0..3].title|event|impact|counterpoint|watch|evidence_ids`, `market_view|sector_view|macro_view(.text|.evidence_ids)`, `outlook(.base|.upside|.downside|.evidence_ids)`, `checklist[0..4]`, `headline/stance/response` 등).
 - `_web_validation_diagnostic()` 허용 목록으로 걸러 `prepare_web_report`가 실패 행 metadata에 `validation_code/validation_field`를 추가한다(사건 미인용 `no_event_cited/issues`, 미분류 예외 `composition_failure/response`). 로그는 예외 유형·코드·경로만. 통과 행 metadata·`reason`·status·대체 본문·호출 횟수·claim/동결 정책 불변. 과거 행은 진단 없이 그대로 읽힌다(추정 없음). 스키마 변경·마이그레이션 없음.
