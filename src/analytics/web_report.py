@@ -267,8 +267,8 @@ def validate_web_analysis(text, facts, bundle) -> dict:
         dates, _ = _tokens(sources[x] for x in ids)
         _, numbers = _tokens(numeric[x] for x in ids)
         for key in fields:
-            _check_text(item[key], text_limit or LIMITS[key], dates=dates, numbers=numbers, latin=latin,
-                        field=path + '.' + key)
+            _check_text(item[key], text_limit if text_limit is not None else LIMITS[key], dates=dates, numbers=numbers,
+                        latin=latin, field=path + '.' + key)
 
     def check_list(items, key, low, high):
         if not isinstance(items, list) or not low <= len(items) <= high:

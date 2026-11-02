@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (PR 대기, 운영 미배포)
+
+- `src/analytics/web_report.py`: `validate_web_analysis`/`_check_text`가 `ValueError('문장')` 대신 시장 보고와 같은 `AnalysisValidationError(code, field)`를 올린다(ValueError 하위 → 기존 호출자 호환). 코드는 고정 11종(`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`), 필드는 스키마 경로 고정 집합(`summary[0..3]`, `issues[0..3].title|event|impact|counterpoint|watch|evidence_ids`, `market_view|sector_view|macro_view(.text|.evidence_ids)`, `outlook(.base|.upside|.downside|.evidence_ids)`, `checklist[0..4]`, `headline/stance/response` 등).
+- `_web_validation_diagnostic()` 허용 목록으로 걸러 `prepare_web_report`가 실패 행 metadata에 `validation_code/validation_field`를 추가한다(사건 미인용 `no_event_cited/issues`, 미분류 예외 `composition_failure/response`). 로그는 예외 유형·코드·경로만. 통과 행 metadata·`reason`·status·대체 본문·호출 횟수·claim/동결 정책 불변. 과거 행은 진단 없이 그대로 읽힌다(추정 없음). 스키마 변경·마이그레이션 없음.
+- 검사: `tests/test_web_report_rejection_diagnostics.py`(거절 13종 코드/경로·응답 본문 비포함, 색인 경로·JSON 오류, 허용 목록 위조 거부, 실패 행 영속·재오픈 조회·sentinel 비유출·호출 1회, 미분류 예외 고정 폴백, no_event/validated 형태 유지, 과거 행). 11/2 실제 웹 실패 3건의 원인은 원응답이 없어 여전히 미확정이다. 원장 `#r02-web-rejection-diagnostics-20261102`.
+
 ## 2026-11-02 — E02-CORE-INDICATORS: 코어 리밸런싱 BUY 신호에 선정 당시 지표 전달 (PR #329, 실제 WSL 10,347 passed, 운영 미배포)
 
 - `src/core/batch_analyzer.py`: 모듈 헬퍼 `core_signal_indicators()` 추가. `execute_core_rebalance` 의 즉시 매수·pending 저장(`pending_core_buys[].indicators`)·재시도 신호가 `Signal.metadata["indicators"]` 로 후보의 기존 지표(MA/close/변동성/거래대금/EPS/BPS/시총·PER/PBR·5일 수급)를 전달한다. PER/PBR 유니버스 센티널 0.0→None, 수급은 측별 관측 일수 ≥1 일 때만 유효 evidence 합 `*_5d_observed` 를 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣고 아니면 None, `supply_window_days=5`·`indicators_source` 기록. 새 dict 로 복사(후보와 비공유), Decimal→float, 직렬화 불가 값 None. 구 pending 항목(지표 없음)은 그대로.

@@ -1,5 +1,24 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-web-rejection-diagnostics-20261102"></a>
+### R02-WEB-REJECTION-DIAGNOSTICS — 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (구현·합성 검증·독립 리뷰 DONE / 실제 WSL·PR·CI 아래 기록 / 운영 미배포)
+
+**Plan:** 사용자 “웹 리포트 검증 거절 사유 기록을 최소 보완” 승인. 목적은 반복되는 웹 분석 거절(11/2 3/3 `invalid_output`, 로그에 ValueError 유형만)을 실제 근거로 판독할 수 있게 하는 것이며 검증 기준 완화·유료 재생성·과거 실패 원인 추정은 하지 않는다. 시작 상태(읽기 전용): origin/main `d37a95f9`(PR #329 병합, main CI run 41457041643 success 10,347 passed — 기존 실행 결과만 확인, 새 실행 0), 운영 `cfc9bc20`+evolved 미커밋·`KILL_SWITCH_KR`·active PID 4157369.
+
+**Do/계약 추적:** 시장 보고는 `AnalysisValidationError(code, field)` + runner `_validation_diagnostic` 허용 목록으로 `metadata.validation_code/field`를 남기지만, 웹 `validate_web_analysis`는 `ValueError('uncited number')` 류 문장만 올리고 `prepare_web_report`는 `type(error).__name__`만 로그했다. 저장 경로는 `ReportStore.complete_analysis(metadata_json ≤16KiB)`·`analysis_receipt`(재시작 후 조회), 페이지는 `status!=ready`면 "분석 미확보". 스키마 변경 없이 기존 metadata 로 영속화한다.
+
+**Do/구현:** `web_report.py` — 모든 거절을 `AnalysisValidationError(code, field)`로(ValueError 하위, 기존 호출자 호환), `_check_text(field=)`·`check_block(path)`·`check_list` 색인 경로, `_web_validation_diagnostic()`(고정 코드 11종·스키마 경로 고정 집합·그 밖은 `composition_failure/response`, 사건 미인용 `no_event_cited/issues`), `prepare_web_report` 실패 분기에서 `_safe_metadata(...)`에 진단 2키 추가·로그는 유형/코드/경로만. 통과 행·`reason`·status·대체 본문·claim/동결·호출 횟수·Telegram/페이지 출력 불변, 마이그레이션 0. 리뷰 지적의 기존 `text_limit or LIMITS[key]`는 `is not None` 비교로 정리(동작 동일).
+
+**See/수락 검사(AWS 보조):** `tests/test_web_report_rejection_diagnostics.py` 8건(파라미터 13종 포함) — 정상 통과 불변, 거절별 고정 코드/경로·`str(error)`에 응답 본문 없음, 색인 경로·JSON/스키마 오류, 허용 목록 위조·미지 값 폴백, 실패 행 영속·재오픈 동일 조회·sentinel(저장 행·로그) 비유출·호출 1회·동결 재요청 무호출, 미분류 예외 고정 폴백, no_event/validated 형태 유지, 과거 행 추정 없음. 웹/시장 보고·저장·연구 E2E 관련 11파일 **164 passed**·격리 0(`related-tests-1.log`).
+
+**See/독립 리뷰(Codex, 요청 gpt-6-astra/high, actual/effective 미노출, 읽기 전용·테스트 미실행):** 1회차 HEAD `06eeb7ef`(tree `0e7eb9bb`) **P0/P1 0·P2 1**(문서 누락) — 이 문서·CHANGELOG·reporting.md 로 반영. 재리뷰·실제 WSL·PR·CI 는 아래에 적는다.
+
+**과거 실패:** 11/2 web morning/midday/after 3건은 원응답·사유가 없어 원인 미확정으로 유지한다. market morning `unsupported_date`와 같은 원인이라고 단정하지 않는다. 새 자연 거절이 생기면 그때 저장된 코드·경로로 판독한다(실패를 일부러 만들거나 유료 재생성하지 않음).
+
+**운영/예약:** 운영 `cfc9bc20`·미커밋 evolved·매수 중지·R1 OFF·worker 비활성·Gemini 차단 보존, 배포/재시작/실호출/시험 발송/슬롯 재실행/새 예약 0. 영수증: 비공개 `~/.local/state/qwq-task-audit/20261102/r02-web-rejection-diagnostics/`.
+
+**NEXT:** 실제 WSL 직렬 전체 → 커밋/푸시·PR·필수 CI → 사용자 병합 결정. 그다음은 고정 SHA 배포 승인 — 배포 대상은 운영 `cfc9bc20` 이후 main 누적분(E04 비활성 wiring·현행 흐름·어댑터, 코어 지표 전달, 이 웹 진단 등)이며 웹 진단만 배포되는 것이 아니다. 배포 뒤 기존 미소비 정기 슬롯의 자연 결과에서 거절 기록 인수를 확인하고, 자연 거절이 없으면 WAIT 로 둔다.
+
 <a id="e02-core-indicators-20261102"></a>
 ### E02-CORE-INDICATORS — 코어 리밸런싱 BUY 신호의 선정 당시 지표 전달 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR #329 CI 영수증 참조 / 운영 미배포)
 
