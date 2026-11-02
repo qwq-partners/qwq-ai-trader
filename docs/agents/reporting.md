@@ -30,6 +30,14 @@
   `checklist` 2~5. 모든 문장은 한글 필수, 숫자·날짜는 인용한 M/E의 표시 값만(부호 포함 일치), 영문은 입력 표기만, 추천·목표가 어휘 금지, 이슈 하나 이상은 사건 E 인용.
 - 저장: `report_analyses(audience=web)` 행에 `result_json={facts, analysis|null, reason}`. 모델 실패·근거 부재·검증 실패도
   사실은 남겨 페이지가 자료를 보여 주고 "분석 미확보"와 사유를 표시한다. 고아 attempt는 재시도하지 않는다.
+- 거절 진단(R02-WEB-REJECTION-DIAGNOSTICS, 2026-11-02~): `validate_web_analysis`는 시장 보고와 같은
+  `AnalysisValidationError(code, field)`로 거절하고, 실패 행 `metadata`에 허용 목록으로 걸러진 `validation_code`
+  (`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/
+  recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`, 사건 미인용은 `no_event_cited`,
+  그 밖은 `composition_failure`)와 `validation_field`(스키마 경로: `response/stance/headline/summary[i]/market_view.text/
+  issues[i].event/outlook.base/checklist[i]` 등 고정 집합)만 남긴다. 원응답·프롬프트·예외 전문은 저장·로그하지 않고,
+  판정·대체 본문·호출 횟수·`reason`은 그대로다. 진단 없이 저장된 과거 행은 그대로 읽히며 원인을 추정해 채우지 않는다.
+  페이지·텔레그램 본문에는 노출하지 않는 운영 판독용이다.
 - 페이지: 상단 날짜·슬롯 탭 → 리드(스탠스·제목·요약) → 2단(서사: 시장 판단→핵심 이슈→업종 해석→거시·해외→전망 3칸→체크리스트
   / 자료: 지수 카드·섹터 ETF 막대 전체·거시 지표·공시/일정·자료 범위) → 근거·출처(인용 E 먼저, 나머지 접힘)·관측 자료 M·고지.
   문장 뒤 근거 칩은 하단 항목으로 이동한다. 웹 행이 없는 과거 날짜는 저장 본문의 지표·ETF 줄만 자료로 읽는다.
