@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/2 E02-RR/E01 판독:** 11/1 17:42:10 이후 새 `signal_events` 2행(코어 리밸런싱 011200: G2 +2 → G5 현금 차단, target/수량/판단 null)·장중 75+ 후보 최대 9개는 가용현금 0으로 엔진 미도달 → 비교쌍 0·E01 입력 0. 실행 제약 상태이며 선정 실패가 아니고, 현금/매수 중지가 그대로면 기다려도 입력은 생기지 않는다. 팀 심의 Bear CLI 9/48 성공·API 대체 39/39. 11/2 보고: Telegram 3건 수락, market morning·web 3/3 검증 거절(web 사유 미기록), 수신/내용 수락 미확정. 소스 변경 0·운영 불변. [원장](docs/operations/execution-roadmap.md#e02-e01-readout-20261102).
+
 > **11/2 E04-WORKER-WIRING:** PR #326 병합(main `c8b38798`) 위에 raw 전송 묶음·명시 승인 기록·동결 현행 manifest로만 worker를 조립하는 `model_comparison_wiring`을 추가했다(실제 `CrossValidator` 발행→worker→guard→복구 합성 E2E). `install_from_env`/`_raw_clients` 거부·R1 OFF·설정·매수 중지는 그대로이며 실제 호출·활성화는 없다. [원장](docs/operations/execution-roadmap.md#e04-worker-wiring-20261102).
 
 > **11/1 E04-CURRENT-FLOW:** PR #325 병합(main `6e38a371`) 위에 현행 독립 검토 판정(`review_policy=entry-independent-review-v1`: 양쪽 유효 의견 없으면 hold, 단일 모델 폴백 없음)과 Bear CLI→API 상위 흐름(허용 실패에서만 남은 내부 시한으로 API 1회, 시도별 영수증·의견 1회 계수)을 runner/PairSpec에 구현했다. worker는 프로필을 init에서 검증하고 선택 주입만 받으며 `_raw_clients` 활성화 거부·R1 OFF·설정·매수 중지는 그대로다. [원장](docs/operations/execution-roadmap.md#e04-current-flow-20261101).
