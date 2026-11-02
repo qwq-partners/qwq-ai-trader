@@ -345,13 +345,27 @@ def test_entry_llm_input_keeps_supply_window_and_source(home, tmp_path):
     ind = emitted[0].metadata["indicators"]
     flow = _facts(build_entry_context(SYMBOL, "core_holding", 85, ind, "neutral", "운송"))["indicators"]["foreign_net_buy"]
     assert flow["value"] == "312000" and flow["direction"] == "net_buy"
-    assert flow["window_days"] == 5 and flow["source"] == "core_screener"
+    assert flow["window_days"] == 5 and flow["observed_days"] == 5 and flow["partial"] is False
+    assert flow["source"] == "core_screener"
     # 스윙 경로(당일 값, 창/출처 미기재)는 None=미확인으로 남는다
     flow_swing = _facts(build_entry_context("005930", "sepa_trend", 80, {"foreign_net_buy": 120}, "bull", ""))["indicators"]["foreign_net_buy"]
-    assert flow_swing["window_days"] is None and flow_swing["source"] is None
+    assert flow_swing["window_days"] is None and flow_swing["observed_days"] is None
+    assert flow_swing["partial"] is None and flow_swing["source"] is None
     # 미관측 코어 수급은 direction=unknown 으로 전달된다(balanced 아님)
     flow_none = _facts(build_entry_context(SYMBOL, "core_holding", 85,
                                            core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed=None,
                                                                        foreign_net_buy_5d_observed_days=0)),
                                            "neutral", "운송"))["indicators"]["foreign_net_buy"]
     assert flow_none["direction"] == "unknown" and flow_none["status"] == "missing" and flow_none["window_days"] == 5
+    assert flow_none["observed_days"] == 0 and flow_none["partial"] is True
+
+
+@pytest.mark.parametrize("days,total,partial", [(1, 700, True), (3, 3000, True), (5, 312000, False)])
+def test_entry_llm_input_marks_partial_supply_windows(home, days, total, partial):
+    """관측 1·3·5일 합계가 최종 LLM 입력에서 요청 창(5)과 실제 관측 일수로 구분된다."""
+    ind = core_signal_indicators(_ind(foreign_net_buy_5d=total, foreign_net_buy_5d_observed=total,
+                                      foreign_net_buy_5d_observed_days=days))
+    flow = _facts(build_entry_context(SYMBOL, "core_holding", 85, ind, "neutral", "운송"))["indicators"]["foreign_net_buy"]
+    assert flow["value"] == str(total) and flow["direction"] == "net_buy" and flow["status"] == "provided"
+    assert flow["window_days"] == 5 and flow["observed_days"] == days and flow["partial"] is partial
+    assert ind["foreign_net_buy_observed_days"] == days

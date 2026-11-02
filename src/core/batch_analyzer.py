@@ -54,9 +54,12 @@ _CORE_SIGNAL_INDICATOR_KEYS = (
 # 유효 evidence 값만 더한 `*_5d_observed` 를 관측 일수 1 이상일 때만 싣고 아니면 None(미관측)으로 둔다.
 # 레거시 합 `*_5d`(점수 입력)는 기록용으로만 보존한다 — 미관측·충돌값을 "관측 순매수" 로 바꾸지 않는다.
 _CORE_SUPPLY_WINDOW_DAYS = 5
+# (레거시 합, 유효 evidence 합, 관측 일수, 소비자 값 키, 소비자 관측 일수 키)
 _CORE_SUPPLY_ALIASES = (
-    ("foreign_net_buy_5d", "foreign_net_buy_5d_observed", "foreign_net_buy_5d_observed_days", "foreign_net_buy"),
-    ("inst_net_buy_5d", "inst_net_buy_5d_observed", "inst_net_buy_5d_observed_days", "inst_net_buy"),
+    ("foreign_net_buy_5d", "foreign_net_buy_5d_observed", "foreign_net_buy_5d_observed_days",
+     "foreign_net_buy", "foreign_net_buy_observed_days"),
+    ("inst_net_buy_5d", "inst_net_buy_5d_observed", "inst_net_buy_5d_observed_days",
+     "inst_net_buy", "inst_net_buy_observed_days"),
 )
 
 
@@ -81,7 +84,7 @@ def core_signal_indicators(indicators: Any) -> Dict[str, Any]:
     - PER/PBR 의 유니버스 센티널 0 은 결측(None)으로 되돌리고 음수(적자)는 그대로 둔다.
     - 수급은 코어 키(레거시 합 `*_5d`·유효 evidence 합 `*_5d_observed`·관측 일수)를 보존하고, 관측 일수가
       1 이상인 측의 `*_5d_observed` 만 소비자 키(`foreign_net_buy`/`inst_net_buy`)에 싣는다(없으면 None).
-      창 일수 `supply_window_days` 를 남긴다.
+      창 일수 `supply_window_days` 와 측별 관측 일수 `*_observed_days` 를 소비자 키로 남긴다(부분 관측 구분).
     - 빈 입력은 빈 dict 를 돌려준다(가짜 지표·출처 표시를 만들지 않는다).
     """
     if not isinstance(indicators, dict) or not indicators:
@@ -95,14 +98,17 @@ def core_signal_indicators(indicators: Any) -> Dict[str, Any]:
             value = indicators[key]
             out[key] = None if _core_zero_sentinel(value) else _core_json_scalar(value)
     supply_present = False
-    for src, observed_key, days_key, dst in _CORE_SUPPLY_ALIASES:
+    for src, observed_key, days_key, dst, dst_days in _CORE_SUPPLY_ALIASES:
         if src in indicators or observed_key in indicators:
             supply_present = True
             days = indicators.get(days_key)
             value = indicators.get(observed_key)
-            observed = (isinstance(days, int) and not isinstance(days, bool) and days > 0
+            days_known = isinstance(days, int) and not isinstance(days, bool) and days >= 0
+            observed = (days_known and days > 0
                         and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool))
             out[dst] = _core_json_scalar(value) if observed else None
+            # 소비자(LLM 입력)가 요청 창(5일)과 실제 관측 일수를 구분하도록 측별 관측 일수를 소비자 키로도 적는다
+            out[dst_days] = days if days_known else None
     if supply_present:
         out["supply_window_days"] = _CORE_SUPPLY_WINDOW_DAYS
     out["indicators_source"] = "core_screener"

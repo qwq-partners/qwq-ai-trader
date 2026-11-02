@@ -70,6 +70,8 @@ def test_entry_llm_context_marks_unknown_swing_supply_missing(tmp_path, monkeypa
         "direction": "unknown",
         # E02-CORE-INDICATORS: 집계 창·출처는 생산자가 적은 값만 전달 — 스윙 당일 값은 None=미확인
         "window_days": None,
+        "observed_days": None,
+        "partial": None,
         "source": None,
     }
 

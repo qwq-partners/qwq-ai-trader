@@ -322,7 +322,7 @@ SEPA/RSI2 후보 중 **2계층 이상 복합 시그널** (전문가패널+수급
   만 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣는다(없으면 None=미관측,
   `supply_window_days=5`·`indicators_source="core_screener"`). ATR 은 코어 스크리너가 계산하지 않으므로 결손 그대로
   (-2). 크로스검증 규칙 8(적자+고PBR -10·극단 PER -5)은 전달된 값에 그대로 적용되고 규칙 2(동시 순매도)는 코어 비대상
-  정책이 유지된다. entry LLM 공통 입력의 수급 metric 에 `window_days/source` 가 추가돼 5일 합과 당일 값을 구분한다.
+  정책이 유지된다. entry LLM 공통 입력의 수급 metric 에 `window_days/observed_days/partial/source` 가 추가돼 5일 창·실제 관측 일수·부분 합·당일 값을 구분한다.
   감점 규칙·문턱·배분(core 0%)·현금/매수 중지 판단은 바꾸지 않았고, 후보 dict 와 신호 metadata 는 공유하지 않는다.
 
 ### 저변동성 감점 (`core_screener.py`, 2026-08-03~)
