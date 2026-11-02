@@ -363,6 +363,14 @@ async def test_close_timeout_returns_incomplete_without_waiting_on_stalled_disk(
         assert not result["sealed"] and not result["fsync_confirmed"]
         assert result["error"] == "journal_close_timeout"
         assert not buffer.export()["complete"]
+        # 종료 실패 진단: 접수/영속 건수·큐 잔량·writer 생존·시한/경과만 — 기록 본문·예외 전문 없음
+        diag = result["close_diagnostics"]
+        assert diag["accepted_records"] == 1 and diag["persisted_records"] == 0
+        assert diag["writer_alive"] is True and diag["queue_pending"] in (0, 1)
+        assert diag["close_timeout_seconds"] == 0.02 and diag["close_elapsed_seconds"] >= 0.02
+        assert isinstance(diag["bytes_written"], int) and diag["bytes_written"] >= 0 and isinstance(diag["sealed_at"], str)
+        assert set(diag) == {"accepted_records", "persisted_records", "queue_pending", "writer_alive", "bytes_written",
+                             "close_timeout_seconds", "close_elapsed_seconds", "sealed_at"}
     finally:
         release.set()
     while journal._thread.is_alive(): await asyncio.sleep(0.001)
@@ -383,3 +391,29 @@ async def test_new_file_sync_includes_parent_directory(tmp_path, monkeypatch):
     _, journal, _ = await opened(tmp_path)
     await journal.close()
     assert any(synced_directory)
+
+
+@pytest.mark.asyncio
+async def test_clean_close_result_keeps_prior_shape_without_diagnostics(tmp_path):
+    buffer, journal, path = await opened(tmp_path)
+    buffer.publish(record())
+    result = await journal.close(timeout_seconds=5.0)
+    assert result["sealed"] and result["fsync_confirmed"] and result["error"] is None
+    assert set(result) == {"sealed", "fsync_confirmed", "persisted_records", "error", "path"}
+    assert result["persisted_records"] == 1 and read(path)["complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_writer_failure_result_also_carries_close_diagnostics(tmp_path, monkeypatch):
+    """진단은 timeout 전용이 아니라 오류가 기록된 모든 close 반환 결과에 붙는다(writer 실패 포함)."""
+    buffer, journal, path = await opened(tmp_path)
+    def broken(rows):
+        raise OSError("disk gone")
+    monkeypatch.setattr(journal, "_write_batch", broken)
+    buffer.publish(record())
+    result = await journal.close(timeout_seconds=5.0)
+    assert result["error"] == "journal_writer_failed" and not result["sealed"] and not result["fsync_confirmed"]
+    diag = result["close_diagnostics"]
+    assert diag["accepted_records"] == 1 and diag["persisted_records"] == 0 and diag["writer_alive"] is False
+    assert set(diag) == {"accepted_records", "persisted_records", "queue_pending", "writer_alive", "bytes_written",
+                         "close_timeout_seconds", "close_elapsed_seconds", "sealed_at"}
