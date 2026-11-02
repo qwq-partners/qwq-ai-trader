@@ -46,15 +46,17 @@ _CORE_SIGNAL_INDICATOR_KEYS = (
     "close", "ma5", "ma20", "ma50", "ma200", "ma_aligned", "ma200_below_days",
     "ret_vol_60d", "avg_trading_value", "eps", "bps", "market_cap_eok",
     "foreign_net_buy_5d", "inst_net_buy_5d",
+    "foreign_net_buy_5d_observed", "inst_net_buy_5d_observed",
     "foreign_net_buy_5d_observed_days", "inst_net_buy_5d_observed_days",
 )
 # 코어 수급은 KIS 투자자별 일별 순매수 수량(주)의 5거래일 합 — 스윙 경로의 당일 값과 창이 다르므로 함께 적는다.
-# 원천은 미관측 일자를 0 으로 채우므로, 소비자 키(`foreign_net_buy`/`inst_net_buy`)는 유효 evidence 가 있는 날이
-# 1일 이상일 때만 합계를 싣고 아니면 None(미관측)으로 둔다 — 미관측을 "순매수 0" 으로 바꾸지 않는다.
+# 원천은 미관측 일자를 0 으로 채우고 중복 충돌은 evidence 만 지우므로, 소비자 키(`foreign_net_buy`/`inst_net_buy`)는
+# 유효 evidence 값만 더한 `*_5d_observed` 를 관측 일수 1 이상일 때만 싣고 아니면 None(미관측)으로 둔다.
+# 레거시 합 `*_5d`(점수 입력)는 기록용으로만 보존한다 — 미관측·충돌값을 "관측 순매수" 로 바꾸지 않는다.
 _CORE_SUPPLY_WINDOW_DAYS = 5
 _CORE_SUPPLY_ALIASES = (
-    ("foreign_net_buy_5d", "foreign_net_buy_5d_observed_days", "foreign_net_buy"),
-    ("inst_net_buy_5d", "inst_net_buy_5d_observed_days", "inst_net_buy"),
+    ("foreign_net_buy_5d", "foreign_net_buy_5d_observed", "foreign_net_buy_5d_observed_days", "foreign_net_buy"),
+    ("inst_net_buy_5d", "inst_net_buy_5d_observed", "inst_net_buy_5d_observed_days", "inst_net_buy"),
 )
 
 
@@ -77,8 +79,9 @@ def core_signal_indicators(indicators: Any) -> Dict[str, Any]:
 
     - 소비자 키만 복사하고 값이 None 이면 None 을 보존한다(`or` 기본값 없음).
     - PER/PBR 의 유니버스 센티널 0 은 결측(None)으로 되돌리고 음수(적자)는 그대로 둔다.
-    - 수급은 코어 키(`*_5d`·관측 일수)를 보존하고, 유효 evidence 가 1일 이상인 측만 소비자 키
-      (`foreign_net_buy`/`inst_net_buy`)에 싣는다(없으면 None). 창 일수 `supply_window_days` 를 남긴다.
+    - 수급은 코어 키(레거시 합 `*_5d`·유효 evidence 합 `*_5d_observed`·관측 일수)를 보존하고, 관측 일수가
+      1 이상인 측의 `*_5d_observed` 만 소비자 키(`foreign_net_buy`/`inst_net_buy`)에 싣는다(없으면 None).
+      창 일수 `supply_window_days` 를 남긴다.
     - 빈 입력은 빈 dict 를 돌려준다(가짜 지표·출처 표시를 만들지 않는다).
     """
     if not isinstance(indicators, dict) or not indicators:
@@ -92,12 +95,14 @@ def core_signal_indicators(indicators: Any) -> Dict[str, Any]:
             value = indicators[key]
             out[key] = None if _core_zero_sentinel(value) else _core_json_scalar(value)
     supply_present = False
-    for src, days_key, dst in _CORE_SUPPLY_ALIASES:
-        if src in indicators:
+    for src, observed_key, days_key, dst in _CORE_SUPPLY_ALIASES:
+        if src in indicators or observed_key in indicators:
             supply_present = True
             days = indicators.get(days_key)
-            observed = isinstance(days, int) and not isinstance(days, bool) and days > 0
-            out[dst] = _core_json_scalar(indicators[src]) if observed else None
+            value = indicators.get(observed_key)
+            observed = (isinstance(days, int) and not isinstance(days, bool) and days > 0
+                        and isinstance(value, (int, float, Decimal)) and not isinstance(value, bool))
+            out[dst] = _core_json_scalar(value) if observed else None
     if supply_present:
         out["supply_window_days"] = _CORE_SUPPLY_WINDOW_DAYS
     out["indicators_source"] = "core_screener"

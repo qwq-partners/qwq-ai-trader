@@ -317,8 +317,9 @@ SEPA/RSI2 후보 중 **2계층 이상 복합 시그널** (전문가패널+수급
   기록처럼 이전에는 지표가 전혀 실리지 않아 크로스검증 `지표결손(ATR,PER,PBR,수급) -8` 이 코어 신호마다 붙었다.
   전달 범위는 후보가 실제로 가진 소비자 키뿐이다 — `close/ma5/ma20/ma50/ma200/ma_aligned/ma200_below_days/
   ret_vol_60d/avg_trading_value/eps/bps/market_cap_eok`, `per/pbr`(유니버스 미제공 센티널 0.0 은 None 으로 복원,
-  음수=적자 보존), 수급은 `foreign_net_buy_5d/inst_net_buy_5d` 와 측별 `*_observed_days` 를 보존하고
-  유효 evidence 가 1일 이상인 측만 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣는다(없으면 None=미관측,
+  음수=적자 보존), 수급은 레거시 합 `foreign_net_buy_5d/inst_net_buy_5d`(점수 입력, 원천 0 채움·충돌 숫자 포함)와
+  유효 evidence 값만 더한 `*_5d_observed`·측별 `*_observed_days` 를 보존하고, 관측 일수 1 이상인 측의 `*_5d_observed`
+  만 소비자 키 `foreign_net_buy/inst_net_buy` 에 싣는다(없으면 None=미관측,
   `supply_window_days=5`·`indicators_source="core_screener"`). ATR 은 코어 스크리너가 계산하지 않으므로 결손 그대로
   (-2). 크로스검증 규칙 8(적자+고PBR -10·극단 PER -5)은 전달된 값에 그대로 적용되고 규칙 2(동시 순매도)는 코어 비대상
   정책이 유지된다. entry LLM 공통 입력의 수급 metric 에 `window_days/source` 가 추가돼 5일 합과 당일 값을 구분한다.

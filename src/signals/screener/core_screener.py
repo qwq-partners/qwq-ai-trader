@@ -393,7 +393,6 @@ class CoreScreener:
 
         try:
             from src.analytics.swing_supply import utc_now, valid_evidence
-            now = utc_now()
             # 배치 수급 조회 (5일간 합산, 10건씩 병렬)
             investor_data: Dict[str, Dict] = {}
             batch_size = 10
@@ -401,27 +400,36 @@ class CoreScreener:
                 batch = symbols[bi:bi + batch_size]
                 tasks = [self._kis_market_data.fetch_stock_investor_daily(sym, days=5) for sym in batch]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
+                # 검증 기준시각은 응답을 받은 뒤 잡는다 — 공급자가 응답 뒤에 적는 captured_at 보다 앞서면
+                # valid_evidence 가 새로 조회한 정상 evidence 를 전부 거절한다(독립 리뷰 P1).
+                now = utc_now()
                 for sym, daily in zip(batch, results):
                     if isinstance(daily, Exception) or not daily:
                         continue
                     total_foreign = sum(d.get("foreign_net_buy", 0) for d in daily.values())
                     total_inst = sum(d.get("inst_net_buy", 0) for d in daily.values())
-                    # E02-CORE-INDICATORS: 원천(FHKST01010900)은 미관측 수량을 호환용 0 으로 채우고 실제 관측·중복
-                    # 충돌은 `_supply_evidence` 에 따로 둔다. 합계는 기존 점수 입력 그대로 두되, 측별로 유효 evidence 가
-                    # 있는 날 수를 함께 적어 신호 소비자가 "관측값 0" 과 "미관측" 을 구분하게 한다.
-                    foreign_days = 0
-                    inst_days = 0
+                    # E02-CORE-INDICATORS: 원천(FHKST01010900)은 미관측 수량을 호환용 0 으로 채우고, 중복 충돌은
+                    # evidence 만 None 으로 만들며 숫자 필드는 남긴다. 기존 점수 입력인 레거시 합계는 그대로 두고,
+                    # 신호 소비자용으로 유효 evidence 의 value 만 더한 합계와 관측 일수를 측별로 따로 적는다.
+                    foreign_days = inst_days = 0
+                    foreign_observed = inst_observed = 0
                     for d in daily.values():
                         proofs = d.get("_supply_evidence") if isinstance(d, dict) else None
                         if not isinstance(proofs, dict):
                             continue
-                        if valid_evidence(proofs.get("foreign"), now) is not None:
+                        proof = valid_evidence(proofs.get("foreign"), now)
+                        if proof is not None:
                             foreign_days += 1
-                        if valid_evidence(proofs.get("institution"), now) is not None:
+                            foreign_observed += proof["value"]
+                        proof = valid_evidence(proofs.get("institution"), now)
+                        if proof is not None:
                             inst_days += 1
+                            inst_observed += proof["value"]
                     investor_data[sym] = {
                         "foreign_net_buy_5d": total_foreign,
                         "inst_net_buy_5d": total_inst,
+                        "foreign_net_buy_5d_observed": foreign_observed if foreign_days > 0 else None,
+                        "inst_net_buy_5d_observed": inst_observed if inst_days > 0 else None,
                         "foreign_net_buy_5d_observed_days": foreign_days,
                         "inst_net_buy_5d_observed_days": inst_days,
                     }
@@ -433,6 +441,8 @@ class CoreScreener:
                 sd = investor_data.get(c.symbol, {})
                 c.indicators["foreign_net_buy_5d"] = sd.get("foreign_net_buy_5d")
                 c.indicators["inst_net_buy_5d"] = sd.get("inst_net_buy_5d")
+                c.indicators["foreign_net_buy_5d_observed"] = sd.get("foreign_net_buy_5d_observed")
+                c.indicators["inst_net_buy_5d_observed"] = sd.get("inst_net_buy_5d_observed")
                 c.indicators["foreign_net_buy_5d_observed_days"] = sd.get("foreign_net_buy_5d_observed_days")
                 c.indicators["inst_net_buy_5d_observed_days"] = sd.get("inst_net_buy_5d_observed_days")
 

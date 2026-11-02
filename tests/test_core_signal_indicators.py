@@ -43,6 +43,7 @@ def _ind(**over):
         "avg_trading_value": 4.2e10, "per": 16.2, "pbr": 0.9, "eps": 1450.0, "bps": 26000.0,
         "rank": 40, "market_cap_eok": 120000, "sector": "운송",
         "foreign_net_buy_5d": 312000, "inst_net_buy_5d": -45000,
+        "foreign_net_buy_5d_observed": 312000, "inst_net_buy_5d_observed": -45000,
         "foreign_net_buy_5d_observed_days": 5, "inst_net_buy_5d_observed_days": 5,
     }
     base.update(over)
@@ -113,7 +114,7 @@ def test_helper_forwards_consumer_keys_and_preserves_missing():
     assert "sector" not in out and "rank" not in out
     # 후보 dict 와 공유하지 않는다
     ind["per"] = 99.0
-    ind["foreign_net_buy_5d"] = -1
+    ind["foreign_net_buy_5d_observed"] = -1
     assert out["per"] == 16.2 and out["foreign_net_buy"] == 312000
 
 
@@ -124,22 +125,28 @@ def test_helper_zero_sentinel_and_empty_input():
     assert core_signal_indicators(_ind(per=-7.5))["per"] == -7.5
     # 수급 키가 아예 없으면 별칭·창 일수도 없다(가짜 결측/존재 표시 없음)
     ind = _ind()
-    del ind["foreign_net_buy_5d"]
-    del ind["inst_net_buy_5d"]
+    for key in ("foreign_net_buy_5d", "inst_net_buy_5d", "foreign_net_buy_5d_observed", "inst_net_buy_5d_observed",
+                "foreign_net_buy_5d_observed_days", "inst_net_buy_5d_observed_days"):
+        del ind[key]
     out = core_signal_indicators(ind)
     assert "foreign_net_buy" not in out and "supply_window_days" not in out
     # 수급 키가 있고 값이 None 이면 None 보존(크로스검증은 결손으로 읽는다)
     out = core_signal_indicators(_ind(foreign_net_buy_5d=None, inst_net_buy_5d=None,
+                                      foreign_net_buy_5d_observed=None, inst_net_buy_5d_observed=None,
                                       foreign_net_buy_5d_observed_days=None, inst_net_buy_5d_observed_days=None))
     assert out["foreign_net_buy"] is None and out["inst_net_buy"] is None
-    # 원천이 미관측 일자를 0 으로 채운 합계(관측 일수 0)는 소비자 키에 "0" 으로 싣지 않는다 — 원키는 보존
-    out = core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed_days=0,
-                                      inst_net_buy_5d=-45000, inst_net_buy_5d_observed_days=3))
+    # 원천이 미관측 일자를 0 으로 채운 레거시 합(관측 일수 0)은 소비자 키에 "0" 으로 싣지 않는다 — 원키는 보존
+    out = core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed=None, foreign_net_buy_5d_observed_days=0,
+                                      inst_net_buy_5d=-45000, inst_net_buy_5d_observed=-44000, inst_net_buy_5d_observed_days=3))
     assert out["foreign_net_buy"] is None and out["foreign_net_buy_5d"] == 0 and out["foreign_net_buy_5d_observed_days"] == 0
-    assert out["inst_net_buy"] == -45000 and out["inst_net_buy_5d_observed_days"] == 3
-    # 관측 일수 키가 없거나 bool/비정수면 미확인 → None
+    # 소비자 키는 레거시 합(-45000)이 아니라 유효 evidence 합(-44000)
+    assert out["inst_net_buy"] == -44000 and out["inst_net_buy_5d"] == -45000 and out["inst_net_buy_5d_observed_days"] == 3
+    # 관측 일수/관측 합 키가 없거나 bool/비정수면 미확인 → None (구 후보 dict)
     legacy = _ind()
     del legacy["foreign_net_buy_5d_observed_days"]
+    assert core_signal_indicators(legacy)["foreign_net_buy"] is None
+    legacy = _ind()
+    del legacy["foreign_net_buy_5d_observed"]
     assert core_signal_indicators(legacy)["foreign_net_buy"] is None
     assert core_signal_indicators(_ind(foreign_net_buy_5d_observed_days=True))["foreign_net_buy"] is None
     # 빈 입력 → 빈 dict (출처 표시도 없음)
@@ -197,7 +204,9 @@ def test_unfavorable_indicators_are_not_neutralized_by_forwarding(home, tmp_path
 
 
 def test_partial_or_missing_indicators_keep_missing_penalty(home, tmp_path):
-    partial = _candidate(_ind(per=0.0, foreign_net_buy_5d=None, inst_net_buy_5d=None))
+    partial = _candidate(_ind(per=0.0, foreign_net_buy_5d=None, inst_net_buy_5d=None,
+                              foreign_net_buy_5d_observed=None, inst_net_buy_5d_observed=None,
+                              foreign_net_buy_5d_observed_days=0, inst_net_buy_5d_observed_days=0))
     empty = _candidate({}, symbol="033780", score=84.0)
     ba, emitted = _ba(tmp_path, [partial, empty])
     asyncio.run(ba.execute_core_rebalance())
@@ -251,29 +260,42 @@ def test_pending_buys_persist_indicators_and_retry_restores_them(home, tmp_path)
 
 # ── 생산자(코어 스크리너) 수급 보강: 관측 일수 ───────────────────────────────
 
-def _daily_rows(now, spec):
-    """spec: [(foreign_raw|None, inst_raw|None), ...] 최근 거래일부터. None 은 원천 미관측(수량 0 채움·evidence None)."""
+def _daily_rows(spec):
+    """공급자(kis_market_data.fetch_stock_investor_daily)가 응답 뒤에 만드는 형태를 응답 시점(captured_at=지금)에 생성한다.
+    spec: [(foreign, inst), ...] 최근 거래일부터. None=원천 미관측(수량 0 채움·evidence None),
+    ("conflict", n)=같은 날짜 중복 충돌(숫자 n 은 남고 evidence 는 None)."""
+    now = utc_now()
     captured = now.isoformat()
     day = now.astimezone(KST).date()
     rows = {}
-    for foreign_raw, inst_raw in spec:
+    for foreign_spec, inst_spec in spec:
         day = previous_session(day)
         key = day.strftime("%Y%m%d")
-        foreign = daily_evidence(foreign_raw, key, captured) if foreign_raw is not None else None
-        inst = daily_evidence(inst_raw, key, captured) if inst_raw is not None else None
-        rows[key] = {"foreign_net_buy": foreign["value"] if foreign is not None else 0,
-                     "inst_net_buy": inst["value"] if inst is not None else 0,
-                     "_supply_evidence": {"foreign": foreign, "institution": inst}}
+        row = {"_supply_evidence": {}}
+        for side, field, raw in (("foreign", "foreign_net_buy", foreign_spec), ("institution", "inst_net_buy", inst_spec)):
+            if isinstance(raw, tuple) and raw[0] == "conflict":
+                row[field] = raw[1]
+                row["_supply_evidence"][side] = None
+            elif raw is None:
+                row[field] = 0
+                row["_supply_evidence"][side] = None
+            else:
+                proof = daily_evidence(raw, key, captured)
+                assert proof is not None
+                row[field] = proof["value"]
+                row["_supply_evidence"][side] = proof
+        rows[key] = row
     return rows
 
 
 def test_core_screener_supply_enrichment_counts_observed_days(home):
-    now = utc_now()
-    observed = _daily_rows(now, [(1000, -200), (2000, None), (None, None), (0, 50), (-500, 10)])
-    unobserved = _daily_rows(now, [(None, None)] * 5)
+    spec_observed = [(1000, -200), (2000, None), (None, None), (0, 50), (("conflict", -10000), ("conflict", 10))]
+    spec_unobserved = [(None, None)] * 5
 
     async def _fetch(symbol, days=5):
-        return {"011200": observed, "033780": unobserved}[symbol]
+        # evidence 는 조회 응답 시점에 만들어진다(captured_at 이 조회 전 기준시각보다 늦음) — 기준시각을 조회 전에
+        # 고정하면 valid_evidence 가 전부 거절하므로 생산자는 응답 뒤 기준시각을 잡아야 한다(독립 리뷰 P1).
+        return _daily_rows({"011200": spec_observed, "033780": spec_unobserved}[symbol])
 
     screener = object.__new__(CoreScreener)
     screener._kis_market_data = SimpleNamespace(fetch_stock_investor_daily=_fetch)
@@ -281,20 +303,26 @@ def test_core_screener_supply_enrichment_counts_observed_days(home):
     b = CoreCandidate(symbol="033780", name="KT&G", indicators={})
     asyncio.run(screener._enrich_supply_demand([a, b]))
 
-    # 합계는 기존 그대로(원천 0 채움 포함) — 점수 입력 불변
-    assert a.indicators["foreign_net_buy_5d"] == 2500 and a.indicators["inst_net_buy_5d"] == -140
-    # 관측 일수는 유효 evidence 가 있는 날만 센다(값 0 인 관측일도 관측일)
-    assert a.indicators["foreign_net_buy_5d_observed_days"] == 4
-    assert a.indicators["inst_net_buy_5d_observed_days"] == 3
+    # 레거시 합계는 기존 그대로(원천 0 채움·충돌 숫자 포함) — 코어 점수 입력 불변
+    assert a.indicators["foreign_net_buy_5d"] == 1000 + 2000 + 0 + 0 - 10000
+    assert a.indicators["inst_net_buy_5d"] == -200 + 0 + 0 + 50 + 10
+    # 관측 일수는 유효 evidence 가 있는 날만 센다(값 0 인 관측일도 관측일, 충돌일은 제외)
+    assert a.indicators["foreign_net_buy_5d_observed_days"] == 3
+    assert a.indicators["inst_net_buy_5d_observed_days"] == 2
+    # 신호용 합은 유효 evidence 의 value 만 더한다 — 충돌 -10000 이 섞이지 않는다
+    assert a.indicators["foreign_net_buy_5d_observed"] == 3000 and a.indicators["inst_net_buy_5d_observed"] == -150
     assert b.indicators["foreign_net_buy_5d"] == 0 and b.indicators["foreign_net_buy_5d_observed_days"] == 0
-    # 신호 전달: 관측된 종목은 소비자 키에 실리고, 전부 미관측인 종목은 None(결손 유지)
-    assert core_signal_indicators(a.indicators)["foreign_net_buy"] == 2500
+    assert b.indicators["foreign_net_buy_5d_observed"] is None
+    # 신호 전달: 관측된 종목은 유효 합이 소비자 키에 실리고, 전부 미관측인 종목은 None(결손 유지)
+    out_a = core_signal_indicators(a.indicators)
+    assert out_a["foreign_net_buy"] == 3000 and out_a["inst_net_buy"] == -150 and out_a["foreign_net_buy_5d"] == -7000
     out_b = core_signal_indicators(b.indicators)
     assert out_b["foreign_net_buy"] is None and out_b["inst_net_buy"] is None and out_b["foreign_net_buy_5d"] == 0
 
 
 def test_unobserved_supply_sum_stays_missing_for_cross_validation(home, tmp_path):
     cand = _candidate(_ind(foreign_net_buy_5d=0, inst_net_buy_5d=0,
+                           foreign_net_buy_5d_observed=None, inst_net_buy_5d_observed=None,
                            foreign_net_buy_5d_observed_days=0, inst_net_buy_5d_observed_days=0))
     ba, emitted = _ba(tmp_path, [cand])
     asyncio.run(ba.execute_core_rebalance())
@@ -323,6 +351,7 @@ def test_entry_llm_input_keeps_supply_window_and_source(home, tmp_path):
     assert flow_swing["window_days"] is None and flow_swing["source"] is None
     # 미관측 코어 수급은 direction=unknown 으로 전달된다(balanced 아님)
     flow_none = _facts(build_entry_context(SYMBOL, "core_holding", 85,
-                                           core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed_days=0)),
+                                           core_signal_indicators(_ind(foreign_net_buy_5d=0, foreign_net_buy_5d_observed=None,
+                                                                       foreign_net_buy_5d_observed_days=0)),
                                            "neutral", "운송"))["indicators"]["foreign_net_buy"]
     assert flow_none["direction"] == "unknown" and flow_none["status"] == "missing" and flow_none["window_days"] == 5
