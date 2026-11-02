@@ -1,5 +1,16 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-acceptance-runner-20261103"></a>
+### E04-ACCEPTANCE-RUNNER — 제한 실호출 인수 실행기 (구현·합성 검증·독립 리뷰 DONE / 실제 WSL·PR·CI 아래 기록 / 실호출 승인 대기)
+
+**Plan(후속 순서 단계④):** 사용자 “E04 실제 연결 인수 준비 → 별도 사용자 승인 → 제한된 인수 실행.” 기존에는 가짜 공급자 드라이런(`scripts/dev/comparison_worker_dryrun.py`)만 있고 승인 기반 실호출 경로가 없었다. 준비안의 범위(1쌍/일·시도 4·출력 400·USD 0.50·현행 시한 12.0/11.5/5.75)를 코드로 고정하고, 운영 worker/R1/`_raw_clients` 를 건드리지 않는 전용 경로를 만든다. 실호출 승인은 배포 승인과 별개이며 이 단위는 승인을 요청할 수 있는 상태를 만드는 것까지다.
+
+**Do:** `model_comparison_acceptance.prepare_acceptance(controls, experiment_id, day, candidate{변수 1개}, input_spec, out_dir, now)` → `manifest.json`(enabled=True, `execution_policy` 고정 범위, `allowed_models`=운영 Bull/Bear 요청 모델(+후보 모델)), `approval.json`(experiment_id·manifest_sha256·창·전송 집합·`approved_by=null`), `input.json`(사양·`operating_controls`·공통 입력 SHA256/바이트). `run_acceptance(out_dir, approved_by, ledger, transports(owned), now, deadline≤600s)` → 조립 거절(창·지문·전송·프로필)은 전송 생성 전, 통과 뒤 승인 서명 기록, 봉투 1개 offer, 종료 상태까지 폴링, `inspect_pair` 를 원문 키 제거해 `receipt.json`, `worker.stop(5)`·소유 전송 종료. CLI `main` 은 `LLMManager(LLMConfig.from_env())` 로 제어·공유 월 원장만 쓰고(호출 0) raw `OpenAIClient/ClaudeCLIClient/AnthropicAPIClient` 를 owned 로 만든다. 입력은 저장된 공개 지표 사양(예: 11/2 011200 코어 신호의 지표)으로 `build_entry_context` 를 만들며 계좌 자료는 없다.
+
+**See/합성 검사(AWS 보조):** `tests/test_model_comparison_acceptance.py` 10 passed — 위 CHANGELOG 항목 참조. 비교 계층 관련 묶음·독립 리뷰·실제 WSL·PR·CI 는 아래에 적는다.
+
+**실호출 승인 요청안(실행 안 함):** 고정 소스 SHA = 이 단위의 병합 커밋(아래 기록), 실행기 `scripts/ops/model_comparison_acceptance.py`. 인수 당일 KST 하루 창(valid_from=valid_until=당일), 시작/종료 시각은 승인 시 명시(장외 권장). baseline=운영 Bull `gpt-5-mini/minimal/400` · candidate=Bull `reasoning_effort=low`(변수 1개) · Bear=`claude-opus-5-5/low/400` 구독 CLI 우선→허용 실패 시 API 1회(현행 시한 12.0/11.5/5.75). 상한: 1쌍·시도 4(Bull 2 + Bear CLI 1 + API 1 포함)·출력 400·`experiment_usd_ceiling` USD 0.50(가드 예약/추정 계약, 청구액 보장 아님; 구독 CLI 는 예약 없이 표시 추정비만). 중단 조건: 채널/정산 불일치·unknown 예약·신원 불일치·CLI 미정리·운영 점검 오류·승인 창 밖. 정리: 자기 소유 전송 종료·영수증 보존, 실패/불명을 새 쌍으로 재시도하지 않음. 1쌍은 경로 인수이며 모델 우위·선정 품질·순수익 증거가 아니다.
+
 <a id="r02-web-rejection-diagnostics-20261102"></a>
 ### R02-WEB-REJECTION-DIAGNOSTICS — 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (구현·합성 검증·독립 리뷰·실제 WSL 전체 DONE · PR CI 영수증 참조 / 운영 미배포)
 

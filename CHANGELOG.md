@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-03 — E04 제한 실호출 인수 실행기 (준비만, 실호출·R1·운영 worker 활성화 없음)
+
+- 새 `src/analytics/model_comparison_acceptance.py` + 진입점 `scripts/ops/model_comparison_acceptance.py`: `prepare`(생산자 제어→현행 manifest 동결, 고정 범위 `pairs_per_day=1·daily_attempt_cap=4·max_output_tokens=400·experiment_usd_ceiling="0.50"·valid_from=valid_until=승인일`, 승인 요청서 `approved_by=null`, 입력 사양+공통 입력 지문; 호출 0) / `run`(승인자·같은 KST 날짜·manifest 지문 일치·worker 전용 owned 전송·`deadline_seconds≤600` 검사 뒤 `assemble_comparison_worker` 로 조립한 worker 에 봉투 1개 offer → 영수증 `receipt.json`(프롬프트·응답·공통 입력 본문 키 제거) → 자기 소유 전송 종료). 실패·불명 결과를 새 쌍으로 재시도하지 않고, 같은 날 두 번째 쌍은 가드(1쌍/일)가 막는다. `install_from_env`/`_raw_clients`/R1 manifest 는 그대로다. `neutral_sizing=None`(엔진 사이징 문맥 없음 → runner 사유 `neutral_sizing_missing`).
+- 검사: `tests/test_model_comparison_acceptance.py` 10건 — 고정 범위·호출 0·원문 미기록, 후보 변수 1개 강제, 미해결 운영 모델 거절, 전송 접촉 전 거절(승인 없음·공유 전송·시한 범위·manifest 변조), 승인 창 밖 fail-closed 영수증, CLI 시한→API 대체 1쌍 완료(예약 3·구독 1·영수증 정화·전송 종료·승인 서명), CLI 성공 시 API 0·예약 2, 미래 fixed_at 정상 거절. 실제 공급자 호출은 없으며 실행은 별도 사용자 승인 뒤에만 한다. 원장 `#e04-acceptance-runner-20261103`.
+
 ## 2026-11-02 — R02-WEB-REJECTION-DIAGNOSTICS: 웹 분석 검증 거절의 안전한 사유 코드·필드 경로 영속화 (실제 WSL 10,367 passed, PR 참조, 운영 미배포)
 
 - `src/analytics/web_report.py`: `validate_web_analysis`/`_check_text`가 `ValueError('문장')` 대신 시장 보고와 같은 `AnalysisValidationError(code, field)`를 올린다(ValueError 하위 → 기존 호출자 호환). 코드는 고정 11종(`invalid_json/invalid_schema/invalid_stance/invalid_item/invalid_evidence/invalid_prose/too_long/recommendation_vocabulary/unsupported_date/unsupported_numeric/unsupported_latin`), 필드는 스키마 경로 고정 집합(`summary[0..3]`, `issues[0..3].title|event|impact|counterpoint|watch|evidence_ids`, `market_view|sector_view|macro_view(.text|.evidence_ids)`, `outlook(.base|.upside|.downside|.evidence_ids)`, `checklist[0..4]`, `headline/stance/response` 등).

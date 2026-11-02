@@ -1,0 +1,189 @@
+"""E04 제한 실호출 인수 실행기 — 합성 전송·임시 원장만. 자격/네트워크/CLI 실행 없음.
+
+확인하는 것: prepare 는 호출 없이 고정 범위(1쌍·시도 4·출력 400·USD 0.50·하루 창)의 manifest·승인 요청서·입력 지문만 적는다.
+run 은 승인자·같은 날짜·manifest 지문·owned 전송이 맞을 때만 봉투 하나를 보내고, 영수증에 프롬프트·응답 원문이 없으며,
+전송은 끝나면 닫히고, 같은 날 두 번째 쌍은 가드가 막는다. 1쌍 결과를 모델 우위로 해석하지 않는다.
+"""
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from src.analytics import model_comparison_acceptance as acc
+from src.analytics import model_comparison_wiring as w
+from src.utils.llm_budget import MonthlyBudgetLedger
+from tests.test_model_comparison_claude import SCRIPTS, FakeAPI, FakeCLI, _ok, reservations
+from tests.test_model_comparison_current_flow import CertifiedOpenAI
+from tests.test_model_comparison_wiring import controls
+
+SENTINEL = "SENTINELCTX"      # 공통 입력에만 들어가는 표식 — 영수증/승인/manifest 어디에도 없어야 한다
+NOW = datetime(2026, 11, 3, 2, 10, tzinfo=timezone.utc)      # 원장 clock(11:10 KST) — 승인 날짜 계산용 고정값
+
+
+def prep_now():
+    """manifest fixed_at 은 runner 의 실시간 now 보다 앞서야 정책이 '가용' 상태가 된다(미래 fixed_at 은 정상 거절)."""
+    return datetime.now(acc.KST) - timedelta(seconds=2)
+
+
+def spec(**over):
+    base = {"symbol": "011200", "strategy": "core_holding", "score": 73.0, "market_regime": "neutral",
+            "sector": f"운송 {SENTINEL}",
+            "indicators": {"per": 16.2, "pbr": 0.9, "close": 23600.0, "ma200": 19050.0, "foreign_net_buy": 312000,
+                           "supply_window_days": 5, "foreign_net_buy_observed_days": 5, "indicators_source": "core_screener"}}
+    base.update(over)
+    return base
+
+
+def ledger(tmp_path):
+    return MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW, policy_enabled=True)
+
+
+def transports(cli=_ok, api=_ok, owned=True):
+    return w.ComparisonTransports(openai=CertifiedOpenAI(), claude_cli=FakeCLI(cli), anthropic_api=FakeAPI(api), owned=owned)
+
+
+def prepared(tmp_path, day=None, **over):
+    led = ledger(tmp_path)
+    day = day or led.today().isoformat()
+    summary = acc.prepare_acceptance(controls(), experiment_id="ACC-1", day=day, candidate={"reasoning_effort": "low"},
+                                     input_spec=spec(), out_dir=tmp_path / "acc", now=prep_now(), **over)
+    return led, day, summary
+
+
+def files_text(tmp_path):
+    return "\n".join(p.read_text(encoding="utf-8") for p in sorted((tmp_path / "acc").glob("*.json")))
+
+
+def test_prepare_writes_fixed_scope_without_calls_or_prompt_text(tmp_path):
+    led, day, summary = prepared(tmp_path)
+    man = json.loads((tmp_path / "acc" / acc.MANIFEST_FILE).read_text())
+    pol = man["execution_policy"]
+    assert man["enabled"] is True and man["experiment_id"] == "ACC-1" and man["pairs_per_day"] == 1
+    assert (pol["pairs_per_day"], pol["daily_attempt_cap"], pol["max_output_tokens"], pol["experiment_usd_ceiling"]) == (1, 4, 400, "0.50")
+    assert pol["valid_from"] == pol["valid_until"] == day
+    assert set(pol["allowed_models"]) == {"gpt-5-mini", "claude-opus-5-5"}      # 운영 Bull/Bear 요청 모델만
+    assert man["current"]["reasoning_effort"] == "minimal" and man["candidate"]["reasoning_effort"] == "low"
+    assert man["bear"]["billing_channel"] == "subscription" and man["bear_api_fallback"]["billing_channel"] == "api"
+    appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
+    assert appr["approved_by"] is None and appr["manifest_sha256"] == w.manifest_sha256(man)
+    assert set(appr["transports"]) == {"openai_chat", "claude_cli", "anthropic_messages"}
+    inp = json.loads((tmp_path / "acc" / acc.INPUT_FILE).read_text())
+    assert inp["input_spec"]["symbol"] == "011200" and len(inp["common_context_sha256"]) == 64
+    # 공통 입력 본문은 파일에 없고(지문만), 반환 요약에도 없다
+    assert "<entry_facts>" not in files_text(tmp_path) and "<entry_facts>" not in json.dumps(summary, ensure_ascii=False)
+    assert summary["manifest_sha256"] == appr["manifest_sha256"] and summary["common_context_bytes"] > 0
+    assert (tmp_path / "acc" / acc.MANIFEST_FILE).stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("candidate,match", [({}, "exactly_one"), ({"reasoning_effort": "low", "model": "x"}, "exactly_one"),
+                                             ({"model": ""}, "candidate_model_invalid")])
+def test_prepare_rejects_invalid_candidate(tmp_path, candidate, match):
+    with pytest.raises(ValueError, match=match):
+        acc.prepare_acceptance(controls(), experiment_id="ACC-1", day="2026-11-03", candidate=candidate,
+                               input_spec=spec(), out_dir=tmp_path / "x", now=NOW)
+
+
+def test_prepare_rejects_unresolved_operating_model(tmp_path):
+    c = controls()
+    c["bear"] = dict(c["bear"], model=None)
+    with pytest.raises(ValueError, match="operating_model_unresolved:bear"):
+        acc.prepare_acceptance(c, experiment_id="ACC-1", day="2026-11-03", candidate={"reasoning_effort": "low"},
+                               input_spec=spec(), out_dir=tmp_path / "x", now=NOW)
+
+
+def _untouched(tr):
+    return tr.openai.calls == [] and tr.claude_cli.calls == [] and tr.anthropic_api.calls == [] \
+        and not tr.claude_cli._closed and not tr.anthropic_api._closed
+
+
+def test_run_refuses_before_any_transport_is_touched(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = transports()
+    with pytest.raises(ValueError, match="approval_missing"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="", ledger=led, transports=tr, now=NOW)
+    with pytest.raises(ValueError, match="owned_transports_required"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=transports(owned=False), now=NOW)
+    with pytest.raises(ValueError, match="deadline_seconds_out_of_range"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=NOW, deadline_seconds=0)
+    # manifest 를 승인 뒤에 바꾸면 지문 불일치로 거절
+    path = tmp_path / "acc" / acc.MANIFEST_FILE
+    man = json.loads(path.read_text()); man["execution_policy"]["daily_attempt_cap"] = 40
+    path.write_text(json.dumps(man, ensure_ascii=False))
+    with pytest.raises(ValueError, match="approval_manifest_mismatch"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=NOW)
+    assert _untouched(tr)
+
+
+def test_run_outside_the_approved_day_is_fail_closed_receipt(tmp_path):
+    led, day, _ = prepared(tmp_path, day="2026-01-02")       # 승인 창이 오늘이 아님
+    tr = transports()
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=NOW)
+    assert receipt["status"] == "error" and receipt["error"].startswith("ValueError:approval_expired")
+    assert receipt["offer"] is None and _untouched(tr)
+    # 조립이 거절되면 승인 서명도 적지 않는다
+    assert json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())["approved_by"] is None
+
+
+def test_run_sends_one_pair_and_leaves_a_scrubbed_receipt(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=SCRIPTS["timeout"])                   # CLI 허용 실패 → 남은 시한으로 API 1회
+    now = datetime.now(acc.KST)
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr, now=now,
+                                 deadline_seconds=30)
+    assert receipt["status"] == "finished" and receipt["offer"] == "accepted"
+    assert receipt["worker_health"]["finished"] == 1
+    assert len(tr.openai.calls) == 2 and len(tr.claude_cli.calls) == 1 and len(tr.anthropic_api.calls) == 1
+    assert len(reservations(led)) == 3 and led.status()["unresolved_count"] == 0      # bull 2 + API 1, 구독 0
+    pair = receipt["pair"]
+    assert pair["complete"] is True and len(pair["attempts"]) == 4
+    row = pair["result"]
+    assert row["current"]["review_policy"] == "entry-independent-review-v1" and row["subscription_attempts"] == 1
+    assert "neutral_sizing_missing" in row["current"]["reasons"]      # 독립 실행기: 엔진 사이징 문맥 없음
+    bear = [a for a in row["current"]["attempts"] if a["role"] == "bear"]
+    assert [a["billing_channel"] for a in bear] == ["subscription", "api"]
+    # 원문 비유출: 공통 입력 표식(입력 사양 파일 input.json 에만 설계상 존재)·프롬프트 블록·응답 본문 키가
+    # 영수증/승인/manifest 어디에도 없고, input.json 에도 조립된 프롬프트 블록은 없다(사양+지문만)
+    acc_dir = tmp_path / "acc"
+    scrubbed = json.dumps(receipt, ensure_ascii=False) + "".join((acc_dir / n).read_text(encoding="utf-8")
+                                                                 for n in (acc.RECEIPT_FILE, acc.APPROVAL_FILE, acc.MANIFEST_FILE))
+    assert SENTINEL not in scrubbed and "<entry_facts>" not in scrubbed and '"prompt"' not in scrubbed and '"content"' not in scrubbed
+    assert "<entry_facts>" not in (acc_dir / acc.INPUT_FILE).read_text(encoding="utf-8")
+    # 전송은 닫혔고 승인 서명이 기록됐다
+    assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True}
+    appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
+    assert appr["approved_by"] == "user" and appr["approved_at"] == now.isoformat()
+    assert json.loads((tmp_path / "acc" / acc.RECEIPT_FILE).read_text())["status"] == "finished"
+    # 같은 날 두 번째 쌍: 다른 서명자는 거절, 같은 서명자는 가드(1쌍/일)에서 막혀 새 전송 0
+    with pytest.raises(ValueError, match="approval_signer_mismatch"):
+        acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="someone-else", ledger=led, transports=transports(), now=now)
+    tr2 = transports(cli=SCRIPTS["timeout"])
+    second = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr2, now=datetime.now(acc.KST),
+                                deadline_seconds=30)
+    assert second["status"] in ("not_offered", "incomplete", "finished") and second["offer"] is not None
+    assert tr2.openai.calls == [] and tr2.claude_cli.calls == [] and tr2.anthropic_api.calls == []
+    assert tr2.claude_cli._closed and tr2.anthropic_api._closed
+
+
+def test_cli_success_needs_no_api_and_reserves_only_bull(tmp_path):
+    led, day, _ = prepared(tmp_path)
+    tr = transports(cli=_ok)
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["status"] == "finished"
+    assert len(tr.claude_cli.calls) == 1 and len(tr.anthropic_api.calls) == 0 and len(reservations(led)) == 2
+    assert receipt["pair"]["result"]["subscription_attempts"] == 1
+
+
+def test_future_fixed_at_is_refused_before_any_call(tmp_path):
+    led = ledger(tmp_path)
+    acc.prepare_acceptance(controls(), experiment_id="ACC-1", day=led.today().isoformat(), candidate={"reasoning_effort": "low"},
+                           input_spec=spec(), out_dir=tmp_path / "acc", now=datetime.now(acc.KST) + timedelta(hours=1))
+    tr = transports()
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["offer"] == "accepted" and receipt["status"] == "incomplete"
+    assert _untouched_calls(tr) and tr.claude_cli._closed and tr.anthropic_api._closed
+
+
+def _untouched_calls(tr):
+    return tr.openai.calls == [] and tr.claude_cli.calls == [] and tr.anthropic_api.calls == []
