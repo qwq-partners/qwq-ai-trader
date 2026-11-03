@@ -3,8 +3,8 @@
 ## 2026-11-03 — E04 인수 실행기 run 경로 설정·인수 기준 수정 (실호출·배포 없음)
 
 - `src/analytics/model_comparison_acceptance.py`: CLI `main` 이 `LLMConfig.from_env()`(월 예산 None → 공유 원장 미개방 → run 이 항상 `shared_monthly_ledger_unavailable` rc 2) 대신 새 `load_operating_llm_config()`(`.env` 빈 키만 채움 + `load_effective_config()` 병합 YAML → `LLMConfig.from_config`, 월 예산/원장 경로 없으면 `operating_llm_budget_config_missing` 거절)로 제어·공유 월 원장을 연다. prepare/run 모두 같은 로더(오늘 prepare 지문 `825cbf97…` 과 동일 controls 확인).
-- 인수 기준: `MonthlyBudgetLedger.status().unresolved_count` 는 월 필터 없이 `unknown` 전체를 세므로(운영 2026-10 unknown 336건) 절대값 0 대신 **이 실행 전후 증가분 0** 으로 판정 — 영수증에 `ledger_status_before` 추가, finding 은 `ledger_unresolved_delta:<n>` / 기준선 미확보 `ledger_unresolved_baseline_unknown`. 과거 unknown 은 해제하지도 사유로 세지도 않는다.
-- 검사: `tests/test_model_comparison_acceptance.py` — 사전 unknown 1건이 있는 원장에서 1쌍 `finished`·finding 0(전후 1→1), 기준선 결측/불리언/증가 1 finding, 운영 설정 로더의 예산·경로·정책·모델 값과 4가지 결측 거절. 관련 묶음 결과는 원장 참조. 실호출·운영 배포·설정 변경 없음.
+- 인수 기준: `MonthlyBudgetLedger.status().unresolved_count` 는 월 필터 없이 `unknown` 전체를 세고(운영 2026-10 unknown 336건) 운영 봇과 공유하는 원장이라 동시 호출로도 움직인다 → 절대값/전후 차이 대신 **이 쌍의 시도 중 예약 토큰이 있는 것(API 과금) 전부가 `known`/`known_reconciled`** 인지로 판정(finding `ledger_unresolved_attempt:<attempt_id>:<state>`). 전체 건수 전후는 `ledger_status_before`·`ledger_unresolved_delta` 참고값으로만 영수증에 남긴다(Codex 1회차 P2 반영). 과거 unknown 은 해제하지도 사유로 세지도 않는다.
+- 검사: `tests/test_model_comparison_acceptance.py` — 사전 unknown 1건이 있는 원장에서 1쌍 `finished`·finding 0(전후 1→1·토큰 3개 known), 다른 호출의 unknown 추가/과거 unknown 대사는 결과 불변·이 쌍의 unknown/pending 토큰은 finding, 운영 설정 로더의 예산·경로·정책·모델 값과 4가지 결측 거절. 관련 묶음 결과는 원장 참조. 실호출·운영 배포·설정 변경 없음.
 
 ## 2026-11-03 — E04 제한 실호출 인수 실행기 (실제 WSL 10,391 passed, PR 참조; 실호출·R1·운영 worker 활성화 없음)
 

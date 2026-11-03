@@ -13,7 +13,8 @@ USD 0.50 은 가드의 예약/추정 비용 계약(`experiment_usd_ceiling`)이�
 
 CLI ``main`` 은 운영과 같은 설정(`.env` + `default.yml`/`evolved_overrides.yml` 병합 → `LLMConfig.from_config`)으로
 공유 월 원장을 연다 — `from_env` 는 월 예산이 없어 run 이 항상 `shared_monthly_ledger_unavailable` 로 끝났다(11/3 확인).
-원장 unresolved 는 **이 실행 전후의 증가분**만 인수 기준으로 본다(과거 월의 unknown 은 해제하지도, 사유로 세지도 않는다).
+원장 unresolved 는 **이 쌍의 시도가 남긴 예약 토큰의 상태**로만 판정한다(과거 월의 unknown·동시에 돌아가는 운영 호출은 공유
+원장 전체 건수를 바꾸므로 전후 차이는 참고값 `ledger_unresolved_delta` 로만 남긴다).
 """
 from __future__ import annotations
 
@@ -203,7 +204,7 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
     receipt_path = out / f"receipt-{decision_id}.json"
     worker = None
     try:
-        # 실행 전 원장 상태 — 인수 기준은 이 실행이 남긴 unresolved 증가분이다(과거 월 unknown 은 기준선에 포함).
+        # 실행 전 원장 상태 — 참고용(공유 원장이라 운영 호출도 건수를 바꾼다). 인수 기준은 이 쌍의 시도별 예약 상태다.
         receipt["ledger_status_before"] = _scrub(ledger.status())
         # 조립 거절(승인 창·지문·전송 집합·프로필)은 전송 생성 전에 끝난다. 승인 서명은 조립이 통과한 뒤에만 적는다.
         worker = assemble_comparison_worker(SimpleNamespace(), manifest=manifest, ledger=ledger, transports=transports,
@@ -257,6 +258,7 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
             except Exception as error:
                 receipt["ledger_status_after"] = {"error": type(error).__name__}
         receipt["transports_closed"] = _closed(transports)
+        receipt["ledger_unresolved_delta"] = _unresolved_delta(receipt)
         receipt["findings"] = _acceptance_findings(receipt)
         if receipt["deadline_exceeded"]:
             receipt["findings"].append("deadline_exceeded")
@@ -270,7 +272,8 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
 def _acceptance_findings(receipt: dict) -> list[str]:
     """저장 완료(`pair.complete`)와 인수 통과를 구분한다. 어느 하나라도 있으면 `finished` 가 아니다.
 
-    원장 기준은 '이 실행이 unresolved 를 늘리지 않았다'이다(실행 전후 `unresolved_count` 동일). 기준선을 못 읽었으면 finding.
+    원장 기준은 이 쌍의 시도 중 예약 토큰이 있는 것(API 과금 시도) 전부가 `known`/`known_reconciled` 로 정산된 것이다 — 공유
+    원장 전체 `unresolved_count` 는 운영 호출·과거 월 unknown 으로 움직이므로 판정에 쓰지 않는다(`ledger_unresolved_delta` 참고값).
     """
     findings = []
     pair = receipt.get("pair")
@@ -288,13 +291,14 @@ def _acceptance_findings(receipt: dict) -> list[str]:
             for reason in reasons if isinstance(reasons, list) else []:
                 if isinstance(reason, str) and any(marker in reason for marker in _FINDING_REASON_MARKERS):
                     findings.append(arm + ":reason:" + reason)
-        # 원장 unresolved 는 전체 unknown 수(월 필터 없음)라 과거 월 기록이 섞인다 → 이 실행 전후 증가분만 센다.
-        before, after = receipt.get("ledger_status_before"), receipt.get("ledger_status_after")
-        counts = [s.get("unresolved_count") if isinstance(s, dict) else None for s in (before, after)]
-        if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
-            findings.append("ledger_unresolved_baseline_unknown")
-        elif counts[1] != counts[0]:
-            findings.append("ledger_unresolved_delta:" + str(counts[1] - counts[0]))
+        # 이 쌍이 원장에 남긴 예약만 본다: 토큰 있는 시도(API 과금)는 known/known_reconciled 여야 한다. 구독(CLI) 시도는
+        # 예약이 없어 원장 미해결이 될 수 없고, 응답 유무는 위 arm 판정이 집행한다.
+        attempts = pair.get("attempts") if isinstance(pair, dict) else None
+        for attempt in attempts if isinstance(attempts, list) else []:
+            if not isinstance(attempt, dict) or attempt.get("reservation_token") is None:
+                continue
+            if attempt.get("state") not in ("known", "known_reconciled"):
+                findings.append(f"ledger_unresolved_attempt:{attempt.get('attempt_id')}:{attempt.get('state')}")
     stop = receipt.get("stop")
     if receipt.get("offer") is not None and not (isinstance(stop, dict) and stop.get("drained") is True and stop.get("journal_drained") is True):
         findings.append("worker_stop_not_drained")
@@ -302,6 +306,15 @@ def _acceptance_findings(receipt: dict) -> list[str]:
     if not (isinstance(closed, dict) and closed and all(v is True for v in closed.values())):
         findings.append("transport_not_closed")
     return findings
+
+
+def _unresolved_delta(receipt: dict):
+    """공유 원장 전체 unresolved 의 실행 전후 차이 — 참고값. 운영 호출의 unknown 추가/과거 unknown 대사도 섞이므로 판정이 아니다."""
+    counts = [s.get("unresolved_count") if isinstance(s, dict) else None
+              for s in (receipt.get("ledger_status_before"), receipt.get("ledger_status_after"))]
+    if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
+        return None
+    return counts[1] - counts[0]
 
 
 def _closed(transports) -> dict:

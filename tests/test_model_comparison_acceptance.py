@@ -212,7 +212,8 @@ def test_stored_pair_with_unverified_identity_is_not_an_acceptance_pass(tmp_path
     assert "current_verdict_hold_or_missing" in receipt["findings"] and "candidate_verdict_hold_or_missing" in receipt["findings"]
     # 신원 불일치 응답은 독립 검토 불가 판정·불명 API 비용(unknown 예약)으로 드러난다 — 모두 인수 중단 조건이다
     assert "current:reason:independent_review_unavailable" in receipt["findings"]
-    assert "current:reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved_delta:1" in receipt["findings"]
+    assert "current:reason:api_cost_unknown" in receipt["findings"]
+    assert any(f.startswith("ledger_unresolved_attempt:") and f.endswith(":unknown") for f in receipt["findings"])
     assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True, "openai": True}
 
 
@@ -322,18 +323,29 @@ def test_preexisting_unknown_reservations_are_baseline_not_a_finding(tmp_path):
                                  now=datetime.now(acc.KST), deadline_seconds=30)
     assert receipt["status"] == "finished" and receipt["findings"] == []
     assert receipt["ledger_status_before"]["unresolved_count"] == 1 and receipt["ledger_status_after"]["unresolved_count"] == 1
+    assert receipt["ledger_unresolved_delta"] == 0
+    tokens = [a["reservation_token"] for a in receipt["pair"]["attempts"] if a["reservation_token"] is not None]
+    assert len(tokens) == 3 and all(a["state"] == "known" for a in receipt["pair"]["attempts"] if a["reservation_token"] is not None)
 
 
-def test_missing_ledger_baseline_is_a_finding():
-    base = {"offer": "accepted", "pair": {"complete": True, "result": {"current": {"verdict": "approve", "reasons": []},
-                                                                      "candidate": {"verdict": "reject", "reasons": []}}},
-            "ledger_status_after": {"unresolved_count": 0}, "stop": {"drained": True, "journal_drained": True},
-            "transports_closed": {"openai": True}}
-    assert acc._acceptance_findings(dict(base, ledger_status_before=None)) == ["ledger_unresolved_baseline_unknown"]
-    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": True})) == ["ledger_unresolved_baseline_unknown"]
-    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": 0})) == []
-    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": 2},
-                                         ledger_status_after={"unresolved_count": 3})) == ["ledger_unresolved_delta:1"]
+def test_ledger_criterion_follows_this_pairs_reservations_not_shared_counts():
+    """다른 호출의 unknown 추가(전체 +1)나 과거 unknown 대사(전체 -1)는 인수 결과를 바꾸지 않고, 이 쌍의 토큰이 unknown 이면 finding 이다."""
+    known = [{"attempt_id": "p:0", "state": "known", "reservation_token": "t0"},
+             {"attempt_id": "p:1", "state": "known_reconciled", "reservation_token": "t1"},
+             {"attempt_id": "p:2", "state": "pending", "reservation_token": None}]      # 구독 시도: 예약 없음 → 원장 기준 밖
+    def receipt(attempts, before, after):
+        return {"offer": "accepted",
+                "pair": {"complete": True, "attempts": attempts,
+                         "result": {"current": {"verdict": "approve", "reasons": []}, "candidate": {"verdict": "reject", "reasons": []}}},
+                "ledger_status_before": {"unresolved_count": before}, "ledger_status_after": {"unresolved_count": after},
+                "stop": {"drained": True, "journal_drained": True}, "transports_closed": {"openai": True}}
+    assert acc._acceptance_findings(receipt(known, 336, 337)) == []        # 동시 운영 호출의 unknown
+    assert acc._acceptance_findings(receipt(known, 336, 335)) == []        # 과거 unknown 대사
+    assert acc._unresolved_delta(receipt(known, 336, 337)) == 1 and acc._unresolved_delta(receipt(known, None, 1)) is None
+    bad = known + [{"attempt_id": "p:3", "state": "unknown", "reservation_token": "t3"}]
+    assert acc._acceptance_findings(receipt(bad, 5, 5)) == ["ledger_unresolved_attempt:p:3:unknown"]
+    stuck = known + [{"attempt_id": "p:4", "state": "pending", "reservation_token": "t4"}]
+    assert acc._acceptance_findings(receipt(stuck, 5, 5)) == ["ledger_unresolved_attempt:p:4:pending"]
 
 
 def test_operating_llm_config_opens_shared_ledger_settings_or_refuses(tmp_path):
