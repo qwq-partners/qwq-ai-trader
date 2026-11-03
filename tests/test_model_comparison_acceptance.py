@@ -212,7 +212,7 @@ def test_stored_pair_with_unverified_identity_is_not_an_acceptance_pass(tmp_path
     assert "current_verdict_hold_or_missing" in receipt["findings"] and "candidate_verdict_hold_or_missing" in receipt["findings"]
     # 신원 불일치 응답은 독립 검토 불가 판정·불명 API 비용(unknown 예약)으로 드러난다 — 모두 인수 중단 조건이다
     assert "current:reason:independent_review_unavailable" in receipt["findings"]
-    assert "current:reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved:1" in receipt["findings"]
+    assert "current:reason:api_cost_unknown" in receipt["findings"] and "ledger_unresolved_delta:1" in receipt["findings"]
     assert receipt["transports_closed"] == {"claude_cli": True, "anthropic_api": True, "openai": True}
 
 
@@ -306,3 +306,44 @@ def test_future_fixed_at_is_refused_before_any_call(tmp_path):
 
 def _untouched_calls(tr):
     return tr.openai.calls == [] and tr.claude_cli.calls == [] and tr.anthropic_api.calls == []
+
+
+def test_preexisting_unknown_reservations_are_baseline_not_a_finding(tmp_path):
+    """과거 월 unknown(운영 원장의 2026-10 336건 같은)은 월 필터 없이 unresolved_count 에 들어간다 — 이 실행이 늘리지 않으면 통과."""
+    led = MonthlyBudgetLedger(tmp_path / "budget.db", 100, clock=lambda: NOW, policy_enabled=True,
+                              missing_cost_policy="log_and_continue")
+    token = led.reserve("gpt-5-mini", "seed", "", 10, task="seed", role="seed")
+    led.settle(token, outcome="unknown")
+    assert led.status()["unresolved_count"] == 1
+    acc.prepare_acceptance(controls(), experiment_id="ACC-1", day=led.today().isoformat(), candidate={"reasoning_effort": "low"},
+                           input_spec=spec(), out_dir=tmp_path / "acc", now=prep_now())
+    tr = transports(cli=SCRIPTS["timeout"])
+    receipt = acc.run_acceptance(out_dir=tmp_path / "acc", approved_by="user", ledger=led, transports=tr,
+                                 now=datetime.now(acc.KST), deadline_seconds=30)
+    assert receipt["status"] == "finished" and receipt["findings"] == []
+    assert receipt["ledger_status_before"]["unresolved_count"] == 1 and receipt["ledger_status_after"]["unresolved_count"] == 1
+
+
+def test_missing_ledger_baseline_is_a_finding():
+    base = {"offer": "accepted", "pair": {"complete": True, "result": {"current": {"verdict": "approve", "reasons": []},
+                                                                      "candidate": {"verdict": "reject", "reasons": []}}},
+            "ledger_status_after": {"unresolved_count": 0}, "stop": {"drained": True, "journal_drained": True},
+            "transports_closed": {"openai": True}}
+    assert acc._acceptance_findings(dict(base, ledger_status_before=None)) == ["ledger_unresolved_baseline_unknown"]
+    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": True})) == ["ledger_unresolved_baseline_unknown"]
+    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": 0})) == []
+    assert acc._acceptance_findings(dict(base, ledger_status_before={"unresolved_count": 2},
+                                         ledger_status_after={"unresolved_count": 3})) == ["ledger_unresolved_delta:1"]
+
+
+def test_operating_llm_config_opens_shared_ledger_settings_or_refuses(tmp_path):
+    """CLI 는 from_env(월 예산 None → 원장 없음) 대신 운영 YAML 설정으로 월 예산·원장 경로·정책을 읽는다."""
+    raw = {"llm": {"monthly_budget": 100.0, "budget_state_path": str(tmp_path / "ledger.sqlite3"), "budget_policy_enabled": True,
+                   "missing_cost_policy": "log_and_continue", "openai_model_light": "gpt-5-mini"}}
+    cfg = acc.load_operating_llm_config(raw, dotenv=False)
+    assert cfg.monthly_budget_usd == 100.0 and cfg.budget_state_path == str(tmp_path / "ledger.sqlite3")
+    assert cfg.budget_policy_enabled is True and cfg.missing_cost_policy == "log_and_continue"
+    assert cfg.openai_model_light == "gpt-5-mini" and cfg.claude_model == "claude-opus-5-5"
+    for broken in ({}, {"llm": {}}, {"llm": {"monthly_budget": 100.0}}, {"llm": {"monthly_budget": 100.0, "budget_state_path": " "}}):
+        with pytest.raises(ValueError, match="operating_llm_budget_config_missing"):
+            acc.load_operating_llm_config(broken, dotenv=False)

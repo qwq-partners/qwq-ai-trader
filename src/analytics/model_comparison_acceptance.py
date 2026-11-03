@@ -10,6 +10,10 @@
 
 USD 0.50 은 가드의 예약/추정 비용 계약(`experiment_usd_ceiling`)이며 실제 청구액의 절대 보장이 아니다. 구독 CLI
 시도는 월 원장을 예약하지 않고 표시 추정비만 남긴다. 1쌍은 경로 인수이지 모델 우위·선정 품질·순수익 증거가 아니다.
+
+CLI ``main`` 은 운영과 같은 설정(`.env` + `default.yml`/`evolved_overrides.yml` 병합 → `LLMConfig.from_config`)으로
+공유 월 원장을 연다 — `from_env` 는 월 예산이 없어 run 이 항상 `shared_monthly_ledger_unavailable` 로 끝났다(11/3 확인).
+원장 unresolved 는 **이 실행 전후의 증가분**만 인수 기준으로 본다(과거 월의 unknown 은 해제하지도, 사유로 세지도 않는다).
 """
 from __future__ import annotations
 
@@ -68,6 +72,24 @@ def _scrub(value):
 def _write(path: Path, payload) -> None:
     path.write_text(_canon(payload), encoding="utf-8")
     path.chmod(0o600)
+
+
+def load_operating_llm_config(raw: dict | None = None, *, dotenv: bool = True):
+    """운영 봇과 같은 LLM 설정을 만든다 — 월 예산·영속 원장 경로가 없으면 거절(fail-closed).
+
+    `.env` 는 비어 있는 키만 채우고(`load_dotenv`), 모델명·월 예산·정책은 유효 YAML 에서 읽는다(`load_effective_config`).
+    `LLMConfig.from_env()` 는 월 예산이 None 이라 공유 원장이 열리지 않는다.
+    """
+    from ..utils.config import load_dotenv, load_effective_config
+    from ..utils.llm import LLMConfig
+    if dotenv:
+        load_dotenv()
+    raw = load_effective_config() if raw is None else raw
+    llm = raw.get("llm") if isinstance(raw, dict) else None
+    if (not isinstance(llm, dict) or llm.get("monthly_budget") is None
+            or not isinstance(llm.get("budget_state_path"), str) or not llm["budget_state_path"].strip()):
+        raise ValueError("operating_llm_budget_config_missing")
+    return LLMConfig.from_config(raw)
 
 
 def common_context_for(input_spec: dict) -> str:
@@ -176,11 +198,13 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
     receipt = {"task": "E04 limited live acceptance", "experiment_id": manifest["experiment_id"],
                "manifest_sha256": approval.manifest_sha256, "approved_by": approved_by, "decision_id": decision_id,
                "started_at": now.isoformat(), "status": "not_started", "offer": None, "pair": None,
-               "ledger_status_after": None, "transports_closed": None, "error": None, "findings": [],
-               "deadline_exceeded": False}
+               "ledger_status_before": None, "ledger_status_after": None, "transports_closed": None, "error": None,
+               "findings": [], "deadline_exceeded": False}
     receipt_path = out / f"receipt-{decision_id}.json"
     worker = None
     try:
+        # 실행 전 원장 상태 — 인수 기준은 이 실행이 남긴 unresolved 증가분이다(과거 월 unknown 은 기준선에 포함).
+        receipt["ledger_status_before"] = _scrub(ledger.status())
         # 조립 거절(승인 창·지문·전송 집합·프로필)은 전송 생성 전에 끝난다. 승인 서명은 조립이 통과한 뒤에만 적는다.
         worker = assemble_comparison_worker(SimpleNamespace(), manifest=manifest, ledger=ledger, transports=transports,
                                             approval=approval, today=today, journal_dir=out / "journal")
@@ -244,7 +268,10 @@ def run_acceptance(*, out_dir, approved_by: str, ledger, transports: ComparisonT
 
 
 def _acceptance_findings(receipt: dict) -> list[str]:
-    """저장 완료(`pair.complete`)와 인수 통과를 구분한다. 어느 하나라도 있으면 `finished` 가 아니다."""
+    """저장 완료(`pair.complete`)와 인수 통과를 구분한다. 어느 하나라도 있으면 `finished` 가 아니다.
+
+    원장 기준은 '이 실행이 unresolved 를 늘리지 않았다'이다(실행 전후 `unresolved_count` 동일). 기준선을 못 읽었으면 finding.
+    """
     findings = []
     pair = receipt.get("pair")
     if receipt.get("offer") == "accepted":
@@ -261,10 +288,13 @@ def _acceptance_findings(receipt: dict) -> list[str]:
             for reason in reasons if isinstance(reasons, list) else []:
                 if isinstance(reason, str) and any(marker in reason for marker in _FINDING_REASON_MARKERS):
                     findings.append(arm + ":reason:" + reason)
-        status = receipt.get("ledger_status_after")
-        unresolved = status.get("unresolved_count") if isinstance(status, dict) else None
-        if unresolved != 0:
-            findings.append("ledger_unresolved:" + str(unresolved))
+        # 원장 unresolved 는 전체 unknown 수(월 필터 없음)라 과거 월 기록이 섞인다 → 이 실행 전후 증가분만 센다.
+        before, after = receipt.get("ledger_status_before"), receipt.get("ledger_status_after")
+        counts = [s.get("unresolved_count") if isinstance(s, dict) else None for s in (before, after)]
+        if any(isinstance(c, bool) or not isinstance(c, int) for c in counts):
+            findings.append("ledger_unresolved_baseline_unknown")
+        elif counts[1] != counts[0]:
+            findings.append("ledger_unresolved_delta:" + str(counts[1] - counts[0]))
     stop = receipt.get("stop")
     if receipt.get("offer") is not None and not (isinstance(stop, dict) and stop.get("drained") is True and stop.get("journal_drained") is True):
         findings.append("worker_stop_not_drained")
@@ -304,8 +334,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     from ..core.cross_validator import SINGLE_FALLBACK_TIMEOUT
-    from ..utils.llm import LLMConfig, LLMManager
-    manager = LLMManager(LLMConfig.from_env())            # 제어·공유 월 원장만 쓴다. 호출 없음.
+    from ..utils.llm import LLMManager
+    manager = LLMManager(load_operating_llm_config())     # 운영과 같은 설정으로 제어·공유 월 원장만 쓴다. 호출 없음.
     now = datetime.now(KST)
     if args.mode == "prepare":
         controls = mci.operating_role_controls(manager, fallback_prompt_suffix="", fallback_timeout=SINGLE_FALLBACK_TIMEOUT)

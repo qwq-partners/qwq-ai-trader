@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-03 — E04 인수 실행기 run 경로 설정·인수 기준 수정 (실호출·배포 없음)
+
+- `src/analytics/model_comparison_acceptance.py`: CLI `main` 이 `LLMConfig.from_env()`(월 예산 None → 공유 원장 미개방 → run 이 항상 `shared_monthly_ledger_unavailable` rc 2) 대신 새 `load_operating_llm_config()`(`.env` 빈 키만 채움 + `load_effective_config()` 병합 YAML → `LLMConfig.from_config`, 월 예산/원장 경로 없으면 `operating_llm_budget_config_missing` 거절)로 제어·공유 월 원장을 연다. prepare/run 모두 같은 로더(오늘 prepare 지문 `825cbf97…` 과 동일 controls 확인).
+- 인수 기준: `MonthlyBudgetLedger.status().unresolved_count` 는 월 필터 없이 `unknown` 전체를 세므로(운영 2026-10 unknown 336건) 절대값 0 대신 **이 실행 전후 증가분 0** 으로 판정 — 영수증에 `ledger_status_before` 추가, finding 은 `ledger_unresolved_delta:<n>` / 기준선 미확보 `ledger_unresolved_baseline_unknown`. 과거 unknown 은 해제하지도 사유로 세지도 않는다.
+- 검사: `tests/test_model_comparison_acceptance.py` — 사전 unknown 1건이 있는 원장에서 1쌍 `finished`·finding 0(전후 1→1), 기준선 결측/불리언/증가 1 finding, 운영 설정 로더의 예산·경로·정책·모델 값과 4가지 결측 거절. 관련 묶음 결과는 원장 참조. 실호출·운영 배포·설정 변경 없음.
+
 ## 2026-11-03 — E04 제한 실호출 인수 실행기 (실제 WSL 10,391 passed, PR 참조; 실호출·R1·운영 worker 활성화 없음)
 
 - 새 `src/analytics/model_comparison_acceptance.py` + 진입점 `scripts/ops/model_comparison_acceptance.py`: `prepare`(생산자 제어→현행 manifest 동결, 고정 범위 `pairs_per_day=1·daily_attempt_cap=4·max_output_tokens=400·experiment_usd_ceiling="0.50"·valid_from=valid_until=승인일`, 승인 요청서 `approved_by=null`, 입력 사양+공통 입력 지문; 호출 0) / `run`(승인자·같은 KST 날짜·manifest 지문 일치·worker 전용 owned 전송·`deadline_seconds≤600` 검사 뒤 `assemble_comparison_worker` 로 조립한 worker 에 봉투 1개 offer → 실행별 영수증 `receipt-<decision_id>.json`(프롬프트·응답·공통 입력 본문 키 제거) → 자기 소유 전송 종료). 인수 통과(`finished`)는 결과 행 저장만이 아니라 baseline·candidate 두 arm 의 검토 판정 approve/reject·판정 차단 사유 없음·원장 unresolved 0·worker drained·소유 전송(Claude CLI/API·OpenAI 세션) 종료까지 맞아야 하며 아니면 `completed_with_findings`(CLI 종료 코드 1). 영수증이 있는 디렉터리의 재실행은 전송 접촉 전에 거부한다(실패·불명을 같은 승인으로 재시도하지 않음). `install_from_env`/`_raw_clients`/R1 manifest 는 그대로다. `neutral_sizing=None`(엔진 사이징 문맥 없음 → runner 사유 `neutral_sizing_missing`).
