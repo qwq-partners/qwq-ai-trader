@@ -6,6 +6,8 @@ import hashlib
 import importlib
 import importlib.util
 import json
+from threading import Event
+import traceback
 
 import pytest
 
@@ -32,6 +34,16 @@ def snapshot(ledger):
 
 def call(guard, name):
     return asyncio.run(guard.call(request(), dispatch=paid_once, attempt_id=name))
+
+
+def storage_failure_details(exc):
+    """합성 원장 실패에서만 원본 예외와 마지막 실행 단계를 단언에 남긴다."""
+    cause = exc.__context__
+    frames = traceback.extract_tb(cause.__traceback__) if cause is not None else []
+    return {'reason': exc.reason, 'cause': type(cause).__name__, 'message': str(cause),
+            'sqlite_errorcode': getattr(cause, 'sqlite_errorcode', None),
+            'sqlite_errorname': getattr(cause, 'sqlite_errorname', None),
+            'phase': [(frame.name, frame.lineno, frame.line) for frame in frames[-1:]]}
 
 
 def test_registration_preserves_history_and_both_guards_recover(tmp_path):
@@ -86,24 +98,49 @@ def test_same_id_registration_approval_and_policy_are_immutable(tmp_path):
     assert snapshot(ledger) == before
 
 
-def test_cross_policy_attempt_id_collision_and_concurrent_global_cap(tmp_path):
+@pytest.mark.parametrize('winner_policy', ['old', 'new'])
+def test_cross_policy_attempt_id_collision_and_concurrent_global_cap(tmp_path, winner_policy):
     ledger, old, guard = setup_guard(tmp_path, cap=2)
     new = replace(old, experiment_id='new')
     register(ledger, new)
     other = ComparisonCallGuard(ledger=ledger, policy=new)
     call(guard, 'shared')
     with pytest.raises(BudgetBlocked, match='comparison_attempt_mismatch'): call(other, 'shared')
-    def run(item):
-        g, name = item
+    winner, loser = (guard, other) if winner_policy == 'old' else (other, guard)
+    entered, release = Event(), Event()
+    dispatches = []
+
+    async def pending_transport(req):
+        dispatches.append('winner')
+        entered.set()
+        assert release.wait(5), '첫 전송의 테스트 해제 신호 누락'
+        return await paid_once(req)
+
+    async def forbidden_transport(req):
+        dispatches.append('loser')
+        return await paid_once(req)
+
+    def run_winner():
+        return asyncio.run(winner.call(request(), dispatch=pending_transport, attempt_id='winner-2'))
+
+    # 첫 입장·예약은 커밋됐지만 전송은 아직 미완료다. 이 슬롯도 다른 정책의
+    # 전역 상한에 계수해야 한다. writer 잠금 만료는 별도 경합 검사에서 검증한다.
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(run_winner)
         try:
-            call(g, name)
-            return 'sent'
-        except BudgetBlocked as exc:
-            return exc.reason
-    with ThreadPoolExecutor(2) as pool:
-        outcomes = list(pool.map(run, [(guard, 'old-2'), (other, 'new-2')]))
-    assert sorted(outcomes) == ['comparison_daily_attempt_cap', 'sent']
+            assert entered.wait(5), '첫 호출이 전송 경계에 도달하지 못함'
+            assert not first.done()
+            with pytest.raises(BudgetBlocked) as blocked:
+                asyncio.run(loser.call(request(), dispatch=forbidden_transport, attempt_id='loser-2'))
+            assert blocked.value.reason == 'comparison_daily_attempt_cap', storage_failure_details(blocked.value)
+            assert winner.lookup('winner-2')['state'] == 'pending'
+            assert ledger.status()['reserved_usd'] > 0
+        finally:
+            release.set()
+        assert first.result().value == 'approve'
+    assert dispatches == ['winner']
     assert len(guard.day_attempts('2026-10-13')) == 2
+    assert loser.lookup('loser-2')['block_reason'] == 'comparison_daily_attempt_cap'
 
 
 @pytest.mark.parametrize('damage', ['partial', 'version', 'digest', 'anchor', 'identity', 'contract', 'request'])

@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/5 E04-BEAR-COMPLETION-DECISION:** PR338은 main `4d0f2ad2`로 병합했다. 현재 모델/low/프롬프트/상한/시한을 유지하고, 새 실호출·반복 계측 없이 승인된 누적 소스 배포를 준비한다. 병합 main CI의 경합 실패는 테스트 전제를 두 계약으로 분리한 뒤 새 WSL/CI 검증으로 확인하며, 운영 잠금 대기·시한·예산은 변경하지 않는다. 실제 운영 인수·고정 SHA·보호 상태·NEXT는 [정본 원장](docs/operations/execution-roadmap.md#e04-completion-deploy-20261105)을 따른다. 진단 보완을 Bear 완료율/순수익 개선으로 표현하지 않는다.
+
 > **11/5 E04-BEAR-TIMEOUT-EVIDENCE:** 취소 예외의 안전한 네 상태만 별도 `timeout_observation`으로 전달한다. 완료/실패·시한·unknown 정산·재시도 금지는 그대로이며 합성 검사만 사용한다. 과거800 응답을 복원하거나 비용을 확정하지 않는다. 검증/독립 리뷰/WSL/푸시 상태는 [정본 원장](docs/operations/execution-roadmap.md#e04-bear-timeout-evidence-20261105)을 따른다.
 
 > **11/5 E04-BEAR-COMPLETION-REVIEW:** PR337은 `7bbad4f3`에 병합했다. 기존400 절단/800 timeout과 코드만 판독했으며 추가 호출/검사/설정 변경은 없다. NEXT는 취소 예외의 안전한 상태 전달에 대한 최소 합성 계약이고, 800 운영 승격·시한 변경·재실호출은 승인된 것이 아니다. [정본 원장](docs/operations/execution-roadmap.md#e04-bear-completion-review-20261105).

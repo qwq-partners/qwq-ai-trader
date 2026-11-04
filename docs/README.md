@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [E04 완료 조건 결정·누적 소스 배포](reviews/e04-bear-completion-decision-2026-11-05.md): 현재 제어 유지, 진단 정보 보존과 완료율 개선 구분. [실제 운영 인수·NEXT](operations/execution-roadmap.md#e04-completion-deploy-20261105).
+
 - [E04 Bear 취소 상태 전달(11/5)](operations/execution-roadmap.md#e04-bear-timeout-evidence-20261105): 합성 취소 재현·허용된 전송 상태만 보조 기록. 실패/시한/unknown 정산 보존, 추가 실호출 없음. [필드 의미](operations/bear-api-cap-diagnostic.md#취소외부-timeout의-보조-관측).
 
 - [E04 Bear 완료 조건 판독(11/5)](reviews/e04-bear-completion-review-2026-11-05.md): PR337 병합 뒤 기존400 절단/800 timeout의 의미와 최소 후속 정보 전달 계약. [정본 상태/NEXT](operations/execution-roadmap.md#e04-bear-completion-review-20261105).
