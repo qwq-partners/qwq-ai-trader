@@ -1,5 +1,14 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-bear-completion-20261104"></a>
+### E04-BEAR-COMPLETION — Bear 요청·완료 계약 조사 (조사 DONE / 런타임 결함 미재현 / 새 실호출 없음)
+
+**Plan:** 사용자 “이번에는 Claude가 아니라 Codex에서 직접 이어서 진행”. 기존 11/4 1쌍의 Bear timeout·API400 절단을 요청 계약과 대조하고 재현된 결함만 최소 수정한다. 완료된 검증은 반복하지 않고 운영 설정·매수 중지를 유지한다. 기준 main `af35f601`·운영 checkout `a399c297`/evolved M. PR #335 main Verify run41820676472는 기존 실행 success를 확인했다(재실행0).
+
+**Do/See:** 외부 전송 없는 새 진단8건 PASS·격리 위반0(AWS 개발 worktree, 가짜 CLI/HTTP·임시 월 원장). CLI/API400 전달·절단 시 hold·기존 명시 API800 override의 예약/시도 기록은 계약대로다. 설치 CLI2.1.316 정적 조사에서 `CLAUDE_CODE_DISABLE_THINKING=1`은 명시 thinking 설정을 생략하며 Opus5.5의 추론을 끄지 않음을 확인했다. 공식 문서상400은 추론+답변 합계 상한이다. 실제400 토큰 배분과 CLI 지연의 내부 원인은 기존 영수증으로 미확정이다. 현재 E04는 Bull 후보만 바꾸고 Bear를 공유하므로 API만800으로 바꾸는 Bear 비교를 표현할 수 없으며, 이는 현행 프로필 제약이다. 고칠 런타임 결함이 재현되지 않아 소스·테스트·설정 변경과 기존 WSL/CI 재검증은0이다. [요청 계약·8진단·공식 근거·다음 단위](../reviews/e04-bear-completion-2026-11-04.md). 비공개 영수증은 `~/.local/state/qwq-task-audit/20261104/e04-bear-completion/`. 독립 분석 Sol6.1/high 2명과 별도 최종 문서 검토(차단0·P2 1 정정 반영; 5.75초는 실제 최대 잔여가 아닌 고정 진단 예산) 완료. 실제 모델/실효 effort metadata는 미노출이다.
+
+**NEXT:** `E04-BEAR-API-CAP-PREP` — 같은 입력/모델/low effort/API 시한에서 API 상한400과800만 비교할 최소 진단 계약·실행 준비. 기존 단일 시도 가드·어댑터 재사용을 먼저 검토하고 현재 Bull 비교기의 Bear를 조용히 바꾸지 않는다. 800의 충분성·개선률은 미입증이며 실제 호출은 새 승인 대상이다. 기존 승인/manifest/영수증 재사용·실패 후 새 쌍 자동 재시도는 없다. CLI5.75/내부11.5/패널12초·운영 설정·KILL_SWITCH_KR·R1 OFF 유지, 배포/재시작/실호출/발송/새 예약0. 아래 E04의 이전 NEXT는 이 조사 결과로 대체하며 상태 기록만의 별도 PR은 만들지 않는다.
+
 <a id="e04-acceptance-runner-20261103"></a>
 ### E04-ACCEPTANCE-RUNNER — 제한 실호출 인수 실행기 (구현·검증·리뷰·PR #334 병합 DONE / 11/4 1쌍 실호출 DONE · 양 arm hold · 비교쌍 평가 불가)
 
