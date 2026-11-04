@@ -1,5 +1,20 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-comparison-policy-lifecycle-20261104"></a>
+### E04-COMPARISON-POLICY-LIFECYCLE — 공유 월 원장 안의 명시 실험 정책 등록 (DO)
+
+**Plan:** 사용자 “PR #336 병합하고 후속 진행, 기존 기록·월 예산·설정·매수 중지 보존, WSL 검증 후 커밋/푸시, 실호출 승인”. #336은 고정 HEAD `5fa5d623`·필수 verify run41835266729 success를 대조해 merge `aa29b636`으로 병합했다(PR/tree 동일). 병합 후 main CI run41840618012도 **10,442 passed / 2 skipped / 2 xfailed**,485.72초·격리0·비밀검사 통과로 마감했다. 새 개발은 이 main 기준 별도 feature 브랜치와 구현 worktree에서 진행한다. 과거 검증 반복0, 운영 `a399c297`·evolved M·KILL의 읽기 전용 지문 보존.
+
+**설계:** legacy `comparison_policy(id=1)`을 전역 상한의 불변 기준으로 남기고 명시 승인자·plan 참조에 결합한 실험별 정책 등록부를 추가한다. 기존 요청·결과·쌍·월 예약·대사 바이트는 재작성하지 않는다. 일 상한은 기존 전역 cap과 새 실험 cap을 모두 만족해야 하며 월 예산·80/95/100%·기존 unknown은 유지한다. 같은 ID 정책 변경·불명 버전/부분 스키마는 거절한다. [구현 계획](../superpowers/plans/2026-11-04-e04-comparison-policy-lifecycle.md).
+
+**실호출 범위:** 이번 사용자의 승인은 기존 API400→800·같은 모델/low/입력/system/5.75초·최대2시도·재시도0·추정USD0.50 진단 한 번에만 적용한다. 코드/WSL/CI 완료 뒤 새 고정 SHA·ID·입력/plan 지문·KST 창으로 구체화하며, 이전 만료/소비 승인과 다른 실험이다. 11/4 기존4시도로 전역 일 한도가 소진됐으므로 그날은 호출할 수 없다. 한도 변경·새 ID 우회·자동 cron/기간 연장은 하지 않는다.
+
+**Do:** 소스 `159b552a`(작성자 원본 `a165a719`)는 lifecycle v1 metadata/anchor SHA와 explicit registry를 추가했다. 기존 policy payload v2·역사 JSON/토큰·월 원장 소스는 그대로다. 같은 transaction에서 전체/실험 한도를 검사하고 runner의 schema/claim도 정책을 대조한다. RO는 등록 필요/동일 정책/충돌/손상을 구분하며, run은 두 소비표식 뒤 승인자/plan 지문으로 등록한다. 누락 슬롯·미등록 소유권·unknown schema는 fail-closed다.
+
+**See(구현자 AWS 보조):** 관련 `test_model_comparison*.py`+진단 **882 passed**,71.90초·rc0·격리0, 변경7파일 문법/diff/비밀패턴 통과. 신규 lifecycle25사례와 기존 진단의 legacy 보존 검사를 포함한다. 최초 PRAGMA가 월 예약의 readonly authorizer에 거절되는 실패를 재현한 뒤 권한 완화 없이 SELECT/DDL 검사로 바꿨다. 슬롯 소실·스키마 제약·RO 분류도 RED→GREEN으로 보완했다. 독립 리뷰·실제 WSL·푸시/CI는 아직 진행 전이다. 승인 기록과 과거 행/설정 보존 지문은 비공개 `~/.local/state/qwq-task-audit/20261104/e04-comparison-policy-lifecycle/`에 둔다.
+
+**운영/예약·NEXT:** 운영 배포/재시작·주문·매수 재개·worker/R1 활성화·정기 보고/기존 예약 변경0. 다음은 본 단위 구현·검증을 마친 뒤 승인된 제한 진단의 실제 영수증 판독이다. E02/E01 대기 입력을 반복 조회하지 않는다.
+
 <a id="e04-bear-api-cap-prep-20261104"></a>
 ### E04-BEAR-API-CAP-PREP — Bear API 400/800 비교 준비 (구현·관련/실제 WSL 검사·독립 리뷰 DONE / 실호출 미승인·원장 정책 충돌)
 

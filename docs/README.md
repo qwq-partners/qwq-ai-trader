@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [E04 비교 정책 수명](operations/execution-roadmap.md#e04-comparison-policy-lifecycle-20261104): PR336 병합 뒤 같은 월 원장 안에 승인된 새 실험 정책을 추가하는 단위. [설계·구현 계획](superpowers/plans/2026-11-04-e04-comparison-policy-lifecycle.md), [정책 수명 계약](operations/comparison-policy-lifecycle.md).
+
 > **11/4 Bear API400/800 준비:** [고정 조건·선행 제약·중단 기준](operations/bear-api-cap-diagnostic.md). 모델·low effort·프롬프트·API5.75초는 고정하며 실제 호출은 미승인이다. 공유 원장의 기존 비교 정책 충돌을 먼저 해소해야 한다. [구현·검증·NEXT 정본](operations/execution-roadmap.md#e04-bear-api-cap-prep-20261104).
 
 > **11/1 E04 후속(guard 소유권):** PR #323 병합(main `c022ef36`). 비교 호출 경계에 전송 채널(api|subscription)을 명시해 구독 시도가 월 원장을 예약·정산하지 않게 했다. 실제 Claude 어댑터·R1은 별도, 설정·매수 중지 유지. [원장](operations/execution-roadmap.md#e04-guard-billing-20261101).
