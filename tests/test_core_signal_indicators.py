@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as datetime_module
 import json
 import sys
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +26,7 @@ for _p in (ROOT, ROOT / "tests"):
 
 from src.analytics.swing_supply import KST, daily_evidence, previous_session, utc_now  # noqa: E402
 from src.core.batch_analyzer import BatchAnalyzer, core_signal_indicators  # noqa: E402
+import src.core.cross_validator as cv_module  # noqa: E402
 from src.core.cross_validator import CrossStrategyValidator as CrossValidator  # noqa: E402
 from src.core.entry_llm_context import build_entry_context  # noqa: E402
 from src.core.types import OrderSide, Position  # noqa: E402
@@ -33,6 +36,23 @@ from test_risk_sizing import home  # noqa: E402,F401
 
 SYMBOL = "011200"
 HELD = "033780"
+
+
+@pytest.fixture(autouse=True)
+def validation_clock(monkeypatch, request):
+    # 공급자/소비자 지표 전달 검사는 호스트 시각과 무관해야 한다.
+    hour, minute, bonus = getattr(request, "param", (11, 0, 0))
+    fixed = datetime(2026, 11, 4, hour, minute)
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed if tz is None else fixed.replace(tzinfo=tz)
+
+    monkeypatch.setattr(cv_module, "datetime", Frozen)
+    # validate 안의 지연 import도 같은 시각을 보게 한다.
+    monkeypatch.setattr(datetime_module, "datetime", Frozen)
+    return bonus
 
 
 def _ind(**over):
@@ -159,7 +179,10 @@ def test_helper_zero_sentinel_and_empty_input():
 
 # ── 생산자 → 소비자 E2E ─────────────────────────────────────────────────────
 
-def test_rebalance_buy_signal_closes_missing_indicator_gap(home, tmp_path):
+@pytest.mark.parametrize("validation_clock", [
+    (11, 0, 0), (12, 29, 0), (12, 30, 5), (12, 45, 5), (13, 0, 5), (13, 1, 0),
+], indirect=True, ids=["neutral", "before_lunch", "lunch_start", "ci_1245", "lunch_end", "after_lunch"])
+def test_rebalance_buy_signal_closes_missing_indicator_gap(home, tmp_path, validation_clock):
     cand = _candidate(_ind())
     ba, emitted = _ba(tmp_path, [cand])
 
@@ -176,11 +199,11 @@ def test_rebalance_buy_signal_closes_missing_indicator_gap(home, tmp_path):
     ok_new, adj_new, _ = _validate(meta)
     ok_old, adj_old, _ = _validate(_legacy(meta))
     assert ok_new and ok_old
-    # 수정 전: ATR·PER·PBR·수급 4개 결손 -8 / 수정 후: 코어가 계산하지 않는 ATR 만 결손 -2
-    assert adj_old <= 85.0 - MISSING_ALL
+    # 시간 가점은 양쪽 모두 유지한다. 지표 전달 효과는 결손 -8 → -2다.
+    assert adj_old == 85.0 + validation_clock - MISSING_ALL
+    assert adj_new == 85.0 + validation_clock - MISSING_ATR
     assert adj_new - adj_old == MISSING_ALL - MISSING_ATR
     # 전달된 값은 선정 당시 값과 같은 의미로 소비된다(PER 16.2·PBR 0.9 는 규칙 8 비대상 → 추가 감점 없음)
-    assert adj_new == adj_old + MISSING_ALL - MISSING_ATR
 
     # 객체 수명: 발행 뒤 후보 지표가 바뀌어도 이미 발행된 신호는 불변
     cand.indicators["per"] = 80.0
