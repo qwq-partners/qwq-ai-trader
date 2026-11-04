@@ -160,14 +160,22 @@ def test_consumption_is_exclusive_and_survives_factory_failure(tmp_path, monkeyp
     assert calls == ['fail'] and reservations(led) == []
 
 
-def test_existing_guard_policy_conflict_never_creates_client(tmp_path, monkeypatch):
+def test_approved_diagnostic_registers_new_policy_and_preserves_anchor(tmp_path, monkeypatch):
     m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
     policy = ComparisonExecutionPolicy('old-policy', 4, ('claude-opus-5-5',), 400, '0.50',
                                         '2026-11-04', '2026-11-04', 1, 65536)
-    ComparisonCallGuard(ledger=led, policy=policy)
-    result = asyncio.run(m.run_diagnostic(**kw))
-    assert result['status'] == 'stopped' and calls == [] and reservations(led) == []
+    guard = ComparisonCallGuard(ledger=led, policy=policy)
+    from tests.test_model_comparison_execution import paid_once, request
+    asyncio.run(guard.call(request('claude-opus-5-5'), dispatch=paid_once, attempt_id='legacy-attempt'))
     with led._connect(readonly=True) as db:
+        before = {table: [tuple(r) for r in db.execute('SELECT * FROM ' + table)]
+                  for table in ('comparison_policy', 'comparison_requests', 'comparison_attempts', 'reservations')}
+    result = asyncio.run(m.run_diagnostic(**kw))
+    assert result['status'] == 'completed' and len(client.calls) == 2
+    with led._connect(readonly=True) as db:
+        for table, rows in before.items():
+            after = [tuple(r) for r in db.execute('SELECT * FROM ' + table)]
+            assert all(row in after for row in rows)
         assert json.loads(db.execute('SELECT policy FROM comparison_policy').fetchone()[0])['experiment_id'] == 'old-policy'
 
 
@@ -199,7 +207,7 @@ def test_readonly_policy_check_preserves_existing_policy_requests_budget(tmp_pat
                     for table in ('comparison_policy', 'comparison_requests', 'reservations', 'comparison_attempts')}
     before = snapshot()
     other = dict(plan, experiment_id='different')
-    assert m.check_ledger_policy(led.path, other) == {'ready': False, 'reason': 'existing_policy_conflict'}
+    assert m.check_ledger_policy(led.path, other) == {'ready': True, 'reason': 'registration_required'}
     assert m.check_ledger_policy(led.path, plan) == {'ready': True, 'reason': 'matching_policy'}
     assert before == snapshot()
     missing = tmp_path / 'absent.db'
@@ -207,12 +215,12 @@ def test_readonly_policy_check_preserves_existing_policy_requests_budget(tmp_pat
     assert not missing.exists()
 
 
-def test_cli_ledger_check_reports_conflict_without_factories(tmp_path, monkeypatch, capsys):
+def test_cli_ledger_check_reports_registration_required_without_factories(tmp_path, monkeypatch, capsys):
     m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
     old = ComparisonExecutionPolicy('old', 4, ('claude-opus-5-5',), 400, '0.50', '2026-11-04', '2026-11-04', 1, 65536)
     ComparisonCallGuard(ledger=led, policy=old)
-    assert m.main(['check-ledger', '--dir', str(out), '--ledger-path', str(led.path)]) == 1
-    assert json.loads(capsys.readouterr().out) == {'ready': False, 'reason': 'existing_policy_conflict'}
+    assert m.main(['check-ledger', '--dir', str(out), '--ledger-path', str(led.path)]) == 0
+    assert json.loads(capsys.readouterr().out) == {'ready': True, 'reason': 'registration_required'}
     assert calls == [] and reservations(led) == []
 
 
@@ -330,7 +338,7 @@ def test_reused_experiment_in_different_plan_cannot_recover_prior_attempts(tmp_p
 
 
 def test_two_plan_race_cannot_relabel_recovered_responses(tmp_path, monkeypatch):
-    """둘 다 기존 시도 없음 확인 후 B를 늦춰 A 완료 응답을 복구하는 경쟁을 재현한다."""
+    """두 계획이 등록 전 전역 소비에서 경쟁해 한 계획만 등록·전송한다."""
     import threading
     m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
     other = tmp_path / 'other'
@@ -340,34 +348,26 @@ def test_two_plan_race_cannot_relabel_recovered_responses(tmp_path, monkeypatch)
     plan['output_directory'] = str(other)
     (other / 'plan.json').write_text(json.dumps(plan))
     second = dict(kw, out_dir=other, approved_plan_sha256=m._sha(m._canon(plan)))
-    barrier, first_done, local = threading.Barrier(2), threading.Event(), threading.local()
-    original = ComparisonCallGuard.lookup
+    barrier = threading.Barrier(2)
+    original = m._consume_experiment
     clients = []
-    def lookup(self, attempt_id):
-        result = original(self, attempt_id)
-        if attempt_id.endswith(':800') and result is None and not getattr(local, 'checked', False):
-            local.checked = True
-            barrier.wait(timeout=5)
-            if local.label == 'B': assert first_done.wait(timeout=5)
-        return result
+    def consume(*args):
+        barrier.wait(timeout=5)
+        return original(*args)
     def factory(config):
         owned = FakeAPI(client.script)
         clients.append(owned)
         return owned
-    monkeypatch.setattr(ComparisonCallGuard, 'lookup', lookup)
+    monkeypatch.setattr(m, '_consume_experiment', consume)
     kw['client_factory'] = second['client_factory'] = factory
-    def execute(label, args):
-        local.label = label
-        try: return asyncio.run(m.run_diagnostic(**args))
-        finally:
-            if label == 'A': first_done.set()
     with ThreadPoolExecutor(2) as pool:
-        first = pool.submit(execute, 'A', kw)
-        later = pool.submit(execute, 'B', second)
+        first = pool.submit(asyncio.run, m.run_diagnostic(**kw))
+        later = pool.submit(asyncio.run, m.run_diagnostic(**second))
         a, b = first.result(timeout=10), later.result(timeout=10)
-    assert a['status'] == 'completed' and b['status'] == 'stopped'
+    assert sorted([a['status'], b['status']]) == ['completed', 'stopped']
     assert sum(len(c.calls) for c in clients) == 2 and len(clients) == 1
-    assert b['error'] == 'experiment_already_consumed'
+    stopped = a if a['status'] == 'stopped' else b
+    assert stopped['error'] == 'experiment_already_consumed'
     assert reservations(led) == [('settled',), ('settled',)]
 
 

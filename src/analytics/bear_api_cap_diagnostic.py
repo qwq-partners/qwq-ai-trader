@@ -2,7 +2,7 @@
 
 prepare 는 과거 공개 입력을 복사할 뿐 설정/자격/원장/전송을 열지 않는다. run 은 새 승인 지문·창·
 소스·제어를 확인하고 일회성 소비를 영속한 뒤 기존 guard/adapter 만 사용한다. 공유 원장의 이전
-비교 정책 충돌은 별도 소유권 작업 전까지 실행 차단 사유다. USD 0.50은 추정 예약 계약이다.
+비교 정책은 보존하고 승인된 새 정책만 두 소비 표식 뒤에 명시 등록한다. USD 0.50은 추정 예약 계약이다.
 """
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ from . import model_comparison_acceptance as acceptance
 from .model_comparison_claude import ClaudeSingleAttemptAdapter, DEADLINE_AT
 from .model_comparison_execution import ComparisonCallGuard, ComparisonExecutionPolicy, ComparisonRequest
 from .model_comparison_input import operating_role_controls
+from .model_comparison_policy_registry import registration_status, register_policy
+from ..utils.llm_budget import BudgetBlocked
 from ..core.adversarial_validator import BEAR_SUFFIX, BEAR_SYSTEM, _parse_verdict
 from ..utils.claude_transport import AnthropicAPIClient
 
@@ -159,19 +161,17 @@ def _policy(plan):
 
 
 def check_ledger_policy(ledger_path, plan):
-    """원장을 생성/초기화하지 않는 호환성 확인. 상태/거래/요청 행을 읽지 않는다."""
+    """등록 가능·기등록 exact·충돌·손상을 구분하는 읽기 전용 검사. 승인이나 입장이 아니다."""
     path = Path(ledger_path).expanduser().absolute()
     if path.is_symlink() or not path.is_file():
         return {'ready': False, 'reason': 'existing_ledger_required'}
     try:
         with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
-            exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='comparison_policy'").fetchone()
-            if not exists:
-                return {'ready': True, 'reason': 'no_existing_comparison_policy'}
-            rows = db.execute('SELECT policy FROM comparison_policy').fetchall()
-            if len(rows) == 1 and rows[0][0] == _policy(plan).serialized():
-                return {'ready': True, 'reason': 'matching_policy'}
-            return {'ready': False, 'reason': 'existing_policy_conflict'}
+            db.execute('BEGIN')
+            return {'ready': True, 'reason': registration_status(db, _policy(plan))}
+    except BudgetBlocked as exc:
+        reason = 'existing_policy_conflict' if exc.reason == 'comparison_policy_mismatch' else 'ledger_policy_corrupt'
+        return {'ready': False, 'reason': reason}
     except (sqlite3.Error, OSError, ValueError):
         return {'ready': False, 'reason': 'ledger_preflight_unavailable'}
 
@@ -325,13 +325,15 @@ async def run_diagnostic(*, out_dir, approved_by, approved_plan_sha256, clock=_n
     client = None
     try:
         ledger = ledger_factory(config)
+        _consume_experiment(ledger, plan, approved_plan_sha256, clock)
+        _remaining_window(plan, clock)
+        register_policy(ledger=ledger, policy=_policy(plan), approved_by=approved_by,
+                        approved_plan_sha256=approved_plan_sha256)
         guard = ComparisonCallGuard(ledger=ledger, policy=_policy(plan))
         # 새 디렉터리를 만들어도 같은 실험 ID의 완료 응답을 새 진단으로 복구하지 않는다.
         if any(guard.lookup(plan['experiment_id'] + ':api:' + str(cap)) is not None for cap in (400, 800)):
             raise ValueError('experiment_attempt_exists')
-        _remaining_window(plan, clock)
-        _consume_experiment(ledger, plan, approved_plan_sha256, clock)
-        _remaining_window(plan, clock)  # 소비 표식 fsync 지연이 승인 창을 넘겼으면 객체도 생성하지 않는다.
+        _remaining_window(plan, clock)  # 등록·검사 지연이 승인 창을 넘겼으면 객체도 생성하지 않는다.
         client = client_factory(config)
         if not isinstance(client, AnthropicAPIClient) or client.billing_channel != 'api':
             raise ValueError('owned_raw_api_required')

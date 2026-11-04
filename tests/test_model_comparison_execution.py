@@ -259,7 +259,7 @@ def test_missing_attempt_history_fails_closed_instead_of_restarting_cap(tmp_path
         db.execute("DROP TABLE comparison_attempts")
     with pytest.raises(BudgetBlocked, match="comparison_storage_corrupt"):
         ComparisonCallGuard(ledger=ledger, policy=policy)
-    with pytest.raises(BudgetBlocked, match="comparison_storage_unavailable"):
+    with pytest.raises(BudgetBlocked, match="comparison_storage_corrupt"):
         asyncio.run(guard.call(request(), dispatch=paid_once))
 
 
