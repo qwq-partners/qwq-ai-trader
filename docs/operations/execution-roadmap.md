@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-comparison-policy-lifecycle-20261104"></a>
-### E04-COMPARISON-POLICY-LIFECYCLE — 공유 월 원장 안의 명시 실험 정책 등록 (DO)
+### E04-COMPARISON-POLICY-LIFECYCLE — 공유 월 원장 안의 명시 실험 정책 등록 (구현·독립 리뷰·실제 WSL DONE / PR CI·승인된 제한 진단 대기)
 
 **Plan:** 사용자 “PR #336 병합하고 후속 진행, 기존 기록·월 예산·설정·매수 중지 보존, WSL 검증 후 커밋/푸시, 실호출 승인”. #336은 고정 HEAD `5fa5d623`·필수 verify run41835266729 success를 대조해 merge `aa29b636`으로 병합했다(PR/tree 동일). 병합 후 main CI run41840618012도 **10,442 passed / 2 skipped / 2 xfailed**,485.72초·격리0·비밀검사 통과로 마감했다. 새 개발은 이 main 기준 별도 feature 브랜치와 구현 worktree에서 진행한다. 과거 검증 반복0, 운영 `a399c297`·evolved M·KILL의 읽기 전용 지문 보존.
 
@@ -11,7 +11,7 @@
 
 **Do:** 소스 `159b552a`(작성자 원본 `a165a719`)는 lifecycle v1 metadata/anchor SHA와 explicit registry를 추가했다. 기존 policy payload v2·역사 JSON/토큰·월 원장 소스는 그대로다. 같은 transaction에서 전체/실험 한도를 검사하고 runner의 schema/claim도 정책을 대조한다. RO는 등록 필요/동일 정책/충돌/손상을 구분하며, run은 두 소비표식 뒤 승인자/plan 지문으로 등록한다. 누락 슬롯·미등록 소유권·unknown schema는 fail-closed다.
 
-**See(구현자 AWS 보조):** 관련 `test_model_comparison*.py`+진단 **882 passed**,71.90초·rc0·격리0, 변경7파일 문법/diff/비밀패턴 통과. 신규 lifecycle25사례와 기존 진단의 legacy 보존 검사를 포함한다. 최초 PRAGMA가 월 예약의 readonly authorizer에 거절되는 실패를 재현한 뒤 권한 완화 없이 SELECT/DDL 검사로 바꿨다. 슬롯 소실·스키마 제약·RO 분류도 RED→GREEN으로 보완했다. 별도 Astra/xhigh 독립 리뷰(02811500)는 P0 0·P1 2·P2 1로 보완을 요구했다: 요청/예약/과금 role 연결, 쌍 입장 날짜 소실, standalone 일별 조회의 빈 결과 전 무결성 검사. 수정 `fadcf3aa`(작성자 `bf40f645`)는 13개 손상 재현과 marker 날짜 재현 후 세 지적을 보완했다. 요청 owner↔slot/token↔예약↔과금 task/role, pair schema/입장 날짜/차단 marker, standalone 보고의 빈 결과 전 이력을 검사한다. 날짜열 없는 pair table은 비어 있을 때만 기존 upgrade를 허용하고 자료가 있으면 무쓰기 차단한다. 최종 관련 **899 passed**,75.31초·rc0·격리0·문법/diff/비밀검사 통과. 독립 재리뷰·실제 WSL/푸시/실호출은 그 뒤다. 승인 기록과 과거 행/설정 보존 지문은 비공개 `~/.local/state/qwq-task-audit/20261104/e04-comparison-policy-lifecycle/`에 둔다.
+**See(구현자 AWS 보조):** 관련 `test_model_comparison*.py`+진단 **882 passed**,71.90초·rc0·격리0, 변경7파일 문법/diff/비밀패턴 통과. 신규 lifecycle25사례와 기존 진단의 legacy 보존 검사를 포함한다. 최초 PRAGMA가 월 예약의 readonly authorizer에 거절되는 실패를 재현한 뒤 권한 완화 없이 SELECT/DDL 검사로 바꿨다. 슬롯 소실·스키마 제약·RO 분류도 RED→GREEN으로 보완했다. 별도 Astra/xhigh 독립 리뷰(02811500)는 P0 0·P1 2·P2 1로 보완을 요구했다: 요청/예약/과금 role 연결, 쌍 입장 날짜 소실, standalone 일별 조회의 빈 결과 전 무결성 검사. 수정 `fadcf3aa`(작성자 `bf40f645`)는 13개 손상 재현과 marker 날짜 재현 후 세 지적을 보완했다. 요청 owner↔slot/token↔예약↔과금 task/role, pair schema/입장 날짜/차단 marker, standalone 보고의 빈 결과 전 이력을 검사한다. 날짜열 없는 pair table은 비어 있을 때만 기존 upgrade를 허용하고 자료가 있으면 무쓰기 차단한다. 최종 관련 **899 passed**,75.31초·rc0·격리0·문법/diff/비밀검사 통과. 독립 재리뷰 `e9a75b6f`는 세 지적 모두 ADDRESSED·새/미해결P0/P1/P2 0, Spec/Quality PASS다(같은 제공자 별도 검토, 요청 Astra/xhigh·실제 모델/실효 effort metadata 미노출). 실제 원장의 최종 RO도 registration_required로 판독했고 쓰기는 없다. 실제 사용자 WSL의 고정 `e9a75b6f`/tree `060cbe96` 직렬 전체는 **10,484 passed / 2 skipped / 2 xfailed**,386.02초(전체403초)·rc0·격리0·문법/비밀검사 통과다. 기존 호스트 핀 일치·사용자 임시 인증·bundle 해시·전후tree·원본 main a399c297/작업본 clean·로그SHA256 `440df591…7ddfd19`을 대조했다. 최초02811500번들은 검증 실행 없이 대체했고 최종소스 전체는1회다. source/tests/scripts 불변의 결과 문서만 추가해 푸시/PR로 진행한다. 필수 CI와 승인된 실제 호출 결과는 같은 비공개 영수증 및 PR 본문에 기록하며 아직 호출하지 않았다. 승인 기록과 과거 행/설정 보존 지문은 비공개 `~/.local/state/qwq-task-audit/20261104/e04-comparison-policy-lifecycle/`에 둔다.
 
 **운영/예약·NEXT:** 운영 배포/재시작·주문·매수 재개·worker/R1 활성화·정기 보고/기존 예약 변경0. 다음은 본 단위 구현·검증을 마친 뒤 승인된 제한 진단의 실제 영수증 판독이다. E02/E01 대기 입력을 반복 조회하지 않는다.
 

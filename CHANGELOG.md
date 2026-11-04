@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-04 — E04-COMPARISON-POLICY-LIFECYCLE (구현·관련899검사 완료, 독립 재리뷰/WSL 대기)
+## 2026-11-04 — E04-COMPARISON-POLICY-LIFECYCLE (구현·독립 재리뷰·실제 WSL10,484검사 완료)
 
 - PR #336을 고정 HEAD로 병합(main `aa29b636`). 기존 비교 정책·과거 행·공유 월 예산을 보존하는 실험별 명시 등록과 전역/실험별 이중 상한을 추가했다. 정책 payload/역사 바이트·월 예산 소스는 유지하며 손상/미등록 소유권은 차단한다. 실제 검증·실행 상태는 단일 원장 참조.
 
