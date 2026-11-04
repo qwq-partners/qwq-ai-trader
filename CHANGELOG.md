@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-05 — E04 누적 소스 운영 배포·인수 지적
+
+- PR #339 병합 main `4117371c`를 실제 WSL 정본 절차로 배포했다. WSL/PR/main/서버 검증 모두10,529 passed·격리0·비밀검사 PASS. 운영08:00:26 재기동·PID579455, 보호48파일/crontab/evolved/KILL·월USD100/log_and_continue·R1/worker OFF 보존.
+- 기동177.57초 시 broker/recovery/pending 정상이나 초기 KIS 시세 요청 한도 거절2건이 있어 엄격한 거절0 인수는 미충족이다. 이후 기존 집계의 HTTP성공/추가 거절0을 확인했으며, 원인·데이터 완전성·개별 복구를 단정하지 않고 `completed_with_findings`로 남긴다. 추가 API시험·재시작·제어 변경 없음.
+- 07:40 시장 보고는 검증 본문/API accepted, 웹은 `unsupported_numeric @ summary[0]` 안전 진단을 저장했다. O02 11/4 사전점검 영수증은 미확인, 기존 정리 일정은 유지한다. 상세·후속은 실행 원장 참조.
+
 ## 2026-11-05 — E04 완료 조건 결정·누적 소스 배포 준비
 
 - PR #338 병합(main `4d0f2ad2`, tree 동일). 기존400 절단/800 timeout은 상한·시한·모델 변경의 근거로 부족하므로 현재 제어와 hold 경계를 유지한다. 완료 조건 결정 자체의 추가 실호출·런타임 수정 없음.
