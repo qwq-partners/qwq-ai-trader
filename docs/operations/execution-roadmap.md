@@ -1,13 +1,13 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-bear-timeout-evidence-20261105"></a>
-### E04-BEAR-TIMEOUT-EVIDENCE — 취소 예외의 안전한 보조 상태 전달 (구현·검증 진행)
+### E04-BEAR-TIMEOUT-EVIDENCE — 취소 예외의 안전한 보조 상태 전달 (구현·독립 리뷰·실제 WSL DONE / PR CI 대기)
 
 **Plan:** 사용자 “합성 자료로 취소 예외 상태 전달 확인·최소 수정, 완료 판정/시한/정산·설정/매수 중지 유지, 추가 실호출/완료 검증 반복 없음, 새 변경 WSL 후 커밋/푸시”. 기준 main `7bbad4f3` 위 이전 판독 문서 `04e10341`을 함께 통합한다. source 범위는 진단 모듈1개와 새 합성 검사1개이며 transport/guard/adapter를 바꾸지 않는다. [계획](../superpowers/plans/2026-11-05-e04-bear-timeout-evidence.md).
 
-**Do:** 실제 run→guard→adapter→가짜 HTTP·임시 원장의 직접 취소/외부 timeout에서 안전한 상태가 영수증으로 전달되지 않는 경계를 재현한다. 선택적 `timeout_observation`에 request_sent/http_status/transport_error_kind/refusal_detected만 남기고 기존 outcome/error/verdict/settlement·중단/시도/close는 보존한다. 원문·usage/비용·모델 신원은 승격하지 않는다. 과거 실제800에 첨부 상태가 있었다고 추정하거나 과거 영수증을 보충하지 않는다.
+**Do:** 실제 run→guard→adapter→가짜 HTTP·임시 원장의 직접 취소/외부 timeout에서 안전한 상태가 영수증으로 전달되지 않는 경계를 재현했다. 선택적 `timeout_observation`에 request_sent/http_status/transport_error_kind/refusal_detected만 남기고 기존 outcome/error/verdict/settlement·중단/시도/close는 보존한다. 원문·usage/비용·모델 신원은 승격하지 않는다. 과거 실제800에 첨부 상태가 있었다고 추정하거나 과거 영수증을 보충하지 않는다.
 
-**See(관련 합성):** 소스 `2d6d7483`(작성자 `60a8364c`)는 직접/외부 취소의 보조 상태 소실3건 RED 후 최소 투영으로 GREEN을 확인했다. 악성 속성 dict가 취소를 가리는 추가1건도 재현해 plain dict만 읽도록 보완했다. AWS 보조 관련4파일 **218 passed**(신규42)·18.19초·rc0·격리0, 문법/diff/비밀패턴 검사 통과다. 독립 최종 리뷰와 실제 사용자 WSL 직렬 전체는 대기 중이다. 이전 검증 반복/AWS 전체 대체·실제 원장 조회/쓰기·모델 실호출0. 기존 WSL 호스트 핀과 원본 main `a399c297` clean을 대조했으며 사용자 등록 임시 인증만 사용한다.
+**See(관련 합성):** 소스 `2d6d7483`(작성자 `60a8364c`)는 직접/외부 취소의 보조 상태 소실3건 RED 후 최소 투영으로 GREEN을 확인했다. 악성 속성 dict가 취소를 가리는 추가1건도 재현해 plain dict만 읽도록 보완했다. AWS 보조 관련4파일 **218 passed**(신규42)·18.19초·rc0·격리0, 문법/diff/비밀패턴 검사 통과다. 독립 최종 리뷰(Astra/xhigh 요청, 실제 모델/실효 effort 미노출, 같은 제공자 별도 리뷰어)는 `5729b489` 전체 범위 P0/P1/P2 0·Spec/Quality PASS다. **실제 사용자 WSL 직렬 전체**는 고정 `5729b489`/tree `648ee21a`에서 **10,526 passed / 2 skipped / 2 xfailed**·394.61초(전체410초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 해시·전후tree·원본 main a399c297/작업본 clean을 대조했다. 로그SHA256 `7f787dbe…3c729e4e`, 영수증은 `~/.local/state/qwq-task-audit/20261105/e04-bear-timeout-evidence/`에 보존한다. 최종 소스 전체 실행은 이1회이며 WSL 뒤 결과 문서만 추가한다. 필수 PR CI는 푸시 후 확인해 같은 감사 디렉터리와 PR 검사에 기록한다. 이전 검증 반복/AWS 전체 대체·실제 원장 조회/쓰기·모델 실호출0. 기존 WSL 호스트 핀과 원본 main `a399c297` clean을 대조했으며 사용자 등록 임시 인증만 사용한다.
 
 **운영/예약·NEXT:** 운영 checkout `a399c297`·evolved 미커밋·KILL/default/evolved 지문 보존, 월USD100/log_and_continue·R1/worker OFF·Gemini 차단 유지. 배포/재시작/주문/보고 발송/새 예약0. **NEXT E04-BEAR-COMPLETION-DECISION:** 기존400 절단/800 timeout의 미확정 한계를 바탕으로 제어 변경 필요 여부를 결정한다. 본 수정은 완료율 개선이나800 충분성의 증거가 아니며 새 실호출·시한/상한 조정·운영 활성화는 별도 승인 범위다. 실제 unknown 비용 대사는 공급자 증빙이 있을 때 기존 절차로만 진행한다.
 

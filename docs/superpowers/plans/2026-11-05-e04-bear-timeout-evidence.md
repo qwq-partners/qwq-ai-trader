@@ -44,3 +44,7 @@
 Coordinator가 diff/합성 증거를 확인하고 저자와 별도인 Astra/xhigh로 task+최종 범위 리뷰를 진행한다. 같은 단일 source task에 중복 리뷰는 만들지 않는다. 지적은 원인 재현·최소 보완·해당 부분 재리뷰로 처리한다. 실행 원장·기존 진단 문서·CHANGELOG·CLAUDE/README에 실제 범위와 NEXT를 반영한다.
 
 기존 WSL 호스트 핀을 대조하고 임시 인증 등록 후 고정 SHA bundle을 별도 작업본에 전달한다. `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 직렬 전체·전후tree·로그hash·원본상태를 확인한다. 완료된 과거 결과를 재실행하지 않는다. 통과 뒤 새 feature commit/push/PR·필수CI, 이번 WSL 인증만 정리. 운영 배포·실호출은 없다. WSL 접근이 막히면 구현·리뷰·번들까지 준비하고 WSL 의존 단계만 기다린다.
+
+## 검증 기록
+
+소스2d6d7483(작성자60a8364c) 관련218검사(신규42)·격리0. 고정5729b489 독립 Astra/xhigh 리뷰 P0/P1/P2 0·Spec/Quality PASS(실제 모델/실효 effort 미노출). 같은 SHA 실제 WSL 직렬 전체10,526 passed/2 skipped/2 xfailed·rc0·394.61초·격리0·문법/비밀검사 PASS, 전후tree648ee21a·원본/작업본 clean·로그hash 확인. 이후 추가는 결과 문서뿐이며 PR 필수CI·작업용 인증 정리는 원장에 연결된 비공개 영수증으로 마감한다. 운영 배포·실호출 없음.
