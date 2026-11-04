@@ -1,5 +1,16 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-bear-completion-review-20261105"></a>
+### E04-BEAR-COMPLETION-REVIEW — 기존 영수증의 시한 내 의견 완성 조건 (정적 판독·독립 문서 리뷰·병합 main CI DONE)
+
+**Plan:** 사용자 “PR #337 병합, 기존 영수증·코드로 완료 조건 확인, 완료 검증 반복/추가 실호출 없음”. 11/5 00:38 KST PR HEAD `3b8c4508`·필수 verify run41854057057 success·mergeable을 대조해 merge `7bbad4f3`으로 병합했다(tree `6f00b841` 동일). 자동 main CI run41859848787은 **10,484 passed / 2 skipped / 2 xfailed**,527.28초·격리0·비밀검사 PASS다. 운영 checkout `a399c297`·evolved M·KILL/default/evolved 지문 불변. 이 main에서 feature/e04-bear-completion-review-20261105로 판독 문서만 커밋/푸시한다. 상태 기록을 위한 추가 PR·수동 전체 검증은 만들지 않고 후속 소스 작업 때 함께 통합한다.
+
+**Do:** 11/4 인수 영수증·11/5 API400/800 영수증과 공개 소스/기존 검사 정의만 읽었다. 이전8개 probe·WSL/PR/full test 재실행0, 모델 호출/DB조회·쓰기/SSH/배포/재시작0. [완료 조건·근거·후속 계약](../reviews/e04-bear-completion-review-2026-11-05.md).
+
+**See:** API400 두 응답은 max_tokens, API800은 외부 TimeoutError로 응답/사용량 unknown. 완료는 end_turn·정확 신원·본문·파싱 가능한 의견·시한을 모두 요구하며, 단독 진단 valid는 알려진 사용량/정산도 요구한다. API 단독5.75초와 CLI 뒤 실제 내부 잔여 시간은 다르다. output_tokens400이 최종 답변400임을 뜻하지 않으며800 충분성·지연 단계·실효 effort·순수익은 미확정이다. 800의5.799초는 예외 정리/조회 포함으로 deadline 결함 증거가 아니다. 독립 Astra/high 정적 검토(실제 모델/실효 effort 미노출)와 coordinator 영수증 대조로 확인했다. 최종 문서 리뷰 P0/P1 0·P2 표현 보정2건을 반영했다. 운영 판정·모델/effort/프롬프트/상한/시한·월예산·기존 unknown은 변경하지 않는다.
+
+**운영/예약·NEXT:** 신규 주문/발송/예약·매수 재개·worker/R1 활성화0. **NEXT E04-BEAR-TIMEOUT-EVIDENCE:** raw 전송의 취소 예외 `_llm_response`가 진단에서 사라질 수 있는 경계만 합성으로 검토하는 최소 단위. 실제800에 그 상태가 있었음을 가정하지 않으며, 허용된 상태를 보존하더라도 실패/hold·unknown 정산·재시도0을 바꾸지 않는다. 본 리뷰는 구현·새 검사·추가 실호출 승인이 아니다. 비용 대사는 공급자 증빙이 있을 때만 기존 절차로 진행한다.
+
 <a id="e04-comparison-policy-lifecycle-20261104"></a>
 ### E04-COMPARISON-POLICY-LIFECYCLE — 공유 월 원장 안의 명시 실험 정책 등록 (구현·WSL·PR CI DONE / 승인 진단 2시도 후 중단)
 

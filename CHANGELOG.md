@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-05 — E04-BEAR-COMPLETION-REVIEW (기존 영수증·코드 정적 판독)
+
+- PR #337 고정 HEAD 병합(main `7bbad4f3`, PR/tree 동일). 400 절단2건·800 timeout1건으로 완료 조건과 관측 한계를 정리했다. 설정/시한 변경·추가 실호출·검증 재실행 없음.
+- NEXT는 기존 취소 예외의 허용된 상태를 진단 영수증으로 전달할 수 있는지 합성으로 확인하는 E04-BEAR-TIMEOUT-EVIDENCE다. 800 효과·실제 비용은 미확정이며 기존 unknown은 보존한다. 상세는 실행 원장/검토 문서 참조.
+
 ## 2026-11-05 — E04-COMPARISON-POLICY-LIFECYCLE (WSL/PR CI10,484검사·승인 제한 진단 판독 완료)
 
 - PR #336을 고정 HEAD로 병합(main `aa29b636`). 기존 비교 정책·과거 행·공유 월 예산을 보존하는 실험별 명시 등록과 전역/실험별 이중 상한을 추가했다. 정책 payload/역사 바이트·월 예산 소스는 유지하며 손상/미등록 소유권은 차단한다.
