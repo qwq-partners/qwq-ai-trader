@@ -27,6 +27,7 @@ from .model_comparison_policy_registry import registration_status, register_poli
 from ..utils.llm_budget import BudgetBlocked
 from ..core.adversarial_validator import BEAR_SUFFIX, BEAR_SYSTEM, _parse_verdict
 from ..utils.claude_transport import AnthropicAPIClient
+from ..utils.llm import LLMProvider, LLMResponse
 
 KST = acceptance.KST
 CONTRACT = dict(model='claude-opus-5-5', caps=[400, 800], reasoning_effort='low', temperature=None,
@@ -271,13 +272,48 @@ def _safe_response_status(value):
                 provider_error_type=provider if provider in _PROVIDER_ERRORS else None)
 
 
+def _timeout_observation(error):
+    """취소 첨부의 안전한 상태만 투영한다. 판정·신원·사용량·정산 근거가 아니다."""
+    # asyncio 외부 timeout 의 직접 취소 원인까지만 허용한다. 임의 예외/속성/원인 순회는 없다.
+    if type(error) is TimeoutError:
+        error = error.__cause__
+    if type(error) is not asyncio.CancelledError:
+        return None
+    attached = vars(error)
+    if type(attached) is not dict:
+        return None
+    response = attached.get('_llm_response')
+    if type(response) is not LLMResponse:
+        return None
+    value = vars(response)
+    if type(value) is not dict or value.get('provider') is not LLMProvider.ANTHROPIC:
+        return None
+    for field, expected in (('model', CONTRACT['model']), ('requested_model', CONTRACT['model']),
+                            ('transport', 'anthropic_messages'), ('billing_channel', 'api')):
+        if type(value.get(field)) is not str or value[field] != expected:
+            return None
+    fields = ('request_sent', 'http_status', 'transport_error_kind', 'refusal_detected')
+    if any(field not in value for field in fields):
+        return None
+    sent, status, kind, refusal = (value[field] for field in fields)
+    if any(flag is not None and type(flag) is not bool for flag in (sent, refusal)):
+        return None
+    if status is not None and (type(status) is not int or not 100 <= status <= 599):
+        return None
+    if kind is not None and (type(kind) is not str or kind not in _TRANSPORT_ERRORS):
+        return None
+    if sent is False and (status is not None or refusal is True):
+        return None
+    return dict(zip(fields, (sent, status, kind, refusal)))
+
+
 def _evidence(attempt_id, cap, record, elapsed, result=None, error=None):
     record = record or {}
     value = result.value if result is not None else {}
     usage = value.get('usage_known') is True
     state = record.get('state')
     safety = _safe_response_status(value)
-    return dict(attempt_id=attempt_id, max_output_tokens=cap, billing_channel='api',
+    evidence = dict(attempt_id=attempt_id, max_output_tokens=cap, billing_channel='api',
                 requested_model=CONTRACT['model'],
                 resolved_model=CONTRACT['model'] if safety['model_identity_status'] == 'verified' else None,
                 input_tokens=value.get('input_tokens') if usage else None,
@@ -289,7 +325,13 @@ def _evidence(attempt_id, cap, record, elapsed, result=None, error=None):
                 ledger_state=state if state in ('known', 'known_reconciled', 'unknown', 'blocked',
                                                 'pending', 'pending_reconciliation') else None,
                 request_sent=value.get('request_sent') if type(value.get('request_sent')) is bool else None,
-                settlement_known=False, outcome='error', verdict=None, error=error, **safety)
+                settlement_known=False, outcome='error', verdict=None,
+                error=type(error).__name__ if error is not None else None, **safety)
+    if result is None:
+        observation = _timeout_observation(error)
+        if observation is not None:
+            evidence['timeout_observation'] = observation
+    return evidence
 
 
 def _remaining_window(plan, clock):
@@ -364,7 +406,7 @@ async def run_diagnostic(*, out_dir, approved_by, approved_plan_sha256, clock=_n
                 except Exception:
                     record = None
                 receipt['attempts'].append(_evidence(attempt_id, cap, record, _monotonic() - started,
-                                                     error=type(error).__name__))
+                                                     error=error))
                 raise
             finally:
                 DEADLINE_AT.reset(token)

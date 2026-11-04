@@ -1,5 +1,9 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/5 E04-BEAR-TIMEOUT-EVIDENCE:** 취소 예외의 안전한 네 상태만 별도 `timeout_observation`으로 전달한다. 완료/실패·시한·unknown 정산·재시도 금지는 그대로이며 합성 검사만 사용한다. 과거800 응답을 복원하거나 비용을 확정하지 않는다. 검증/독립 리뷰/WSL/푸시 상태는 [정본 원장](docs/operations/execution-roadmap.md#e04-bear-timeout-evidence-20261105)을 따른다.
+
+> **11/5 E04-BEAR-COMPLETION-REVIEW:** PR337은 `7bbad4f3`에 병합했다. 기존400 절단/800 timeout과 코드만 판독했으며 추가 호출/검사/설정 변경은 없다. NEXT는 취소 예외의 안전한 상태 전달에 대한 최소 합성 계약이고, 800 운영 승격·시한 변경·재실호출은 승인된 것이 아니다. [정본 원장](docs/operations/execution-roadmap.md#e04-bear-completion-review-20261105).
+
 > **11/4 E04-COMPARISON-POLICY-LIFECYCLE 소스 준비:** PR #336은 `aa29b636`에 병합했다. 기존 singleton 정책·비교 기록·월 예산을 보존하며 명시 승인된 실험만 추가한다. 관련899검사·독립 재리뷰0지적·실제 WSL10,484검사를 통과했다. 전역 일 상한은 그대로이고 소유권/입장 이력 손상은 차단한다. 사용자 실호출 승인은 API400/800 제한 진단 한 번의 범위이며 운영 설정/매수 중지 변경이 아니다. [현재 원장](docs/operations/execution-roadmap.md#e04-comparison-policy-lifecycle-20261104)을 따른다.
 
 > **11/4 E04-BEAR-API-CAP-PREP:** 기존 가드/어댑터를 재사용해 API400/800만 비교할 준비 경로를 추가했다(관련176검사·독립 재리뷰·최종 실제 WSL 전체10,442검사 완료). 공유 월 원장은 이전 실험 정책1개에 결합돼 있으므로 새 정책은 충돌한다. 준비 완료를 실호출 가능으로 표현하거나 원장을 초기화하지 않는다. [단일 원장·검증/NEXT](docs/operations/execution-roadmap.md#e04-bear-api-cap-prep-20261104).
