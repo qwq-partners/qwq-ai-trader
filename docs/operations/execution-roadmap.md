@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-completion-deploy-20261105"></a>
-### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·경합 검사 수정/리뷰 DONE / 새 WSL·CI·배포 대기)
+### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·경합 검사/리뷰·실제 WSL DONE / CI·배포 대기)
 
 **Plan:** 사용자 승인 원문: “완료되면 다음 task 진행해줘. 그리고 커밋 푸쉬 문서업데이트 운영배포까지”. PR #338을 고정 HEAD `9841eb14`·필수 verify run41867517421 success(10,526 passed)·mergeable 대조 후 merge `4d0f2ad2`로 병합했다(PR/tree 동일). 운영 기준은 `a399c297`이며 운영 checkout을 미리 이동하지 않는다. [완료 조건 결정](../reviews/e04-bear-completion-decision-2026-11-05.md)과 [배포 정본](lightsail-deployment.md)을 따른다.
 
@@ -11,7 +11,7 @@
 
 **See/main CI 실패·후속:** 병합 main `4d0f2ad2`의 run41870477873/job126715855067은 `test_cross_policy_attempt_id_collision_and_concurrent_global_cap` 1건 실패(10,525 passed/2 skipped/2 xfailed·456.15초·격리0)다. 동시 두 요청 중 한 건은 전송됐고 다른 건이 기대한 daily cap 대신 `comparison_storage_unavailable`로 차단됐다. journal close 실패가 아니다. **E04-COMPARISON-CONTENTION**에서 동일 순서 무주입 합성의20번째 반복과 통제 writer 보유로 `_admit/BEGIN IMMEDIATE`의 실제 `OperationalError/SQLITE_BUSY(5)`를 확인했다. 원 CI의 하위 예외가 없어 당시 같은 원인이었다고 단정하지 않는다. 정상 타임라인2회에서는 종료 후 잠금 잔존 근거가 없고 실패 회차 보유 시간은 미계측이다.
 
-**Do/최소 수정:** 기존0.1초 bounded lock 차단을 제품 결함으로 입증하지 못했으므로 런타임은 바꾸지 않았다. 테스트2파일은 ① 첫 입장·예약 commit 후 전송 미완료 상태의 다른 정책 요청이 정확히 daily cap으로 차단되는지, ② 실제 writer 경합에서 storage 차단·새 요청/예약/전송0인지 구분한다(old/new 승자 모두). 기존 ID충돌을 유지하며 예외 유형/SQLite code/단계를 합성 단언에만 남긴다. 모든 저장소 실패를 통과시키거나 잠금 대기·상한·시한을 늘리지 않는다. 작성자 Astra/high의 관련6파일206 passed·24.00초·격리0·문법/diff/비밀패턴 PASS, 소스0·테스트2파일이다. 독립 Astra/xhigh 최종 리뷰는 작성자 `1d77803f` 두 테스트 파일 P0/P1/P2 0(정적/기존 관련 로그 확인, 재실행0, 실제 모델/실효 effort 미노출)이다. 통합 `66d3e468`의 테스트 내용은 같다. 실제 WSL/CI를 새 변경에 수행한 뒤 배포한다. [계획](../superpowers/plans/2026-11-05-e04-comparison-contention.md).
+**Do/최소 수정:** 기존0.1초 bounded lock 차단을 제품 결함으로 입증하지 못했으므로 런타임은 바꾸지 않았다. 테스트2파일은 ① 첫 입장·예약 commit 후 전송 미완료 상태의 다른 정책 요청이 정확히 daily cap으로 차단되는지, ② 실제 writer 경합에서 storage 차단·새 요청/예약/전송0인지 구분한다(old/new 승자 모두). 기존 ID충돌을 유지하며 예외 유형/SQLite code/단계를 합성 단언에만 남긴다. 모든 저장소 실패를 통과시키거나 잠금 대기·상한·시한을 늘리지 않는다. 작성자 Astra/high의 관련6파일206 passed·24.00초·격리0·문법/diff/비밀패턴 PASS, 소스0·테스트2파일이다. 독립 Astra/xhigh 최종 리뷰는 작성자 `1d77803f` 두 테스트 파일 P0/P1/P2 0(정적/기존 관련 로그 확인, 재실행0, 실제 모델/실효 effort 미노출)이다. 통합 `66d3e468`의 테스트 내용은 같다. 실제 사용자 WSL 직렬 전체는 `cfdd49f3`/tree `e38764ff`에서 **10,529 passed / 2 skipped / 2 xfailed**·406.74초(전체425초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 SHA256·전후tree·원본 main a399c297 clean을 대조했고 최종 실행1회, AWS 전체 대체0이다. WSL 뒤 문서만 추가하며 필수 PR/main CI 후 배포한다. [계획](../superpowers/plans/2026-11-05-e04-comparison-contention.md).
 
 **See/운영:** 수정본 WSL/PR/main CI와 정본 배포·재시작 후 인수 결과를 확정한다. 비공개 영수증: `~/.local/state/qwq-task-audit/20261105/e04-completion-deploy/`. 추가 실험 호출/주문/매수 재개·worker/R1 활성화·환경/예산/전략 변경은 하지 않는다. 운영 미커밋 evolved·KILL·기존 영수증/원장을 보존하고 결과 문서만으로 재배포하지 않는다.
 
