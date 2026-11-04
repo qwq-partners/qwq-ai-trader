@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-05 — E04-BEAR-TIMEOUT-EVIDENCE (취소 상태의 제한된 보조 기록)
+
+- Bear API 진단의 직접 취소/외부 timeout에서 검증된 전송 상태 네 필드만 선택적 `timeout_observation`으로 전달한다. 실제 가드·어댑터와 합성 HTTP/임시 원장으로 재현하며 원문·사용량·비용·신원은 새 객체에 넣지 않는다.
+- 실패/의견 없음·unknown 정산·중단·소비표식·시한/재시도 규칙은 그대로다. 실제 호출·과거 영수증 보충·운영 설정/매수 중지 변경 없음. 검증·리뷰·현재 상태는 실행 원장 E04-BEAR-TIMEOUT-EVIDENCE 참조.
+
 ## 2026-11-05 — E04-BEAR-COMPLETION-REVIEW (기존 영수증·코드 정적 판독)
 
 - PR #337 고정 HEAD 병합(main `7bbad4f3`, PR/tree 동일). 400 절단2건·800 timeout1건으로 완료 조건과 관측 한계를 정리했다. 설정/시한 변경·추가 실호출·검증 재실행 없음.

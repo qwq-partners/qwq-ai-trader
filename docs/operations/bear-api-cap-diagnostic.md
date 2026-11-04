@@ -30,6 +30,14 @@
 
 영수증에는 요청/응답 신원·출력 상한·stop reason·유효 판정 여부·지연·예약 정산·소유 전송 종료를 남긴다. 응답 본문·프롬프트·숨은 추론·자격증명은 넣지 않는다. 비용은 공개 가격표를 통한 추정이며 실제 청구액이 아니다.
 
+## 취소·외부 timeout의 보조 관측
+
+진단 예외 영수증의 선택적 `timeout_observation`은 직접 `CancelledError` 또는 `TimeoutError`의 직접 취소 원인에 붙은 정상 `LLMResponse`에서만 읽는다. Anthropic·요청 `claude-opus-5-5`·API 전송/채널과 형식을 대조한 `request_sent`, `http_status`, `transport_error_kind`, `refusal_detected` 네 필드만 허용한다. 첨부가 없거나 문맥/타입이 틀리면 보조 객체를 생략하며 미전송으로 추정하지 않는다.
+
+이 객체는 클라이언트의 관측이다. `request_sent=true`는 HTTP 요청 시작 전 플래그이므로 공급자 수신 증거가 아니고, HTTP 상태는 완성된 본문/사용량 수신 증거가 아니다. 예외 경로는 계속 `outcome=error`, 의견 없음, 정산 미확정이다. 가드가 정한 unknown 예약·중단·재시도 금지·기존 시한은 그대로다. 원문/프롬프트/예외 전문/토큰/비용/응답 모델 신원은 이 객체에 넣지 않으며 기존 영수증도 다시 쓰지 않는다. 내부 API timeout이 정상 결과 객체로 반환되는 경로는 기존 필드를 그대로 사용한다.
+
+새 변경의 검증·독립 리뷰·WSL 상태는 [E04-BEAR-TIMEOUT-EVIDENCE 원장](execution-roadmap.md#e04-bear-timeout-evidence-20261105)을 따른다. 합성 확인은 과거 실제800 timeout의 관측 공백을 채우거나 실제 완료율을 입증하지 않는다.
+
 ## 준비·검증 상태
 
 준비 진입점은 `scripts/ops/bear_api_cap_diagnostic.py`다. `prepare`는 과거 입력을 읽어 새 디렉터리에 `input.json`·`plan.json`을 작성한다. 자격증명·원장·전송을 열지 않는다. 소스 작업본이 깨끗하고 `--source-commit`과 HEAD가 일치해야 한다.

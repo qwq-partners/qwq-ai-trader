@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [E04 Bear 취소 상태 전달(11/5)](operations/execution-roadmap.md#e04-bear-timeout-evidence-20261105): 합성 취소 재현·허용된 전송 상태만 보조 기록. 실패/시한/unknown 정산 보존, 추가 실호출 없음. [필드 의미](operations/bear-api-cap-diagnostic.md#취소외부-timeout의-보조-관측).
+
 - [E04 Bear 완료 조건 판독(11/5)](reviews/e04-bear-completion-review-2026-11-05.md): PR337 병합 뒤 기존400 절단/800 timeout의 의미와 최소 후속 정보 전달 계약. [정본 상태/NEXT](operations/execution-roadmap.md#e04-bear-completion-review-20261105).
 
 - [E04 비교 정책 수명](operations/execution-roadmap.md#e04-comparison-policy-lifecycle-20261104): PR336 병합 뒤 같은 월 원장 안에 승인된 새 실험 정책을 추가하는 단위. [설계·구현 계획](superpowers/plans/2026-11-04-e04-comparison-policy-lifecycle.md), [정책 수명 계약](operations/comparison-policy-lifecycle.md).
