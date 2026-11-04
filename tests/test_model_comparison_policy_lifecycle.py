@@ -338,3 +338,120 @@ def test_readonly_preflight_distinguishes_same_id_conflict_from_corrupt_contract
     before = snapshot(ledger)
     assert m.check_ledger_policy(ledger.path, plan) == {'ready': False, 'reason': 'ledger_policy_corrupt'}
     assert snapshot(ledger) == before
+
+
+@pytest.mark.parametrize('damage', ['other_owner', 'missing_mapping', 'wrong_task', 'missing_reservation',
+                                    'slot_token', 'request_token', 'both_tokens'])
+def test_paid_history_links_cannot_reduce_experiment_spend(tmp_path, damage):
+    from tests.test_model_comparison_admission_budget import request_units
+    units = request_units(tmp_path)
+    ledger, old, _ = setup_guard(tmp_path, cap=10)
+    policy = replace(old, experiment_id='limited', experiment_usd_ceiling=str(units / 1_000_000_000))
+    register(ledger, policy)
+    guard = ComparisonCallGuard(ledger=ledger, policy=policy)
+    call(guard, 'paid')
+    with ledger._connect() as db:
+        if damage == 'other_owner': db.execute("UPDATE policy_attempts SET role='study-1' WHERE task='model_comparison'")
+        if damage == 'missing_mapping': db.execute("DELETE FROM policy_attempts WHERE task='model_comparison'")
+        if damage == 'wrong_task': db.execute("UPDATE policy_attempts SET task='ordinary' WHERE task='model_comparison'")
+        if damage == 'missing_reservation': db.execute('DELETE FROM reservations')
+        if damage == 'slot_token': db.execute('UPDATE comparison_attempts SET reservation_token=NULL')
+        if damage == 'request_token': db.execute('UPDATE comparison_requests SET reservation_token=NULL')
+        if damage == 'both_tokens':
+            db.execute('UPDATE comparison_requests SET reservation_token=NULL')
+            db.execute('UPDATE comparison_attempts SET reservation_token=NULL')
+    before = snapshot(ledger)
+    with pytest.raises(BudgetBlocked): register(ledger, replace(old, experiment_id='third'))
+    sent = []
+    async def dispatch(req):
+        sent.append(req)
+        return await paid_once(req)
+    with pytest.raises(BudgetBlocked): asyncio.run(guard.call(request(), dispatch=dispatch, attempt_id='next'))
+    assert sent == [] and snapshot(ledger) == before
+
+
+@pytest.mark.parametrize('damage', ['null_day', 'missing_column', 'missing_pk'])
+def test_pair_admission_damage_cannot_revive_global_cap(tmp_path, damage):
+    from tests.test_model_comparison_runner import setup, NOW as PAIR_NOW
+    m, ledger, old_runner, spec, op, ge = setup(tmp_path, pairs_per_day=1)
+    new = replace(old_runner.guard.policy, experiment_id='new')
+    register(ledger, new)
+    guard = ComparisonCallGuard(ledger=ledger, policy=new)
+    runner = m.PairedComparisonRunner(guard=guard, adapter=old_runner.adapter, clock=lambda: PAIR_NOW)
+    old_runner._claim(spec, PAIR_NOW)
+    with ledger._connect() as db:
+        if damage == 'null_day': db.execute('UPDATE comparison_pairs SET admission_day=NULL')
+        if damage == 'missing_column': db.execute('ALTER TABLE comparison_pairs DROP COLUMN admission_day')
+        if damage == 'missing_pk':
+            rows = db.execute('SELECT * FROM comparison_pairs').fetchall()
+            db.execute('DROP TABLE comparison_pairs')
+            db.execute('CREATE TABLE comparison_pairs (pair_id TEXT, manifest TEXT NOT NULL, '
+                       'requested_at TEXT NOT NULL, result TEXT, admission_day TEXT)')
+            db.executemany('INSERT INTO comparison_pairs VALUES (?,?,?,?,?)', [tuple(r) for r in rows])
+    before = snapshot(ledger)
+    with pytest.raises(BudgetBlocked): register(ledger, replace(new, experiment_id='third'))
+    with pytest.raises(BudgetBlocked): asyncio.run(runner.run(replace(spec, decision_id='new-pair')))
+    with pytest.raises(BudgetBlocked): old_runner.admitted_pair_ids('2026-10-13')
+    assert snapshot(ledger) == before and op.calls == [] and ge.calls == []
+
+
+@pytest.mark.parametrize('damage', ['missing_slot', 'missing_table', 'registry_version_empty_day'])
+def test_standalone_report_validates_before_empty_join(tmp_path, damage):
+    ledger, old, guard = setup_guard(tmp_path)
+    register(ledger, replace(old, experiment_id='new'))
+    call(guard, 'paid')
+    day = '2026-10-13'
+    with ledger._connect() as db:
+        if damage == 'missing_slot': db.execute('DELETE FROM comparison_attempts')
+        if damage == 'missing_table': db.execute('DROP TABLE comparison_attempts')
+        if damage == 'registry_version_empty_day':
+            db.execute('UPDATE comparison_policy_lifecycle SET version=99')
+            day = '2026-10-14'
+    before = snapshot(ledger)
+    with pytest.raises(BudgetBlocked): read_day_attempts(ledger.path, day)
+    assert snapshot(ledger) == before
+
+
+def test_unused_comparison_report_is_empty_without_schema_writes(tmp_path):
+    ledger = MonthlyBudgetLedger(tmp_path / 'budget.db', 100, clock=lambda: NOW, policy_enabled=True)
+    before = snapshot(ledger)
+    assert read_day_attempts(ledger.path, '2026-10-13') == []
+    assert snapshot(ledger) == before
+
+
+def test_preidentity_paid_slot_keeps_anchor_cost_and_history(tmp_path):
+    ledger, old, guard = setup_guard(tmp_path, cap=1)
+    call(guard, 'old')
+    # 신원 테이블 도입 이전 이력처럼 요청만 없고 슬롯·예약·비용 소유권은 남는다.
+    with ledger._connect() as db: db.execute('DELETE FROM comparison_requests')
+    before = snapshot(ledger)
+    new = replace(old, experiment_id='new')
+    register(ledger, new)
+    assert all(snapshot(ledger)[table] == rows for table, rows in before.items())
+    with pytest.raises(BudgetBlocked, match='comparison_daily_attempt_cap'):
+        call(ComparisonCallGuard(ledger=ledger, policy=new), 'new')
+    assert ledger.status()['spent_usd'] == 0.0001
+
+
+def test_valid_pair_block_marker_survives_new_registration_and_report(tmp_path):
+    from tests.test_model_comparison_runner import setup, NOW as PAIR_NOW
+    m, ledger, runner, spec, _, _ = setup(tmp_path, pairs_per_day=2, max_common_context_bytes=10)
+    with pytest.raises(BudgetBlocked, match='comparison_input_too_large'): runner._claim(spec, PAIR_NOW)
+    before = snapshot(ledger)
+    register(ledger, replace(runner.guard.policy, experiment_id='new'))
+    assert all(snapshot(ledger)[table] == rows for table, rows in before.items())
+    assert runner.admitted_pair_ids('2026-10-13') == set()
+    assert read_day_attempts(ledger.path, '2026-10-13') == []
+
+
+def test_malformed_pair_block_timestamp_is_not_an_unadmitted_marker(tmp_path):
+    from tests.test_model_comparison_runner import setup, NOW as PAIR_NOW
+    _, ledger, runner, spec, _, _ = setup(tmp_path, max_common_context_bytes=10)
+    with pytest.raises(BudgetBlocked): runner._claim(spec, PAIR_NOW)
+    with ledger._connect() as db:
+        value = json.loads(db.execute('SELECT result FROM comparison_pairs').fetchone()[0])
+        value['blocked_at'] = 'invalid'
+        db.execute('UPDATE comparison_pairs SET requested_at=?,result=?', ('invalid', json.dumps(value)))
+    before = snapshot(ledger)
+    with pytest.raises(BudgetBlocked): register(ledger, replace(runner.guard.policy, experiment_id='new'))
+    assert snapshot(ledger) == before

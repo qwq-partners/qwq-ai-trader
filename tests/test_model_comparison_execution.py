@@ -597,7 +597,7 @@ def test_adapter_declared_channel_is_checked_before_any_dispatch(tmp_path):
     assert spend["total_usd"] == "0"
 
 
-def test_stored_subscription_result_with_token_or_api_request_is_settlement_mismatch(tmp_path):
+def test_stored_subscription_result_with_token_or_api_request_fails_closed(tmp_path):
     from src.utils.llm_budget import BudgetStateError
     ledger, policy, guard = setup_guard(tmp_path, cap=5)
 
@@ -607,12 +607,16 @@ def test_stored_subscription_result_with_token_or_api_request_is_settlement_mism
     asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1"))
     with sqlite3.connect(ledger.path) as db:
         db.execute("UPDATE comparison_requests SET reservation_token='forged' WHERE attempt_id='sub-1'")
-    with pytest.raises(BudgetStateError, match="comparison_settlement_mismatch"):
+    with pytest.raises(BudgetStateError, match="comparison_storage_corrupt"):
         guard.lookup("sub-1")
     # 같은 ID 복구도 정상으로 돌려주지 않는다.
-    with pytest.raises(BudgetStateError, match="comparison_settlement_mismatch"):
+    with pytest.raises(BudgetStateError, match="comparison_storage_corrupt"):
         asyncio.run(guard.call(subscription_request(), dispatch=declared(transport), attempt_id="sub-1"))
-    # 유료 요청 행에 구독 정산 응답을 끼워 넣은 저장도 거절한다.
+    # 전체 이력 검증은 손상된 구독 행이 있는 원장의 신규 유료 시도도 차단한다.
+    with pytest.raises(BudgetStateError, match="comparison_storage_corrupt"):
+        asyncio.run(guard.call(request(), dispatch=paid_once, attempt_id="blocked-api"))
+    # 별도 정상 원장에서 유료 요청에 구독 정산 응답을 끼워 넣어도 거절한다.
+    ledger, policy, guard = setup_guard(tmp_path / "separate", cap=5)
     asyncio.run(guard.call(request(), dispatch=paid_once, attempt_id="api-1"))
     from src.analytics.model_comparison_execution import _result_json
     with sqlite3.connect(ledger.path) as db:

@@ -129,25 +129,97 @@ def policy_owner(payload, policies):
         raise BudgetStateError('comparison_storage_corrupt') from None
 
 
+def _reservation_owner(db, token, owner, model=None):
+    rows = db.execute("SELECT r.model,p.task,p.role FROM reservations r LEFT JOIN policy_attempts p ON p.token=r.token "
+                      "WHERE r.token=?", (token,)).fetchall()
+    if (len(rows) != 1 or tuple(rows[0][1:]) != ('model_comparison', owner)
+            or (model is not None and rows[0][0] != model)):
+        raise BudgetStateError('comparison_storage_corrupt')
+
+
+def _validate_requests(db, policies):
+    tokens = set()
+    rows = db.execute("SELECT r.request_json,r.request_sha256,r.reservation_token,r.result_json,r.block_reason,"
+                      "a.slot,a.reservation_token,a.state FROM comparison_requests r "
+                      "LEFT JOIN comparison_attempts a ON a.slot=r.slot")
+    for payload, digest, token, result, reason, slot, slot_token, state in rows:
+        if not isinstance(payload, str) or _sha(payload) != digest:
+            raise BudgetStateError('comparison_storage_corrupt')
+        owner = policy_owner(payload, policies)
+        request = json.loads(payload).get('request')
+        if not isinstance(request, dict) or request.get('billing_channel', 'api') not in ('api', 'subscription'):
+            raise BudgetStateError('comparison_storage_corrupt')
+        if slot is None and (reason != 'comparison_daily_attempt_cap' or token is not None or result is not None):
+            raise BudgetStateError('comparison_storage_corrupt')
+        if token != slot_token:
+            raise BudgetStateError('comparison_storage_corrupt')
+        api = request.get('billing_channel', 'api') == 'api'
+        if token is None:
+            # 예약 전 admitted/blocked와 구독 시도는 합법적이다. 유료 응답이나
+            # 예약 이후 상태가 있는데 양쪽 토큰이 모두 사라진 것은 손상이다.
+            if api and (result is not None or state in ('reserved', 'known', 'unknown')):
+                raise BudgetStateError('comparison_storage_corrupt')
+        else:
+            if not api or token in tokens:
+                raise BudgetStateError('comparison_storage_corrupt')
+            _reservation_owner(db, token, owner, request.get('model'))
+            tokens.add(token)
+    # 신원 도입 이전 슬롯은 요청 JSON이 없을 수 있다. 기존 anchor의 비용 연결을
+    # 검사하되 행을 생성하거나 재작성하지 않고 global 슬롯으로 계속 센다.
+    anchor = _policy(db.execute('SELECT policy FROM comparison_policy WHERE id=1').fetchone()[0]).experiment_id
+    for token, in db.execute("SELECT a.reservation_token FROM comparison_attempts a "
+                             "LEFT JOIN comparison_requests r ON r.slot=a.slot "
+                             "WHERE r.slot IS NULL AND a.reservation_token IS NOT NULL"):
+        if token in tokens:
+            raise BudgetStateError('comparison_storage_corrupt')
+        _reservation_owner(db, token, anchor)
+        tokens.add(token)
+
+
+def _validate_pairs(db, policies):
+    from .model_comparison_execution import _kst_date
+    from .model_comparison_runner import BLOCKED_VERSION, _time
+    columns = [('pair_id', 'TEXT', 1), ('manifest', 'TEXT', 0), ('requested_at', 'TEXT', 0),
+               ('result', 'TEXT', 0), ('admission_day', 'TEXT', 0)]
+    actual = [r[0] for r in db.execute('SELECT * FROM comparison_pairs LIMIT 0').description]
+    if actual == [r[0] for r in columns[:-1]]:
+        _columns(db, 'comparison_pairs', columns[:-1], nullable=('result',))
+        # 입장 이력이 없는 옛 빈 테이블만 runner가 열을 추가할 수 있다.
+        # 행이 있으면 날짜를 추정/보정하지 않고 보수적으로 중단한다.
+        if db.execute('SELECT 1 FROM comparison_pairs LIMIT 1').fetchone() is not None:
+            raise BudgetStateError('comparison_storage_corrupt')
+        return
+    _columns(db, 'comparison_pairs', columns, nullable=('result', 'admission_day'))
+    for pair_id, manifest, requested_at, result, day in db.execute('SELECT * FROM comparison_pairs'):
+        policy_owner(manifest, policies)
+        try:
+            _time(requested_at)
+            parsed = json.loads(result) if result is not None else None
+            blocked = isinstance(parsed, dict) and parsed.get('schema_version') == BLOCKED_VERSION
+            if day is None:
+                if (not blocked or set(parsed) != {'schema_version', 'reason', 'blocked_at'}
+                        or parsed['reason'] not in ('comparison_daily_pair_cap', 'comparison_input_too_large')
+                        or parsed['blocked_at'] != requested_at):
+                    raise ValueError('invalid_pre_admission_marker')
+                prefix = pair_id + ':'
+                if db.execute('SELECT 1 FROM comparison_requests WHERE substr(attempt_id,1,?)=? LIMIT 1',
+                              (len(prefix), prefix)).fetchone() is not None:
+                    raise ValueError('blocked_pair_has_attempts')
+            else:
+                _kst_date(day, 'admission_day')
+                if blocked:
+                    raise ValueError('blocked_pair_admitted')
+        except (TypeError, ValueError, KeyError):
+            raise BudgetStateError('comparison_storage_corrupt') from None
+
+
 def validate_history(db, policies):
-    """기존 JSON 바이트로 소유권을 검증한다. backfill·별도 소유권 mapping은 없다."""
+    """JSON 소유 정책·슬롯·월 예약·비용 mapping을 같은 읽기 snapshot에서 대조한다."""
     names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'comparison_requests' in names:
-        # 일 상한 거절은 의도적으로 슬롯 없이 ID만 소비한다. 그 외 요청의 슬롯
-        # 소실은 사용량을 줄이는 손상이므로 신규 입장·등록 전에 닫는다.
-        orphan = db.execute("SELECT 1 FROM comparison_requests r LEFT JOIN comparison_attempts a ON a.slot=r.slot "
-                            "WHERE a.slot IS NULL AND (r.block_reason IS NULL OR "
-                            "r.block_reason != 'comparison_daily_attempt_cap' OR r.reservation_token IS NOT NULL "
-                            "OR r.result_json IS NOT NULL) LIMIT 1").fetchone()
-        if orphan is not None:
-            raise BudgetStateError('comparison_storage_corrupt')
-        for payload, digest in db.execute('SELECT request_json,request_sha256 FROM comparison_requests'):
-            if not isinstance(payload, str) or _sha(payload) != digest:
-                raise BudgetStateError('comparison_storage_corrupt')
-            policy_owner(payload, policies)
+        _validate_requests(db, policies)
     if 'comparison_pairs' in names:
-        for row in db.execute('SELECT manifest FROM comparison_pairs'):
-            policy_owner(row[0], policies)
+        _validate_pairs(db, policies)
     if 'policy_attempts' in names:
         for row in db.execute("SELECT DISTINCT role FROM policy_attempts WHERE task='model_comparison'"):
             if row[0] not in policies:

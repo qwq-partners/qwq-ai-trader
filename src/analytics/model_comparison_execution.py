@@ -728,9 +728,15 @@ def read_day_attempts(ledger_path, day: str) -> list[dict]:
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("BEGIN")
-        names = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {"comparison_requests", "comparison_attempts", "reservations"} <= names:
-            return []
+        from .model_comparison_policy_registry import read_policy_state, validate_history
+        anchor, policies, _ = read_policy_state(connection)
+        validate_history(connection, policies)
+        if anchor is None:
+            return []  # 비교를 사용한 적 없는 원장만 무자료로 보고한다.
         return _day_attempt_rows(shim, connection, day)
+    except BudgetBlocked:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise BudgetStateError("comparison_storage_unavailable") from None
     finally:
         connection.close()
