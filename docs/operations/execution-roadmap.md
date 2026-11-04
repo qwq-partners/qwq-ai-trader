@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-completion-deploy-20261105"></a>
-### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·경합 검사/리뷰·실제 WSL DONE / CI·배포 대기)
+### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·검증·병합·배포 DONE / 초기 KIS 거절 지적 유지)
 
 **Plan:** 사용자 승인 원문: “완료되면 다음 task 진행해줘. 그리고 커밋 푸쉬 문서업데이트 운영배포까지”. PR #338을 고정 HEAD `9841eb14`·필수 verify run41867517421 success(10,526 passed)·mergeable 대조 후 merge `4d0f2ad2`로 병합했다(PR/tree 동일). 운영 기준은 `a399c297`이며 운영 checkout을 미리 이동하지 않는다. [완료 조건 결정](../reviews/e04-bear-completion-decision-2026-11-05.md)과 [배포 정본](lightsail-deployment.md)을 따른다.
 
@@ -11,11 +11,17 @@
 
 **See/main CI 실패·후속:** 병합 main `4d0f2ad2`의 run41870477873/job126715855067은 `test_cross_policy_attempt_id_collision_and_concurrent_global_cap` 1건 실패(10,525 passed/2 skipped/2 xfailed·456.15초·격리0)다. 동시 두 요청 중 한 건은 전송됐고 다른 건이 기대한 daily cap 대신 `comparison_storage_unavailable`로 차단됐다. journal close 실패가 아니다. **E04-COMPARISON-CONTENTION**에서 동일 순서 무주입 합성의20번째 반복과 통제 writer 보유로 `_admit/BEGIN IMMEDIATE`의 실제 `OperationalError/SQLITE_BUSY(5)`를 확인했다. 원 CI의 하위 예외가 없어 당시 같은 원인이었다고 단정하지 않는다. 정상 타임라인2회에서는 종료 후 잠금 잔존 근거가 없고 실패 회차 보유 시간은 미계측이다.
 
-**Do/최소 수정:** 기존0.1초 bounded lock 차단을 제품 결함으로 입증하지 못했으므로 런타임은 바꾸지 않았다. 테스트2파일은 ① 첫 입장·예약 commit 후 전송 미완료 상태의 다른 정책 요청이 정확히 daily cap으로 차단되는지, ② 실제 writer 경합에서 storage 차단·새 요청/예약/전송0인지 구분한다(old/new 승자 모두). 기존 ID충돌을 유지하며 예외 유형/SQLite code/단계를 합성 단언에만 남긴다. 모든 저장소 실패를 통과시키거나 잠금 대기·상한·시한을 늘리지 않는다. 작성자 Astra/high의 관련6파일206 passed·24.00초·격리0·문법/diff/비밀패턴 PASS, 소스0·테스트2파일이다. 독립 Astra/xhigh 최종 리뷰는 작성자 `1d77803f` 두 테스트 파일 P0/P1/P2 0(정적/기존 관련 로그 확인, 재실행0, 실제 모델/실효 effort 미노출)이다. 통합 `66d3e468`의 테스트 내용은 같다. 실제 사용자 WSL 직렬 전체는 `cfdd49f3`/tree `e38764ff`에서 **10,529 passed / 2 skipped / 2 xfailed**·406.74초(전체425초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 SHA256·전후tree·원본 main a399c297 clean을 대조했고 최종 실행1회, AWS 전체 대체0이다. WSL 뒤 문서만 추가하며 필수 PR/main CI 후 배포한다. [계획](../superpowers/plans/2026-11-05-e04-comparison-contention.md).
+**Do/최소 수정:** 기존0.1초 bounded lock 차단을 제품 결함으로 입증하지 못했으므로 런타임은 바꾸지 않았다. 테스트2파일은 ① 첫 입장·예약 commit 후 전송 미완료 상태의 다른 정책 요청이 정확히 daily cap으로 차단되는지, ② 실제 writer 경합에서 storage 차단·새 요청/예약/전송0인지 구분한다(old/new 승자 모두). 기존 ID충돌을 유지하며 예외 유형/SQLite code/단계를 합성 단언에만 남긴다. 모든 저장소 실패를 통과시키거나 잠금 대기·상한·시한을 늘리지 않는다. 작성자 Astra/high의 관련6파일206 passed·24.00초·격리0·문법/diff/비밀패턴 PASS, 소스0·테스트2파일이다. 독립 Astra/xhigh 최종 리뷰는 작성자 `1d77803f` 두 테스트 파일 P0/P1/P2 0(정적/기존 관련 로그 확인, 재실행0, 실제 모델/실효 effort 미노출)이다. 통합 `66d3e468`의 테스트 내용은 같다. 실제 사용자 WSL 직렬 전체는 `cfdd49f3`/tree `e38764ff`에서 **10,529 passed / 2 skipped / 2 xfailed**·406.74초(전체425초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 SHA256·전후tree·원본 main a399c297 clean을 대조했고 최종 실행1회, AWS 전체 대체0이다. WSL 뒤 문서만 추가했다. PR #339 HEAD `82c5ba4a` 필수 verify run41920632454/job126891859617 success(10,529 passed·450.47초), merge `4117371c`/tree `5e17d93c`(PR 동일), main run41922067431/job126896815806 success(10,529 passed·507.10초), 모두 격리0·비밀검사 PASS다. 실제 WSL 정본 --check를 통과했고 main CI가07:15 시작 기준을 넘어 완료되어07:40 자연 보고 뒤07:45 이후 배포한다. 새 예약은 만들지 않는다. [계획](../superpowers/plans/2026-11-05-e04-comparison-contention.md).
 
-**See/운영:** 수정본 WSL/PR/main CI와 정본 배포·재시작 후 인수 결과를 확정한다. 비공개 영수증: `~/.local/state/qwq-task-audit/20261105/e04-completion-deploy/`. 추가 실험 호출/주문/매수 재개·worker/R1 활성화·환경/예산/전략 변경은 하지 않는다. 운영 미커밋 evolved·KILL·기존 영수증/원장을 보존하고 결과 문서만으로 재배포하지 않는다.
+**See/운영:** 사용자 승인으로 실제 WSL의 정본 `--check → --deploy 4117371c47282cf6207230a56e168e830384c25a → 실제 기동150초 이후 --postcheck`를 실행했다. 서버 직렬 전체 **10,529 passed / 2 skipped / 2 xfailed**·870.76초·격리0·문법/비밀검사 PASS, 배포 rc0·롤백0이다. 08:00:26 KST 새 PID579455, 08:03:23 인수 시 기동177.57초·active/running·NRestarts0·broker connected·recovery ready·pending0이다. 보호48파일/crontab/evolved/KILL·월USD100/log_and_continue·R1/worker OFF·Toss starts/tokens0/helper없음이 전후 동일하고 Gemini 차단 설정도 보존했다. 주문·매수 재개·새 비교 진단 실호출·환경/예산/전략 변경0이다.
 
-**NEXT:** 운영 인수 후 **E02-RR/E01 입력 전제 결정(WAIT)**. 현금/매수 중지 유지 상태에서 같은0행 반복 조회나 모의 거래를 만들지 않는다. E04의800 충분성·완료율·unknown 총비용은 미확정이며 증빙/별도 변경 승인 없이는 새 실호출·시한/모델 변경0이다. O02·자연 보고는 기존 일정의 영수증을 해당 작업 범위에서 확인한다.
+**인수 지적(지우지 않음):** postcheck rc0이지만 초기08:01:37/39의 일봉 시세 FHKST03010100에서 HTTP500/EGW00201 **2건**(중복 로거 때문에 코드 출력4줄)이 발생해 정본의 **초기 KIS 거절0 조건은 미충족**이다. ERROR/Traceback은0이다. 08:04:20 기존 process_lifetime 집계는 source=unknown 일봉 논리15·provider15·HTTP시도17·재시도2·HTTP/rt_cd 성공15이고, 08:01:40 이후 관측 구간의 추가 거절/ERROR/Traceback0·정체/실패 누적0이다. 이 집계로 일봉 자료 완전성·개별 실패의 복구·호출주체를 확정하지 않는다. 실제 KIS 재시도 정책은 최대3 HTTP시도이며 관측된 재시도2회를 정책 변경으로 해석하지 않는다. 관련 broker/리미터/스케줄러/entry/config 소스는 이전운영 대비 차이0으로, 신규 회귀나 지속 장애·즉시 롤백 필요 근거는 확인되지 않았다. 공급자 한도·동시 사용·기동 요청 집중의 정확 원인은 미확정이다. **배포는 유지하되 completed_with_findings이며 전 항목 PASS/거절0으로 기록하지 않는다.** 추가 API시험·재시작·시한/한도/재시도 조정은 하지 않았다. 독립 Astra/xhigh 판독의 원인/집계 한계를 반영한다(실제 모델/실효 effort 미노출). 비공개 영수증: `~/.local/state/qwq-task-audit/20261105/e04-completion-deploy/`. 결과 문서만으로 재배포하지 않는다.
+
+**도래 보고·예약(기존 영수증):** 11/5 07:43 읽기 전용·5초·각 LIMIT≤3으로 오늘 morning만 판독했다. market은 ready/validated·finish stop, 저장 본문1,612자·Telegram API accepted다. 실제 모바일 수신/내용 수락은 미확정이다. web은 failed/invalid_output·`unsupported_numeric` @ `summary[0]`이며 자연 거절의 안전한 코드/경로가 저장돼 R02-WEB-REJECTION-DIAGNOSTICS의 영속화 경로를 실제로 확인했다. 이는 인용 근거의 표시 수치 검사 결과이며 원문이 없어 어떤 문장이 왜 달랐는지 또는 의미상 허위였는지는 단정하지 않는다. 실패 유발·재생성·시험/재발송0. 보고 종료 후07:45:23에 WSL 정본 고정SHA 배포를 시작했다.
+
+O02 기존 영수증의 독립 판독(Sol6.1/high, 실제 모델/실효 effort 미노출)은 **11/4 18시 사전점검 영수증 미확인**이다(허용된 task-audit/deploy 경로 내 미발견이며 미실행 단정 아님). 기존 영수증에 기록된 timer 일정은11/5·6 09:34:10, 대상은 각각10/6·7 cohort observations1개다. 11/1 완료를 다른 cohort에 옮기지 않는다. 신규 참조 재스캔·삭제·예약 변경0, 해당 정리 결과/11/5 18시 점검은 WAIT다.
+
+**NEXT:** **E02-RR/E01 입력 전제 결정(WAIT)**. KIS 초기 거절 지적은 기존 자연 영수증에 재발/새 구별 근거가 있을 때 E05에서 판독하며, 이번에 새 관측 기간이나 API 부하 실험을 만들지 않는다. 현금/매수 중지 유지 상태에서 같은0행 반복 조회나 모의 거래를 만들지 않는다. E04의800 충분성·완료율·unknown 총비용은 미확정이며 증빙/별도 변경 승인 없이는 새 실호출·시한/모델 변경0이다. O02·자연 보고는 기존 일정의 영수증을 해당 작업 범위에서 확인한다.
 
 <a id="e04-bear-timeout-evidence-20261105"></a>
 ### E04-BEAR-TIMEOUT-EVIDENCE — 취소 예외의 안전한 보조 상태 전달 (구현·독립 리뷰·실제 WSL·PR CI·병합 DONE)

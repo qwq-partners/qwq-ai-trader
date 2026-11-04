@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/5 08:00 운영 배포:** 고정 `4117371c`·PID579455, 실제 WSL 정본 배포/기동177.57초 점검·보호48파일/crontab/KILL/설정 보존. 초기 KIS 시세 한도 거절2건이 있어 **completed_with_findings, 전 항목 PASS 아님**이다. 이후 집계상 HTTP성공과 추가 거절0은 확인했으나 원인·자료 완전성은 미확정이며 새 API시험/재시작/제어 변경은 없다. [영수증·후속 정본](docs/operations/execution-roadmap.md#e04-completion-deploy-20261105). 결과 문서로 재배포하지 않는다.
+
 > **11/5 E04-BEAR-COMPLETION-DECISION:** PR338은 main `4d0f2ad2`로 병합했다. 현재 모델/low/프롬프트/상한/시한을 유지하고, 새 실호출·반복 계측 없이 승인된 누적 소스 배포를 준비한다. 병합 main CI의 경합 실패는 테스트 전제를 두 계약으로 분리한 뒤 새 WSL/CI 검증으로 확인하며, 운영 잠금 대기·시한·예산은 변경하지 않는다. 실제 운영 인수·고정 SHA·보호 상태·NEXT는 [정본 원장](docs/operations/execution-roadmap.md#e04-completion-deploy-20261105)을 따른다. 진단 보완을 Bear 완료율/순수익 개선으로 표현하지 않는다.
 
 > **11/5 E04-BEAR-TIMEOUT-EVIDENCE:** 취소 예외의 안전한 네 상태만 별도 `timeout_observation`으로 전달한다. 완료/실패·시한·unknown 정산·재시도 금지는 그대로이며 합성 검사만 사용한다. 과거800 응답을 복원하거나 비용을 확정하지 않는다. 검증/독립 리뷰/WSL/푸시 상태는 [정본 원장](docs/operations/execution-roadmap.md#e04-bear-timeout-evidence-20261105)을 따른다.
