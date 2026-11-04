@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="e04-bear-api-cap-prep-20261104"></a>
-### E04-BEAR-API-CAP-PREP — Bear API 400/800 비교 준비 (구현·관련 검사·독립 리뷰 DONE / WSL 인증 대기 / 실호출 미승인·원장 정책 충돌)
+### E04-BEAR-API-CAP-PREP — Bear API 400/800 비교 준비 (구현·관련/실제 WSL 검사·독립 리뷰 DONE / 실호출 미승인·원장 정책 충돌)
 
 **Plan:** 사용자 “기존 가드·어댑터 재사용, API400/800 비교 진단 준비. 모델·effort·프롬프트·시한·설정·매수 중지 유지, 실호출은 별도 승인”. 기준 main `af35f601`·직전 조사 `51a23912`·운영 `a399c297`(evolved M). 별도 API 진단에서 상한만400→800, 모델 `claude-opus-5-5`/low·기존 Bear 입력/system·고정 API5.75초·최대2시도/재시도0·추정비USD0.50. 기존 Bull 비교기/PairSpec과 CLI→API 운영 흐름은 변경하지 않는다. [계약·계획](../superpowers/plans/2026-11-04-e04-bear-api-cap.md), [준비/한계](bear-api-cap-diagnostic.md).
 
@@ -9,7 +9,9 @@
 
 **Do:** 새 `bear_api_cap_diagnostic` 모듈·진입점·검사만 추가(기존 가드/어댑터/운영 소스·설정 변경0). prepare는 과거 공개 입력/제어·기존 Bear 프롬프트를 새 지문에 동결하며 설정/자격/원장/전송을 열지 않는다. 별도 승인자·지문·창·clean SHA·입력·운영 제어를 대조한 뒤에만 실행을 허용하고, 현재 원장 정책 충돌은 RO 사전검사에서 차단한다. 승인된 run에서만 디렉터리 소비 표식과 원장 경로/실험ID별 영속 소비 표식을 만들며 두 표식 모두 보존한다. 가드 입장 전 고정5.75초·늦은 결과 미수락, known/verified 400절단 예외만800으로 진행, 실패/중단/정산/종료 안전 영수증과 동시 실행 방어를 구현했다.
 
-**See:** 소스 통합 `4fab99c0`(구현자 원본 `bdbd2c59`+`2603e987`). AWS 보조 관련4파일 **176 passed**(신규40·기존136,14.78초·rc0·격리0), 문법/diff/비밀 패턴 검사 통과. 신규 검사 RED→GREEN 이력 포함. Codex 요청 Astra/high 구현·별도 Astra/xhigh 최종 리뷰: 1차P0/P1 0·P2 2(다른 폴더 동일ID 경쟁, 안전 실패 사유 소실) → 모두 반영 → 재리뷰P0/P1/P2 0. 실제 응답 모델/실효 effort metadata는 미노출이며 같은 제공자 독립 리뷰다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261104/e04-bear-api-cap-prep/`. 실제 WSL 전체는 **인증 대기**: 라이브 호스트키는 기존 핀과 일치, 이전 작업용 개인키/등록 정리 기록과 현재 인증 거절 확인. 기존 호스트키·사용자 SSH 설정은 보존한다. 새 코드용 bundle/직렬 verify 인계를 준비하며 기존 완료 WSL/CI 재실행·AWS 전체 대체는0, 푸시/PR은 WSL 성공 뒤다.
+**See:** 소스 통합 `4fab99c0`(구현자 원본 `bdbd2c59`+`2603e987`). AWS 보조 관련4파일 **176 passed**(신규40·기존136,14.78초·rc0·격리0), 문법/diff/비밀 패턴 검사 통과. 신규 검사 RED→GREEN 이력 포함. Codex 요청 Astra/high 구현·별도 Astra/xhigh 최종 리뷰: 1차P0/P1 0·P2 2(다른 폴더 동일ID 경쟁, 안전 실패 사유 소실) → 모두 반영 → 재리뷰P0/P1/P2 0. 실제 응답 모델/실효 effort metadata는 미노출이며 같은 제공자 독립 리뷰다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261104/e04-bear-api-cap-prep/`. **실제 WSL 전체 DONE:** 기존 핀 일치·사용자 임시 등록 뒤 별도 worktree에서 고정 `55b6c7b3`/tree `8258f4a1`의 미푸시 bundle 해시를 대조하고 정본 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 직렬 전체를 실행했다. **10,437 passed / 2 skipped / 2 xfailed**, 검사410.48초·전체443초·rc0·격리0·문법/비밀검사 통과. 로그SHA256 `1633ba6d…5d93a53`, 검증 전후 tree 동일, WSL 원본 main `a399c297`·작업본 clean 보존(`wsl-result.json`). 기존 완료 WSL/CI 반복·AWS 전체 대체0. 본 기록은 검증본 위 문서만 갱신하며 source/tests/scripts 동일성을 확인해 푸시/PR로 이어간다. 임시 인증 정리는 PR CI 후 영수증으로 남기고 기존 호스트키/SSH 설정을 보존한다.
+
+**무호출 준비 확인:** 고정 `55b6c7b3`에서 기존 공개 입력(준비 시각11/3 20:06:41)을 새 `e04-bear-api-cap-20261105-proposal1`로 동결해 `prepared_not_authorized` rc0, 읽기 전용 원장 점검은 `existing_policy_conflict` rc1을 확인했다. 새 plan 지문 `61e545e9…c89ef655`; 11/5 17:00~17:45는 미승인 제안일 뿐 예약/실행 권한이 아니다. 소비 표식2종·공급자 영수증·실호출0. 정책 수명 작업 후 새 소스/지문/창을 다시 고정해야 한다.
 
 **운영/예약·NEXT:** 실호출/배포/재시작/발송/새 예약0, 운영 설정·매수 중지·R1 OFF 보존. 이번 준비 완료 뒤 `E04-COMPARISON-POLICY-LIFECYCLE`에서 같은 공유 월 원장 안의 비교 정책 수명/분리 계약을 검토해야 한다. 실제400/800 호출은 해당 제약 해소와 새 고정 SHA·지문·창·승인자 승인 후 별도이며, 현재 승인을 실행 권한으로 해석하지 않는다. 이전 E04-BEAR-COMPLETION의 NEXT는 본 항목으로 이어진다.
 
