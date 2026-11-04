@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-04 — E04 제한 실호출 인수 1쌍 실행·판독 (문서 전용, 소스 변경 0, 운영 불변)
+
+- 사용자 승인(창 11/4 17:00~17:45 KST, 고정 `b71d6828`, 4시도·400토큰·USD 0.50)으로 `scripts/ops/model_comparison_acceptance.py run` 1쌍 실행 → `completed_with_findings`: 양 arm hold(Bear 구독 CLI `cli_timeout` 5.75s → API 대체 `finish_reason=max_tokens`/400 → `api_incomplete`), Claude 두 시도 `claude-opus-5-5` 신원 verified, Bull `gpt-5-mini-2025-08-07`, 추정비 USD 0.018, 이 쌍 예약 3건 known·10월 unknown 336 불변, 전송/worker 종료·잔존 프로세스 0.
+- 17:00 cron 1차는 비공개 래퍼가 `__main__` 없는 모듈을 `python -m` 으로 불러 호출 0 으로 끝났고(저장소 코드 아님) 같은 창에 같은 쌍을 재실행했다. 1쌍·양 hold 는 모델 우위·순수익 증거가 아니며 새 쌍 재시도 없음. 원장 `#e04-acceptance-runner-20261103`.
+
 ## 2026-11-03 — E04 인수 실행기 run 경로 설정·인수 기준 수정 (실호출·배포 없음)
 
 - `src/analytics/model_comparison_acceptance.py`: CLI `main` 이 `LLMConfig.from_env()`(월 예산 None → 공유 원장 미개방 → run 이 항상 `shared_monthly_ledger_unavailable` rc 2) 대신 새 `load_operating_llm_config()`(`.env` 빈 키만 채움 + `load_effective_config()` 병합 YAML → `LLMConfig.from_config`, 월 예산/원장 경로 없으면 `operating_llm_budget_config_missing` 거절)로 제어·공유 월 원장을 연다. prepare/run 모두 같은 로더(오늘 prepare 지문 `825cbf97…` 과 동일 controls 확인).
