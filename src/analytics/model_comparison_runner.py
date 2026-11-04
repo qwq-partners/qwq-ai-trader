@@ -460,17 +460,23 @@ class PairedComparisonRunner:
     def _schema(self):
         """Short schema transaction only. admission_day 는 입장한(지출 가능) 쌍의 KST 날짜, 차단 표식은 NULL."""
         with self.guard.ledger._connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            self.guard._check_policy(db)
             db.execute('CREATE TABLE IF NOT EXISTS comparison_pairs (pair_id TEXT PRIMARY KEY, manifest TEXT NOT NULL, '
                        'requested_at TEXT NOT NULL, result TEXT, admission_day TEXT)')
             if 'admission_day' not in {row[1] for row in db.execute('PRAGMA table_info(comparison_pairs)')}:
                 db.execute('ALTER TABLE comparison_pairs ADD COLUMN admission_day TEXT')
+            db.commit()
 
     def admitted_pair_ids(self, day: str) -> set:
         """그날 입장한 쌍 ID(작업자 재시작 때 일 상한 복원용). 차단 표식은 입장이 아니라 빠진다."""
         try:
             self._schema()
             with self.guard.ledger._connect(readonly=True) as db:
-                return {row[0] for row in db.execute('SELECT pair_id FROM comparison_pairs WHERE admission_day=?', (day,))}
+                from .model_comparison_policy_registry import admission_counts
+                db.execute('BEGIN')
+                _, policies = self.guard._check_policy(db)
+                return admission_counts(db, day, self.guard.policy.experiment_id, policies, pairs=True)[1]
         except sqlite3.Error:
             raise BudgetStateError('comparison_pair_storage_unavailable') from None
 
@@ -479,6 +485,7 @@ class PairedComparisonRunner:
         manifest = _json({'schema_version': VERSION, 'policy': self.guard.policy.serialized(), 'spec': spec.snapshot()})
 
         def existing(db):
+            self.guard._check_policy(db)
             row = db.execute('SELECT manifest,result FROM comparison_pairs WHERE pair_id=?', (pair_id,)).fetchone()
             if row is None:
                 return None
@@ -535,8 +542,10 @@ class PairedComparisonRunner:
                     return pair_id, cached
                 # 하루 쌍 상한은 같은 쓰기 잠금 안에서 센다 — 공급자 호출·예약 전에 막는다.
                 day = self.guard.ledger.today().isoformat()
-                used = db.execute('SELECT COUNT(*) FROM comparison_pairs WHERE admission_day=?', (day,)).fetchone()[0]
-                if used >= self.guard.policy.pairs_per_day:
+                from .model_comparison_policy_registry import admission_counts
+                anchor, policies = self.guard._check_policy(db)
+                used, local_ids = admission_counts(db, day, self.guard.policy.experiment_id, policies, pairs=True)
+                if used >= anchor.pairs_per_day or len(local_ids) >= self.guard.policy.pairs_per_day:
                     block(db, 'comparison_daily_pair_cap')
                 db.execute('INSERT INTO comparison_pairs (pair_id,manifest,requested_at,result,admission_day) '
                            'VALUES (?,?,?,NULL,?)', (pair_id, manifest, now.isoformat(), day))

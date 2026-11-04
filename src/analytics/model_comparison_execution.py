@@ -18,7 +18,7 @@ v2 입장 조건은 월 예약과 같은 BEGIN IMMEDIATE 안에서 같은 units 
 정책이 켜진 원장의 normal 단계만 허용하고, 이번 예약을 포함한 월 사용액이 80%를
 **넘으면**(정확히 80%는 허용) 거부한다. 95% 필수 보호·100% 중지는 기존 원장 검사가
 먼저 적용한다. 실험 상한은 월 집계와 별개인 실험 ID 전체의 예약/정산 합이며,
-월 전환·재시작·ID 변경(저장 정책 불일치로 거부)이 상한을 되살리지 않는다.
+월 전환·재시작으로 실험 상한을 되살리지 않는다. 새 ID도 기존 전역 일 상한을 공유한다.
 SQLite 처리는 동기식이다. 별도 오프라인 작업 프로세스용이며 실시간 엔진의
 이벤트 루프에 비차단으로 통합됐다고 해석하면 안 된다.
 """
@@ -230,8 +230,8 @@ def _read_result(payload: str) -> ComparisonAttemptResult:
 class ComparisonCallGuard:
     """공유 월 예약 원장을 사용하는 명시 단일 시도 경계.
 
-    정책 하나를 호출자 ID가 아닌 원장 전체에 결합해 ID·상한 변경으로 집계가
-    초기화되지 않는다. 정책 이전은 미지원이며 월 원장 자체를 생성하지 않는다.
+    기존 singleton을 전역 상한으로 유지하고 명시 등록된 실험별 상한도 적용한다.
+    일반 생성은 새 실험을 등록하지 않으며 월 원장 자체를 생성하지 않는다.
     """
 
     def __init__(self, *, ledger: MonthlyBudgetLedger, policy: ComparisonExecutionPolicy):
@@ -245,39 +245,46 @@ class ComparisonCallGuard:
         self._ceiling = _ceiling_units(policy.experiment_usd_ceiling)
         self._initialize()
 
+    @staticmethod
+    def _initialize_schema(db, policy_json):
+        names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        base = names & {"comparison_policy", "comparison_attempts", "comparison_requests"}
+        if not base:
+            if names & {"comparison_policy_lifecycle", "comparison_policy_registry", "comparison_pairs"}:
+                raise BudgetStateError("comparison_storage_corrupt")
+            db.execute("CREATE TABLE comparison_policy (id INTEGER PRIMARY KEY CHECK(id=1), policy TEXT NOT NULL)")
+            db.execute("INSERT INTO comparison_policy VALUES (1,?)", (policy_json,))
+            db.execute("""CREATE TABLE comparison_attempts (
+                slot TEXT PRIMARY KEY, admission_day TEXT NOT NULL,
+                reservation_token TEXT, state TEXT NOT NULL
+                CHECK(state IN ('admitted','reserved','known','unknown','blocked')))""")
+            db.execute("CREATE INDEX comparison_attempt_day ON comparison_attempts(admission_day)")
+        elif not {"comparison_policy", "comparison_attempts"} <= base:
+            raise BudgetStateError("comparison_storage_corrupt")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(comparison_policy)")}
+        if "identity_version" not in columns:
+            # 구 버전의 singleton exact만 기존 신원 스키마로 올릴 수 있다.
+            rows = db.execute("SELECT id,policy FROM comparison_policy").fetchall()
+            if len(rows) != 1 or tuple(rows[0]) != (1, policy_json):
+                raise BudgetStateError("comparison_policy_mismatch")
+            if names & {"comparison_policy_lifecycle", "comparison_policy_registry", "comparison_requests"}:
+                raise BudgetStateError("comparison_storage_corrupt")
+            db.execute("ALTER TABLE comparison_policy ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1")
+            db.execute("""CREATE TABLE comparison_requests (
+                attempt_id TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL,
+                request_json TEXT NOT NULL, slot TEXT NOT NULL UNIQUE,
+                reservation_token TEXT, result_json TEXT, block_reason TEXT)""")
+        db.execute("SELECT slot,admission_day,reservation_token,state FROM comparison_attempts LIMIT 1")
+        db.execute("SELECT attempt_id,request_sha256,request_json,slot,reservation_token,result_json,block_reason "
+                   "FROM comparison_requests LIMIT 1")
+
     def _initialize(self):
         try:
-            # 기존 rw 연결 경계만 사용한다. DB·월 설정·활성화 표식·기준선은 생성/교체하지 않는다.
             with self.ledger._connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 self.ledger._settings(db)
-                names = {row[0] for row in db.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-                    "('comparison_policy','comparison_attempts')")}
-                if not names:
-                    db.execute("CREATE TABLE comparison_policy (id INTEGER PRIMARY KEY CHECK(id=1), policy TEXT NOT NULL)")
-                    db.execute("INSERT INTO comparison_policy VALUES (1,?)", (self._policy_json,))
-                    db.execute("""CREATE TABLE comparison_attempts (
-                        slot TEXT PRIMARY KEY, admission_day TEXT NOT NULL,
-                        reservation_token TEXT, state TEXT NOT NULL
-                        CHECK(state IN ('admitted','reserved','known','unknown','blocked')))
-                    """)
-                    db.execute("CREATE INDEX comparison_attempt_day ON comparison_attempts(admission_day)")
-                elif names != {"comparison_policy", "comparison_attempts"}:
-                    raise BudgetStateError("comparison_storage_corrupt")
+                self._initialize_schema(db, self._policy_json)
                 self._check_policy(db)
-                db.execute("SELECT slot,admission_day,reservation_token,state FROM comparison_attempts LIMIT 1")
-                columns = {row[1] for row in db.execute("PRAGMA table_info(comparison_policy)")}
-                if "identity_version" not in columns:
-                    db.execute("ALTER TABLE comparison_policy ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1")
-                    db.execute("""CREATE TABLE comparison_requests (
-                        attempt_id TEXT PRIMARY KEY, request_sha256 TEXT NOT NULL,
-                        request_json TEXT NOT NULL, slot TEXT NOT NULL UNIQUE,
-                        reservation_token TEXT, result_json TEXT, block_reason TEXT)""")
-                elif db.execute("SELECT identity_version FROM comparison_policy").fetchone()[0] != 1:
-                    raise BudgetStateError("comparison_identity_version")
-                db.execute("SELECT attempt_id,request_sha256,request_json,slot,reservation_token,result_json,block_reason "
-                           "FROM comparison_requests LIMIT 1")
                 db.execute("COMMIT")
         except BudgetBlocked:
             raise
@@ -285,12 +292,10 @@ class ComparisonCallGuard:
             raise BudgetStateError("comparison_storage_unavailable") from None
 
     def _check_policy(self, db):
-        rows = db.execute("SELECT id,policy FROM comparison_policy").fetchall()
-        if len(rows) != 1 or rows[0][0] != 1 or rows[0][1] != self._policy_json:
-            raise BudgetStateError("comparison_policy_mismatch")
-        # 메모리 정책의 우발적 변경/교체도 거부한다.
+        from .model_comparison_policy_registry import check_policy
         if self.policy.serialized() != self._policy_json:
             raise BudgetStateError("comparison_policy_mismatch")
+        return check_policy(db, self._policy_json)
 
     @staticmethod
     def _attempt_id(attempt_id):
@@ -322,6 +327,9 @@ class ComparisonCallGuard:
     def _lookup_row(self, db, row):
         if hashlib.sha256(row["request_json"].encode()).hexdigest() != row["request_sha256"]:
             raise BudgetStateError("comparison_storage_corrupt")
+        from .model_comparison_policy_registry import policy_owner, read_policy_state
+        _, policies, _ = read_policy_state(db)
+        policy_owner(row["request_json"], policies)
         result = _read_result(row["result_json"]) if row["result_json"] is not None else None
         stored_request = json.loads(row["request_json"]).get("request")
         channel = stored_request.get("billing_channel", "api") if isinstance(stored_request, dict) else "api"
@@ -424,10 +432,12 @@ class ComparisonCallGuard:
                         raise BudgetBlocked(recovered["block_reason"] or "comparison_attempt_interrupted")
                     return None, None, recovered["result"]
                 day = self.ledger.today().isoformat()
-                used = db.execute("SELECT COUNT(*) FROM comparison_attempts WHERE admission_day=?", (day,)).fetchone()[0]
+                from .model_comparison_policy_registry import admission_counts
+                anchor, policies = self._check_policy(db)
+                used, local_used = admission_counts(db, day, self.policy.experiment_id, policies)
                 slot = uuid.uuid4().hex
                 fingerprint = hashlib.sha256(request_json.encode()).hexdigest()
-                if used >= self.policy.daily_attempt_cap:
+                if used >= anchor.daily_attempt_cap or local_used >= self.policy.daily_attempt_cap:
                     # 미전송 차단 ID도 고정한다. 날짜 변경이 같은 논리 시도의 자동 재시도가 되면 안 된다.
                     db.execute("INSERT INTO comparison_requests VALUES (?,?,?,?,NULL,NULL,?)",
                                (attempt_id, fingerprint, request_json, slot, "comparison_daily_attempt_cap"))
@@ -708,7 +718,7 @@ def _day_attempt_rows(guard, db, day: str) -> list[dict]:
 
 
 def read_day_attempts(ledger_path, day: str) -> list[dict]:
-    """읽기 전용 CLI 용: 원장 SQLite 를 ro 로 열어 그날 입장 시도의 상태·비용을 돌려준다. 정책 검사·초기화·쓰기 없음."""
+    """읽기 전용 CLI 용: 원장 SQLite 를 ro 로 열어 그날 입장 시도의 상태·비용을 돌려준다. 저장 정책 소유권을 검사하며 초기화·쓰기 없음."""
     _kst_date(day, "day")
     path = Path(ledger_path).expanduser()
     if not path.is_absolute() or not path.is_file():
@@ -718,9 +728,15 @@ def read_day_attempts(ledger_path, day: str) -> list[dict]:
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("BEGIN")
-        names = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {"comparison_requests", "comparison_attempts", "reservations"} <= names:
-            return []
+        from .model_comparison_policy_registry import read_policy_state, validate_history
+        anchor, policies, _ = read_policy_state(connection)
+        validate_history(connection, policies)
+        if anchor is None:
+            return []  # 비교를 사용한 적 없는 원장만 무자료로 보고한다.
         return _day_attempt_rows(shim, connection, day)
+    except BudgetBlocked:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise BudgetStateError("comparison_storage_unavailable") from None
     finally:
         connection.close()
