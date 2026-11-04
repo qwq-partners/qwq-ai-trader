@@ -1,13 +1,30 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-completion-deploy-20261105"></a>
+### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·경합 검사 수정/리뷰 DONE / 새 WSL·CI·배포 대기)
+
+**Plan:** 사용자 승인 원문: “완료되면 다음 task 진행해줘. 그리고 커밋 푸쉬 문서업데이트 운영배포까지”. PR #338을 고정 HEAD `9841eb14`·필수 verify run41867517421 success(10,526 passed)·mergeable 대조 후 merge `4d0f2ad2`로 병합했다(PR/tree 동일). 운영 기준은 `a399c297`이며 운영 checkout을 미리 이동하지 않는다. [완료 조건 결정](../reviews/e04-bear-completion-decision-2026-11-05.md)과 [배포 정본](lightsail-deployment.md)을 따른다.
+
+**Do/결정:** 기존400 절단/800 timeout 자료와 코드를 정적으로 대조했다. 현재 모델/low/프롬프트/운영 상한/시한 유지, 완료 기준 완화·실호출·원장 대사·추가 계측0. 네 필드 전달 수정은 진단 증거 보존이지 완료율/순수익 개선이 아니다. 독립 Sol6.1/high 분석(정본 Sol5.6 런타임 미제공 대체)과 Astra/xhigh 누적 배포 검토 P0/P1/P2 0을 마쳤다(실제 모델/실효 effort 미노출).
+
+**Do/배포 준비:** `a399c297..4d0f2ad2` 누적 실행 소스8파일(+1249/-45): journal close 실패 진단, E04 승인 실행기/API cap 진단, 비교 정책 등록/소유권·복구 검사, 취소 보조 기록. config/requirements/scheduler/run_trader/LLMManager/전송/배포 스크립트 차이0. 새 소스 작성·완료된 WSL/PR 검사 재실행0. 배포 정본의 서버 전체 verify와150초 후 인수는 이번 배포의 필수 확인이다. worker 서비스 환경·dotenv 활성 플래그/manifest 부재, R1 manifest enabled=false, 월USD100/log_and_continue, Toss 승인 만료·starts/tokens0·helper없음, pending0·broker연결·recovery ready·active/PID346880/NRestarts0, 보호48파일·cron 기준선을 대조했다. 오늘09:34/내일09:34 기존 정리 예약과 현재 장외 배포 창은 충돌하지 않는다. 기존 예약 변경0.
+
+**See/main CI 실패·후속:** 병합 main `4d0f2ad2`의 run41870477873/job126715855067은 `test_cross_policy_attempt_id_collision_and_concurrent_global_cap` 1건 실패(10,525 passed/2 skipped/2 xfailed·456.15초·격리0)다. 동시 두 요청 중 한 건은 전송됐고 다른 건이 기대한 daily cap 대신 `comparison_storage_unavailable`로 차단됐다. journal close 실패가 아니다. **E04-COMPARISON-CONTENTION**에서 동일 순서 무주입 합성의20번째 반복과 통제 writer 보유로 `_admit/BEGIN IMMEDIATE`의 실제 `OperationalError/SQLITE_BUSY(5)`를 확인했다. 원 CI의 하위 예외가 없어 당시 같은 원인이었다고 단정하지 않는다. 정상 타임라인2회에서는 종료 후 잠금 잔존 근거가 없고 실패 회차 보유 시간은 미계측이다.
+
+**Do/최소 수정:** 기존0.1초 bounded lock 차단을 제품 결함으로 입증하지 못했으므로 런타임은 바꾸지 않았다. 테스트2파일은 ① 첫 입장·예약 commit 후 전송 미완료 상태의 다른 정책 요청이 정확히 daily cap으로 차단되는지, ② 실제 writer 경합에서 storage 차단·새 요청/예약/전송0인지 구분한다(old/new 승자 모두). 기존 ID충돌을 유지하며 예외 유형/SQLite code/단계를 합성 단언에만 남긴다. 모든 저장소 실패를 통과시키거나 잠금 대기·상한·시한을 늘리지 않는다. 작성자 Astra/high의 관련6파일206 passed·24.00초·격리0·문법/diff/비밀패턴 PASS, 소스0·테스트2파일이다. 독립 Astra/xhigh 최종 리뷰는 작성자 `1d77803f` 두 테스트 파일 P0/P1/P2 0(정적/기존 관련 로그 확인, 재실행0, 실제 모델/실효 effort 미노출)이다. 통합 `66d3e468`의 테스트 내용은 같다. 실제 WSL/CI를 새 변경에 수행한 뒤 배포한다. [계획](../superpowers/plans/2026-11-05-e04-comparison-contention.md).
+
+**See/운영:** 수정본 WSL/PR/main CI와 정본 배포·재시작 후 인수 결과를 확정한다. 비공개 영수증: `~/.local/state/qwq-task-audit/20261105/e04-completion-deploy/`. 추가 실험 호출/주문/매수 재개·worker/R1 활성화·환경/예산/전략 변경은 하지 않는다. 운영 미커밋 evolved·KILL·기존 영수증/원장을 보존하고 결과 문서만으로 재배포하지 않는다.
+
+**NEXT:** 운영 인수 후 **E02-RR/E01 입력 전제 결정(WAIT)**. 현금/매수 중지 유지 상태에서 같은0행 반복 조회나 모의 거래를 만들지 않는다. E04의800 충분성·완료율·unknown 총비용은 미확정이며 증빙/별도 변경 승인 없이는 새 실호출·시한/모델 변경0이다. O02·자연 보고는 기존 일정의 영수증을 해당 작업 범위에서 확인한다.
+
 <a id="e04-bear-timeout-evidence-20261105"></a>
-### E04-BEAR-TIMEOUT-EVIDENCE — 취소 예외의 안전한 보조 상태 전달 (구현·독립 리뷰·실제 WSL DONE / PR CI 대기)
+### E04-BEAR-TIMEOUT-EVIDENCE — 취소 예외의 안전한 보조 상태 전달 (구현·독립 리뷰·실제 WSL·PR CI·병합 DONE)
 
 **Plan:** 사용자 “합성 자료로 취소 예외 상태 전달 확인·최소 수정, 완료 판정/시한/정산·설정/매수 중지 유지, 추가 실호출/완료 검증 반복 없음, 새 변경 WSL 후 커밋/푸시”. 기준 main `7bbad4f3` 위 이전 판독 문서 `04e10341`을 함께 통합한다. source 범위는 진단 모듈1개와 새 합성 검사1개이며 transport/guard/adapter를 바꾸지 않는다. [계획](../superpowers/plans/2026-11-05-e04-bear-timeout-evidence.md).
 
 **Do:** 실제 run→guard→adapter→가짜 HTTP·임시 원장의 직접 취소/외부 timeout에서 안전한 상태가 영수증으로 전달되지 않는 경계를 재현했다. 선택적 `timeout_observation`에 request_sent/http_status/transport_error_kind/refusal_detected만 남기고 기존 outcome/error/verdict/settlement·중단/시도/close는 보존한다. 원문·usage/비용·모델 신원은 승격하지 않는다. 과거 실제800에 첨부 상태가 있었다고 추정하거나 과거 영수증을 보충하지 않는다.
 
-**See(관련 합성):** 소스 `2d6d7483`(작성자 `60a8364c`)는 직접/외부 취소의 보조 상태 소실3건 RED 후 최소 투영으로 GREEN을 확인했다. 악성 속성 dict가 취소를 가리는 추가1건도 재현해 plain dict만 읽도록 보완했다. AWS 보조 관련4파일 **218 passed**(신규42)·18.19초·rc0·격리0, 문법/diff/비밀패턴 검사 통과다. 독립 최종 리뷰(Astra/xhigh 요청, 실제 모델/실효 effort 미노출, 같은 제공자 별도 리뷰어)는 `5729b489` 전체 범위 P0/P1/P2 0·Spec/Quality PASS다. **실제 사용자 WSL 직렬 전체**는 고정 `5729b489`/tree `648ee21a`에서 **10,526 passed / 2 skipped / 2 xfailed**·394.61초(전체410초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 해시·전후tree·원본 main a399c297/작업본 clean을 대조했다. 로그SHA256 `7f787dbe…3c729e4e`, 영수증은 `~/.local/state/qwq-task-audit/20261105/e04-bear-timeout-evidence/`에 보존한다. 최종 소스 전체 실행은 이1회이며 WSL 뒤 결과 문서만 추가한다. 필수 PR CI는 푸시 후 확인해 같은 감사 디렉터리와 PR 검사에 기록한다. 이전 검증 반복/AWS 전체 대체·실제 원장 조회/쓰기·모델 실호출0. 기존 WSL 호스트 핀과 원본 main `a399c297` clean을 대조했으며 사용자 등록 임시 인증만 사용한다.
+**See(관련 합성):** 소스 `2d6d7483`(작성자 `60a8364c`)는 직접/외부 취소의 보조 상태 소실3건 RED 후 최소 투영으로 GREEN을 확인했다. 악성 속성 dict가 취소를 가리는 추가1건도 재현해 plain dict만 읽도록 보완했다. AWS 보조 관련4파일 **218 passed**(신규42)·18.19초·rc0·격리0, 문법/diff/비밀패턴 검사 통과다. 독립 최종 리뷰(Astra/xhigh 요청, 실제 모델/실효 effort 미노출, 같은 제공자 별도 리뷰어)는 `5729b489` 전체 범위 P0/P1/P2 0·Spec/Quality PASS다. **실제 사용자 WSL 직렬 전체**는 고정 `5729b489`/tree `648ee21a`에서 **10,526 passed / 2 skipped / 2 xfailed**·394.61초(전체410초)·rc0·격리0·문법/비밀검사 PASS다. bundle/로그 해시·전후tree·원본 main a399c297/작업본 clean을 대조했다. 로그SHA256 `7f787dbe…3c729e4e`, 영수증은 `~/.local/state/qwq-task-audit/20261105/e04-bear-timeout-evidence/`에 보존한다. 최종 소스 전체 실행은 이1회이며 WSL 뒤 결과 문서만 추가한다. PR #338 고정 `9841eb14` 필수 verify run41867517421은 **10,526 passed / 2 skipped / 2 xfailed**·482.70초·격리0·비밀검사 PASS로 마감했고, merge `4d0f2ad2`로 병합했다. main CI와 운영 배포 상태는 위 E04-BEAR-COMPLETION-DECISION 절에서 이어 기록한다. 이전 검증 반복/AWS 전체 대체·실제 원장 조회/쓰기·모델 실호출0. 기존 WSL 호스트 핀과 원본 main `a399c297` clean을 대조했으며 사용자 등록 임시 인증만 사용한다.
 
 **운영/예약·NEXT:** 운영 checkout `a399c297`·evolved 미커밋·KILL/default/evolved 지문 보존, 월USD100/log_and_continue·R1/worker OFF·Gemini 차단 유지. 배포/재시작/주문/보고 발송/새 예약0. **NEXT E04-BEAR-COMPLETION-DECISION:** 기존400 절단/800 timeout의 미확정 한계를 바탕으로 제어 변경 필요 여부를 결정한다. 본 수정은 완료율 개선이나800 충분성의 증거가 아니며 새 실호출·시한/상한 조정·운영 활성화는 별도 승인 범위다. 실제 unknown 비용 대사는 공급자 증빙이 있을 때 기존 절차로만 진행한다.
 
