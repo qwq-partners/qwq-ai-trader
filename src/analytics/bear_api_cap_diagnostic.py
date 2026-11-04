@@ -30,6 +30,11 @@ KST = acceptance.KST
 CONTRACT = dict(model='claude-opus-5-5', caps=[400, 800], reasoning_effort='low', temperature=None,
                 seed=None, timeout_seconds=5.75, billing_channel='api', retries=0, daily_attempt_cap=2,
                 pairs_per_day=1, experiment_usd_ceiling='0.50', continue_after_known_max_tokens=True)
+_TRANSPORT_ERRORS = ('refusal', 'identity_mismatch', 'policy_violation', 'api_timeout', 'api_http_error',
+                     'api_incomplete', 'api_unavailable', 'api_auth_unavailable', 'invalid_request',
+                     'client_closed', 'cancelled')
+_PROVIDER_ERRORS = ('authentication_error', 'permission_error', 'rate_limit_error', 'invalid_request_error',
+                    'overloaded_error', 'api_error')
 
 
 def _canon(value):
@@ -103,6 +108,18 @@ def _read(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError('unsafe_prepared_file')
     return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _consume_experiment(ledger, plan, approved_plan_sha256, clock):
+    # 같은 원장의 같은 실험 ID는 출력 디렉터리/프로세스와 무관하게 한 번만 소비한다.
+    # DB 정책/스키마를 변경하지 않는다. 실패·종료 뒤에도 이 파일을 삭제하거나 재사용하지 않는다.
+    canonical = Path(ledger.path).resolve(strict=True)
+    claim = canonical.with_name(canonical.name + '.bear-api-cap-' + _sha(plan['experiment_id']) + '.consumed.json')
+    try:
+        _write_exclusive(claim, dict(experiment_id=plan['experiment_id'], plan_sha256=approved_plan_sha256,
+                                    consumed_at=clock().isoformat()))
+    except FileExistsError:
+        raise ValueError('experiment_already_consumed') from None
 
 
 def prepare_diagnostic(*, source_dir, out_dir, experiment_id, source_commit, start, end, now):
@@ -218,12 +235,40 @@ def _attempt_summary(cap, result, record, late):
         parsed = _parse_verdict(value.get('content', ''), 'ACCEPT', 'REJECT')
         verdict = None if parsed is None else ('accept' if parsed else 'reject')
     outcome = 'late' if late else 'valid' if verdict else 'expected_max_tokens' if expected else 'stopped'
+    safety = _safe_response_status(value)
+    reason = None
+    if outcome == 'late':
+        reason = 'attempt_deadline_exceeded'
+    elif outcome == 'stopped':
+        reason = (safety['transport_error_kind'] or ('refusal' if safety['refusal_detected'] else None)
+                  or ('model_identity_' + safety['model_identity_status'] if not identity else None)
+                  or ('usage_unknown' if value.get('usage_known') is not True else None)
+                  or ('settlement_unknown' if not known else None)
+                  or ('unexpected_http_status' if value.get('http_status') != 200 else None)
+                  or 'invalid_or_incomplete_verdict')
     # 원시 오류문/응답/프롬프트는 영수증에 전달하지 않는다. 외부 문자열도 고정 enum만 내보낸다.
     finish = value.get('finish_reason')
     return dict(max_output_tokens=cap, billing_channel='api', outcome=outcome, verdict=verdict,
-                identity_verified=identity, usage_known=value.get('usage_known') is True,
+                identity_verified=identity, usage_known=value.get('usage_known') is True, stop_reason=reason,
                 settlement_known=known, api_cost_usd=str(result.actual_cost_usd) if known else None,
                 finish_reason=finish if finish in ('end_turn', 'max_tokens', 'refusal') else None)
+
+
+def _safe_response_status(value):
+    kind, provider, status = (value.get('transport_error_kind'), value.get('provider_error_type'),
+                              value.get('http_status'))
+    identity = value.get('model_identity_status')
+    if identity == 'verified':
+        identity = ('verified' if value.get('resolved_model') == CONTRACT['model']
+                    and value.get('requested_model_match') is True else 'mismatch')
+    elif identity != 'mismatch':
+        identity = 'unverified'
+    return dict(transport_error_kind=kind if kind in _TRANSPORT_ERRORS else
+                ('unclassified_transport_error' if kind is not None else None),
+                refusal_detected=value.get('refusal_detected') is True,
+                http_status=status if type(status) is int and 100 <= status <= 599 else None,
+                model_identity_status=identity,
+                provider_error_type=provider if provider in _PROVIDER_ERRORS else None)
 
 
 def _evidence(attempt_id, cap, record, elapsed, result=None, error=None):
@@ -231,9 +276,10 @@ def _evidence(attempt_id, cap, record, elapsed, result=None, error=None):
     value = result.value if result is not None else {}
     usage = value.get('usage_known') is True
     state = record.get('state')
+    safety = _safe_response_status(value)
     return dict(attempt_id=attempt_id, max_output_tokens=cap, billing_channel='api',
                 requested_model=CONTRACT['model'],
-                resolved_model=CONTRACT['model'] if value.get('resolved_model') == CONTRACT['model'] else None,
+                resolved_model=CONTRACT['model'] if safety['model_identity_status'] == 'verified' else None,
                 input_tokens=value.get('input_tokens') if usage else None,
                 output_tokens=value.get('output_tokens') if usage else None,
                 elapsed_ms=max(0, elapsed * 1000), reservation_token=record.get('reservation_token'),
@@ -243,7 +289,7 @@ def _evidence(attempt_id, cap, record, elapsed, result=None, error=None):
                 ledger_state=state if state in ('known', 'known_reconciled', 'unknown', 'blocked',
                                                 'pending', 'pending_reconciliation') else None,
                 request_sent=value.get('request_sent') if type(value.get('request_sent')) is bool else None,
-                settlement_known=False, outcome='error', verdict=None, error=error)
+                settlement_known=False, outcome='error', verdict=None, error=error, **safety)
 
 
 def _remaining_window(plan, clock):
@@ -284,6 +330,8 @@ async def run_diagnostic(*, out_dir, approved_by, approved_plan_sha256, clock=_n
         if any(guard.lookup(plan['experiment_id'] + ':api:' + str(cap)) is not None for cap in (400, 800)):
             raise ValueError('experiment_attempt_exists')
         _remaining_window(plan, clock)
+        _consume_experiment(ledger, plan, approved_plan_sha256, clock)
+        _remaining_window(plan, clock)  # 소비 표식 fsync 지연이 승인 창을 넘겼으면 객체도 생성하지 않는다.
         client = client_factory(config)
         if not isinstance(client, AnthropicAPIClient) or client.billing_channel != 'api':
             raise ValueError('owned_raw_api_required')
@@ -306,6 +354,7 @@ async def run_diagnostic(*, out_dir, approved_by, approved_plan_sha256, clock=_n
                 summary.update(_attempt_summary(cap, result, record, late))
                 receipt['attempts'].append(summary)
                 if summary['outcome'] not in ('valid', 'expected_max_tokens'):
+                    receipt['error'] = summary['stop_reason']
                     break
             except BaseException as error:
                 try:
@@ -322,6 +371,8 @@ async def run_diagnostic(*, out_dir, approved_by, approved_plan_sha256, clock=_n
     except Exception as error:
         # 가드 정책 충돌만 고정 사유로 노출하며 예외 본문은 기록하지 않는다.
         receipt['error'] = ('existing_policy_conflict' if getattr(error, 'reason', None) == 'comparison_policy_mismatch'
+                            else 'experiment_already_consumed' if isinstance(error, ValueError)
+                            and str(error) == 'experiment_already_consumed'
                             else type(error).__name__)
     finally:
         if client is not None:

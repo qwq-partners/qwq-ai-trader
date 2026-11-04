@@ -327,3 +327,122 @@ def test_reused_experiment_in_different_plan_cannot_recover_prior_attempts(tmp_p
     kw.update(out_dir=other, approved_plan_sha256=m._sha(m._canon(plan)))
     result = asyncio.run(m.run_diagnostic(**kw))
     assert result['status'] == 'stopped' and len(calls) == 1 and len(client.calls) == 2
+
+
+def test_two_plan_race_cannot_relabel_recovered_responses(tmp_path, monkeypatch):
+    """둘 다 기존 시도 없음 확인 후 B를 늦춰 A 완료 응답을 복구하는 경쟁을 재현한다."""
+    import threading
+    m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
+    other = tmp_path / 'other'
+    other.mkdir(mode=0o700)
+    (other / 'input.json').write_bytes((out / 'input.json').read_bytes())
+    plan = json.loads((out / 'plan.json').read_text())
+    plan['output_directory'] = str(other)
+    (other / 'plan.json').write_text(json.dumps(plan))
+    second = dict(kw, out_dir=other, approved_plan_sha256=m._sha(m._canon(plan)))
+    barrier, first_done, local = threading.Barrier(2), threading.Event(), threading.local()
+    original = ComparisonCallGuard.lookup
+    clients = []
+    def lookup(self, attempt_id):
+        result = original(self, attempt_id)
+        if attempt_id.endswith(':800') and result is None and not getattr(local, 'checked', False):
+            local.checked = True
+            barrier.wait(timeout=5)
+            if local.label == 'B': assert first_done.wait(timeout=5)
+        return result
+    def factory(config):
+        owned = FakeAPI(client.script)
+        clients.append(owned)
+        return owned
+    monkeypatch.setattr(ComparisonCallGuard, 'lookup', lookup)
+    kw['client_factory'] = second['client_factory'] = factory
+    def execute(label, args):
+        local.label = label
+        try: return asyncio.run(m.run_diagnostic(**args))
+        finally:
+            if label == 'A': first_done.set()
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(execute, 'A', kw)
+        later = pool.submit(execute, 'B', second)
+        a, b = first.result(timeout=10), later.result(timeout=10)
+    assert a['status'] == 'completed' and b['status'] == 'stopped'
+    assert sum(len(c.calls) for c in clients) == 2 and len(clients) == 1
+    assert b['error'] == 'experiment_already_consumed'
+    assert reservations(led) == [('settled',), ('settled',)]
+
+
+@pytest.mark.parametrize('kind,http,identity,refusal,provider', [
+    ('refusal', 200, 'unverified', True, None),
+    ('api_timeout', None, 'unverified', False, None),
+    ('api_http_error', 401, 'unverified', False, 'authentication_error'),
+    ('api_http_error', 429, 'unverified', False, 'rate_limit_error'),
+    ('identity_mismatch', 200, 'mismatch', False, None),
+    ('SENSITIVE_SENTINEL', 'SENSITIVE_SENTINEL', 'SENSITIVE_SENTINEL', False, 'SENSITIVE_SENTINEL'),
+])
+def test_failure_receipt_preserves_allowlisted_reason_without_external_text(
+        tmp_path, monkeypatch, kind, http, identity, refusal, provider):
+    def fail(response):
+        response.success = False
+        response.content = response.error = 'SENSITIVE_SENTINEL'
+        response.resolved_model = 'SENSITIVE_SENTINEL'
+        response.transport_error_kind = kind
+        response.http_status = http
+        response.model_identity_status = identity
+        response.refusal_detected = refusal
+        response.provider_error_type = provider
+        response.request_sent = True
+        response.billing_status = 'unknown'
+        return response
+    m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch, fail)
+    result = asyncio.run(m.run_diagnostic(**kw))
+    attempt = result['attempts'][0]
+    expected_kind = kind if kind != 'SENSITIVE_SENTINEL' else 'unclassified_transport_error'
+    assert attempt['transport_error_kind'] == expected_kind
+    assert attempt['refusal_detected'] is refusal
+    assert attempt['http_status'] == (http if type(http) is int else None)
+    assert attempt['model_identity_status'] == (identity if identity in ('unverified', 'mismatch') else 'unverified')
+    assert attempt['provider_error_type'] == (provider if provider != 'SENSITIVE_SENTINEL' else None)
+    assert attempt['resolved_model'] is None
+    assert result['error'] == expected_kind
+    assert 'SENSITIVE_SENTINEL' not in (out / 'receipt.json').read_text()
+
+
+def test_global_claim_survives_factory_failure_and_fresh_process(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
+    def fail(config): raise RuntimeError('sensitive')
+    kw['client_factory'] = fail
+    assert asyncio.run(m.run_diagnostic(**kw))['status'] == 'stopped'
+    claims = list(tmp_path.glob('budget.db.bear-api-cap-*.consumed.json'))
+    assert len(claims) == 1
+    content = claims[0].read_bytes()
+    code = '''
+import sys
+from types import SimpleNamespace
+from src.analytics import bear_api_cap_diagnostic as m
+try:
+    m._consume_experiment(SimpleNamespace(path=sys.argv[1]), {'experiment_id': 'new'}, 'different', m._now)
+except ValueError as error:
+    print(str(error))
+else:
+    raise SystemExit(1)
+'''
+    # 같은 원장을 다른 프로세스에서 열어도 기존 소비 표식은 환급되지 않는다.
+    result = subprocess.run([sys.executable, '-c', code, str(led.path)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0 and result.stdout.strip() == 'experiment_already_consumed'
+    assert claims[0].read_bytes() == content and reservations(led) == []
+
+
+def test_global_claim_persistence_delay_cannot_create_client_after_window(tmp_path, monkeypatch):
+    m, out, led, client, calls, kw = setup_run(tmp_path, monkeypatch)
+    stamp = [NOW]
+    kw['clock'] = lambda: stamp[0]
+    original = m._consume_experiment
+    def delayed(*args):
+        original(*args)
+        stamp[0] += timedelta(hours=1)
+    monkeypatch.setattr(m, '_consume_experiment', delayed)
+    result = asyncio.run(m.run_diagnostic(**kw))
+    assert result['status'] == 'stopped' and calls == [] and reservations(led) == []
+    assert len(list(tmp_path.glob('budget.db.bear-api-cap-*.consumed.json'))) == 1
