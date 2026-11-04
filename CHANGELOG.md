@@ -1,5 +1,10 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-04 — E04-BEAR-API-CAP-PREP (준비 중·실호출 미승인)
+
+- 같은 Bear API 입력/모델/low effort/5.75초에서 출력 상한400/800만 비교하는 별도 준비 경로. 기존 단일 시도 가드·Claude 어댑터를 재사용하며 Bull/CLI/운영 비교 흐름·설정은 불변이다.
+- 공유 원장에는 이전 실험의400 정책이 고정돼 있어 새 정책과 충돌한다. 이를 읽기 전용으로 확인하고 차단하며 초기화·예산 분리로 우회하지 않는다. 구현/검증 상태와 NEXT는 원장 `#e04-bear-api-cap-prep-20261104` 참조.
+
 ## 2026-11-04 — E04 제한 실호출 인수 1쌍 실행·판독 (문서 전용, 소스 변경 0, 운영 불변)
 
 - 사용자 승인(창 11/4 17:00~17:45 KST, 고정 `b71d6828`, 4시도·400토큰·USD 0.50)으로 `scripts/ops/model_comparison_acceptance.py run` 1쌍 실행 → `completed_with_findings`: 양 arm hold(Bear 구독 CLI `cli_timeout` 5.75s → API 대체 `finish_reason=max_tokens`/400 → `api_incomplete`), Claude 두 시도 `claude-opus-5-5` 신원 verified, Bull `gpt-5-mini-2025-08-07`, 추정비 USD 0.018, 이 쌍 예약 3건 known·10월 unknown 336 불변, 전송/worker 종료·잔존 프로세스 0.
