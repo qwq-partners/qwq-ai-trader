@@ -1,5 +1,31 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="e04-bear-api-cap-prep-20261104"></a>
+### E04-BEAR-API-CAP-PREP — Bear API 400/800 비교 준비 (구현·관련/실제 WSL 검사·독립 리뷰 DONE / 실호출 미승인·원장 정책 충돌)
+
+**Plan:** 사용자 “기존 가드·어댑터 재사용, API400/800 비교 진단 준비. 모델·effort·프롬프트·시한·설정·매수 중지 유지, 실호출은 별도 승인”. 기준 main `af35f601`·직전 조사 `51a23912`·운영 `a399c297`(evolved M). 별도 API 진단에서 상한만400→800, 모델 `claude-opus-5-5`/low·기존 Bear 입력/system·고정 API5.75초·최대2시도/재시도0·추정비USD0.50. 기존 Bull 비교기/PairSpec과 CLI→API 운영 흐름은 변경하지 않는다. [계약·계획](../superpowers/plans/2026-11-04-e04-bear-api-cap.md), [준비/한계](bear-api-cap-diagnostic.md).
+
+**발견한 선행 제약:** 공유 월 원장의 `comparison_policy(id=1)`은 단일 정책에 결합돼 있고, 읽기 전용 조회에서 기존 `e04-acc-20261104-003490-r1`(11/4 하루·출력400·시도4)이 남아 있다. 새 진단은 `comparison_policy_mismatch` 대상이다. 기존 정책/원장 삭제·리셋, 별도 예산 DB, 과거 승인 재사용 없이 읽기 전용 사전점검과 차단을 준비한다. 실제 실행은 승인만 추가한다고 가능해지는 상태가 아니다.
+
+**Do:** 새 `bear_api_cap_diagnostic` 모듈·진입점·검사만 추가(기존 가드/어댑터/운영 소스·설정 변경0). prepare는 과거 공개 입력/제어·기존 Bear 프롬프트를 새 지문에 동결하며 설정/자격/원장/전송을 열지 않는다. 별도 승인자·지문·창·clean SHA·입력·운영 제어를 대조한 뒤에만 실행을 허용하고, 현재 원장 정책 충돌은 RO 사전검사에서 차단한다. 승인된 run에서만 디렉터리 소비 표식과 원장 경로/실험ID별 영속 소비 표식을 만들며 두 표식 모두 보존한다. 가드 입장 전 고정5.75초·늦은 결과 미수락, known/verified 400절단 예외만800으로 진행, 실패/중단/정산/종료 안전 영수증과 동시 실행 방어를 구현했다.
+
+**See:** 소스 통합 `4fab99c0`(구현자 원본 `bdbd2c59`+`2603e987`). AWS 보조 관련4파일 **176 passed**(신규40·기존136,14.78초·rc0·격리0), 문법/diff/비밀 패턴 검사 통과. 신규 검사 RED→GREEN 이력 포함. Codex 요청 Astra/high 구현·별도 Astra/xhigh 최종 리뷰: 1차P0/P1 0·P2 2(다른 폴더 동일ID 경쟁, 안전 실패 사유 소실) → 모두 반영 → 재리뷰P0/P1/P2 0. 실제 응답 모델/실효 effort metadata는 미노출이며 같은 제공자 독립 리뷰다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261104/e04-bear-api-cap-prep/`. **실제 WSL 전체 DONE:** 기존 핀 일치·사용자 임시 등록 뒤 별도 worktree에서 고정 `55b6c7b3`/tree `8258f4a1`의 미푸시 bundle 해시를 대조하고 정본 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` 직렬 전체를 실행했다. **10,437 passed / 2 skipped / 2 xfailed**, 검사410.48초·전체443초·rc0·격리0·문법/비밀검사 통과. 로그SHA256 `1633ba6d…5d93a53`, 검증 전후 tree 동일, WSL 원본 main `a399c297`·작업본 clean 보존(`wsl-result.json`). 기존 완료 WSL/CI 반복·AWS 전체 대체0. 본 기록은 검증본 위 문서만 갱신하며 source/tests/scripts 동일성을 확인해 푸시/PR로 이어간다. 임시 인증 정리는 PR CI 후 영수증으로 남기고 기존 호스트키/SSH 설정을 보존한다.
+
+**PR #336 CI 1차 실패·원인 수정:** HEAD `68e7be0b`, run41831695258은 기존 `test_core_signal_indicators.py::test_rebalance_buy_signal_closes_missing_indicator_gap` 1건 실패(10,436 passed/2 skipped/2 xfailed,462.76초·격리0). CI 현지12:45의 기존 점심 가점+5로 지표 없는 점수가82인데 검사는77 이하를 기대했다. journal close 오류가 아니다. 시각 고정 재현은 12:30/12:45/13:00에서3 failed·중립 시각3 passed. 테스트 파일만 수정(`8b066fef`): 실제 생산자→소비자 경로와 시간 가점을 유지하고 -8/-2 결손을 정확히 단언하며, 전후 경계6시각과 파일 내 시계를 고정했다. 관련31검사 PASS·격리0, 운영 소스/설정 변경0. Sol6.1/high 독립 검사 리뷰는 P0/P1/P2 0(정본 Sol5.6 런타임 부재로 대체, actual/effective 미노출). 새 검사 변경의 WSL 전체 후 푸시하며 동일 SHA 맹목 재실행은 하지 않는다. 최초 CI 실패와 최초 WSL 통과는 각각 보존한다. **수정본 실제 WSL:** 고정 `c74071d7`/tree `5abdc2ae`, 별도 작업본 직렬 전체 **10,442 passed / 2 skipped / 2 xfailed**, 검사388.57초·전체405초·rc0·격리0·문법/비밀검사 통과. 로그SHA256 `5071995f…e75605cb`, 전후tree 동일·원본 main/작업본 clean 보존(`wsl-ci-clock-result.json`). 최종 PR #336 HEAD의 필수 CI 결과는 같은 비공개 디렉터리의 `pr-ci.json`과 PR 검사에서 확인한다. 수정 후 source/tests/scripts는 이 검증 SHA와 동일하며 결과 문서만 추가한다.
+
+**무호출 준비 확인:** 고정 `55b6c7b3`에서 기존 공개 입력(준비 시각11/3 20:06:41)을 새 `e04-bear-api-cap-20261105-proposal1`로 동결해 `prepared_not_authorized` rc0, 읽기 전용 원장 점검은 `existing_policy_conflict` rc1을 확인했다. 새 plan 지문 `61e545e9…c89ef655`; 11/5 17:00~17:45는 미승인 제안일 뿐 예약/실행 권한이 아니다. 소비 표식2종·공급자 영수증·실호출0. 정책 수명 작업 후 새 소스/지문/창을 다시 고정해야 한다.
+
+**운영/예약·NEXT:** 실호출/배포/재시작/발송/새 예약0, 운영 설정·매수 중지·R1 OFF 보존. 이번 준비 완료 뒤 `E04-COMPARISON-POLICY-LIFECYCLE`에서 같은 공유 월 원장 안의 비교 정책 수명/분리 계약을 검토해야 한다. 실제400/800 호출은 해당 제약 해소와 새 고정 SHA·지문·창·승인자 승인 후 별도이며, 현재 승인을 실행 권한으로 해석하지 않는다. 이전 E04-BEAR-COMPLETION의 NEXT는 본 항목으로 이어진다.
+
+<a id="e04-bear-completion-20261104"></a>
+### E04-BEAR-COMPLETION — Bear 요청·완료 계약 조사 (조사 DONE / 런타임 결함 미재현 / 새 실호출 없음)
+
+**Plan:** 사용자 “이번에는 Claude가 아니라 Codex에서 직접 이어서 진행”. 기존 11/4 1쌍의 Bear timeout·API400 절단을 요청 계약과 대조하고 재현된 결함만 최소 수정한다. 완료된 검증은 반복하지 않고 운영 설정·매수 중지를 유지한다. 기준 main `af35f601`·운영 checkout `a399c297`/evolved M. PR #335 main Verify run41820676472는 기존 실행 success를 확인했다(재실행0).
+
+**Do/See:** 외부 전송 없는 새 진단8건 PASS·격리 위반0(AWS 개발 worktree, 가짜 CLI/HTTP·임시 월 원장). CLI/API400 전달·절단 시 hold·기존 명시 API800 override의 예약/시도 기록은 계약대로다. 설치 CLI2.1.316 정적 조사에서 `CLAUDE_CODE_DISABLE_THINKING=1`은 명시 thinking 설정을 생략하며 Opus5.5의 추론을 끄지 않음을 확인했다. 공식 문서상400은 추론+답변 합계 상한이다. 실제400 토큰 배분과 CLI 지연의 내부 원인은 기존 영수증으로 미확정이다. 현재 E04는 Bull 후보만 바꾸고 Bear를 공유하므로 API만800으로 바꾸는 Bear 비교를 표현할 수 없으며, 이는 현행 프로필 제약이다. 고칠 런타임 결함이 재현되지 않아 소스·테스트·설정 변경과 기존 WSL/CI 재검증은0이다. [요청 계약·8진단·공식 근거·다음 단위](../reviews/e04-bear-completion-2026-11-04.md). 비공개 영수증은 `~/.local/state/qwq-task-audit/20261104/e04-bear-completion/`. 독립 분석 Sol6.1/high 2명과 별도 최종 문서 검토(차단0·P2 1 정정 반영; 5.75초는 실제 최대 잔여가 아닌 고정 진단 예산) 완료. 실제 모델/실효 effort metadata는 미노출이다.
+
+**NEXT:** `E04-BEAR-API-CAP-PREP` — 같은 입력/모델/low effort/API 시한에서 API 상한400과800만 비교할 최소 진단 계약·실행 준비. 기존 단일 시도 가드·어댑터 재사용을 먼저 검토하고 현재 Bull 비교기의 Bear를 조용히 바꾸지 않는다. 800의 충분성·개선률은 미입증이며 실제 호출은 새 승인 대상이다. 기존 승인/manifest/영수증 재사용·실패 후 새 쌍 자동 재시도는 없다. CLI5.75/내부11.5/패널12초·운영 설정·KILL_SWITCH_KR·R1 OFF 유지, 배포/재시작/실호출/발송/새 예약0. 아래 E04의 이전 NEXT는 이 조사 결과로 대체하며 상태 기록만의 별도 PR은 만들지 않는다.
+
 <a id="e04-acceptance-runner-20261103"></a>
 ### E04-ACCEPTANCE-RUNNER — 제한 실호출 인수 실행기 (구현·검증·리뷰·PR #334 병합 DONE / 11/4 1쌍 실호출 DONE · 양 arm hold · 비교쌍 평가 불가)
 

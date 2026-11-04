@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/4 E04-BEAR-API-CAP-PREP:** 기존 가드/어댑터를 재사용해 API400/800만 비교할 준비 경로를 추가했다(관련176검사·독립 재리뷰·최종 실제 WSL 전체10,442검사 완료). 공유 월 원장은 이전 실험 정책1개에 결합돼 있으므로 새 정책은 충돌한다. 준비 완료를 실호출 가능으로 표현하거나 원장을 초기화하지 않는다. [단일 원장·검증/NEXT](docs/operations/execution-roadmap.md#e04-bear-api-cap-prep-20261104).
+
 > **11/4 17:02 E04 제한 실호출 1쌍 DONE:** 사용자 승인 창(17:00~17:45)·고정 `b71d6828`로 1쌍을 실행해 영수증을 얻었다 — `completed_with_findings`, 양 arm **hold**(독립 Bear 미확보: 구독 CLI 5.75s 시한 초과 → API 대체가 400토큰 상한에서 절단 `api_incomplete`), Claude 신원 `claude-opus-5-5` verified, 4시도·추정비 USD 0.018, 예약 전부 정산·전송/worker/cron 정리. 17:00 cron 1차는 래퍼 진입점 결함으로 호출 없이 끝나 같은 창에 같은 쌍을 재실행했다. 경로 인수이며 모델 우위·순수익 증거가 아니고 새 쌍 재시도 없음. 운영·설정·매수 중지 불변. [원장](docs/operations/execution-roadmap.md#e04-acceptance-runner-20261103).
 
 > **11/3 01:29 운영 배포 DONE:** 사용자 승인(1안)으로 고정 `a399c297`(PR #321·#323~#330 누적: E04 비활성 비교 계층, 코어 지표 전달, 웹 거절 진단; 설정/스키마/스케줄러 변경 0)을 WSL 정본 절차로 배포했다 — 서버 verify 10,367 passed·PID 346880·postcheck rc 0·보호 48파일/crontab/evolved/KILL 보존·롤백 없음. 첫 자연 슬롯 발송·웹 거절 자연 기록·코어 지표 운영 효과는 WAIT. [원장](docs/operations/execution-roadmap.md#deploy-prep-20261103).
