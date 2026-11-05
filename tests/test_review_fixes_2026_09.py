@@ -47,15 +47,19 @@ def test_ledger_calls_are_serialized_until_response():
     kis_rate_limit.reset()
 
     async def run():
-        await kis_rate_limit.acquire("TTTC8434R")      # 응답 대기 중(busy)
+        acquired = asyncio.Event()
 
-        async def _respond_later():
+        async def _request_and_respond():
+            await kis_rate_limit.acquire("TTTC8434R")
+            acquired.set()
             await asyncio.sleep(0.3)
             kis_rate_limit.release_ledger()
 
-        asyncio.get_running_loop().create_task(_respond_later())
+        owner = asyncio.create_task(_request_and_respond())
+        await acquired.wait()
         t0 = time.monotonic()
         await kis_rate_limit.acquire("TTTC8001R")      # 응답(0.3s) + 1.05s 뒤에야 통과
+        await owner
         return time.monotonic() - t0
 
     assert asyncio.run(run()) >= 0.3 + kis_rate_limit.LEDGER_MIN_INTERVAL - 0.05
@@ -80,6 +84,7 @@ def test_ledger_busy_is_released_after_timeout(monkeypatch):
     kis_rate_limit.reset()
     monkeypatch.setattr(kis_rate_limit, "LEDGER_BUSY_TIMEOUT", 0.2)
     monkeypatch.setattr(kis_rate_limit, "LEDGER_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(kis_rate_limit, "LEDGER_TR_INTERVALS", {})  # stale 대기만 격리
 
     async def run():
         await kis_rate_limit.acquire("TTTC8434R")  # 응답 누락 가정 (release 없음)

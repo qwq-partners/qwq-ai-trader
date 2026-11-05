@@ -569,6 +569,10 @@ class KISBroker(BaseBroker):
                     continue
                 logger.error(f"[API] GET 실패 (3회 시도): {e}")
                 return {"rt_cd": "-1", "msg1": f"네트워크 오류: {e}"}
+            finally:
+                if kis_rate_limit.is_ledger(tr_id):
+                    # 취소/예상 밖 예외도 소유권을 정리한다. 대기자·이미 해제한 작업은 무효다.
+                    kis_rate_limit.release_ledger()
         return {"rt_cd": "-1", "msg1": "API 호출 실패 (최대 재시도 초과)"}
 
     async def _api_post(self, url: str, tr_id: str, json_data: dict,
