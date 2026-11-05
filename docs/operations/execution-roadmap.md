@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="t03-kis-ledger-ownership-20261105"></a>
-### T03-KIS-LEDGER-OWNERSHIP — 조회 대기 소유권 (합성 결함 수정·실제 WSL DONE / 통합·운영 반영 대기)
+### T03-KIS-LEDGER-OWNERSHIP — 조회 대기 소유권 (수정·WSL·병합·운영 인수 DONE)
 
 **Plan:** 사용자 후속 진행 지시에 따라 11/5 배포 후 남은 KIS 조회 실패를 기존 안전 영수증·코드·합성 자료로 한정 조사했다. 기준 main `98513f6e`, 운영 `4117371c`·PID579455·NRestarts0·evolved 미커밋·KILL_SWITCH_KR 유지다. 직전 최신 절의 KIS 판독을 E05로 적은 것은 ID 혼동이며 **T03 후속**으로 바로잡는다. E05 순수익 통합 리뷰는 실제 전략 거래/E01~04/A01 결측으로 WAIT다. [수정 계획](../superpowers/plans/2026-11-05-t03-kis-ledger-ownership.md).
 
@@ -11,15 +11,17 @@
 
 **Do/최소 수정:** 리미터는 원장 입장 asyncio task를 소유자로 기록하고 동일 소유자만 해제한다. stale 해제 뒤 전체 가드를 재검사하며 GET 시도 finally가 취소/예상 밖 종료에도 자신의 대기만 정리한다. 이벤트 루프 밖 해제는 무변경으로 반환한다. 헤더 수신 시 조기 해제·네트워크 오류 재시도 전 해제·MAX_RPS10/MIN_GAP0.1·원장1.05/8434R2.1·stale 10초·HTTP 시한·최대3시도/거절 backoff는 유지한다. 기존 stale 정책의 최초 중첩 가능성은 남는다. **송신 후 취소/예상 밖 종료에서도 서버 처리는 아직 진행 중일 수 있어, 로컬 해제 뒤 다음 요청과 중첩될 수 있다.** 입장 간격을 wire/공급자 도착 간격 보장으로 해석하지 않는다.
 
-**See:** 새 실제 broker/리미터 검사 RED 5 failed/7 passed → 수정 뒤 관련 12파일 199 passed(18.98초, 격리 0, 기존 pykrx warning 1). 독립 Claude CLI의 실제 응답 모델 `claude-opus-5-5`, 요청 high/실효 effort 미노출, tools0/rc0/172.63초 리뷰는 조건부 APPROVE·P0/P1 0·P2 5다. P2의 루프 밖 예외를 새 RED로 확인해 최소 보완했고, 부정 단언 뒤 정상 소유자 응답→후속 요청 진행을 양성 대조했다. 해당 2파일 38 passed/7.17초·격리 0이며 문서 한계/띄어쓰기와 새 파일 포함도 정정한다. 문법/diff/비밀패턴 PASS. 실제 Opus5.5/high 보완 재리뷰(tools 0, rc0, 71.03초)는 기존 P2 5건을 모두 해소로 판정하고 소스 조건부 APPROVE·P0/P1 0을 냈다. 남긴 P2 1건은 새 문단의 숫자 띄어쓰기이며 해당 문구만 정정했다(추가 리뷰/검사 반복 없음). 실제 사용자 WSL2/Python3.12.3의 별도 작업본에서 스냅샷 `cdebeec1`/tree `f2426a8b`를 직렬 전체 검증해 **10,545 passed / 2 skipped / 2 xfailed**(440.30초, 전체461초, rc0, 격리0, 문법/비밀검사 PASS)를 확인했다. bundle/로그 SHA256·전후 tree·원본 main `4117371c` clean 보존을 대조했다. AWS 전체 중복 실행은 없으며 이후 변경은 완료 기록 Markdown뿐이다. 통합·운영 반영은 대기다. 비공개 근거: `~/.local/state/qwq-task-audit/20261105/t03-kis-boundary/`. 아직 운영에 이 수정은 없다.
+**See:** 새 실제 broker/리미터 검사 RED 5 failed/7 passed → 수정 뒤 관련 12파일 199 passed(18.98초, 격리 0, 기존 pykrx warning 1). 독립 Claude CLI의 실제 응답 모델 `claude-opus-5-5`, 요청 high/실효 effort 미노출, tools0/rc0/172.63초 리뷰는 조건부 APPROVE·P0/P1 0·P2 5다. P2의 루프 밖 예외를 새 RED로 확인해 최소 보완했고, 부정 단언 뒤 정상 소유자 응답→후속 요청 진행을 양성 대조했다. 해당 2파일 38 passed/7.17초·격리 0이며 문서 한계/띄어쓰기와 새 파일 포함도 정정한다. 문법/diff/비밀패턴 PASS. 실제 Opus5.5/high 보완 재리뷰(tools 0, rc0, 71.03초)는 기존 P2 5건을 모두 해소로 판정하고 소스 조건부 APPROVE·P0/P1 0을 냈다. 남긴 P2 1건은 새 문단의 숫자 띄어쓰기이며 해당 문구만 정정했다(추가 리뷰/검사 반복 없음). 실제 사용자 WSL2/Python3.12.3의 별도 작업본에서 스냅샷 `cdebeec1`/tree `f2426a8b`를 직렬 전체 검증해 **10,545 passed / 2 skipped / 2 xfailed**(440.30초, 전체461초, rc0, 격리0, 문법/비밀검사 PASS)를 확인했다. bundle/로그 SHA256·전후 tree·원본 main `4117371c` clean 보존을 대조했다. AWS 전체 중복 실행은 없으며 이후 변경은 완료 기록 Markdown뿐이다. PR #341 고정 HEAD `21e8ab83`를 merge `f5c9e6c8`로 병합했다(PR/main tree `38c43983` 동일). PR verify run42017690683은 10,545 passed·341.57초, main run42018874522는 10,545 passed·466.50초이며 모두 2 skipped/2 xfailed·격리0·비밀검사 PASS다. 비공개 근거: `~/.local/state/qwq-task-audit/20261105/t03-kis-boundary/`. 아래 운영 인수까지 완료했다.
+
+**See/운영 인수:** 사용자 승인 “완료되면 다음 task 진행해줘. 그리고 커밋 푸쉬 문서업데이트 운영배포까지”에 따라 실제 WSL의 정본 `--check → --deploy f5c9e6c8e8c53c9bd9db7fafe87ccb4a2f23896d → 기동150초 이후 --postcheck`를 실행했다. 21시 개인 요약의 기존 accepted 영수증을 확인한 뒤 21:05:33 배포를 시작했고, 서버 직렬 전체 **10,545 passed / 2 skipped / 2 xfailed**·865.53초·격리0·비밀검사 PASS, 배포 rc0·롤백0이다. 21:20:25 KST 새 PID609787, 21:23:24 인수 시 기동179.10초·**명시 점검30/30 PASS**: active/running·NRestarts0·broker connected·recovery ready·pending0, 보호48파일/crontab/evolved/KILL·월USD100/log_and_continue·R1/worker OFF·Toss starts/tokens0/helper없음 보존. Gemini 차단 설정도 보호 지문에 포함돼 동일하다. 초기21:20:25~21:23:24 기존 기동 로그에서 ERROR/Traceback/HTTP500/EGW00201/EGW00215는0이며 KIS 연결·엔진 시작 표식을 확인했다. 이는 해당 기동 구간 인수이며 오전 거절의 실제 원인·영구 복구·자료 완전성·순수익 개선을 입증하지 않는다. 독립 Astra/high 절차 검토(실제 모델/실효 effort 미노출)는 차단 결함0이며 집계 rc0만으로 인수하지 말라는 P2를 반영해 실제 수치와 보호 상태를 대조했다. 문서 마감으로 재배포하지 않는다.
 
 **선정 입력 후속:** core의 빈 수급은 None, Swing은 근거 날짜를 검증한 폴백을 유지한다. 별도 합성 경계는 ① KR 실패 빈 목록이 300초 캐시에 들어가 다음 cached_empty의 오류0이 복구 증거가 되지 않는 점, ② theme 캐시에 다른 종목만 있어도 미관측 종목의 metadata 수급이0이 돼 검토기가 관측값처럼 읽는 점이다. 실제 11/5 영향 종목·점수·수익은 미확정이며 이번 수정은 이 소비자를 바꾸지 않는다. **NEXT T03-THEME-SUPPLY-MISSING:** 미관측과 실제0의 생산자 경계를 합성으로 고정한 최소 수정. 캐시 계측·새 수집과 분리한다.
 
 **도래 O02:** 기존 10/6 cohort 정리는 11/5 09:34:10 시작→09:34:11 종료·rc0/success, 같은 service의 기존 journal은 deleted=true/eligible=true다. 원본 retention.jsonl은 권한상 직접 읽지 못해 intent/completed·대상 부재·보호파일 해시를 독립 확인한 것은 아니다. 권한 확대·새 삭제·재실행은 없다. 11/4 18시 사전점검 영수증은 미확인이며 미실행으로 단정하지 않는다. 20:09 판독에서 오늘 18시 사전점검 영수증도 확인되지 않았으며 미실행으로 단정하지 않는다. 내일 09:34:10 기존 timer는 WAIT다.
 
-**도래 보고:** 오늘 midday/after만 읽기 전용·5초·테이블별 LIMIT10으로 판독했다. 시장 보고 13:10/16:40은 ready/validated 및 Telegram API accepted이며 실제 모바일 수신·내용 수락은 미확정이다. 웹은 둘 다 failed/invalid_output으로 각각 unsupported_numeric/unsupported_latin @ market_view.text다. 원문 재생성·시험 발송·소비 슬롯 재실행은 없다.
+**도래 보고:** 오늘 midday/after만 읽기 전용·5초·테이블별 LIMIT10으로 판독했다. 시장 보고 13:10/16:40은 ready/validated 및 Telegram API accepted이며 실제 모바일 수신·내용 수락은 미확정이다. 웹은 둘 다 failed/invalid_output으로 각각 unsupported_numeric/unsupported_latin @ market_view.text다. 21시 개인 요약도 21:02 읽기 전용 판독에서 본문 저장944자·Telegram API accepted이며 실제 수신/내용 수락은 미확정이다. 원문 재생성·시험 발송·소비 슬롯 재실행은 없다.
 
-**운영·예약:** 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단·기존 cron을 보존한다. 새 주문·진단 실호출·발송·재시작·예약은 없다. 새 소스 푸시 전 실제 사용자 WSL 직렬 전체가 필요하며, 완료된 이전 검증은 재실행하지 않는다.
+**운영·예약:** 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단·기존 cron을 보존한다. 승인된 배포 재시작1회 외 새 주문·진단 실호출·시험 발송·예약은 없다. 실제 WSL 검증을 푸시 전에 완료했고 완료된 과거 검증은 반복하지 않았다. NEXT는 위 T03-THEME-SUPPLY-MISSING의 미관측/실제0 경계이며 E02/E01·E05의 현금/매수 중지 WAIT를 해제하지 않는다.
 
 <a id="e04-completion-deploy-20261105"></a>
 ### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·검증·병합·배포 DONE / 초기 KIS 거절 지적 유지)
