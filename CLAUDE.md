@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/5 T03-THEME-SUPPLY-MISSING:** 테마 전략의 수급 순위 캐시에 없는 종목·검증 실패 수량이 metadata에 0으로 전달돼 검토기/entry LLM이 관측값(balanced)으로 읽던 결함을 재현해 None(미관측)으로 고쳤다. 관측된 0·음수 보존, 보너스/감점 산식·설정 불변, 소비자 코드 변경 0. theme은 비활성·배분 0%라 운영 신호 영향 없음. 독립 Codex 리뷰 P0/P1 0. 실제 WSL·PR·배포 상태는 [원장](docs/operations/execution-roadmap.md#t03-theme-supply-missing-20261105)을 따르며 설정·매수 중지 불변.
+
 > **11/5 T03 KIS 조회 소유권 수정:** 오래된 요청의 늦은 응답·취소가 후속 원장 대기를 훼손하는 경계를 합성 재현해 최소 수정하고 실제 WSL 전체10,545검사·독립 Opus5.5 소스 리뷰를 통과했다. 호출 한도/간격/시한·재시도/설정/매수 중지 유지, PR #341 병합·WSL 정본 배포로 운영 `f5c9e6c8`/PID609787에 반영했다. 21:23 기동179.10초 인수30/30 PASS·초기 거절0·보호48파일/cron 보존이며 과거 거절 인과·영구 복구를 입증한 것은 아니다. 완료 문서 재배포는 없다. [검증·운영 상태와 NEXT](docs/operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105). KIS 후속은 T03이며 E05 순수익 통합 WAIT와 구분한다.
 
 > **11/5 08:00 운영 배포:** 고정 `4117371c`·PID579455, 실제 WSL 정본 배포/기동177.57초 점검·보호48파일/crontab/KILL/설정 보존. 초기 KIS 시세 한도 거절2건이 있어 **completed_with_findings, 전 항목 PASS 아님**이다. 이후 집계상 HTTP성공과 추가 거절0은 확인했으나 원인·자료 완전성은 미확정이며 새 API시험/재시작/제어 변경은 없다. [영수증·후속 정본](docs/operations/execution-roadmap.md#e04-completion-deploy-20261105). 결과 문서로 재배포하지 않는다.

@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [T03 테마 수급 미관측/실제0 경계](operations/execution-roadmap.md#t03-theme-supply-missing-20261105): 순위 캐시 부재·검증 실패 수량은 None, 관측 0/음수 보존. 비활성 전략이라 운영 신호 영향 0. WSL·PR·배포 상태는 원장 참조.
+
 - [T03 KIS 원장 조회 소유권 경계](operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105): 운영 `f5c9e6c8`/PID609787·21:23 인수30/30 PASS·보호48파일/cron 보존. 초기 거절0과 과거 인과·영구 복구는 구분한다.
 
 - **11/5 오전 08시 배포 이력 `4117371c`:** 보호 상태 유지, 초기 KIS 거절2건 지적 보존. [실제 인수·남은 WAIT](operations/execution-roadmap.md#e04-completion-deploy-20261105).

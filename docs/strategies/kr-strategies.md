@@ -148,6 +148,9 @@ RSI(2) 과매도 반전 진입. 상위 추세(MA200) 필터 결합.
 ### ❌ 비활성 상태
 `evolved_overrides.yml`: `theme_chasing.enabled: false`, `allocation: 0.0%`.
 
+### 수급 metadata 계약 (2026-11-05, T03-THEME-SUPPLY-MISSING)
+`_refresh_supply_demand`는 KIS 외국인/기관 **순위** 목록(FHPTJ04400000)으로 캐시를 만든다. 순위에 없는 종목은 미관측이지 순매수 0이 아니므로 `Signal.metadata.indicators.foreign_net_buy/inst_net_buy`는 **캐시에 종목이 없거나 공급자 수량 검증(`_supply_proof`)이 없으면 None**, 관측된 0·음수는 그대로다(두 측 독립). 소비자(`cross_validator` 결손 감점, entry LLM direction)는 None만 결손으로 읽는다. 보너스/감점 helper는 미관측을 0으로 비교해 판정 산식은 그대로다. 검사 `tests/test_theme_supply_missing.py`.
+
 ### 폐지 근거 (param-optimizer DB 검증, 2026-05-04)
 - 누적 44건 -300k 손실 (3월~4월)
 - 점수 구간별 실제 승률 (역설):

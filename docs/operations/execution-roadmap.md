@@ -1,5 +1,22 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="t03-theme-supply-missing-20261105"></a>
+### T03-THEME-SUPPLY-MISSING — 테마 수급 미관측/실제0 생산자 경계 (수정·합성 재현·독립 리뷰 DONE / WSL·PR·운영 WAIT: 실제 WSL 인증 등록 대기)
+
+**Plan:** 사용자 지시 “선정·진입 판단에 잘못된 근거가 들어가지 않도록, 재현되는 전달 결함만 최소 수정”. 기준 main `45070551`, 운영 `f5c9e6c8`·PID609787·NRestarts0·evolved 미커밋·KILL_SWITCH_KR 유지. 범위는 [직전 T03 분석](#t03-kis-ledger-ownership-20261105)의 합성 경계 ②(theme 캐시에 다른 종목만 있어도 미관측 종목의 metadata 수급이 0)이며, 경계 ①(KR 실패 빈 목록 300초 캐시)·새 캐시 계측·수집 확대·TTL/한도/재시도·전략 설정은 다루지 않는다.
+
+**Do/경로·재현:** 원천 `kis_market_data.fetch_foreign_institution`(FHPTJ04400000 순위 목록, 검증 실패 수량은 `net_buy_qty=0`·`_supply_proof=None`) → `ThemeChasingStrategy._refresh_supply_demand`가 시장별 목록을 합쳐 외국인/기관 캐시를 재구성 → `_check_entry_signal`이 `Signal.metadata["indicators"]["foreign_net_buy"/"inst_net_buy"]`를 채움 → `cross_validator`(None만 수급 결손으로 읽음·규칙2는 양쪽 숫자일 때만)·`entry_llm_context`(0을 `balanced`로 표기)·trade_memory/journal. 실제 `generate_signal`을 가짜 순위 목록(외국인 KOSPI 빈 목록/KOSDAQ 2행, 기관 KOSPI 2행/KOSDAQ 빈 목록)으로 구동한 재현에서 ① 순위 목록에 없는 000002의 외국인=0, ② 수량 검증 실패 행 000003의 양쪽=0이 전달됐고 entry LLM 사실 입력은 둘 다 `provided/balanced`였다. 순위 목록 부재는 상위 순위에 들지 않았다는 뜻이지 순매수0 관측이 아니다.
+
+**Do/최소 수정(`src/strategies/kr/theme_chasing.py` 1파일):** 캐시 행의 `net_buy`는 공급자 `_supply_proof`의 정수 값만 쓰고 없으면 None, metadata는 캐시에 종목이 없거나 값이 None이면 None(캐시 전체가 비어 있을 때의 기존 None과 같다). 관측된 0·음수는 그대로 전달하고 외국인·기관은 서로 독립이다. 보너스/감점 helper는 미관측을 기존처럼 0으로 비교해 판정 산식·임계값·전략 설정은 변하지 않는다. 소비자 소스 변경 0.
+
+**수정 전후 판단(합성 사례):** 미관측 양측(000003): 전 `(0,0)`→검토기 수급 결손 없음·LLM balanced / 후 `(None,None)`→기존 결손 감점 1단계(-2)·LLM missing/unknown. 한쪽 관측(000002: 기관 -5·외국인 미관측): 전 `(0,-5)`→규칙2 미발동·LLM balanced / 후 `(None,-5)`→관측 측만 전달, 결손 감점 없음·규칙2 미발동·LLM unknown. 실제0(000001 기관 0)·양수(외국인 100)는 전후 동일 `(100,0)`·보너스 +5. 음수는 그대로 전달된다. 규칙2(양쪽 음수 차단)는 이미 양쪽 숫자일 때만 평가하므로 새로 차단되는 경우는 없다.
+
+**See/검증:** 새 `tests/test_theme_supply_missing.py` 2건은 수정 전 두 결함을 그대로 실패로 재현했고, 수정 뒤 관련 검사 `test_theme_supply_missing`·`test_supply_missing_consumers`·`test_startup_cash_verification`·`test_entry_llm_context` 56 passed, `test_cross_validation_boost_label`·`test_core_signal_indicators`·`test_selection_supply_policy`·`test_swing_supply_evidence` 143 passed(격리0). 독립 Codex 교차 리뷰(요청 gpt-6-astra/high, 헤더 model gpt-6-astra·effort high, 실효 effort 미노출, 읽기 전용·테스트 미실행)는 소스 커밋 `3de15b9b`에 **P0/P1 0·P2 1(문서 갱신 누락)**로 문서 보완 후 병합 권고다. 지적 그대로 이 절·CHANGELOG·전략 문서를 추가했고 소스는 바꾸지 않았다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261105/t03-theme-supply-missing/`. 실제 WSL 직렬 전체 verify는 기존 사용자 인증으로 로그인이 거부돼(호스트키 핀 일치·`Permission denied (publickey)`) 이번 작업용 임시 클라이언트 키 등록을 사용자에게 요청한 상태이며 아직 미실행이다. AWS 관련 검사는 보조 근거다. 푸시·PR·CI·병합·배포는 WSL 통과 뒤 진행한다.
+
+**한계·불변:** `theme_chasing`은 `enabled:false`·배분 0%(2026-05-04 폐지)라 현재 운영에서 이 생산자는 신호를 만들지 않으며, 이번 수정은 선정 결과·주문·순수익을 바꾸지 않는다. 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단 유지. 별도 생산자인 `kr_scheduler`의 `supply_demand_*.json` 일별 파일 합산(`net_buy_qty` 직접 사용)은 이번 범위 밖이며 소비자(Swing) 쪽 정책이 legacy 캐시를 0으로 승격하지 않는 기존 검사에 의존한다. 11/5 자연 오류의 실제 영향 종목·점수·수익은 여전히 미확정이다.
+
+**NEXT:** ① 사용자 임시 키 등록 → 실제 WSL `bash scripts/dev/verify.sh` 직렬 전체 → 푸시·PR·필수 verify·고정 HEAD 병합 → 승인된 정상 운영배포(`--check → --deploy <40자SHA> → 150초 뒤 --postcheck`, 장외 창·예약 충돌·보호 상태 전후 대조). ② 그 뒤에도 **E02-RR/E01 입력 전제 결정·E05 순수익은 현금/매수 중지 WAIT** 그대로이며 0행 구간 반복 조회·모의 거래는 만들지 않는다. ③ 경계 ①(KR 실패 빈 목록 300초 캐시)은 별도 ID로만 다룬다.
+
 <a id="t03-kis-ledger-ownership-20261105"></a>
 ### T03-KIS-LEDGER-OWNERSHIP — 조회 대기 소유권 (수정·WSL·병합·운영 인수 DONE)
 
@@ -15,13 +32,13 @@
 
 **See/운영 인수:** 사용자 승인 “완료되면 다음 task 진행해줘. 그리고 커밋 푸쉬 문서업데이트 운영배포까지”에 따라 실제 WSL의 정본 `--check → --deploy f5c9e6c8e8c53c9bd9db7fafe87ccb4a2f23896d → 기동150초 이후 --postcheck`를 실행했다. 21시 개인 요약의 기존 accepted 영수증을 확인한 뒤 21:05:33 배포를 시작했고, 서버 직렬 전체 **10,545 passed / 2 skipped / 2 xfailed**·865.53초·격리0·비밀검사 PASS, 배포 rc0·롤백0이다. 21:20:25 KST 새 PID609787, 21:23:24 인수 시 기동179.10초·**명시 점검30/30 PASS**: active/running·NRestarts0·broker connected·recovery ready·pending0, 보호48파일/crontab/evolved/KILL·월USD100/log_and_continue·R1/worker OFF·Toss starts/tokens0/helper없음 보존. Gemini 차단 설정도 보호 지문에 포함돼 동일하다. 초기21:20:25~21:23:24 기존 기동 로그에서 ERROR/Traceback/HTTP500/EGW00201/EGW00215는0이며 KIS 연결·엔진 시작 표식을 확인했다. 이는 해당 기동 구간 인수이며 오전 거절의 실제 원인·영구 복구·자료 완전성·순수익 개선을 입증하지 않는다. 독립 Astra/high 절차 검토(실제 모델/실효 effort 미노출)는 차단 결함0이며 집계 rc0만으로 인수하지 말라는 P2를 반영해 실제 수치와 보호 상태를 대조했다. 문서 마감으로 재배포하지 않는다.
 
-**선정 입력 후속:** core의 빈 수급은 None, Swing은 근거 날짜를 검증한 폴백을 유지한다. 별도 합성 경계는 ① KR 실패 빈 목록이 300초 캐시에 들어가 다음 cached_empty의 오류0이 복구 증거가 되지 않는 점, ② theme 캐시에 다른 종목만 있어도 미관측 종목의 metadata 수급이0이 돼 검토기가 관측값처럼 읽는 점이다. 실제 11/5 영향 종목·점수·수익은 미확정이며 이번 수정은 이 소비자를 바꾸지 않는다. **NEXT T03-THEME-SUPPLY-MISSING:** 미관측과 실제0의 생산자 경계를 합성으로 고정한 최소 수정. 캐시 계측·새 수집과 분리한다.
+**선정 입력 후속:** core의 빈 수급은 None, Swing은 근거 날짜를 검증한 폴백을 유지한다. 별도 합성 경계는 ① KR 실패 빈 목록이 300초 캐시에 들어가 다음 cached_empty의 오류0이 복구 증거가 되지 않는 점, ② theme 캐시에 다른 종목만 있어도 미관측 종목의 metadata 수급이0이 돼 검토기가 관측값처럼 읽는 점이다. 실제 11/5 영향 종목·점수·수익은 미확정이며 이번 수정은 이 소비자를 바꾸지 않는다. **NEXT T03-THEME-SUPPLY-MISSING:** 미관측과 실제0의 생산자 경계를 합성으로 고정한 최소 수정. 캐시 계측·새 수집과 분리한다. → [11/5 최소 수정·합성 재현·독립 리뷰 DONE](#t03-theme-supply-missing-20261105).
 
 **도래 O02:** 기존 10/6 cohort 정리는 11/5 09:34:10 시작→09:34:11 종료·rc0/success, 같은 service의 기존 journal은 deleted=true/eligible=true다. 원본 retention.jsonl은 권한상 직접 읽지 못해 intent/completed·대상 부재·보호파일 해시를 독립 확인한 것은 아니다. 권한 확대·새 삭제·재실행은 없다. 11/4 18시 사전점검 영수증은 미확인이며 미실행으로 단정하지 않는다. 20:09 판독에서 오늘 18시 사전점검 영수증도 확인되지 않았으며 미실행으로 단정하지 않는다. 내일 09:34:10 기존 timer는 WAIT다.
 
 **도래 보고:** 오늘 midday/after만 읽기 전용·5초·테이블별 LIMIT10으로 판독했다. 시장 보고 13:10/16:40은 ready/validated 및 Telegram API accepted이며 실제 모바일 수신·내용 수락은 미확정이다. 웹은 둘 다 failed/invalid_output으로 각각 unsupported_numeric/unsupported_latin @ market_view.text다. 21시 개인 요약도 21:02 읽기 전용 판독에서 본문 저장944자·Telegram API accepted이며 실제 수신/내용 수락은 미확정이다. 원문 재생성·시험 발송·소비 슬롯 재실행은 없다.
 
-**운영·예약:** 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단·기존 cron을 보존한다. 승인된 배포 재시작1회 외 새 주문·진단 실호출·시험 발송·예약은 없다. 실제 WSL 검증을 푸시 전에 완료했고 완료된 과거 검증은 반복하지 않았다. NEXT는 위 T03-THEME-SUPPLY-MISSING의 미관측/실제0 경계이며 E02/E01·E05의 현금/매수 중지 WAIT를 해제하지 않는다.
+**운영·예약:** 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단·기존 cron을 보존한다. 승인된 배포 재시작1회 외 새 주문·진단 실호출·시험 발송·예약은 없다. 실제 WSL 검증을 푸시 전에 완료했고 완료된 과거 검증은 반복하지 않았다. NEXT였던 T03-THEME-SUPPLY-MISSING은 [위 절](#t03-theme-supply-missing-20261105)에서 수정했으며 E02/E01·E05의 현금/매수 중지 WAIT를 해제하지 않는다.
 
 <a id="e04-completion-deploy-20261105"></a>
 ### E04-BEAR-COMPLETION-DECISION / 누적 소스 배포 (제어 유지 결정·검증·병합·배포 DONE / 초기 KIS 거절 지적 유지)
