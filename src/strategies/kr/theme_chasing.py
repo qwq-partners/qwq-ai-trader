@@ -482,14 +482,10 @@ class ThemeChasingStrategy(BaseStrategy):
                     # 2026-04-23 추가: 수급 데이터 주입 (cross_validator R2 활성화)
                     #   기존엔 수급 데이터가 metadata에 없어 R2(기관+외국인 동시 매도) 규칙이 비활성.
                     #   이제 _foreign_cache/_institution_cache에서 가져와 indicators에 포함.
-                    "foreign_net_buy": (
-                        self._foreign_cache.get(symbol, {}).get("net_buy", 0)
-                        if self._foreign_cache else None
-                    ),
-                    "inst_net_buy": (
-                        self._institution_cache.get(symbol, {}).get("net_buy", 0)
-                        if self._institution_cache else None
-                    ),
+                    #   T03-THEME-SUPPLY-MISSING(2026-11-05): 순위 목록에 없는 종목·검증 실패 수량은
+                    #   None(미관측). 관측된 0/음수만 숫자로 전달한다(소비자는 None만 결손으로 읽는다).
+                    "foreign_net_buy": self._cached_net_buy(self._foreign_cache, symbol),
+                    "inst_net_buy": self._cached_net_buy(self._institution_cache, symbol),
                 },
                 "atr_pct": _atr_val,
                 "position_multiplier": _pos_mult,
@@ -717,18 +713,16 @@ class ThemeChasingStrategy(BaseStrategy):
             self._foreign_cache.clear()
             for item in foreign_kospi + foreign_kosdaq:
                 sym = item.get("symbol", "")
-                net_buy = item.get("net_buy_qty", 0)
                 if sym:
-                    self._foreign_cache[sym] = {"net_buy": net_buy, "updated": now}
+                    self._foreign_cache[sym] = {"net_buy": self._validated_net_buy(item), "updated": now}
 
             inst_kospi = await self._kis_market_data.fetch_foreign_institution(market="0001", investor="2") or []
             inst_kosdaq = await self._kis_market_data.fetch_foreign_institution(market="0002", investor="2") or []
             self._institution_cache.clear()
             for item in inst_kospi + inst_kosdaq:
                 sym = item.get("symbol", "")
-                net_buy = item.get("net_buy_qty", 0)
                 if sym:
-                    self._institution_cache[sym] = {"net_buy": net_buy, "updated": now}
+                    self._institution_cache[sym] = {"net_buy": self._validated_net_buy(item), "updated": now}
 
             logger.debug(
                 f"[테마 추종] 수급 캐시 갱신: 외국인 {len(self._foreign_cache)}종목, "
@@ -737,13 +731,26 @@ class ThemeChasingStrategy(BaseStrategy):
         except Exception as e:
             logger.warning(f"[테마 추종] 수급 데이터 조회 실패 (무시): {e}")
 
+    @staticmethod
+    def _validated_net_buy(item: Dict) -> Optional[int]:
+        """순위 행의 검증된 순매수수량. 공급자가 수량 검증에 실패한 행(`_supply_proof` None)은 미관측."""
+        proof = item.get("_supply_proof")
+        value = proof.get("value") if isinstance(proof, dict) else None
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    @staticmethod
+    def _cached_net_buy(cache: Dict[str, Dict], symbol: str) -> Optional[int]:
+        """순위 캐시에 없는 종목은 None(미관측). 관측된 0·음수는 그대로 돌려준다."""
+        row = cache.get(symbol)
+        return row.get("net_buy") if row else None
+
     def _get_supply_demand_bonus(self, symbol: str) -> tuple:
         """외국인/기관 수급 기반 신뢰도 보너스/페널티"""
-        foreign_data = self._foreign_cache.get(symbol)
-        inst_data = self._institution_cache.get(symbol)
-
-        foreign_buy = foreign_data.get("net_buy", 0) if foreign_data else 0
-        inst_buy = inst_data.get("net_buy", 0) if inst_data else 0
+        # 미관측(None)은 보너스/감점 없음 — 기존 판정과 동일하게 0으로 비교한다.
+        foreign_buy = self._cached_net_buy(self._foreign_cache, symbol)
+        inst_buy = self._cached_net_buy(self._institution_cache, symbol)
+        foreign_buy = 0 if foreign_buy is None else foreign_buy
+        inst_buy = 0 if inst_buy is None else inst_buy
 
         bonus = 0.0
         info_parts = []
