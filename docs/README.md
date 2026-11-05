@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [T03 KIS 원장 조회 소유권 경계](operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105): 합성 재현·최소 수정, 실제 공급자 거절 인과와 분리.
+
 - **11/5 운영 `4117371c` 반영:** 보호 상태 유지, 초기 KIS 거절2건 지적 보존. [실제 인수·남은 WAIT](operations/execution-roadmap.md#e04-completion-deploy-20261105).
 
 - [E04 완료 조건 결정·누적 소스 배포](reviews/e04-bear-completion-decision-2026-11-05.md): 현재 제어 유지, 진단 정보 보존과 완료율 개선 구분. [실제 운영 인수·NEXT](operations/execution-roadmap.md#e04-completion-deploy-20261105).

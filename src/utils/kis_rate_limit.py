@@ -49,7 +49,7 @@ LEDGER_BUSY_TIMEOUT = 10.0  # 원장 응답 없이 이 시간이 지나면 busy 
 LEDGER_HOLD_AFTER_REJECT = 2.0  # EGW00215 수신 후 다음 원장 호출까지 최소 대기 (재시도 쌍 충돌 방지)
 
 _state = {"ledger_last": 0.0, "last_send": 0.0, "hold_until": 0.0, "rejections": 0,
-          "ledger_busy_since": 0.0, "ledger_rejections": 0}
+          "ledger_busy_since": 0.0, "ledger_rejections": 0, "ledger_owner": None}
 
 
 def note_rejection(tr_id: str = "") -> None:
@@ -92,7 +92,17 @@ def note_ledger_rejection(tr_id: str = "") -> None:
 
 
 def release_ledger() -> None:
-    """원장 TR 응답 수신(또는 실패) — busy 해제 + 간격 기준 시각을 응답 시각으로 갱신"""
+    """소유 작업의 원장 응답/실패만 해제. 늦은 응답·중복 해제는 후속 요청을 건드리지 않는다."""
+    owner = _state.get("ledger_owner")
+    if owner is None:
+        return
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:  # 실행 중인 루프가 없으면 소유권을 확인할 수 없다
+        return
+    if owner is not current:
+        return
+    _state["ledger_owner"] = None
     _state["ledger_busy_since"] = 0.0
     # 거절 백오프로 미래 시각이 잡혀 있으면 앞당기지 않는다
     _state["ledger_last"] = max(_state["ledger_last"], time.monotonic())
@@ -116,6 +126,8 @@ async def acquire(tr_id: str = "") -> None:
         elif ledger and _state["ledger_busy_since"]:
             if now - _state["ledger_busy_since"] > LEDGER_BUSY_TIMEOUT:
                 _state["ledger_busy_since"] = 0.0  # 응답 누락 — stale 해제
+                _state["ledger_owner"] = None
+                continue  # stale 해제 뒤에도 전역/원장 간격·hold·윈도우를 다시 검사
             else:
                 wait = 0.05  # 이전 원장 응답 대기 중 — 짧게 폴링
         elif ledger and now - _state["ledger_last"] < LEDGER_TR_INTERVALS.get(tr_id, LEDGER_MIN_INTERVAL):
@@ -128,6 +140,7 @@ async def acquire(tr_id: str = "") -> None:
             if ledger:
                 _state["ledger_last"] = now
                 _state["ledger_busy_since"] = now
+                _state["ledger_owner"] = asyncio.current_task()
             return
         await asyncio.sleep(wait)
 
@@ -140,4 +153,5 @@ def reset() -> None:
     _state["hold_until"] = 0.0
     _state["rejections"] = 0
     _state["ledger_busy_since"] = 0.0
+    _state["ledger_owner"] = None
     _state["ledger_rejections"] = 0

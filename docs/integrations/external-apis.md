@@ -1,5 +1,7 @@
 # 외부 API 연동
 
+> **11/5 KIS 원장 대기 소유권:** 원장 `acquire()`와 `release_ledger()`는 같은 asyncio task에서 짝을 이룬다. 이전 소유자의 늦은 응답·입장 전 취소·중복 해제는 현재 소유자의 상태를 바꾸지 않는다. GET은 헤더 도착 때 해제하며, 취소/예상 밖 종료도 자신의 대기만 정리한다. stale 10초 해제 후에는 전체 간격 검사를 다시 수행한다. 기존 10초 stale fallback은 느린 원 요청과 후속 요청의 최초 중첩을 여전히 허용하며 입장 간격이 wire/공급자 도착 간격을 보장하지는 않는다. 송신 후 취소/예상 밖 종료 시에도 서버 처리가 아직 진행 중이면 로컬 해제 후 다음 요청과 중첩될 수 있다. 한도·시한·재시도/설정 변경은 없다. [구현·WSL·운영 상태](../operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105).
+
 > **10/27 장후 보고 전용 지수:** `FHKUP03500200`의 `output2`에서 같은 행의 `stck_bsop_date`·`stck_cntg_hour`·`bstp_nmix_prpr`만 결합한다. 미소비 한국 거래일16:40 보고에서0001/1001 각1GET·당일 첫 페이지·재시도/redirect 없음. 전용 HTTP 세션으로 자동 GET 재시도를 끄며 공유 거래 캐시/세션은 유지한다. `999999`/`888888`은 유효 시각이 아니고 output1 등락률/전일값을 섞지 않는다. 결과는 참고 가격이며 확정 종가/전일대비/시장 방향은 미산출. [계약과 검증](../superpowers/plans/2026-10-27-report-index-health.md) · [운영 상태](../operations/execution-roadmap.md#r02-index-health-20261027).
 
 > **R02 보고 전용 필드:** Yahoo v7의 원래 `market_time`과 v8의 필드 부재는 거래 소비자 호환을 유지한다. 보고는 가격과 짝인 `report_market_time`/`report_market_time_kind`(regular_market/daily_bar)로 날짜를 검증한다. KIS `report_values`는 결측과0을 분리하지만 원천시각이 없는 응답에 수신시각을 대신 붙이지 않는다. 새 외부 조회는 추가하지 않는다. [보고 계약](../agents/reporting.md) · [구현/운영 상태](../operations/execution-roadmap.md#r02-telegram).
