@@ -1,10 +1,11 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-05 — T03 KIS 원장 조회 소유권 경계 (실제 WSL 10,545 passed / 통합·운영 반영 대기)
+## 2026-11-05 — T03 KIS 원장 조회 소유권 경계 (운영 f5c9e6c8 배포·인수 완료)
 
-- `src/utils/kis_rate_limit.py`: 원장 입장 task만 해제하도록 소유권을 기록한다. stale 해제 뒤 전체 가드를 재검사해 최소 송신 간격 우회를 막고, 이전 응답·중복 해제가 후속 요청을 풀거나 간격 기준을 옮기지 않는다.
+- `src/utils/kis_rate_limit.py`: 원장 입장 task만 해제하도록 소유권을 기록한다. stale 해제 뒤 전체 가드를 재검사해 최소 입장 간격 우회를 막고, 이전 응답·중복 해제가 후속 요청을 풀거나 간격 기준을 옮기지 않는다.
 - `src/execution/broker/kis_kr.py`: GET 시도 finally에서 소유한 대기를 정리한다. 취소는 전파하며 입장 대기자의 취소가 다른 요청을 해제하지 않는다. 기존 헤더 도착 시 해제와 네트워크 오류 재시도 전 해제는 유지한다.
 - 실제 브로커·리미터/가짜 HTTP 검사의 실패 재현 뒤 관련 12파일 199 passed, 격리 0·문법/diff/비밀패턴 PASS. 기존 원장 응답 fixture는 소유자 작업에서 응답하도록 정정했다. 독립 Opus5.5/high 리뷰 P0/P1 0·P2 보완 뒤 관련 2파일 38 passed(새 루프 밖 해제/정상 소유자 응답 양성 대조 포함). 실제 WSL 직렬 전체10,545 passed/2 skipped/2 xfailed·격리0·비밀검사 PASS(스냅샷cdebeec1, tree f2426a8b). 통합 상태는 [원장](docs/operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105)을 따른다.
+- PR #341/main CI와 WSL 정본 배포의 서버 직렬 전체 모두 10,545 passed. 운영21:20:25/PID609787, 기동179.10초 시 명시 인수30/30 PASS·초기 ERROR/Traceback/KIS 거절0·보호48파일/crontab/evolved/KILL/월USD100/R1·worker OFF 보존. 초기 구간 결과이며 과거 거절 인과·영구 복구는 미확정이다. 완료 문서로 재배포하지 않는다.
 - 모든 호출 한도·간격·stale 10초·HTTP 시한·재시도·거래 설정은 그대로다. 기존 stale 정책의 최초 요청 중첩 가능성, 입장/실제 전송 시각 차이는 남는다. 송신 후 취소/예상 밖 종료도 서버 처리가 끝났음을 보장하지 않아 후속 요청과 중첩될 수 있다. 오늘 자연 KIS 거절의 실제 원인이나 선정·순수익 개선을 증명한 것은 아니다.
 
 ## 2026-11-05 — E04 누적 소스 운영 배포·인수 지적
