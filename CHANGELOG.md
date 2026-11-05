@@ -1,10 +1,10 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-05 — T03-THEME-SUPPLY-MISSING 테마 수급 미관측/실제0 경계 (소스 1파일, 운영 미적용)
+## 2026-11-05 — T03-THEME-SUPPLY-MISSING 테마 수급 미관측/실제0 경계 (소스 1파일, 운영 fa72a099 배포·인수 완료)
 
 - `src/strategies/kr/theme_chasing.py`: 외국인/기관 순위 캐시에 없는 종목과 공급자 수량 검증 실패 행(`_supply_proof` None)은 `Signal.metadata.indicators`의 `foreign_net_buy`/`inst_net_buy`에 None(미관측)으로 전달한다. 종전에는 캐시에 다른 종목만 있어도 0이 전달돼 검토기가 수급 관측값으로, entry LLM이 `balanced`로 읽었다. 관측된 0·음수는 그대로 전달하고 두 측은 독립이다. 보너스/감점 산식(미관측은 0으로 비교)·임계값·전략 설정·소비자 코드는 변경 없음.
 - 새 `tests/test_theme_supply_missing.py`: 실제 `generate_signal`→metadata→`cross_validator`/`entry_llm_context` 경로를 가짜 순위 목록으로 구동해 수정 전 결함(0 전달·balanced)을 재현하고 수정 후 미관측 None·관측 0/음수 보존·한쪽 관측 독립·기존 결손 감점 1단계를 고정한다. 관련 199 passed·격리 0. 독립 Codex(gpt-6-astra/high) 리뷰 P0/P1 0·P2 문서만.
-- `theme_chasing`은 `enabled:false`·배분 0%라 현재 운영 신호에는 영향이 없고 선정·주문·순수익을 바꾸지 않는다. 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단 유지. 실제 WSL 전체·PR/CI·배포 상태는 [원장](docs/operations/execution-roadmap.md#t03-theme-supply-missing-20261105)을 따른다.
+- `theme_chasing`은 `enabled:false`·배분 0%라 현재 운영 신호에는 영향이 없고 선정·주문·순수익을 바꾸지 않는다. 설정·매수 중지·월USD100/log_and_continue·R1/worker OFF·Gemini 차단 유지. 실제 WSL/PR #343/main/서버 직렬 전체 모두 10,547 passed·격리0·비밀검사 PASS. 운영 `fa72a099` 23:08:45 재기동·PID645724, 기동170초 postcheck rc0·초기 ERROR/Traceback/KIS 거절0·보호48파일/crontab/evolved/KILL·월USD100/R1·worker OFF 보존. 해당 기동 구간 인수이며 순수익 개선 근거가 아니다. [원장](docs/operations/execution-roadmap.md#t03-theme-supply-missing-20261105).
 
 ## 2026-11-05 — T03 KIS 원장 조회 소유권 경계 (운영 f5c9e6c8 배포·인수 완료)
 
