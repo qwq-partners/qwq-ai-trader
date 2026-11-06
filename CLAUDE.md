@@ -1,5 +1,7 @@
 # QWQ AI Trader - CLAUDE.md
 
+> **11/6 R02-WEB-LABEL-NUMERIC:** 웹 리포트가 11/3~11/6 12/12 검증 거절(`unsupported_numeric`)로 대체 본문만 저장되던 원인을 판독했다. 웹 숫자 허용 풀이 값 표기만이라 프롬프트가 그대로 제시하는 `S&P500`·`2차전지`·`10개 표본`·`1세션`·관측 시각이 거절됐고(morning은 구조 확정), 출처 줄에 그대로 적힌 숫자 포함 표기만 허용하도록 `web_report.py` 1파일을 최소 수정했다. 벗겨진 숫자·변형·미인용 표기·부호 뒤집기 거절은 유지, 프롬프트·진단·시장 보고 불변. 합성 29검사 통과이며 독립 리뷰·WSL·PR·배포 상태는 [원장](docs/operations/execution-roadmap.md#r02-web-label-numeric-20261106)을 따른다. 같은 세션 도래 영수증: 시장 보고 ready/API accepted, O02 09:34 rc0, signal_events 222행 G1 차단·경계 19454.
+
 > **11/5 T03-THEME-SUPPLY-MISSING:** 테마 전략의 수급 순위 캐시에 없는 종목·검증 실패 수량이 metadata에 0으로 전달돼 검토기/entry LLM이 관측값(balanced)으로 읽던 결함을 재현해 None(미관측)으로 고쳤다. 관측된 0·음수 보존, 보너스/감점 산식·설정 불변, 소비자 코드 변경 0. theme은 비활성·배분 0%라 운영 신호 영향 없음. 독립 Codex 리뷰 P0/P1 0. 실제 WSL·PR #343·main·서버 10,547 passed, 운영 `fa72a099`/PID645724 23:08:45 기동·postcheck rc0·초기 거절0·보호48파일/cron/KILL/예산 보존. 설정·매수 중지 불변, 완료 문서 재배포 없음. [원장](docs/operations/execution-roadmap.md#t03-theme-supply-missing-20261105).
 
 > **11/5 T03 KIS 조회 소유권 수정:** 오래된 요청의 늦은 응답·취소가 후속 원장 대기를 훼손하는 경계를 합성 재현해 최소 수정하고 실제 WSL 전체10,545검사·독립 Opus5.5 소스 리뷰를 통과했다. 호출 한도/간격/시한·재시도/설정/매수 중지 유지, PR #341 병합·WSL 정본 배포로 운영 `f5c9e6c8`/PID609787에 반영했다. 21:23 기동179.10초 인수30/30 PASS·초기 거절0·보호48파일/cron 보존이며 과거 거절 인과·영구 복구를 입증한 것은 아니다. 완료 문서 재배포는 없다. [검증·운영 상태와 NEXT](docs/operations/execution-roadmap.md#t03-kis-ledger-ownership-20261105). KIS 후속은 T03이며 E05 순수익 통합 WAIT와 구분한다.

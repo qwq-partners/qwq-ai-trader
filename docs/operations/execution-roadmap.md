@@ -1,5 +1,22 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-web-label-numeric-20261106"></a>
+### R02-WEB-LABEL-NUMERIC — 웹 리포트 검증이 출처 줄의 숫자 포함 표기(S&P500·2차전지·표본 수·관측 시각)를 거절하던 경계 (원인 판독·최소 수정·합성 재현 DONE / 독립 리뷰·WSL·PR 진행)
+
+**Plan:** 11/6 22:21 KST 도래 영수증 판독에서 웹 리포트 `report_analyses(audience=web)`가 11/3~11/6 **12슬롯 전부 `failed`**(대체 본문 29자)이고 같은 기간 시장 보고는 9/9 `ready`임을 확인해 사용자가 "착수해"로 원인 판독·최소 보완을 승인했다. 기준 main `f68ed7c1`, 운영 `fa72a099`/PID645724(변경 없음). 목적은 검증 기준 완화가 아니라 프롬프트가 사실로 제시하는 표기와 검증 허용 범위의 불일치 제거다. 실호출·재생성·시험 발송·슬롯 재실행은 하지 않는다.
+
+**Do/판독(읽기 전용·5초·LIMIT≤12):** 저장된 사유는 `unsupported_numeric` 11(`market_view.text` 9, `summary[0]` 1, `sector_view.text` 1)·`unsupported_latin` 1(11/5 after). 저널 11/6 07:41:47·13:11:49·16:41:50 WARNING과 일치. 응답 본문은 설계상 저장되지 않아(`result_json`은 facts·reason만) 슬롯별 실제 거절 토큰은 **미확정**이다. 코드 대조: 웹 `_check_text`의 숫자 허용 풀은 `fact_numbers`의 **값 표기(가격·등락률)만**이고, 시장 보고 `_research_validate`는 사실 줄 본문 전체를 쓴다. 그런데 웹 프롬프트는 `fact_lines` 줄을 그대로 제시하므로 라벨 `S&P500`(토큰 500), 섹터명 `2차전지`(토큰 2), 보일러플레이트 `확인 10개 표본`·`최근 1세션`, 관측 시각 `15:32`가 모두 숫자 토큰으로 거절된다. morning 슬롯은 facts가 미국 지수 3개뿐이고 `market_view`는 M 인용이 필수라 `S&P500` 표기를 쓰는 순간 구조적으로 거절된다(구조 확정). midday/after는 `2차전지`(11/5·11/6 facts에 존재)·표본 수·관측 시각이 유력하나 본문 미저장으로 확정하지 않는다. 기존 검사 `tests/test_web_report.py`는 `'코스피 3% 급락 우려, 외국인 1조 순매도'`를 "boilerplate digits are not a licence"로 거절해야 한다고 고정하므로 시장 보고처럼 줄 전체 숫자를 푸는 것은 계약 위반이다.
+
+**Do/최소 수정(`src/analytics/web_report.py` 1파일, +20/−4):** 새 `_digit_words`가 인용 출처 줄에서 **숫자가 다른 문자와 붙은 표기**(순수 숫자·`YYYY-MM-DD` 제외)만 모으고, `_check_text(words=)`가 숫자 토큰 추출 전에 그 표기를 `(?<!\d)…(?!\d)` 경계로 제거한다. 블록(`market_view/sector_view/macro_view/issues/outlook`)은 그 블록이 인용한 출처만, `headline/summary/checklist`는 전체 출처를 쓴다. 벗겨진 숫자(`3%`·`1조`·`10%`·`500 포인트`)는 종전과 같이 값 풀로만 판정하고, 이어 붙은 변형(`S&P5000`·`12차전지`·`15,730.74`)·미인용 사실의 표기·부호 뒤집기·잘못된 표본 수는 계속 거절한다. 프롬프트·스키마·`PROMPT_VERSION`·저장 행·거절 진단 코드/경로·호출 횟수·시장 보고 검증은 불변.
+
+**수정 전후 판단(합성, `tests/test_web_report_label_numeric.py` 5건):** 11/6 07:40과 같은 모양의 facts(미국 지수 3개)에서 `S&P500이 -4.36%, 나스닥이 -5.52% 내려…`(M1·M2 인용)는 전 `unsupported_numeric @ market_view.text` → 후 통과. after facts+합성 `2차전지`에서 `KOSPI 5,730.74는 15:32 관측값…`·`확인 11개 표본의 최근 1세션에서 2차전지가 -1.70%…`도 전 거절 → 후 통과. 거절 유지 9사례(위 목록 + `확인 10개 표본`(실제 11개)). 값 풀에 `500`이 없음을 검사해 허용 근거가 표기 그대로 규칙뿐임을 고정했다.
+
+**See/검증(AWS 보조):** 신규 5 + 기존 `test_web_report.py`·`test_web_report_rejection_diagnostics.py` 24 = **29 passed**, 격리 위반 0. 관련 보고 묶음·독립 Codex 리뷰·실제 WSL 직렬 전체·PR/CI 영수증은 아래에 추가한다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
+
+**도래 영수증(11/6 22:21 판독, 같은 세션):** 시장 보고 3슬롯 `ready`·Telegram API accepted(수신·내용 수락 미확정). O02 `qwq-entry-capture-retention-20261106.timer` 09:34:10 발화 → `qwq-toss-observer-retention-20261007.service` 09:34:11 rc0·`{"deleted": true, "eligible": true}`(10/7 cohort, `/var/lib/qwq-toss-observer`는 권한상 미열람, 권한 확대 없음). `signal_events` id>19232 새 222행 전부 `intraday_screening/blocked/G1_regime`(11/6 10:02~14:59), passed 0, 판독 경계 **id 19454**. E02-RR/E01·E05 WAIT 불변.
+
+**NEXT:** 독립 Codex 리뷰 → 실제 WSL 직렬 전체 → 커밋/푸시·PR·필수 CI → 사용자 병합·배포 결정. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
+
 <a id="t03-theme-supply-missing-20261105"></a>
 ### T03-THEME-SUPPLY-MISSING — 테마 수급 미관측/실제0 생산자 경계 (수정·합성 재현·독립 리뷰·실제 WSL·PR #343 병합·운영 fa72a099 인수 DONE)
 
