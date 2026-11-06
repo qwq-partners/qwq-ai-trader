@@ -205,6 +205,12 @@ _BANNED = re.compile(r'(매수|매도|비중\s*확대|비중\s*축소)\s*(추천
 _DIGIT_WORD = re.compile(r'\S*\d\S*')
 # 숫자 표현(10% · +1.20% · (-5.65%) · 2026-11-06)은 표기가 아니라 값이다 — 부호 포함 값 풀(_numbers)로만 판정한다.
 _NUMERIC_EXPRESSION = re.compile(rf'[(\[]*(?:{_NUMBER}|{_DATE})[%)\]]*')
+# 표기 뒤에는 공백·문장부호 또는 아래 조사만 올 수 있다. 다른 글자가 이어지면(11개→11개월, 2차전지→2차전지주) 표기 그대로가 아니다.
+# ponytail: 조사 허용 목록은 고정 집합 — 합성어(2차전지주)는 거절되는 상한, 자연 거절 자료에서 필요해지면 목록을 넓힌다.
+_PARTICLES = ('이라는', '이라고', '에서는', '에서도', '으로는', '으로도', '이라', '라는', '라고', '이고', '이며', '이다', '이나', '에는', '에도',
+              '로는', '로도', '과는', '와는', '보다', '까지', '부터', '처럼', '마다', '에서', '으로', '이', '가', '은', '는', '을', '를',
+              '의', '도', '와', '과', '에', '로', '만', '나', '다', '라')
+_AFTER_WORD = rf'(?=(?:{"|".join(sorted(set(_PARTICLES), key=len, reverse=True))})?(?![0-9A-Za-z가-힣]))'
 
 
 # R02-WEB-LABEL-NUMERIC (2026-11-06): 출처 줄에 그대로 적힌, 숫자가 다른 문자와 붙은 표기(S&P500·2차전지·10개·1세션·15:32)는
@@ -235,8 +241,8 @@ def _check_text(value, limit, *, dates, numbers, latin, field, words=()):
     if any(d not in dates for d in re.findall(_DATE, normalized)):
         raise AnalysisValidationError('unsupported_date', field)
     numbers_only = re.sub(_DATE, '', normalized)
-    for word in sorted(words, key=len, reverse=True):   # 이어 붙은 변형(S&P5000·12차전지)·앞에 붙은 부호(-10개)는 표기 그대로가 아니다
-        numbers_only = re.sub(rf'(?<![\d+\-.,]){re.escape(word)}(?!\d)', ' ', numbers_only)
+    for word in sorted(words, key=len, reverse=True):   # 이어 붙은 변형(S&P5000·12차전지·11개월)·앞에 붙은 부호(-10개)는 표기 그대로가 아니다
+        numbers_only = re.sub(rf'(?<![\d+\-.,]){re.escape(word)}{_AFTER_WORD}', ' ', numbers_only)
     # A signed token must match a signed spelling: "+1.20%" in the facts never licenses "-1.20%".
     if any(n not in numbers for n in re.findall(_NUMBER, numbers_only)):
         raise AnalysisValidationError('unsupported_numeric', field)

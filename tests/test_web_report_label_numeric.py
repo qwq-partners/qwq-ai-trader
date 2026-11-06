@@ -91,6 +91,19 @@ def test_bare_digits_and_uncited_labels_stay_rejected():
     _rejects(web_response(sector_view=dict(text='2차전지가 +1.70% 올랐다.', evidence_ids=[battery])), after, 'sector_view.text')
     # 표기 앞에 붙은 부호도 표기 그대로가 아니다
     _rejects(web_response(sector_view=dict(text='표본이 -11개로 줄었다.', evidence_ids=[battery])), after, 'sector_view.text')
+    # 표기 뒤에 다른 글자가 이어지는 단위 확장·합성어는 표기 그대로가 아니다(독립 리뷰 3차 P2)
+    _rejects(web_response(sector_view=dict(text='향후 11개월 동안 약세가 이어질 수 있다.', evidence_ids=[battery])), after, 'sector_view.text')
+    _rejects(web_response(sector_view=dict(text='2차전지주가 약했다.', evidence_ids=[battery])), after, 'sector_view.text')
+    _rejects(web_response(market_view=dict(text='S&P500선물이 내렸다.', evidence_ids=['M1'])), morning, 'market_view.text')
+
+
+def test_particles_and_punctuation_after_a_label_are_allowed():
+    after = after_facts_with_battery()
+    battery = next(fid for fid, text in web.fact_lines(after) if '2차전지' in text)
+    text = ('2차전지가 약했고 2차전지는 반등하지 못했으며 2차전지에서는 매수세가 없었다. '
+            '확인 11개의 표본 중 2차전지의 낙폭이 가장 컸다(2차전지). 2차전지, 그리고 2차전지.')
+    ok = _validate(web_response(sector_view=dict(text=text, evidence_ids=[battery])), after)
+    assert ok['sector_view']['text'].startswith('2차전지가')
 
 
 def test_unsigned_public_evidence_number_never_licenses_a_signed_rewrite():
