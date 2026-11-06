@@ -28,6 +28,11 @@
 - 생성: 고정 역할 `WEB_REPORT`(GPT-6 Astra/medium·JSON) 1회. 스키마 `web-report-v1`: `stance`(우호/중립/경계) · `headline` ·
   `summary` 2~4 · `market_view` · `sector_view` · `issues` 1~4(사건/영향/반론/확인) · `macro_view|null` · `outlook`(기본/상방/하방) ·
   `checklist` 2~5. 모든 문장은 한글 필수, 숫자·날짜는 인용한 M/E의 표시 값만(부호 포함 일치), 영문은 입력 표기만, 추천·목표가 어휘 금지, 이슈 하나 이상은 사건 E 인용.
+  숫자 포함 표기(R02-WEB-LABEL-NUMERIC, 2026-11-06~): 인용한 출처 줄에 그대로 적힌, 숫자가 다른 문자와 붙은 표기(`S&P500`·`2차전지`·
+  `확인 10개 표본`·`최근 1세션`·관측 `15:32`)는 그 표기 그대로일 때만 숫자 검사에서 제외한다(`_digit_words`, 블록은 인용 출처만·
+  숫자 표현 `10%`·`+1.20%`·`(-5.65%)`·날짜·순수 숫자는 표기가 아니라 값이라 등록하지 않고, 표기 앞에 붙은 부호(`-11개`)·뒤에 이어지는 다른 글자(`11개월`·`2차전지주`·`S&P500선물`)도 표기 그대로가 아니다(뒤에는 공백·문장부호·고정 조사 목록만)·
+  `headline/summary/checklist`는 전체 출처). 벗겨진 숫자(`3%`·`1조`·`10%`)·이어 붙은 변형(`S&P5000`·`12차전지`)·미인용 사실의 표기·
+  부호 뒤집기·잘못된 표본 수는 계속 `unsupported_numeric`이다. 시장 보고 검증(사실 줄 전체 숫자 허용)과는 다른, 더 좁은 규칙이다.
 - 저장: `report_analyses(audience=web)` 행에 `result_json={facts, analysis|null, reason}`. 모델 실패·근거 부재·검증 실패도
   사실은 남겨 페이지가 자료를 보여 주고 "분석 미확보"와 사유를 표시한다. 고아 attempt는 재시도하지 않는다.
 - 거절 진단(R02-WEB-REJECTION-DIAGNOSTICS, 2026-11-02~): `validate_web_analysis`는 시장 보고와 같은

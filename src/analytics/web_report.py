@@ -202,11 +202,31 @@ _NUMBER = r'[+-]?\d+(?:[.,]\d+)*'
 _HEDGE = re.compile(r'동행하거나\s*다르게|유지되거나\s*역전|일치하거나\s*다르게')
 # The page promises no recommendations or price targets; reject the vocabulary outright.
 _BANNED = re.compile(r'(매수|매도|비중\s*확대|비중\s*축소)\s*(추천|권고|의견|전략)|목표\s*주?가|적극\s*매[수도]|[매강]력\s*매수')
+_DIGIT_WORD = re.compile(r'\S*\d\S*')
+# 숫자 표현(10% · +1.20% · (-5.65%) · 2026-11-06)은 표기가 아니라 값이다 — 부호 포함 값 풀(_numbers)로만 판정한다.
+_NUMERIC_EXPRESSION = re.compile(rf'[(\[]*(?:{_NUMBER}|{_DATE})[%)\]]*')
+# 표기 뒤에는 공백·문장부호 또는 아래 조사만 올 수 있다. 다른 글자가 이어지면(11개→11개월, 2차전지→2차전지주) 표기 그대로가 아니다.
+# ponytail: 조사 허용 목록은 고정 집합 — 합성어(2차전지주)는 거절되는 상한, 자연 거절 자료에서 필요해지면 목록을 넓힌다.
+_PARTICLES = ('이라는', '이라고', '에서는', '에서도', '으로는', '으로도', '이라', '라는', '라고', '이고', '이며', '이다', '이나', '에는', '에도',
+              '로는', '로도', '과는', '와는', '보다', '까지', '부터', '처럼', '마다', '에서', '으로', '이', '가', '은', '는', '을', '를',
+              '의', '도', '와', '과', '에', '로', '만', '나', '다', '라')
+_AFTER_WORD = rf'(?=(?:{"|".join(sorted(set(_PARTICLES), key=len, reverse=True))})?(?![0-9A-Za-z가-힣]))'
+
+
+# R02-WEB-LABEL-NUMERIC (2026-11-06): 출처 줄에 그대로 적힌, 숫자가 다른 문자와 붙은 표기(S&P500·2차전지·10개·1세션·15:32)는
+# 그 표기 그대로일 때만 인용 허용. 숫자 표현은 제외해 벗겨진 숫자(3%·1조·10%)와 부호 뒤집기(-10%)는 계속 값 풀로만 판정한다.
+def _digit_words(texts) -> set[str]:
+    words = set()
+    for text in texts:
+        for word in _DIGIT_WORD.findall(unicodedata.normalize('NFKC', text)):
+            if not _NUMERIC_EXPRESSION.fullmatch(word):
+                words.add(word)
+    return words
 
 
 # R02-WEB-REJECTION-DIAGNOSTICS (2026-11-02): 검증 거절은 시장 보고와 같은 AnalysisValidationError(code, field) 로
 # 올린다 — 고정 코드와 스키마 경로뿐이며 응답 본문은 절대 담지 않는다. ValueError 하위이므로 기존 호출자 호환.
-def _check_text(value, limit, *, dates, numbers, latin, field):
+def _check_text(value, limit, *, dates, numbers, latin, field, words=()):
     if not isinstance(value, str) or not value.strip():
         raise AnalysisValidationError('invalid_prose', field)
     if len(value) > limit:
@@ -221,6 +241,8 @@ def _check_text(value, limit, *, dates, numbers, latin, field):
     if any(d not in dates for d in re.findall(_DATE, normalized)):
         raise AnalysisValidationError('unsupported_date', field)
     numbers_only = re.sub(_DATE, '', normalized)
+    for word in sorted(words, key=len, reverse=True):   # 이어 붙은 변형(S&P5000·12차전지·11개월)·앞에 붙은 부호(-10개)는 표기 그대로가 아니다
+        numbers_only = re.sub(rf'(?<![\d+\-.,]){re.escape(word)}{_AFTER_WORD}', ' ', numbers_only)
     # A signed token must match a signed spelling: "+1.20%" in the facts never licenses "-1.20%".
     if any(n not in numbers for n in re.findall(_NUMBER, numbers_only)):
         raise AnalysisValidationError('unsupported_numeric', field)
@@ -256,6 +278,7 @@ def validate_web_analysis(text, facts, bundle) -> dict:
     all_dates, _ = _tokens(sources.values())
     _, all_numbers = _tokens(numeric.values())
     latin = {x.casefold() for x in re.findall(r'[A-Za-z]+', ' '.join(sources.values()))} | _LATIN_ALLOWED
+    all_words = _digit_words(sources.values())
     event_ids = {r['id'] for r in bundle['records'] if r['kind'] in ('news', 'disclosure', 'calendar')}
 
     def check_block(item, fields, path, text_limit=None):
@@ -266,19 +289,20 @@ def validate_web_analysis(text, facts, bundle) -> dict:
             raise AnalysisValidationError('invalid_evidence', path + '.evidence_ids')
         dates, _ = _tokens(sources[x] for x in ids)
         _, numbers = _tokens(numeric[x] for x in ids)
+        words = _digit_words(sources[x] for x in ids)
         for key in fields:
             _check_text(item[key], text_limit if text_limit is not None else LIMITS[key], dates=dates, numbers=numbers,
-                        latin=latin, field=path + '.' + key)
+                        latin=latin, field=path + '.' + key, words=words)
 
     def check_list(items, key, low, high):
         if not isinstance(items, list) or not low <= len(items) <= high:
             raise AnalysisValidationError('invalid_item', key)
         for index, value in enumerate(items):
             _check_text(value, LIMITS[key], dates=all_dates, numbers=all_numbers, latin=latin,
-                        field=f'{key}[{index}]')
+                        field=f'{key}[{index}]', words=all_words)
 
     _check_text(obj['headline'], LIMITS['headline'], dates=all_dates, numbers=all_numbers, latin=latin,
-                field='headline')
+                field='headline', words=all_words)
     check_list(obj['summary'], 'summary', 2, 4)
     check_block(obj['market_view'], ('text',), 'market_view', LIMITS['market_view'])
     check_block(obj['sector_view'], ('text',), 'sector_view', LIMITS['sector_view'])

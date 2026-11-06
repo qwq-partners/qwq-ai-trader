@@ -1,5 +1,32 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="r02-web-label-numeric-20261106"></a>
+### R02-WEB-LABEL-NUMERIC — 웹 리포트 검증이 출처 줄의 숫자 포함 표기(S&P500·2차전지·표본 수·관측 시각)를 거절하던 경계 (원인 판독·최소 수정·합성 재현 DONE / 독립 리뷰·WSL·PR 진행)
+
+**Plan:** 11/6 22:21 KST 도래 영수증 판독에서 웹 리포트 `report_analyses(audience=web)`가 11/3~11/6 **12슬롯 전부 `failed`**(대체 본문 29자)이고 같은 기간 시장 보고는 9/9 `ready`임을 확인해 사용자가 "착수해"로 원인 판독·최소 보완을 승인했다. 기준 main `f68ed7c1`, 운영 `fa72a099`/PID645724(변경 없음). 목적은 검증 기준 완화가 아니라 프롬프트가 사실로 제시하는 표기와 검증 허용 범위의 불일치 제거다. 실호출·재생성·시험 발송·슬롯 재실행은 하지 않는다.
+
+**Do/판독(읽기 전용·5초·LIMIT≤12):** 저장된 사유는 `unsupported_numeric` 11(`market_view.text` 9, `summary[0]` 1, `sector_view.text` 1)·`unsupported_latin` 1(11/5 after). 저널 11/6 07:41:47·13:11:49·16:41:50 WARNING과 일치. 응답 본문은 설계상 저장되지 않아(`result_json`은 facts·reason만) 슬롯별 실제 거절 토큰은 **미확정**이다. 코드 대조: 웹 `_check_text`의 숫자 허용 풀은 `fact_numbers`의 **값 표기(가격·등락률)만**이고, 시장 보고 `_research_validate`는 사실 줄 본문 전체를 쓴다. 그런데 웹 프롬프트는 `fact_lines` 줄을 그대로 제시하므로 라벨 `S&P500`(토큰 500), 섹터명 `2차전지`(토큰 2), 보일러플레이트 `확인 10개 표본`·`최근 1세션`, 관측 시각 `15:32`가 모두 숫자 토큰으로 거절된다. morning 슬롯은 facts가 미국 지수 3개뿐이고 `market_view`는 M 인용이 필수라 `S&P500` 표기를 쓰는 순간 구조적으로 거절된다(구조 확정). midday/after는 `2차전지`(11/5·11/6 facts에 존재)·표본 수·관측 시각이 유력하나 본문 미저장으로 확정하지 않는다. 기존 검사 `tests/test_web_report.py`는 `'코스피 3% 급락 우려, 외국인 1조 순매도'`를 "boilerplate digits are not a licence"로 거절해야 한다고 고정하므로 시장 보고처럼 줄 전체 숫자를 푸는 것은 계약 위반이다.
+
+**Do/최소 수정(`src/analytics/web_report.py` 1파일):** 새 `_digit_words`가 인용 출처 줄에서 **숫자가 다른 문자와 붙은 표기**만 모은다 — 숫자 표현(`10%`·`+1.20%`·`(-5.65%)`·`YYYY-MM-DD`·순수 숫자, `_NUMERIC_EXPRESSION`)은 표기가 아니라 값이라 제외한다. `_check_text(words=)`가 숫자 토큰 추출 전에 그 표기를 제거하되, 앞은 숫자·부호·소수점이 아니고 뒤는 공백·문장부호 또는 고정 조사 목록(`_PARTICLES`: 이/가/은/는/을/를/의/도/에/에서/로/으로/와/과/만/까지/부터/이다/이며 등)만 허용한다. 따라서 앞에 붙은 부호(`-11개`), 이어 붙은 숫자(`S&P5000`), 뒤에 다른 글자가 이어지는 단위 확장·합성어(`11개월`·`2차전지주`·`S&P500선물`)는 표기 그대로가 아니다(합성어 거절은 알려진 상한, 자연 거절 자료가 요구할 때만 목록 확장). 블록(`market_view/sector_view/macro_view/issues/outlook`)은 그 블록이 인용한 출처만, `headline/summary/checklist`는 전체 출처를 쓴다. 벗겨진 숫자(`3%`·`1조`·`10%`·`500 포인트`)는 종전과 같이 값 풀로만 판정하고, 이어 붙은 변형(`S&P5000`·`12차전지`·`15,730.74`)·미인용 사실의 표기·부호 뒤집기·잘못된 표본 수는 계속 거절한다. 프롬프트·스키마·`PROMPT_VERSION`·저장 행·거절 진단 코드/경로·호출 횟수·시장 보고 검증은 불변.
+
+**수정 전후 판단(합성, `tests/test_web_report_label_numeric.py` 6건):** 11/6 07:40과 같은 모양의 facts(미국 지수 3개)에서 `S&P500이 -4.36%, 나스닥이 -5.52% 내려…`(M1·M2 인용)는 전 `unsupported_numeric @ market_view.text` → 후 통과. after facts+합성 `2차전지`에서 `KOSPI 5,730.74는 15:32 관측값…`·`확인 11개 표본의 최근 1세션에서 2차전지가 -1.70%…`도 전 거절 → 후 통과. 거절 유지 14사례(위 목록 + `확인 10개 표본`(실제 11개) + `-11개` + `11개월`·`2차전지주`·`S&P500선물`), 조사·문장부호 뒤 허용(`2차전지가/는/에서는/의`, `(2차전지)`, `2차전지,`) 1건. 값 풀에 `500`이 없음을 검사해 허용 근거가 표기 그대로 규칙뿐임을 고정했다. 독립 리뷰 P2(아래)의 회귀 검사: E 발췌의 부호 없는 `10%`는 응답 `10%`만 허용하고 `-10%`·`+10%`·`10.0%`는 `unsupported_numeric @ issues[0].event`로 거절한다.
+
+**See/검증(AWS 보조, 같은 명령 `venv/bin/python -m pytest tests/test_web_report_label_numeric.py tests/test_web_report.py tests/test_web_report_rejection_diagnostics.py -q`):** `3a20d733` 신규 4 + 기존 25 = 29 passed · `f841cefa` 신규 5 + 25 = 30 passed · `ab79e3d5`(최종 소스) 신규 6 + 기존 25(`test_web_report.py` 5·`test_web_report_rejection_diagnostics.py` 20) = **31 passed**. 관련 보고 묶음 11파일은 `ab79e3d5`에서 158 passed, 격리 위반 0. 정식 전체 검증은 아래 실제 WSL 영수증.
+
+**See/독립 리뷰 1차(Codex, 커밋 `3a20d733`):** 요청 gpt-6-astra/high였으나 헤더는 `model: gpt-6-astra`·`reasoning effort: medium` — 원인은 호출자(이 세션)가 `codex_review.sh`의 변수 `QWQ_REVIEW_CODEX_BIN` 대신 `CODEX_BIN`을 넘겨 래퍼가 적용되지 않고 config 기본값으로 돈 것이다(Codex 결함 아님, 제어 호출로 래퍼 단독은 high 확인). **실효 gpt-6-astra/medium으로 기록**. 정적 검토, P0/P1 0, **P2 1건 유효**: 근거 E의 부호 없는 `10%`가 표기로 등록돼 응답 `-10%`에서 `10%`만 제거되고 `-`가 남아 부호 뒤집기 거절이 퇴행 → 숫자 표현 제외·제거 경계 앞 부호 차단·회귀 검사 1건(커밋 `f841cefa`).
+
+**See/독립 리뷰 2차(Codex, 커밋 `f841cefa`, 같은 호출 오류로 실효 gpt-6-astra/medium):** P0/P1 0, **P2 문서 1건 유효**: 신규 검사 수를 6건으로 적었으나 실제 5건(기존 25, 합 30) → 본 절·CHANGELOG 정정. 코드상 차단 결함 없음, 조건부 병합(WSL 직렬 전체·CI 뒤).
+
+**See/독립 리뷰 3차(Codex, 커밋 `af125882`, 헤더 `gpt-6-astra`/`high` — `QWQ_REVIEW_CODEX_BIN` 래퍼):** P0/P1 0, **P2 1건 유효**: 오른쪽 경계 `(?!\d)`가 숫자만 막아 `11개`가 허용되면 응답 `향후 11개월…`에서 `11개`가 지워지고 근거 없는 기간이 통과 → 뒤 경계를 공백·문장부호·고정 조사 목록으로 제한하고 `11개월`/`2차전지주`/`S&P500선물` 거절·조사 허용 회귀 검사를 추가했다(후속 커밋).
+
+**See/독립 리뷰 4차(Codex, 커밋 `ab79e3d5`, 헤더 `gpt-6-astra`/`high`):** P0/P1 0, **P2 문서 1건**: 검증 줄이 `HEAD f841cefa`에 신규 6·31 passed로 적혀 SHA와 수치가 어긋남 + `git diff --check` 후행 공백 1곳 → 본 문서 커밋에서 SHA별 수치로 분리·공백 제거. 코드 지적 없음, 조건부 병합(WSL·CI 뒤).
+
+**See/실제 WSL 직렬 전체(`ab79e3d5`):** 사용자 WSL(6.6.87.2-microsoft-standard-WSL2) 격리 워크트리에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` → **10,553 passed / 2 skipped / 2 xfailed**, 427.94초(총 440초), rc 0, 격리 위반 0, 트리 전후 동일·원본 main `fa72a099` clean 보존. 번들 sha256 `e7171197…`(전제 `fa72a099`), 로그 sha256 `87951184…`. 임시 키는 작업 전용 sshd 파일에만 등록했고 배포 결정 뒤 제거·재접속 거부 확인·AWS 키 파기를 영수증에 남긴다. PR/CI 영수증은 아래에 추가한다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
+
+**도래 영수증(11/6 22:21 판독, 같은 세션):** 시장 보고 3슬롯 `ready`·Telegram API accepted(수신·내용 수락 미확정). O02 `qwq-entry-capture-retention-20261106.timer` 09:34:10 발화 → `qwq-toss-observer-retention-20261007.service` 09:34:11 rc0·`{"deleted": true, "eligible": true}`(10/7 cohort, `/var/lib/qwq-toss-observer`는 권한상 미열람, 권한 확대 없음). `signal_events` id>19232 새 222행 전부 `intraday_screening/blocked/G1_regime`(11/6 10:02~14:59), passed 0, 판독 경계 **id 19454**. E02-RR/E01·E05 WAIT 불변.
+
+**NEXT:** 푸시·PR·필수 CI → 사용자 병합·배포 결정. 이 문서 커밋은 소스 변경 0이라 WSL 검증 소스 `ab79e3d5`와 같은 코드 트리(docs 차이만)이며 PR 필수 CI의 전체 verify로 최종 HEAD를 다시 검증한다. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
+
 <a id="t03-theme-supply-missing-20261105"></a>
 ### T03-THEME-SUPPLY-MISSING — 테마 수급 미관측/실제0 생산자 경계 (수정·합성 재현·독립 리뷰·실제 WSL·PR #343 병합·운영 fa72a099 인수 DONE)
 
