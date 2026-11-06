@@ -1,7 +1,7 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
 <a id="r02-web-label-numeric-20261106"></a>
-### R02-WEB-LABEL-NUMERIC — 웹 리포트 검증이 출처 줄의 숫자 포함 표기(S&P500·2차전지·표본 수·관측 시각)를 거절하던 경계 (원인 판독·최소 수정·합성 재현 DONE / 독립 리뷰·WSL·PR 진행)
+### R02-WEB-LABEL-NUMERIC — 웹 리포트 검증이 출처 줄의 숫자 포함 표기(S&P500·2차전지·표본 수·관측 시각)를 거절하던 경계 (수정·합성 재현·독립 리뷰 4회·실제 WSL·PR #346 병합·운영 `b127577c` 인수 DONE / 자연 수락 WAIT)
 
 **Plan:** 11/6 22:21 KST 도래 영수증 판독에서 웹 리포트 `report_analyses(audience=web)`가 11/3~11/6 **12슬롯 전부 `failed`**(대체 본문 29자)이고 같은 기간 시장 보고는 9/9 `ready`임을 확인해 사용자가 "착수해"로 원인 판독·최소 보완을 승인했다. 기준 main `f68ed7c1`, 운영 `fa72a099`/PID645724(변경 없음). 목적은 검증 기준 완화가 아니라 프롬프트가 사실로 제시하는 표기와 검증 허용 범위의 불일치 제거다. 실호출·재생성·시험 발송·슬롯 재실행은 하지 않는다.
 
@@ -21,11 +21,15 @@
 
 **See/독립 리뷰 4차(Codex, 커밋 `ab79e3d5`, 헤더 `gpt-6-astra`/`high`):** P0/P1 0, **P2 문서 1건**: 검증 줄이 `HEAD f841cefa`에 신규 6·31 passed로 적혀 SHA와 수치가 어긋남 + `git diff --check` 후행 공백 1곳 → 본 문서 커밋에서 SHA별 수치로 분리·공백 제거. 코드 지적 없음, 조건부 병합(WSL·CI 뒤).
 
-**See/실제 WSL 직렬 전체(`ab79e3d5`):** 사용자 WSL(6.6.87.2-microsoft-standard-WSL2) 격리 워크트리에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` → **10,553 passed / 2 skipped / 2 xfailed**, 427.94초(총 440초), rc 0, 격리 위반 0, 트리 전후 동일·원본 main `fa72a099` clean 보존. 번들 sha256 `e7171197…`(전제 `fa72a099`), 로그 sha256 `87951184…`. 임시 키는 작업 전용 sshd 파일에만 등록했고 배포 결정 뒤 제거·재접속 거부 확인·AWS 키 파기를 영수증에 남긴다. PR/CI 영수증은 아래에 추가한다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
+**See/실제 WSL 직렬 전체(`ab79e3d5`):** 사용자 WSL(6.6.87.2-microsoft-standard-WSL2) 격리 워크트리에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` → **10,553 passed / 2 skipped / 2 xfailed**, 427.94초(총 440초), rc 0, 격리 위반 0, 트리 전후 동일·원본 main `fa72a099` clean 보존. 번들 sha256 `e7171197…`(전제 `fa72a099`), 로그 sha256 `87951184…`. 임시 키는 작업 전용 sshd 파일에만 등록했고 배포 결정 뒤 제거·재접속 거부 확인·AWS 키 파기를 영수증에 남긴다.
+
+**See/PR·병합:** [PR #346](https://github.com/qwq-partners/qwq-ai-trader/pull/346) HEAD `93b41c8a`(소스 `ab79e3d5`+문서 커밋, 코드 차이 0) 필수 `verify` run42230913332 success(8분52초) → `--match-head-commit`으로 merge `b127577c`(11/6 23:35:43 KST) → main Verify run42235327098 success. 앱 PR 바인딩은 워크트리 origin 미인식으로 실패해 gh 한정 대기로 확인했다.
+
+**See/운영 인수(사용자 "배포해" 승인):** 사전 스냅샷 23:59:33(운영 `fa72a099`·PID645724·pending0·broker 연결·recovery ready·보호 48파일 변동 0) → WSL main `b127577c` ff·`--check` 정상 → crontab 23시/0시대 항목과 스케줄러 자정 작업이 없음을 확인하고 11/7 00:00:12 KST 드라이버 `--deploy b127577c` 기동(자정 이후 시작·재시작임을 명시) → 서버 직렬 전체 **10,553 passed / 2 skipped / 2 xfailed**(869.11초)·비밀 패턴 검사 PASS·롤백 0 → **00:15:09 KST 재시작 PID754080**, NRestarts0. 00:17:50 `--postcheck` rc0(pending0·실행원장 ready·루프 정체 없음), 사후 스냅샷 00:17:53: 운영 HEAD `b127577c`·보호 48파일 변경 0·crontab 보존·KILL_SWITCH_KR·월USD100/log_and_continue·R1 OFF·worker OFF·Toss 0 보존·evolved 미커밋 변경 보존. 기동 저널 147줄 ERROR0/Traceback0/HTTP500 0/EGW00201 0/EGW00215 0, 브로커 연결·엔진 시작 로그 확인. WSL 임시 키는 작업 전용 파일에서 제거(사용자가 주석 오타판으로 등록해 키 재질 기준 제거, 남은 줄 0)·재접속 거부 rc255·AWS 키 shred, 핀/터널/사용자 키 불변. 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/completion.json`. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
 
 **도래 영수증(11/6 22:21 판독, 같은 세션):** 시장 보고 3슬롯 `ready`·Telegram API accepted(수신·내용 수락 미확정). O02 `qwq-entry-capture-retention-20261106.timer` 09:34:10 발화 → `qwq-toss-observer-retention-20261007.service` 09:34:11 rc0·`{"deleted": true, "eligible": true}`(10/7 cohort, `/var/lib/qwq-toss-observer`는 권한상 미열람, 권한 확대 없음). `signal_events` id>19232 새 222행 전부 `intraday_screening/blocked/G1_regime`(11/6 10:02~14:59), passed 0, 판독 경계 **id 19454**. E02-RR/E01·E05 WAIT 불변.
 
-**NEXT:** 푸시·PR·필수 CI → 사용자 병합·배포 결정. 이 문서 커밋은 소스 변경 0이라 WSL 검증 소스 `ab79e3d5`와 같은 코드 트리(docs 차이만)이며 PR 필수 CI의 전체 verify로 최종 HEAD를 다시 검증한다. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
+**NEXT:** 다음 거래일 07:40 web morning 슬롯의 `report_analyses(web).status=ready` 여부로 자연 인수한다(라벨 허용이 수락을 보장하지 않음). 거절이 재발하면 저장된 `validation_code/field`로 판독하며 응답 본문 저장·검증 완화·재발송은 하지 않는다. 이 문서 영수증은 재배포하지 않는다. E02-RR/E01 입력 전제 결정·E05는 WAIT 그대로. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
 
 <a id="t03-theme-supply-missing-20261105"></a>
 ### T03-THEME-SUPPLY-MISSING — 테마 수급 미관측/실제0 생산자 경계 (수정·합성 재현·독립 리뷰·실제 WSL·PR #343 병합·운영 fa72a099 인수 DONE)

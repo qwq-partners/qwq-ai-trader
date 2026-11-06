@@ -1,6 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
-- [R02-WEB-LABEL-NUMERIC 웹 리포트 숫자 포함 표기 경계](operations/execution-roadmap.md#r02-web-label-numeric-20261106): 11/3~11/6 웹 12/12 거절 원인(값 표기만 허용 vs 프롬프트의 라벨·표본 수·관측 시각)과 최소 수정, 전후 합성 판단, 리뷰/WSL/PR 상태.
+- [R02-WEB-LABEL-NUMERIC 웹 리포트 숫자 포함 표기 경계](operations/execution-roadmap.md#r02-web-label-numeric-20261106): 11/3~11/6 웹 12/12 거절 원인(값 표기만 허용 vs 프롬프트의 라벨·표본 수·관측 시각)과 최소 수정, 전후 합성 판단, 독립 리뷰 4회·WSL 10,553·PR #346 병합 `b127577c`·운영 11/7 00:15 인수. 자연 수락 WAIT.
 
 - [T03 테마 수급 미관측/실제0 경계](operations/execution-roadmap.md#t03-theme-supply-missing-20261105): 순위 캐시 부재·검증 실패 수량은 None, 관측 0/음수 보존. 비활성 전략이라 운영 신호 영향 0. 운영 `fa72a099`/PID645724 인수·보호48파일/cron 보존, 초기 거절0은 기동 구간 결과.
 
