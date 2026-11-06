@@ -4,7 +4,7 @@
 
 - `src/analytics/web_report.py`: `_digit_words`/`_check_text(words=)` — 인용한 출처 줄에 그대로 적힌 숫자 포함 표기(`S&P500`·`2차전지`·`10개`·`1세션`·`15:32`)는 그 표기 그대로일 때만 숫자 검사에서 제외한다. 순수 숫자·날짜는 제외 대상이 아니라 벗겨진 숫자(`3%`·`1조`·`10%`)는 종전처럼 값 풀(`fact_numbers`)로만 판정하고, 이어 붙은 변형(`S&P5000`·`12차전지`)·미인용 사실의 표기·부호 뒤집기는 계속 거절한다. 프롬프트·스키마·`PROMPT_VERSION`·저장 행·거절 진단·호출 횟수·시장 보고 검증 불변.
 - 근거: 11/3~11/6 웹 12/12 `failed`(`unsupported_numeric` 11, `market_view.text` 9) vs 시장 보고 9/9 `ready`. 웹 숫자 풀이 값 표기만이라 프롬프트가 제시하는 라벨·보일러플레이트·관측 시각이 거절됐다. morning은 미국 지수 라벨 `S&P500` 때문에 구조적으로 거절(확정), midday/after 토큰은 본문 미저장으로 미확정.
-- 새 `tests/test_web_report_label_numeric.py` 5건(전 거절→후 통과 2, 거절 유지 9사례, 값 풀 무`500` 고정). 관련 29 passed. 독립 리뷰·WSL·PR·배포는 [원장](docs/operations/execution-roadmap.md#r02-web-label-numeric-20261106).
+- 숫자 표현(`10%`·`+1.20%`·`(-5.65%)`·날짜·순수 숫자)은 표기로 등록하지 않고 제거 경계 앞의 부호도 차단한다(독립 Codex 리뷰 P2: E 발췌 `10%`가 응답 `-10%`를 허용하던 퇴행 수정). 새 `tests/test_web_report_label_numeric.py` 6건(전 거절→후 통과 2, 거절 유지 11사례, 부호 없는 E 숫자의 부호 재작성 거절, 값 풀 무`500` 고정). 관련 30+156 passed. 독립 리뷰·WSL·PR·배포는 [원장](docs/operations/execution-roadmap.md#r02-web-label-numeric-20261106).
 - 같은 세션 11/6 도래 영수증: 시장 보고 3슬롯 ready/API accepted, O02 09:34 정리 rc0·deleted=true, `signal_events` 새 222행 전부 G1 차단·경계 id 19454. 설정·매수 중지·월USD100·R1/worker OFF 불변.
 
 ## 2026-11-06 — T03 완료 인계 판독 (문서 전용, 소스 변경 0)

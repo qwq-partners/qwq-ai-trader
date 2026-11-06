@@ -41,7 +41,9 @@ def test_label_digits_are_not_in_the_value_pool_so_only_the_verbatim_rule_licens
     facts = morning_us_facts()
     assert dict(web.fact_lines(facts))['M1'].startswith('미국 S&P500 -4.36%')
     assert '500' not in web.fact_numbers(facts)['M1'].split()
-    assert web._digit_words([dict(web.fact_lines(facts))['M1']]) == {'S&P500', '-4.36%'}
+    assert web._digit_words([dict(web.fact_lines(facts))['M1']]) == {'S&P500'}      # -4.36% 는 값이지 표기가 아니다
+    assert web._digit_words(['매출 10% 증가', '+1.20%', '(-5.65%)', '2026-11-06', '1432.5']) == set()
+    assert web._digit_words(['확인 10개 표본 · 최근 1세션 · 관측 11/06 15:32 KST · 출처 KIS:091170']) == {'10개', '1세션', '11/06', '15:32', 'KIS:091170'}
 
 
 def test_us_index_label_in_cited_fact_line_passes_with_particles():
@@ -86,3 +88,24 @@ def test_bare_digits_and_uncited_labels_stay_rejected():
     _rejects(web_response(market_view=dict(text='2차전지가 약했다.', evidence_ids=['M1'])), after, 'market_view.text')
     # 부호 뒤집기는 여전히 거절된다
     _rejects(web_response(market_view=dict(text='S&P500이 +4.36% 올랐다.', evidence_ids=['M1'])), morning, 'market_view.text')
+    _rejects(web_response(sector_view=dict(text='2차전지가 +1.70% 올랐다.', evidence_ids=[battery])), after, 'sector_view.text')
+    # 표기 앞에 붙은 부호도 표기 그대로가 아니다
+    _rejects(web_response(sector_view=dict(text='표본이 -11개로 줄었다.', evidence_ids=[battery])), after, 'sector_view.text')
+
+
+def test_unsigned_public_evidence_number_never_licenses_a_signed_rewrite():
+    """독립 리뷰 P2: E 발췌의 부호 없는 10% 가 응답의 -10%/+10% 를 허용하면 안 된다."""
+    raw = web_bundle()
+    raw['records'][0]['excerpt'] = '가온반도체가 서버용 제품 공급을 10% 늘린다고 밝혔다.'
+    bundle = _public_bundle(raw)
+    facts = morning_us_facts()
+    issue = web_response()['issues'][0]
+
+    def with_event(text):
+        return web_response(issues=[dict(issue, event=text, evidence_ids=['E1'])])
+    ok = web.validate_web_analysis(json.dumps(with_event('가온반도체가 공급을 10% 늘린다고 밝혔다.'), ensure_ascii=False), facts, bundle)
+    assert ok['issues'][0]['event'].endswith('밝혔다.')
+    for text in ('가온반도체 공급이 -10% 줄었다.', '가온반도체 공급이 +10% 늘었다.', '가온반도체 공급이 10.0% 늘었다.'):
+        with pytest.raises(AnalysisValidationError) as info:
+            web.validate_web_analysis(json.dumps(with_event(text), ensure_ascii=False), facts, bundle)
+        assert (info.value.code, info.value.field) == ('unsupported_numeric', 'issues[0].event')

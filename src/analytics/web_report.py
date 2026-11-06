@@ -203,15 +203,17 @@ _HEDGE = re.compile(r'동행하거나\s*다르게|유지되거나\s*역전|일�
 # The page promises no recommendations or price targets; reject the vocabulary outright.
 _BANNED = re.compile(r'(매수|매도|비중\s*확대|비중\s*축소)\s*(추천|권고|의견|전략)|목표\s*주?가|적극\s*매[수도]|[매강]력\s*매수')
 _DIGIT_WORD = re.compile(r'\S*\d\S*')
+# 숫자 표현(10% · +1.20% · (-5.65%) · 2026-11-06)은 표기가 아니라 값이다 — 부호 포함 값 풀(_numbers)로만 판정한다.
+_NUMERIC_EXPRESSION = re.compile(rf'[(\[]*(?:{_NUMBER}|{_DATE})[%)\]]*')
 
 
 # R02-WEB-LABEL-NUMERIC (2026-11-06): 출처 줄에 그대로 적힌, 숫자가 다른 문자와 붙은 표기(S&P500·2차전지·10개·1세션·15:32)는
-# 그 표기 그대로일 때만 인용 허용. 순수 숫자·날짜는 제외해 벗겨진 숫자(3%·1조·10%)는 계속 값 풀(_numbers)로만 판정한다.
+# 그 표기 그대로일 때만 인용 허용. 숫자 표현은 제외해 벗겨진 숫자(3%·1조·10%)와 부호 뒤집기(-10%)는 계속 값 풀로만 판정한다.
 def _digit_words(texts) -> set[str]:
     words = set()
     for text in texts:
         for word in _DIGIT_WORD.findall(unicodedata.normalize('NFKC', text)):
-            if not re.fullmatch(_NUMBER, word) and not re.fullmatch(_DATE, word):
+            if not _NUMERIC_EXPRESSION.fullmatch(word):
                 words.add(word)
     return words
 
@@ -233,8 +235,8 @@ def _check_text(value, limit, *, dates, numbers, latin, field, words=()):
     if any(d not in dates for d in re.findall(_DATE, normalized)):
         raise AnalysisValidationError('unsupported_date', field)
     numbers_only = re.sub(_DATE, '', normalized)
-    for word in sorted(words, key=len, reverse=True):   # 숫자가 이어 붙은 변형(S&P5000·12차전지)은 표기 그대로가 아니다
-        numbers_only = re.sub(rf'(?<!\d){re.escape(word)}(?!\d)', ' ', numbers_only)
+    for word in sorted(words, key=len, reverse=True):   # 이어 붙은 변형(S&P5000·12차전지)·앞에 붙은 부호(-10개)는 표기 그대로가 아니다
+        numbers_only = re.sub(rf'(?<![\d+\-.,]){re.escape(word)}(?!\d)', ' ', numbers_only)
     # A signed token must match a signed spelling: "+1.20%" in the facts never licenses "-1.20%".
     if any(n not in numbers for n in re.findall(_NUMBER, numbers_only)):
         raise AnalysisValidationError('unsupported_numeric', field)
