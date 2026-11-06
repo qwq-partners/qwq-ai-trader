@@ -11,17 +11,21 @@
 
 **수정 전후 판단(합성, `tests/test_web_report_label_numeric.py` 6건):** 11/6 07:40과 같은 모양의 facts(미국 지수 3개)에서 `S&P500이 -4.36%, 나스닥이 -5.52% 내려…`(M1·M2 인용)는 전 `unsupported_numeric @ market_view.text` → 후 통과. after facts+합성 `2차전지`에서 `KOSPI 5,730.74는 15:32 관측값…`·`확인 11개 표본의 최근 1세션에서 2차전지가 -1.70%…`도 전 거절 → 후 통과. 거절 유지 14사례(위 목록 + `확인 10개 표본`(실제 11개) + `-11개` + `11개월`·`2차전지주`·`S&P500선물`), 조사·문장부호 뒤 허용(`2차전지가/는/에서는/의`, `(2차전지)`, `2차전지,`) 1건. 값 풀에 `500`이 없음을 검사해 허용 근거가 표기 그대로 규칙뿐임을 고정했다. 독립 리뷰 P2(아래)의 회귀 검사: E 발췌의 부호 없는 `10%`는 응답 `10%`만 허용하고 `-10%`·`+10%`·`10.0%`는 `unsupported_numeric @ issues[0].event`로 거절한다.
 
-**See/검증(AWS 보조, HEAD `f841cefa`):** `venv/bin/python -m pytest tests/test_web_report_label_numeric.py tests/test_web_report.py tests/test_web_report_rejection_diagnostics.py -q` → 신규 6 + 기존 25(`test_web_report.py` 5·`test_web_report_rejection_diagnostics.py` 20) = **31 passed**, 관련 보고 묶음 11파일 157 passed, 격리 위반 0(최종 HEAD 기준 수치는 커밋 메시지·WSL 영수증 참조). 정식 전체 검증은 실제 WSL 직렬 `verify.sh`로 별도 수행한다.
+**See/검증(AWS 보조, 같은 명령 `venv/bin/python -m pytest tests/test_web_report_label_numeric.py tests/test_web_report.py tests/test_web_report_rejection_diagnostics.py -q`):** `3a20d733` 신규 4 + 기존 25 = 29 passed · `f841cefa` 신규 5 + 25 = 30 passed · `ab79e3d5`(최종 소스) 신규 6 + 기존 25(`test_web_report.py` 5·`test_web_report_rejection_diagnostics.py` 20) = **31 passed**. 관련 보고 묶음 11파일은 `ab79e3d5`에서 158 passed, 격리 위반 0. 정식 전체 검증은 아래 실제 WSL 영수증.
 
 **See/독립 리뷰 1차(Codex, 커밋 `3a20d733`):** 요청 gpt-6-astra/high였으나 헤더는 `model: gpt-6-astra`·`reasoning effort: medium` — 원인은 호출자(이 세션)가 `codex_review.sh`의 변수 `QWQ_REVIEW_CODEX_BIN` 대신 `CODEX_BIN`을 넘겨 래퍼가 적용되지 않고 config 기본값으로 돈 것이다(Codex 결함 아님, 제어 호출로 래퍼 단독은 high 확인). **실효 gpt-6-astra/medium으로 기록**. 정적 검토, P0/P1 0, **P2 1건 유효**: 근거 E의 부호 없는 `10%`가 표기로 등록돼 응답 `-10%`에서 `10%`만 제거되고 `-`가 남아 부호 뒤집기 거절이 퇴행 → 숫자 표현 제외·제거 경계 앞 부호 차단·회귀 검사 1건(커밋 `f841cefa`).
 
-**See/독립 리뷰 2차(Codex, 커밋 `f841cefa`, 같은 호출 오류로 실효 gpt-6-astra/medium):** P0/P1 0, **P2 문서 1건 유효**: 신규 검사 수를 6건으로 적었으나 실제 5건(기존 25, 합 30) → 본 절·CHANGELOG 정정. 코드상 차단 결함 없음, 조건부 병합(WSL 직렬 전체·CI 뒤). 
+**See/독립 리뷰 2차(Codex, 커밋 `f841cefa`, 같은 호출 오류로 실효 gpt-6-astra/medium):** P0/P1 0, **P2 문서 1건 유효**: 신규 검사 수를 6건으로 적었으나 실제 5건(기존 25, 합 30) → 본 절·CHANGELOG 정정. 코드상 차단 결함 없음, 조건부 병합(WSL 직렬 전체·CI 뒤).
 
-**See/독립 리뷰 3차(Codex, 커밋 `af125882`, 헤더 `gpt-6-astra`/`high` — `QWQ_REVIEW_CODEX_BIN` 래퍼):** P0/P1 0, **P2 1건 유효**: 오른쪽 경계 `(?!\d)`가 숫자만 막아 `11개`가 허용되면 응답 `향후 11개월…`에서 `11개`가 지워지고 근거 없는 기간이 통과 → 뒤 경계를 공백·문장부호·고정 조사 목록으로 제한하고 `11개월`/`2차전지주`/`S&P500선물` 거절·조사 허용 회귀 검사를 추가했다(후속 커밋). 4차 리뷰·실제 WSL 직렬 전체·PR/CI 영수증은 아래에 추가한다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
+**See/독립 리뷰 3차(Codex, 커밋 `af125882`, 헤더 `gpt-6-astra`/`high` — `QWQ_REVIEW_CODEX_BIN` 래퍼):** P0/P1 0, **P2 1건 유효**: 오른쪽 경계 `(?!\d)`가 숫자만 막아 `11개`가 허용되면 응답 `향후 11개월…`에서 `11개`가 지워지고 근거 없는 기간이 통과 → 뒤 경계를 공백·문장부호·고정 조사 목록으로 제한하고 `11개월`/`2차전지주`/`S&P500선물` 거절·조사 허용 회귀 검사를 추가했다(후속 커밋).
+
+**See/독립 리뷰 4차(Codex, 커밋 `ab79e3d5`, 헤더 `gpt-6-astra`/`high`):** P0/P1 0, **P2 문서 1건**: 검증 줄이 `HEAD f841cefa`에 신규 6·31 passed로 적혀 SHA와 수치가 어긋남 + `git diff --check` 후행 공백 1곳 → 본 문서 커밋에서 SHA별 수치로 분리·공백 제거. 코드 지적 없음, 조건부 병합(WSL·CI 뒤).
+
+**See/실제 WSL 직렬 전체(`ab79e3d5`):** 사용자 WSL(6.6.87.2-microsoft-standard-WSL2) 격리 워크트리에서 `QWQ_VERIFY_PYTHON=/home/user/projects/qwq-ai-trader/venv/bin/python bash scripts/dev/verify.sh` → **10,553 passed / 2 skipped / 2 xfailed**, 427.94초(총 440초), rc 0, 격리 위반 0, 트리 전후 동일·원본 main `fa72a099` clean 보존. 번들 sha256 `e7171197…`(전제 `fa72a099`), 로그 sha256 `87951184…`. 임시 키는 작업 전용 sshd 파일에만 등록했고 배포 결정 뒤 제거·재접속 거부 확인·AWS 키 파기를 영수증에 남긴다. PR/CI 영수증은 아래에 추가한다. 비공개 영수증 `~/.local/state/qwq-task-audit/20261106/r02-web-label-numeric/`.
 
 **도래 영수증(11/6 22:21 판독, 같은 세션):** 시장 보고 3슬롯 `ready`·Telegram API accepted(수신·내용 수락 미확정). O02 `qwq-entry-capture-retention-20261106.timer` 09:34:10 발화 → `qwq-toss-observer-retention-20261007.service` 09:34:11 rc0·`{"deleted": true, "eligible": true}`(10/7 cohort, `/var/lib/qwq-toss-observer`는 권한상 미열람, 권한 확대 없음). `signal_events` id>19232 새 222행 전부 `intraday_screening/blocked/G1_regime`(11/6 10:02~14:59), passed 0, 판독 경계 **id 19454**. E02-RR/E01·E05 WAIT 불변.
 
-**NEXT:** 독립 Codex 리뷰 → 실제 WSL 직렬 전체 → 커밋/푸시·PR·필수 CI → 사용자 병합·배포 결정. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
+**NEXT:** 푸시·PR·필수 CI → 사용자 병합·배포 결정. 이 문서 커밋은 소스 변경 0이라 WSL 검증 소스 `ab79e3d5`와 같은 코드 트리(docs 차이만)이며 PR 필수 CI의 전체 verify로 최종 HEAD를 다시 검증한다. 배포 뒤 첫 자연 슬롯(다음 거래일 07:40 web morning)에서 `report_analyses(web).status=ready` 여부로 인수하며, 라벨 허용이 자연 수락을 보장하지는 않는다. 다른 사유(`unsupported_latin`, 미인용 숫자)가 재발하면 응답 저장 없이 같은 진단 경로로 판독한다.
 
 <a id="t03-theme-supply-missing-20261105"></a>
 ### T03-THEME-SUPPLY-MISSING — 테마 수급 미관측/실제0 생산자 경계 (수정·합성 재현·독립 리뷰·실제 WSL·PR #343 병합·운영 fa72a099 인수 DONE)
