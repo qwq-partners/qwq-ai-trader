@@ -4,7 +4,8 @@
 절반을 차지했다. 창 밖에서는 다음 창 시작까지 대기하고(상한 1시간, 휴장일 갱신 재평가),
 소비자(스크리너 뉴스 심리·보고·대시보드)는 마지막 성공 결과를 그대로 본다.
 """
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -35,6 +36,21 @@ def test_theme_window_wait_seconds(holidays, now, expected):
     assert module._theme_window_wait_seconds(now) == pytest.approx(expected)
 
 
+def test_same_instant_in_utc_and_kst_gives_same_verdict(holidays):
+    kst = datetime(2026, 11, 9, 9, 30, tzinfo=ZoneInfo("Asia/Seoul"))   # 장중
+    assert module._theme_window_wait_seconds(kst) == 0
+    assert module._theme_window_wait_seconds(kst.astimezone(timezone.utc)) == 0  # UTC 00:30 로 읽어도 장중
+    late = datetime(2026, 11, 9, 23, 0, tzinfo=ZoneInfo("Asia/Seoul"))    # 월 23:00 → 화 휴장 → 수 06:30
+    expected = module._theme_window_wait_seconds(late)
+    assert expected == pytest.approx(31 * 3600 + 30 * 60)
+    assert module._theme_window_wait_seconds(late.astimezone(timezone.utc)) == pytest.approx(expected)
+
+
+def test_gate_clock_is_kst_aware():
+    now = module._theme_gate_now()
+    assert now.tzinfo is not None and now.utcoffset().total_seconds() == 9 * 3600
+
+
 def test_theme_window_wait_is_capped_when_no_trading_day_found(monkeypatch):
     monkeypatch.setattr(module, "is_kr_market_holiday", lambda d: True)
     assert module._theme_window_wait_seconds(datetime(2026, 11, 9, 10, 0)) == 3600.0
@@ -55,7 +71,7 @@ def _scheduler(monkeypatch, now, detect_calls, sleeps):
     scheduler = object.__new__(module.KRScheduler)
     scheduler.bot = bot
     scheduler._trim_watch_symbols = lambda: None
-    monkeypatch.setattr(module, "_now_kst", lambda: now)
+    monkeypatch.setattr(module, "_theme_gate_now", lambda: now)
 
     async def fake_sleep(seconds):
         sleeps.append(seconds)
@@ -133,3 +149,20 @@ async def test_fresh_higher_abs_still_wins_within_hour(monkeypatch):
                           {"000001": {"impact": 8, "abs_impact": 8, "updated_at": fresh_at}}, {})
     await d.detect_themes(force=True)
     assert d._stock_sentiments["000001"]["impact"] == 8       # 1시간 안의 더 큰 절댓값 유지(기존 계약)
+
+
+# ── 독립 리뷰 2차 P2: 탐지가 쉬는 동안 대시보드 /api/themes 에 만료 테마가 남으면 안 된다 ──────
+def test_dashboard_themes_drop_expired_without_detection(monkeypatch):
+    import src.signals.sentiment.kr_theme_detector as kd
+    from src.dashboard import data_collector as dc
+    detector = kd.ThemeDetector(llm_manager=SimpleNamespace())  # 전역 LLM 매니저 미사용
+    detector._themes = {
+        "stale": kd.ThemeInfo(name="stale", last_updated=datetime.now() - timedelta(hours=2)),
+        "fresh": kd.ThemeInfo(name="fresh", last_updated=datetime.now() - timedelta(minutes=5)),
+    }
+    collector = object.__new__(dc.DashboardDataCollector)
+    collector.bot = SimpleNamespace(theme_detector=detector)
+    collector._build_name_cache = lambda: {}
+    names = [row["name"] for row in collector.get_themes()]
+    assert names == ["fresh"]
+    assert "stale" not in detector._themes

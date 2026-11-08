@@ -28,6 +28,7 @@ from typing import Optional, Dict, List, Set, Tuple
 from loguru import logger
 
 from ..core.engine import is_kr_market_holiday, set_kr_market_holidays
+from ..utils.session import KST as _KST  # 테마 탐지 창 판정 전용(호스트 시간대 무관)
 from ..core import engine as _engine_mod   # 휴장일 전역의 최신 참조용 (from-import 스테일 방지)
 from ..core.event import ThemeEvent, NewsEvent, FillEvent, SignalEvent, MarketDataEvent
 from ..core.market_regime import (
@@ -73,8 +74,18 @@ _THEME_WINDOW_END = (16, 45)   # 배타
 _THEME_WINDOW_WAIT_CAP = 3600.0  # 휴장일(KIS 동적) 갱신을 재평가하도록 대기 상한
 
 
+def _theme_gate_now() -> datetime:
+    """테마 탐지 창 판정 전용 시계 — 호스트 시간대와 무관하게 KST aware(독립 리뷰 2차 P2)."""
+    return datetime.now(_KST)
+
+
 def _theme_window_wait_seconds(now: datetime) -> float:
-    """허용 창까지 남은 초. 창 안이면 0. 15일 안에 거래일이 없으면 상한값(재평가)."""
+    """허용 창까지 남은 초. 창 안이면 0. 15일 안에 거래일이 없으면 상한값(재평가).
+
+    aware 시각은 KST 로 환산해 판정하고, naive 시각은 KST 벽시계로 간주한다(테스트 주입).
+    """
+    if now.tzinfo is not None:
+        now = now.astimezone(_KST)
     for offset in range(15):
         day = now.date() + timedelta(days=offset)
         if is_kr_market_holiday(day):
@@ -2674,7 +2685,7 @@ JSON:
             waiting = False
 
             while bot.running:
-                wait = _theme_window_wait_seconds(_now_kst())
+                wait = _theme_window_wait_seconds(_theme_gate_now())
                 if wait > 0:
                     if not waiting:
                         logger.info(f"[테마 탐지] 허용 창(거래일 06:30~16:45) 밖 — {wait / 60:.0f}분 뒤 재개, LLM 호출 없음")
