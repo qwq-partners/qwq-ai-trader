@@ -51,11 +51,11 @@
 | D1 | Bear 전송 순서 | **API 우선, CLI 대체**(API 가용성 실패에만 1회) | 추천안 채택 |
 | D2 | 월 예산 상한 | **Task 4 배포 뒤 100 → 200** 명시 이관 | 추천안 채택 |
 | D3 | 웹 리포트 모델 | **처음부터 Fable 5.1** | 추천안(Opus 1단계) 대신 선택. 조직 30일 데이터 보존 설정·180초 시한 재검토 선행 |
-| D4 | 경량 역할 | **Opus 5.5로 바로 이전**(Haiku 검증 생략) | 비용 약 5배 수용. 단 **Bull은 D8 결정 전까지 gpt-5-mini 유지**(아래) |
+| D4 | 경량 역할 | **Opus 5.5로 바로 이전**(Haiku 검증 생략) | 비용 약 5배 수용. Bull은 D8에 따라 제외 |
 | D5 | heavy·시장 조사 보고 | **Fable 5.1**(리포트와 통일) | 90초 시한 재검토 선행 |
 | D6 | OpenAI 자동 충전 | **계속 유지** | 잔여 OpenAI 호출(Bull 등) 안전망 |
 | D7 | Anthropic 자동 충전 | **OFF 유지** | 크레딧 소진 시 API 중단 → 기존 실패 경로 |
-| D8 | Bull 모델(신규 쟁점) | **미결** — 추천: gpt-5-mini 유지 | D4대로 Bull까지 Opus로 옮기면 Bull/Bear가 같은 모델이 되어 `entry-independent-review-v1`의 교차 공급자 독립성이 사라진다. 대안: Bull만 Haiku 5.5(검증 필요) |
+| D8 | Bull 모델 | **gpt-5-mini 유지**(11/8 확정) | Bull(OpenAI) 대 Bear(Claude)의 교차 공급자 독립성 보존. `entry-independent-review-v1` 불변 |
 
 **확정 결정 기준 보수 비용 추정(월, USD, 실측 전 가정):** 웹 리포트 Fable 약 58 · 시장 조사 보고 Fable 약 23 · 주간 복기/진화 Fable 약 5 · 경량 Opus(Task 1 게이트 뒤, Bull 제외) 약 40 · Bear Opus 약 12 → **합계 약 138**(Task 1 없이 경량 약 70이면 약 168). 크레딧 200 이내이나 80% 절약(160)·95% 필수 전용(190) 문턱에 근접할 수 있고, Fable 출력은 thinking 토큰을 포함해 과금되므로 실제는 추정의 1.5~2배까지 벌어질 수 있다. 초과 시 기존 100% 유료 중단 정책이 작동하고 D7 OFF라 과금은 0이다. 잔여 OpenAI는 Bull(gpt-5-mini) 월 약 1~2.
 
@@ -82,7 +82,7 @@
 ### Task 3: Claude 모델 신원·가격 확장 (D3·D4·D5 전제)
 
 **Files:** `src/utils/llm.py`(`claude_model` 허용 집합·역할별 모델), `src/utils/claude_transport.py`(모델별 `resolved_model` 검증·Fable `output_config.effort`·`stop_reason=refusal`/`stop_details`), `src/utils/llm_pricing.py`(Fable 5.1 입력 10/출력 50 USD/MTok·캐시 읽기, Opus 유지), `_validate_controls`, 테스트.
-**Interfaces:** 허용 모델 `{claude-opus-5-5, claude-fable-5-1}`(D4로 Haiku 제외, D8이 Haiku를 택하면 추가); 요청 모델과 응답 `model`이 다르면 실패(기존 규칙). Fable은 `thinking` 미지정(상시)·`output_config.effort`만 전달, `stop_reason=refusal`은 실패로 기록하고 다른 모델로 우회하지 않는다. 역할별 시한: 웹 리포트 180초·시장 보고/복기 90초가 Fable 응답 시간에 충분한지 신원 검증 호출의 실측 지연으로 판단하고, 부족하면 시한 상향을 별도 결정으로 올린다(자동 상향 금지).
+**Interfaces:** 허용 모델 `{claude-opus-5-5, claude-fable-5-1}`(Haiku 미사용); 요청 모델과 응답 `model`이 다르면 실패(기존 규칙). Fable은 `thinking` 미지정(상시)·`output_config.effort`만 전달, `stop_reason=refusal`은 실패로 기록하고 다른 모델로 우회하지 않는다. 역할별 시한: 웹 리포트 180초·시장 보고/복기 90초가 Fable 응답 시간에 충분한지 신원 검증 호출의 실측 지연으로 판단하고, 부족하면 시한 상향을 별도 결정으로 올린다(자동 상향 금지).
 
 - [ ] RED/GREEN: 가격 계산·모델 검증·refusal 처리·Fable 파라미터 형태.
 - [ ] **사용자 선행 확인:** Anthropic 콘솔의 조직 데이터 보존 설정이 30일 이상인지(Fable은 미만이면 400 `invalid_request_error`). 미충족이면 D3·D5는 Opus 5.5로 되돌리고 기록한다.
@@ -91,7 +91,7 @@
 ### Task 4: 역할 재배정 (D3·D4·D5)
 
 **Files:** `src/utils/llm_roles.py`(`ROLE_POLICY_VERSION` 승격·`WEB_REPORT`/`MARKET_BRIEF`/`POST_EXIT_RESEARCH` provider `anthropic`), `config/default.yml`(heavy/light 슬롯 provider·모델), `src/utils/llm.py`(`complete_role`의 Anthropic 분기·종료 사유·JSON 지시: Anthropic은 `response_format`이 없으므로 system에 JSON 전용 출력 지시 + 기존 파서/검증기 그대로), `src/analytics/web_report.py` 등 소비자는 불변, 테스트, `docs/agents/reporting.md`·`CLAUDE.md` LLM 표·CHANGELOG.
-**Interfaces(11/8 확정):** `WEB_REPORT`·`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·heavy 슬롯(`trade_review`/`strategy_analysis`/`market_analysis`) → `claude-fable-5-1`(effort medium, 출력 상한 유지, 시한은 Task 3 실측 뒤 결정). light 슬롯(테마 탐지·quick_*·wiki·news) → `claude-opus-5-5`(effort low). **Bull은 D8 확정 전까지 `gpt-5-mini` 유지**(Bear와 다른 공급자 보존). `REPORT_ONE_LINE`은 호출량이 크지 않아 Opus 5.5. 모닝 브리프는 결정론 조립이라 불변. 신원 검증(Task 3)에 실패한 모델은 그 역할을 이전하지 않고 현행 유지.
+**Interfaces(11/8 확정):** `WEB_REPORT`·`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·heavy 슬롯(`trade_review`/`strategy_analysis`/`market_analysis`) → `claude-fable-5-1`(effort medium, 출력 상한 유지, 시한은 Task 3 실측 뒤 결정). light 슬롯(테마 탐지·quick_*·wiki·news) → `claude-opus-5-5`(effort low). **Bull은 `gpt-5-mini` 유지(D8 확정)** — Bear와 다른 공급자를 보존한다. `REPORT_ONE_LINE`은 호출량이 크지 않아 Opus 5.5. 모닝 브리프는 결정론 조립이라 불변. 신원 검증(Task 3)에 실패한 모델은 그 역할을 이전하지 않고 현행 유지.
 
 - [ ] RED/GREEN: 역할별 provider·모델·상한·JSON 검증 통과·실패 시 대체 본문/hold 경로 불변.
 - [ ] 독립 리뷰·실제 WSL 전체·PR·사용자 승인 배포. 배포 뒤 첫 자연 슬롯(07:40 web morning 등)에서 `report_analyses.status`와 검증 거절 코드로 인수(수락 보장 아님).
@@ -107,9 +107,9 @@
 ### Task 6: 사후 측정 (배포 7일 뒤, 읽기 전용)
 
 - [ ] 원장 집계: 공급자·모델·역할별 일 비용, Bear API/CLI 성공률, 웹/시장 보고 `ready` 비율(수락과 구분), 콘솔 크레딧 잔액 ↔ 원장 추정 대조, OpenAI 청구 0 여부.
-- [ ] 결과로 D8(Bull 모델)·Fable 유지 여부·시한 조정을 결정. 80% 절약 문턱 도달 여부와 Fable 실제 토큰(thinking 포함)을 추정과 대조한다. 모델 우위·순수익 주장은 하지 않는다.
+- [ ] 결과로 Fable 유지 여부·시한 조정을 결정. 80% 절약 문턱 도달 여부와 Fable 실제 토큰(thinking 포함)을 추정과 대조한다. 모델 우위·순수익 주장은 하지 않는다.
 
 ## 진행 기록
 
 - 2026-11-08: 사용자 "계획서 작성해". 11/8 읽기 전용 판독과 공식 크레딧 조건으로 본 계획 작성. 코드·설정·운영 변경 0. 다음 진입점은 사전 결정 D1~D7 확인 뒤 Task 1 착수.
-- 2026-11-08: 사용자 D1~D7 확정(D1 API 우선·D2 이전 뒤 200·D3 웹 Fable·D4 경량 Opus·D5 heavy/시장 보고 Fable·D6 OpenAI 충전 유지·D7 Anthropic 충전 OFF). 새 쟁점 D8(Bull 모델) 미결, 추천 gpt-5-mini 유지. Task 1 착수는 D8 답변과 무관하므로 사용자 지시 시 바로 가능.
+- 2026-11-08: 사용자 D1~D7 확정(D1 API 우선·D2 이전 뒤 200·D3 웹 Fable·D4 경량 Opus·D5 heavy/시장 보고 Fable·D6 OpenAI 충전 유지·D7 Anthropic 충전 OFF). D8(Bull 모델) 사용자 확정: gpt-5-mini 유지. 사전 결정 전부 완료, 다음 진입점은 Task 1 착수(사용자 지시 대기).
