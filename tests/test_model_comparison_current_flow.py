@@ -472,11 +472,14 @@ def test_worker_accepts_envelope_built_from_real_operating_role_controls(tmp_pat
         def _get_model(self, provider, weight):
             return CLAUDE if provider == LLMProvider.ANTHROPIC else 'gpt-5-mini'
     controls = mci.operating_role_controls(Manager(), fallback_prompt_suffix='\nYES/NO', fallback_timeout=10.0)
-    assert controls['bear_transport_order'] == ['claude_cli', 'anthropic_messages'] and 'billing_channel' not in controls['bear']
+    # L01 Task 2(2026-11-09): 생산자는 운영 순서(API 1차)를 적고, CLI→API 만 구현한 현행 worker 는 그 봉투를 거부한다(fail-closed).
+    assert controls['bear_transport_order'] == ['anthropic_messages', 'claude_cli'] and 'billing_channel' not in controls['bear']
     worker, ledger, op, cli, api = build_current_worker(tmp_path, current_manifest(), cli=SCRIPTS['timeout'])
     worker.start()
     try:
-        assert worker.offer(envelope(worker, role_controls=controls)) == 'accepted'
+        assert worker.offer(envelope(worker, role_controls=controls)) == 'rejected_control_mismatch'
+        legacy = dict(controls, bear_transport_order=['claude_cli', 'anthropic_messages'])
+        assert worker.offer(envelope(worker, 'dec-legacy', role_controls=legacy)) == 'accepted'
         assert wait(lambda: worker.health()['finished'] == 1)
     finally:
         worker.stop(5)

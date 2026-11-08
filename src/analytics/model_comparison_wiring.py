@@ -33,6 +33,8 @@ TRANSPORT_OPENAI, TRANSPORT_CLI, TRANSPORT_API = 'openai_chat', 'claude_cli', 'a
 _TRANSPORTS = (TRANSPORT_OPENAI, TRANSPORT_CLI, TRANSPORT_API)
 _REQUIRED_CONTROLS = ('bull', 'bear', 'empty_retries', 'strict_on_disagreement', 'bear_empty_retries',
                       'bear_internal_timeout_seconds', 'bear_transport_order', 'fallback_chain_timeout_seconds')
+# runner/worker 가 구현한 Bear 순서(entry-independent-review-v1). 운영 흐름은 L01 Task 2(2026-11-09)부터 API→CLI 라
+# 실제 생산자 제어는 여기서 unsupported_bear_transport_order 로 거부된다 — 비교를 다시 켜려면 runner 이식이 먼저다.
 _CURRENT_BEAR_TRANSPORT_ORDER = [TRANSPORT_CLI, TRANSPORT_API]
 
 

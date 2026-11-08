@@ -342,9 +342,9 @@ KR `ThemeDetector._extract_themes_from_news`만 `response_format={"type":"json_o
 
 ## Claude 엔진 연결 — 2026-10-28
 
-일반 뉴스·분석·보고는 GPT를 사용하고, 진입 반증/팀 Bear는 `claude-opus-5-5`/low로 검토한다. 로그인된 CLI를 먼저 호출하며 가용성 실패 때만 같은 모델의 Anthropic Messages API를 한 번 호출한다. 신규 Gemini는 client 경계에서 차단하며 과거 원장은 보존한다. 아래 과거 LLM 계약의 모델/라우팅 설명보다 이 절과 [현재 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)을 우선한다.
+일반 뉴스·분석·보고는 GPT를 사용하고, 진입 반증/팀 Bear는 `claude-opus-5-5`/low로 검토한다. **L01 Task 2(2026-11-09 소스, 운영 적용은 배포 뒤):** 예산 내 Anthropic Messages API를 먼저 한 번 호출하고, API가 가용성 실패(시한·전송 불가·HTTP 오류·cooldown·전송 전 예산 차단)로 끝나며 남은 시한이 4초 이상일 때만 로그인된 CLI를 한 번 호출한다(Ultra 크레딧은 API만 덮는다). 종전 10/28~ 계약은 그 반대(CLI 우선·API 대체)였다. 신규 Gemini는 client 경계에서 차단하며 과거 원장은 보존한다. 아래 과거 LLM 계약의 모델/라우팅 설명보다 이 절과 [현재 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)을 우선한다.
 
-CLI는 빈 임시 cwd·입력 stdin·도구/MCP0·safe mode·기존 구독 로그인·API 환경 제외를 사용한다. 자식 그룹을 종료/회수한 후 API로 전환한다. 기존 전체12초/20초 안에서 CLI에 절반(최대8초), API에 실제 남은 시한을 준다. 모델 불일치·명시적 거절·도구/인증 정책 위반·호출자 취소는 자동 대체하지 않는다. 두 검토가 완성되지 않으면 검토 미완료로 보류한다.
+CLI는 빈 임시 cwd·입력 stdin·도구/MCP0·safe mode·기존 구독 로그인·API 환경 제외를 사용한다. 기존 전체12초/20초 안에서 API에 시한 전부, CLI에는 API 정산 뒤 실제 남은 시한(4초 미만이면 미전송)을 준다. 모델 불일치·명시적 거절·빈/잘린 200 응답·요청 계약 위반·호출자 취소는 자동 대체하지 않는다. 두 검토가 완성되지 않으면 검토 미완료로 보류한다.
 
 API는 `https://api.anthropic.com/v1/messages`·리디렉션/자동재시도 없음·출력상한400을 쓴다. Opus5.5 API는 adaptive thinking을 요구하므로 `thinking.type=adaptive`와 `output_config.effort=low`를 전달하고 추론 포함 출력 한도를 유지한다. CLI의 요청 옵션과 API의 실효 추론이 같다고 추정하지 않는다. [공식 마이그레이션 계약](https://platform.claude.com/docs/en/models/opus-5-5/migration-guide).
 

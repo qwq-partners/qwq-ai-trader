@@ -1,5 +1,7 @@
 # 거래 엔진 모델 배분 — 가격·호출 경로·적용 근거
 
+> **2026-11-09 L01 Task 2:** 독립 Bear(Claude Opus 5.5/low)의 전송 순서는 소스에서 예산 내 API 1차·구독 CLI 대체로 바뀌었다(운영 적용은 배포 뒤). 역할별 모델 재배정(Task 3·4)은 별도다. [L01 원장](../operations/execution-roadmap.md#l01-llm-credit-routing-20261108).
+
 > **2026-10-28 사용자 결정:** Gemini 사용을 중단하고 GPT·Claude로 전환한다. 아래10/15 가격/비교/운영 기록은 당시 근거이며 Gemini 재활성화 지시가 아니다. 현행 개발·운영 적용 상태는 [E04-D2 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)과 [전환 계획](../superpowers/plans/2026-10-28-openai-claude-routing.md)을 따른다. 일반 light는 GPT-5 mini/minimal, 기존 heavy/복기는 유지하며 Claude 독립 검토는 API/구독 CLI 선택 후 연결한다. 구독 사용량과 API 청구액을 같은 실제 비용으로 간주하지 않는다.
 
 ## PLAN — 목표와 판단 기준

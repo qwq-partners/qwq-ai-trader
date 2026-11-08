@@ -46,11 +46,14 @@ class ReviewManager:
                     error._llm_trail = [{"transport": "claude_cli", "billing_channel": "subscription", "status": "cancelled"}]
                     raise
             return reply(provider, "uncertain" if self.failure == "unparseable" else "", success=self.failure == "unparseable", provider_error_code=self.failure)
-        return reply(provider, transport="anthropic_messages" if provider == LLMProvider.ANTHROPIC else "openai_chat",
-                     requested_model="claude-opus-5-5" if provider == LLMProvider.ANTHROPIC else "gpt-5-mini",
-                     resolved_model="claude-opus-5-5" if provider == LLMProvider.ANTHROPIC else "gpt-5-mini",
-                     attempt_trail=[{"transport": "claude_cli", "billing_channel": "subscription", "status": "timeout"},
-                                    {"transport": "anthropic_messages", "billing_channel": "api", "status": "success"}])
+        # 운영 Bear 순서(L01 Task 2): API 1차 시한 초과 → 구독 CLI 대체 성공. 소비자는 trail 을 그대로 통과시켜야 한다.
+        claude = provider == LLMProvider.ANTHROPIC
+        return reply(provider, transport="claude_cli" if claude else "openai_chat",
+                     billing_channel="subscription" if claude else "api",
+                     requested_model="claude-opus-5-5" if claude else "gpt-5-mini",
+                     resolved_model="claude-opus-5-5" if claude else "gpt-5-mini",
+                     attempt_trail=[{"transport": "anthropic_messages", "billing_channel": "api", "status": "timeout"},
+                                    {"transport": "claude_cli", "billing_channel": "subscription", "status": "success"}])
 
     async def complete(self, *args, **kwargs):
         self.fallback_calls += 1
@@ -98,9 +101,9 @@ async def test_both_bears_request_claude_with_bounded_low_effort():
         assert "seed" not in call and "temperature" not in call
     rows = reproducibility.LLMLedger.load()
     bear = next(row for row in rows if row["role"] == "bear")
-    assert bear["transport"] == "anthropic_messages" and bear["billing_channel"] == "api"
+    assert bear["transport"] == "claude_cli" and bear["billing_channel"] == "subscription"
     assert bear["requested_model"] == bear["resolved_model"] == "claude-opus-5-5"
-    assert [row["transport"] for row in bear["attempt_trail"]] == ["claude_cli", "anthropic_messages"]
+    assert [row["transport"] for row in bear["attempt_trail"]] == ["anthropic_messages", "claude_cli"]
 
 
 @pytest.mark.asyncio

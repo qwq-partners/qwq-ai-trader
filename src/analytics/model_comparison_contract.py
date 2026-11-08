@@ -19,6 +19,9 @@ POLICY = {"requires_independent_review": True, "missing_review_policy": "hold",
           "single_model_fallback": False, "strict_on_disagreement": False,
           "panel_timeout_seconds": 12.0, "bear_internal_timeout_seconds": 11.5,
           "bear_transport_order": ["claude_cli", "anthropic_messages"]}
+# 역사적(CLI 1차, ~2026-11-09)과 현행(L01 Task 2: API 1차) 두 순서의 증거를 모두 해석한다. 두 번째 시도의 인가 규칙은
+# 첫 전송의 허용 실패 집합(FALLBACK / API_FALLBACK)으로 갈린다.
+BEAR_TRANSPORT_ORDERS = (["claude_cli", "anthropic_messages"], ["anthropic_messages", "claude_cli"])
 BULL = {"requested_model": "gpt-5-mini", "reasoning_effort": "minimal", "max_output_tokens": 400,
         "temperature": .3, "seed": 20260803, "empty_retries": 1}
 BEAR = {"requested_model": "claude-opus-5-5", "reasoning_effort": "low", "max_output_tokens": 400,
@@ -29,6 +32,7 @@ ATTEMPT_FIELDS = {"attempt_id", "transport", "billing_channel", "requested_model
                   "api_estimated_cost_usd", "subscription_estimated_cost_usd"}
 STATUSES = {"success", "empty", "error", "timeout", "cancelled", "blocked", "refusal", "identity_mismatch", "policy_violation"}
 FALLBACK = {"cli_unavailable", "cli_timeout", "cli_rate_limited", "cli_auth_unavailable", "cli_incomplete"}
+API_FALLBACK = {"api_timeout", "api_unavailable", "api_auth_unavailable", "api_http_error", "transport_cooldown"}
 
 
 def _error(path, code="invalid"):
@@ -115,7 +119,11 @@ def evaluate_contract(payload):
     if not isinstance(payload["common_input_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", payload["common_input_sha256"]): _error("common_input_sha256")
     _fields(payload["policy"], POLICY, "policy")
     for key, expected in POLICY.items():
-        if not _same(payload["policy"][key], expected): _error("policy." + key, "unsupported")
+        if key == "bear_transport_order":
+            if payload["policy"][key] not in BEAR_TRANSPORT_ORDERS: _error("policy." + key, "unsupported")
+        elif not _same(payload["policy"][key], expected): _error("policy." + key, "unsupported")
+    order = payload["policy"]["bear_transport_order"]
+    cli_primary = order[0] == "claude_cli"
     calls = payload["calls"]
     _fields(calls, {"bull_current", "bull_candidate", "bear"}, "calls")
     ids, violations, unknowns, observations = set(), [], [], {}
@@ -197,7 +205,7 @@ def evaluate_contract(payload):
                 if role != "bear" and start >= 12000:
                     issue("bull_attempt_started_after_deadline")
                 if a["status"] == "success" and finish >= (11500 if role == "bear" else 12000): issue("attempt_after_deadline")
-                if role == "bear" and a["transport"] == "claude_cli" and a["status"] == "success" and finish >= 5750: issue("cli_success_after_deadline")
+                if role == "bear" and cli_primary and a["transport"] == "claude_cli" and a["status"] == "success" and finish >= 5750: issue("cli_success_after_deadline")
                 if (role == "bear" and a["transport"] == "anthropic_messages"
                         and (start >= 11500 or (a["status"] == "success" and finish >= 11500))):
                     issue("api_after_deadline")
@@ -235,12 +243,16 @@ def evaluate_contract(payload):
             if not a["usage_known"]: costs[channel + "_unknown_usage_count"] += 1
             if a["request_sent"] is None: costs["unknown_transmission_count"] += 1
         if role == "bear":
-            if attempts and attempts[0]["transport"] != "claude_cli": issue("cli_primary_missing")
+            if attempts and attempts[0]["transport"] != order[0]: issue("cli_primary_missing" if cli_primary else "api_primary_missing")
             if len(attempts) == 2:
                 first, second = attempts
-                if second["transport"] != "anthropic_messages": issue("bear_transport_order")
-                if first["status"] not in {"error", "timeout"} or first["transport_error_kind"] not in FALLBACK:
-                    issue("bear_fallback_not_authorized")
+                if second["transport"] != order[1]: issue("bear_transport_order")
+                if cli_primary:
+                    authorized = first["status"] in {"error", "timeout"} and first["transport_error_kind"] in FALLBACK
+                else:   # API 1차: 가용성 실패 또는 전송 전 차단(예산·cooldown)만 구독 CLI 로 이어진다
+                    authorized = ((first["status"] in {"error", "timeout"} and first["transport_error_kind"] in API_FALLBACK)
+                                  or (first["status"] == "blocked" and first["transport_error_kind"] in (None, "transport_cooldown")))
+                if not authorized: issue("bear_fallback_not_authorized")
         elif len(attempts) == 2 and attempts[0]["status"] != "empty": issue("bull_retry_not_authorized")
         verdict = _parse_verdict(call["content"], "ACCEPT" if role == "bear" else "APPROVE", "REJECT") if call["outcome"] == "success" else None
         if call["outcome"] != "success" and attempts and attempts[-1]["status"] == "success":
@@ -263,7 +275,7 @@ def evaluate_contract(payload):
             for key in ("resolved_model", "effective_reasoning_effort"):
                 observation[key] = _safe_observation(a[key])
             kind = a["transport_error_kind"]
-            observation["transport_error_kind"] = kind if kind in FALLBACK or kind is None else "other"
+            observation["transport_error_kind"] = kind if kind in FALLBACK or kind in API_FALLBACK or kind is None else "other"
             if v2: observation["identity_match"] = _identity_match(a, v2)
             attempt_observations.append(observation)
         observations[role] = {"whole_call_elapsed_ms": elapsed, "outcome": call["outcome"],
