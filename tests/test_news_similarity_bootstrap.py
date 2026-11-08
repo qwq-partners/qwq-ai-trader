@@ -243,6 +243,9 @@ async def test_real_scheduler_emits_only_fresh_events(monkeypatch, collector, wi
     bot = SimpleNamespace(theme_detector=d, engine=engine, config=config, running=True)
     schedule = KRScheduler(bot)
     schedule._trim_watch_symbols = lambda: None
+    # L01 Task 1: 탐지 허용 창(거래일 06:30~16:45)은 _theme_gate_now 시계로 판정 — 벽시계 의존 제거
+    from src.schedulers import kr_scheduler as _ks
+    monkeypatch.setattr(_ks, '_theme_gate_now', lambda: datetime(2026, 11, 9, 10, 0))
     async def stop(_):
         bot.running = False
     monkeypatch.setattr(module.asyncio, 'sleep', stop)

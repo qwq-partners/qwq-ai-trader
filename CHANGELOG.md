@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-08 — L01 Task 1 테마 탐지 허용 창 (소스 3파일, 운영 미배포)
+
+- `src/schedulers/kr_scheduler.py`: `run_theme_detection` 루프가 **거래일 06:30~16:45 KST**(`_theme_window_wait_seconds`, `is_kr_market_holiday` = 주말+KIS 동적∪fallback; 시계는 게이트 전용 `_theme_gate_now()` = `datetime.now(KST)` aware라 호스트 시간대와 무관하고 aware 입력은 KST로 환산) 안에서만 `detect_themes(force=True)`를 부른다. 창 밖에서는 다음 창 시작까지 대기(상한 1시간, 휴장일 갱신 재평가·진입 시 1회 INFO 로그), 15일 안에 거래일이 없으면 상한값으로 재평가. 주기(설정 `scan_interval_minutes` 10분)·공급자(gpt-5-mini)·프롬프트는 불변.
+- `src/signals/sentiment/kr_theme_detector.py`(독립 리뷰 P1): 종목 센티멘트 병합이 `abs_impact`를 기존 항목과 비교한 **뒤** 1시간 만료 항목을 지우던 순서를, 병합 **전** `_prune_stale()`로 바꿨다. 창 밖 대기 뒤 첫 탐지에서 전날 `impact=8`(만료)이 새 `-7`을 가리고 삭제돼 종목이 사라지던 경계를 막는다. 1시간 안의 더 큰 절댓값이 유지되는 기존 계약은 그대로다.
+- `src/dashboard/data_collector.py`(독립 리뷰 2차 P2): `/api/themes`가 `_themes`를 직접 읽어 탐지가 쉬는 야간·주말에 만료 테마가 남던 것을 `_fresh_theme_list()`(1시간 만료 적용)로 바꿨다.
+- 소비자 동작(명시): `get_all_stock_sentiments`·`get_stock_sentiment`는 1시간 지난 자료를 제외하므로 창 밖(장 후 17:45 이후~익일 06:30 전)에는 스크리너 뉴스 가점·테마 대장주·재료 생애주기(`kr_screener.py`)와 보고·`/api/themes` 입력이 **결손(없음)** 이 된다. 결손을 0 심리로 바꾸지 않으며 08:20 배치 스캔·08:25 아침 보고는 06:30 이후 첫 탐지 결과를 본다. 리스크 한도·사이징·전략 산식·주문·청산 변경 없음. 장중 입력 갱신 주기는 그대로이고 야간·주말 갱신만 중단된다.
+- 근거: 11/8 월 예산 원장 판독 — gpt-5-mini 테마 탐지가 24시간·주말 포함 10분 주기로 140회/일(11/7 토 140/140), 11/1~11/8 OpenAI USD8.24의 약 절반. 창 적용 시 거래일 약 62회·주말 0 예상(월 약 USD10 절감 추정, 배포 7일 뒤 원장으로 실측). 계획서 `docs/superpowers/plans/2026-11-08-llm-credit-routing.md` Task 1과 실행 원장 L01 항목은 문서 PR [#348](https://github.com/qwq-partners/qwq-ai-trader/pull/348)에 있다(이 변경의 기준 main에는 아직 없음 — #348 선병합).
+- 검사: 신규 `tests/test_theme_detection_gate.py` 16건(창 경계 8·UTC/KST 동일 판정·aware 시계·루프 3·실제 탐지기 재개 경계 2·대시보드 만료 1). 기존 `tests/test_news_similarity_bootstrap.py::test_real_scheduler_emits_only_fresh_events`는 벽시계로 창 밖에 걸릴 수 있어 게이트 시계 `_theme_gate_now`만 거래일 장중으로 고정(검사 전제 분리, 제품 불변). 독립 Codex 리뷰(gpt-6-astra/high) 1차 P0 0·P1 1·P2 2, 2차 P0/P1 0·P2 2(대시보드 만료·호스트 시간대), 3차 P0/P1 0·P2 1(문서 표현: 소비자 만료 조건·시계 함수명) → 전부 반영, 3차는 코드 관점 조건부 병합 가능. 최종은 실제 WSL 직렬 전체 `verify.sh`.
+
 ## 2026-11-06 — R02-WEB-LABEL-NUMERIC 웹 리포트 검증의 숫자 포함 표기 경계 (소스 1파일, PR #346 병합 `b127577c`·운영 배포 11/7 00:15 인수 완료)
 
 - `src/analytics/web_report.py`: `_digit_words`/`_check_text(words=)` — 인용한 출처 줄에 그대로 적힌 숫자 포함 표기(`S&P500`·`2차전지`·`10개`·`1세션`·`15:32`)는 그 표기 그대로일 때만 숫자 검사에서 제외한다. 순수 숫자·날짜는 제외 대상이 아니라 벗겨진 숫자(`3%`·`1조`·`10%`)는 종전처럼 값 풀(`fact_numbers`)로만 판정하고, 이어 붙은 변형(`S&P5000`·`12차전지`)·미인용 사실의 표기·부호 뒤집기는 계속 거절한다. 프롬프트·스키마·`PROMPT_VERSION`·저장 행·거절 진단·호출 횟수·시장 보고 검증 불변.

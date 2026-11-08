@@ -682,7 +682,9 @@ class DashboardDataCollector:
             self._known_stocks_reverse = {v: k for k, v in KNOWN_STOCKS.items()}
 
         themes = []
-        raw_themes = getattr(detector, '_themes', {})
+        # 탐지가 쉬는 창 밖(야간·주말)에도 1시간 만료 테마가 남지 않도록 접근자 사용(2026-11-08 L01 Task 1 리뷰 P2)
+        fresh = getattr(detector, '_fresh_theme_list', None)
+        raw_themes = fresh() if callable(fresh) else getattr(detector, '_themes', {})
         if isinstance(raw_themes, dict):
             raw_themes = raw_themes.values()
 
