@@ -64,11 +64,12 @@
 ### Task 1: 테마 탐지 거래일·장 시간 게이트 (공급자 불변, 즉시 효과)
 
 **Files:** `src/schedulers/kr_scheduler.py`(`run_theme_detection`), `src/signals/sentiment/kr_theme_detector.py`(필요 시 게이트 헬퍼), 테스트 `tests/test_kr_scheduler_theme_gate.py`(신규), `docs/architecture/system-overview.md`·CHANGELOG.
-**Interfaces:** 거래일(`is_kr_market_holiday` False)의 07:00~16:00 KST에만 `detect_themes(force=True)` 호출. 창 밖에서는 다음 창 시작까지 대기(주입 시계·`asyncio.sleep` 상한 유지). 소비자(`get_all_stock_sentiments`·`get_recent_themes`·`/api/themes`)는 마지막 성공 결과와 `observed_at`을 그대로 제공하며 결손을 0 심리로 바꾸지 않는다(T03-THEME-SUPPLY-MISSING 원칙).
+**Interfaces:** 거래일(`is_kr_market_holiday` False)의 **06:30~16:45 KST**(07:00 모닝 두 장·07:40 web morning 전 1회 탐지, 16:40 장후 보고 포함; 계획 초안 07:00~16:00에서 정정)에만 `detect_themes(force=True)` 호출. 창 밖에서는 다음 창 시작까지 대기(`_now_kst` 시계·대기 상한 1시간으로 휴장일 갱신 재평가). 소비자(`get_all_stock_sentiments`·`get_recent_themes`·`/api/themes`)는 마지막 성공 결과와 `observed_at`을 그대로 제공하며 결손을 0 심리로 바꾸지 않는다(T03-THEME-SUPPLY-MISSING 원칙).
 
-- [ ] RED: 토요일 03:00·거래일 02:00·거래일 10:00·휴장일 10:00 네 시점에서 호출 0/0/1/0, 창 밖 대기 시간이 다음 창 시작과 일치, 기존 소비자 결과 보존.
-- [ ] GREEN·관련 검사·CHANGELOG·문서.
-- [ ] 기대 효과: 140회/일(매일) → 거래일 약 55회/주말 0, OpenAI 월 약 USD10 절감. 배포 1주 뒤 원장으로 실측.
+- [x] RED: 토 03:00·거래일 02:00·06:30·10:00·16:44:59·16:45·휴장일 10:00·전부 휴장 상한 + 루프 대기(상한 분할/정확 잔여)·장중 탐지 1회 — `tests/test_theme_detection_gate.py` 11건(헬퍼 부재로 실패 확인).
+- [x] GREEN(`_theme_window_wait_seconds`·루프 게이트)·관련 묶음(kr_scheduler 참조 38파일) AWS 보조 실행·CHANGELOG·아키텍처 문서. 기존 `test_real_scheduler_emits_only_fresh_events`는 벽시계 의존이라 게이트 시계만 고정.
+- [ ] 독립 리뷰·실제 WSL 직렬 전체·PR·사용자 승인 배포.
+- [ ] 기대 효과: 140회/일(매일) → 거래일 약 62회/주말 0, OpenAI 월 약 USD10 절감. 배포 7일 뒤 원장으로 실측.
 
 ### Task 2: Bear 전송 순서 반전 (D1)
 
@@ -113,3 +114,4 @@
 
 - 2026-11-08: 사용자 "계획서 작성해". 11/8 읽기 전용 판독과 공식 크레딧 조건으로 본 계획 작성. 코드·설정·운영 변경 0. 다음 진입점은 사전 결정 D1~D7 확인 뒤 Task 1 착수.
 - 2026-11-08: 사용자 D1~D7 확정(D1 API 우선·D2 이전 뒤 200·D3 웹 Fable·D4 경량 Opus·D5 heavy/시장 보고 Fable·D6 OpenAI 충전 유지·D7 Anthropic 충전 OFF). D8(Bull 모델) 사용자 확정: gpt-5-mini 유지. 사전 결정 전부 완료, 다음 진입점은 Task 1 착수(사용자 지시 대기).
+- 2026-11-08: 사용자 "PR 올리고 착수" — 계획서 PR #348, Task 1 구현·검사 완료(브랜치 `feature/l01-theme-detection-gate-20261108`). 독립 리뷰·WSL·PR은 원장 참조.
