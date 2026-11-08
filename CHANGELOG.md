@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-08 — L01 Task 1 테마 탐지 허용 창 (소스 1파일, 운영 미배포)
+
+- `src/schedulers/kr_scheduler.py`: `run_theme_detection` 루프가 **거래일 06:30~16:45 KST**(`_theme_window_wait_seconds`, `is_kr_market_holiday` = 주말+KIS 동적∪fallback) 안에서만 `detect_themes(force=True)`를 부른다. 창 밖에서는 다음 창 시작까지 대기(상한 1시간, 휴장일 갱신 재평가·진입 시 1회 INFO 로그), 15일 안에 거래일이 없으면 상한값으로 재평가. 주기(설정 `scan_interval_minutes` 10분)·공급자(gpt-5-mini)·프롬프트·소비자(`get_all_stock_sentiments`·`get_recent_themes`·`/api/themes`·ThemeEvent/NewsEvent 발행)는 불변이며 창 밖에서는 마지막 성공 결과가 그대로 제공된다(결손을 0 심리로 바꾸지 않음).
+- 근거: 11/8 월 예산 원장 판독 — gpt-5-mini 테마 탐지가 24시간·주말 포함 10분 주기로 140회/일(11/7 토요일 140/140), 11/1~11/8 OpenAI USD8.24의 약 절반. 창 적용 시 거래일 약 62회·주말 0 예상(월 약 USD10 절감 추정, 배포 7일 뒤 원장으로 실측). 테마추종 전략은 폐지(배분 0%)라 매매 영향 없음. [계획서](docs/superpowers/plans/2026-11-08-llm-credit-routing.md) Task 1.
+- 검사: 신규 `tests/test_theme_detection_gate.py` 11건(토 새벽·거래일 새벽·창 경계 양끝·장중·휴장일·전부 휴장 상한·루프 대기/탐지). 기존 `tests/test_news_similarity_bootstrap.py::test_real_scheduler_emits_only_fresh_events`는 벽시계로 창 밖에 걸릴 수 있어 게이트 시계 `_now_kst`만 거래일 장중으로 고정(검사 전제 분리, 제품 동작 불변). 관련 묶음(kr_scheduler 참조 38파일) AWS 보조 실행 결과는 원장 참조. 최종은 실제 WSL 직렬 전체 `verify.sh`.
+
 ## 2026-11-06 — R02-WEB-LABEL-NUMERIC 웹 리포트 검증의 숫자 포함 표기 경계 (소스 1파일, PR #346 병합 `b127577c`·운영 배포 11/7 00:15 인수 완료)
 
 - `src/analytics/web_report.py`: `_digit_words`/`_check_text(words=)` — 인용한 출처 줄에 그대로 적힌 숫자 포함 표기(`S&P500`·`2차전지`·`10개`·`1세션`·`15:32`)는 그 표기 그대로일 때만 숫자 검사에서 제외한다. 순수 숫자·날짜는 제외 대상이 아니라 벗겨진 숫자(`3%`·`1조`·`10%`)는 종전처럼 값 풀(`fact_numbers`)로만 판정하고, 이어 붙은 변형(`S&P5000`·`12차전지`)·미인용 사실의 표기·부호 뒤집기는 계속 거절한다. 프롬프트·스키마·`PROMPT_VERSION`·저장 행·거절 진단·호출 횟수·시장 보고 검증 불변.
