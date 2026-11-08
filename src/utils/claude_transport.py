@@ -485,9 +485,14 @@ class AnthropicAPIClient(_Client):
                                  "content-type": "application/json"}, allow_redirects=False,
                         timeout=aiohttp.ClientTimeout(total=max(.001, deadline-loop.time()))) as reply:
                     response.http_status = reply.status
-                    data = await reply.json()
+                    try:
+                        data = await reply.json()
+                    except (ValueError, aiohttp.ContentTypeError):
+                        data = None     # 비JSON 본문(프록시 HTML 5xx 등). 상태 코드로 가용성 실패/불완전 200 을 가른다
                 if not isinstance(data, dict):
-                    return _reject(response, "api_incomplete")
+                    # 독립 리뷰 P1(2026-11-09): 비정상 상태의 비JSON 응답을 불완전 200 과 같은 api_incomplete 로 두면
+                    # 구독 CLI 대체가 막힌다. 상태 코드가 200 이 아니면 api_http_error(가용성 실패).
+                    return _reject(response, "api_incomplete" if response.http_status == 200 else "api_http_error")
                 _usage(response, data.get("usage"))
                 response.billing_status = _billing_status(data, response.http_status, response.usage_known)
                 if response.http_status != 200:

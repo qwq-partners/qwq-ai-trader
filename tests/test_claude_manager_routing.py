@@ -106,6 +106,44 @@ async def test_api_non_availability_failures_do_not_fallback(tmp_path, kind):
     await m.close()
 
 
+class _HtmlReply:
+    def __init__(self, status):
+        self.status = status
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *args):
+        pass
+    async def json(self):
+        raise ValueError("<html>502 Bad Gateway</html>")
+
+
+class _HtmlSession:
+    closed = False
+    def __init__(self, status):
+        self.status, self.calls = status, []
+    def post(self, url, **kwargs):
+        self.calls.append(url)
+        return _HtmlReply(self.status)
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,cli_calls', [(502, 1), (503, 1), (200, 0)])
+async def test_real_api_client_non_json_5xx_reaches_cli_but_non_json_200_does_not(tmp_path, status, cli_calls):
+    """독립 리뷰 P1 연결 회귀: 실제 AnthropicAPIClient 가 HTML 5xx 를 api_http_error 로 올려 CLI 대체가 이어진다."""
+    from src.utils.claude_transport import AnthropicAPIClient
+    m = manager(tmp_path, reply(channel='subscription'), reply())
+    m.config.anthropic_api_key = 'synthetic'
+    m.anthropic = AnthropicAPIClient(m.config)
+    m.anthropic._session = _HtmlSession(status)
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=400)
+    assert len(m.anthropic._session.calls) == 1 and len(m.claude_cli.calls) == cli_calls
+    assert result.success is (cli_calls == 1)
+    assert result.attempt_trail[0]['transport_error_kind'] == ('api_http_error' if status != 200 else 'api_incomplete')
+    await m.close()
+
+
 @pytest.mark.asyncio
 async def test_api_refusal_does_not_fallback_even_with_retryable_error(tmp_path):
     m = manager(tmp_path, reply(channel='subscription'), reply(success=False, kind='api_http_error', refusal=True, http=500))

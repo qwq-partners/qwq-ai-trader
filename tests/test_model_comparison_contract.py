@@ -45,15 +45,15 @@ def payload(order=CLI_FIRST):
                            bear=call("bear", bear, order[0], CHANNEL[order[0]], "ACCEPT")))
 
 
-def bear_cli_after_api(first_status, first_kind, *, finish=9000, cli_status="success"):
+def bear_cli_after_api(first_status, first_kind, *, finish=9000, cli_status="success", api_finish=1000, cli_start=None):
     """API 1차 증거: 첫 API 시도가 first_status/first_kind 로 끝나고 CLI 가 뒤따른다."""
     p = payload(API_FIRST); b = p["calls"]["bear"]; api = b["attempts"][0]
-    api.update(status=first_status, transport_error_kind=first_kind, finished_ms=1000)
+    api.update(status=first_status, transport_error_kind=first_kind, finished_ms=api_finish)
     if first_status == "blocked":   # 전송 전 차단: 보낸 것도 비용도 없다
         api.update(request_sent=False, resolved_model=None, usage_known=False, input_tokens=None, output_tokens=None,
                    api_estimated_cost_usd=None)
     cli = attempt("bear-cli", "claude-opus-5-5", "low", "claude_cli", "subscription")
-    cli.update(started_ms=1000, finished_ms=finish, status=cli_status)
+    cli.update(started_ms=api_finish if cli_start is None else cli_start, finished_ms=finish, status=cli_status)
     b["attempts"].append(cli); b["whole_call_elapsed_ms"] = finish + 100
     return p
 
@@ -86,10 +86,34 @@ def test_api_first_unsafe_cli_fallback_is_nonconformant(status, kind):
     assert r["arms"]["current"]["verdict"] == "hold"
 
 
+@pytest.mark.parametrize("sent", [True, None])
+def test_api_first_blocked_without_proven_not_sent_cannot_authorize_cli(sent):
+    """독립 리뷰 P2: '전송 전 차단' 은 request_sent False 로 증명돼야 한다."""
+    p = bear_cli_after_api("blocked", None); p["calls"]["bear"]["attempts"][0]["request_sent"] = sent
+    codes = [v["code"] for v in evaluate_contract(p)["violations"]]
+    assert "bear_fallback_not_authorized" in codes
+
+
+@pytest.mark.parametrize("api_finish,ok", [(7500, True), (7501, False), (9000, False)])
+def test_api_first_cli_fallback_requires_four_seconds_left(api_finish, ok):
+    """독립 리뷰 P2: 운영은 잔여 4초 미만이면 CLI 를 보내지 않으므로 계약도 같은 바닥을 본다."""
+    r = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", api_finish=api_finish, finish=api_finish + 1000))
+    assert ("cli_fallback_below_time_floor" in [v["code"] for v in r["violations"]]) is (not ok)
+    assert r["arms"]["current"]["verdict"] == ("approve" if ok else "hold")
+
+
+def test_api_first_cli_fallback_without_timing_is_unverified_not_approved():
+    p = bear_cli_after_api("timeout", "api_timeout"); cli = p["calls"]["bear"]["attempts"][1]
+    cli.update(started_ms=None, finished_ms=None)
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "unverified" and "transport_timing_unknown" in [u["code"] for u in r["unknowns"]]
+    assert r["arms"]["current"]["verdict"] == "hold"
+
+
 def test_api_first_cli_success_late_in_internal_budget_is_not_cli_deadline_violation():
     r = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", finish=11000))
     assert "cli_success_after_deadline" not in [v["code"] for v in r["violations"]]
-    assert r["contract_status"] == "conformant"
+    assert r["contract_status"] == "conformant", r["violations"]
     late = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", finish=11500))
     assert "attempt_after_deadline" in [v["code"] for v in late["violations"]]    # Bear 내부 시한은 그대로 11.5초
 

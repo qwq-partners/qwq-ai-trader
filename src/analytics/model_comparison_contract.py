@@ -33,6 +33,8 @@ ATTEMPT_FIELDS = {"attempt_id", "transport", "billing_channel", "requested_model
 STATUSES = {"success", "empty", "error", "timeout", "cancelled", "blocked", "refusal", "identity_mismatch", "policy_violation"}
 FALLBACK = {"cli_unavailable", "cli_timeout", "cli_rate_limited", "cli_auth_unavailable", "cli_incomplete"}
 API_FALLBACK = {"api_timeout", "api_unavailable", "api_auth_unavailable", "api_http_error", "transport_cooldown"}
+# API 1차에서 구독 CLI 대체는 Bear 내부 시한(11.5초)까지 4.0초 이상 남아 있을 때만 보낸다(LLMManager._complete_claude 와 동일).
+CLI_FALLBACK_FLOOR_MS = 4000
 
 
 def _error(path, code="invalid"):
@@ -249,9 +251,14 @@ def evaluate_contract(payload):
                 if second["transport"] != order[1]: issue("bear_transport_order")
                 if cli_primary:
                     authorized = first["status"] in {"error", "timeout"} and first["transport_error_kind"] in FALLBACK
-                else:   # API 1차: 가용성 실패 또는 전송 전 차단(예산·cooldown)만 구독 CLI 로 이어진다
+                else:   # API 1차: 가용성 실패 또는 전송 전 차단(예산·cooldown, request_sent False 증명 필수)만 구독 CLI 로 이어진다
                     authorized = ((first["status"] in {"error", "timeout"} and first["transport_error_kind"] in API_FALLBACK)
-                                  or (first["status"] == "blocked" and first["transport_error_kind"] in (None, "transport_cooldown")))
+                                  or (first["status"] == "blocked" and first["request_sent"] is False
+                                      and first["transport_error_kind"] in (None, "transport_cooldown")))
+                    if second["started_ms"] is None:
+                        if "transport_timing_unknown" not in role_issues: issue("transport_timing_unknown", unknown=True)
+                    elif second["started_ms"] > 11500 - CLI_FALLBACK_FLOOR_MS:
+                        issue("cli_fallback_below_time_floor")     # 운영은 잔여 4초 미만이면 CLI 를 보내지 않는다
                 if not authorized: issue("bear_fallback_not_authorized")
         elif len(attempts) == 2 and attempts[0]["status"] != "empty": issue("bull_retry_not_authorized")
         verdict = _parse_verdict(call["content"], "ACCEPT" if role == "bear" else "APPROVE", "REJECT") if call["outcome"] == "success" else None

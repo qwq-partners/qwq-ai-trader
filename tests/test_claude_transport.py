@@ -1,5 +1,7 @@
 """합성 CLI 자식/HTTP 응답만 사용하는 Claude 전송 경계 검사."""
 import asyncio
+
+import aiohttp
 import errno
 import importlib
 import json
@@ -317,6 +319,34 @@ async def test_api_missing_usage_and_errors_never_claim_free_usage(transport, st
     assert response.usage_known is known and response.billing_status == billing
     assert "synthetic-key" not in (response.error or "")
     assert len(client._session.calls) == 1
+
+
+class NonJsonReply(Reply):
+    """프록시/게이트웨이가 돌려준 HTML 등: aiohttp 는 ContentTypeError 또는 JSONDecodeError(ValueError) 를 던진다."""
+    def __init__(self, status, error):
+        super().__init__(None, status)
+        self.error = error
+    async def json(self):
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,body,kind", [
+    (502, "content_type", "api_http_error"), (503, "decode", "api_http_error"), (529, "list", "api_http_error"),
+    (200, "content_type", "api_incomplete"), (200, "list", "api_incomplete")])
+async def test_api_non_json_body_is_availability_failure_only_on_abnormal_status(transport, status, body, kind):
+    """독립 리뷰 P1(2026-11-09): HTML 5xx 가 api_incomplete 로 분류되면 구독 CLI 대체가 막힌다."""
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    session = Session([], status) if body == "list" else Session()
+    if body == "content_type":
+        session.reply = NonJsonReply(status, aiohttp.ContentTypeError(request_info=None, history=()))
+    elif body == "decode":
+        session.reply = NonJsonReply(status, ValueError("not json"))
+    client._session = session
+    response = await client.complete("q", model=MODEL, deadline=deadline())
+    assert not response.success and response.transport_error_kind == kind
+    assert response.http_status == status and response.request_sent is True
+    assert response.usage_known is False and response.billing_status == "unknown"
 
 
 @pytest.mark.asyncio
