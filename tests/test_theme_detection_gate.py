@@ -4,8 +4,9 @@
 절반을 차지했다. 창 밖에서는 다음 창 시작까지 대기하고(상한 1시간, 휴장일 갱신 재평가),
 소비자(스크리너 뉴스 심리·보고·대시보드)는 마지막 성공 결과를 그대로 본다.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -89,3 +90,46 @@ async def test_loop_detects_inside_window_then_sleeps_interval(monkeypatch, holi
     await scheduler.run_theme_detection()
     assert detect_calls == [True]
     assert sleeps == [600]
+
+
+# ── 독립 리뷰 P1: 창 밖 대기 뒤 첫 탐지에서 만료 캐시가 새 결과를 가리면 안 된다 ──────────
+def _real_detector(monkeypatch, llm_result, sentiments, themes):
+    import src.signals.sentiment.kr_theme_detector as kd
+    news = SimpleNamespace(get_market_news=AsyncMock(return_value=[kd.NewsArticle(
+        title='synthetic semiconductor demand shock', content='synthetic', url='u', published_at=datetime.now())]))
+    monkeypatch.setattr(kd, 'NewsCollector', lambda: news)
+    llm = SimpleNamespace(complete_json=AsyncMock(return_value=llm_result))
+    d = kd.ThemeDetector(llm_manager=llm)
+    d._storage_initialized = True
+    # 점수 보정 단계는 전역 KIS/US 시세 싱글톤을 조회하므로 스텁(격리 가드: 네트워크 0)
+    d._adjust_scores_by_sector = AsyncMock()
+    d._adjust_scores_by_us_market = AsyncMock()
+    d._stock_sentiments = sentiments
+    d._themes = themes
+    return d, kd
+
+
+_NEW_BEARISH = {"themes": [{"theme": "AI/반도체", "news_count": 1, "score": 80, "reason": "s", "stocks": []}],
+                "stock_impacts": [{"symbol": "000001", "name": "s", "impact": -7, "direction": "bearish",
+                                   "catalyst_phase": "unknown", "reason": "synthetic bad news"}]}
+
+
+@pytest.mark.asyncio
+async def test_resume_after_gap_replaces_expired_sentiment_with_new_lower_abs(monkeypatch):
+    stale_at = datetime.now() - timedelta(hours=2)
+    d, kd = _real_detector(monkeypatch, _NEW_BEARISH,
+                           {"000001": {"impact": 8, "abs_impact": 8, "updated_at": stale_at}},
+                           {})
+    d._themes = {"old": kd.ThemeInfo(name="old", last_updated=stale_at)}
+    await d.detect_themes(force=True)
+    assert d._stock_sentiments["000001"]["impact"] == -7      # 만료된 8 이 새 -7 을 가리지 않는다
+    assert "old" not in d._themes and "AI/반도체" in d._themes  # 만료 테마는 정리, 새 테마는 등록
+
+
+@pytest.mark.asyncio
+async def test_fresh_higher_abs_still_wins_within_hour(monkeypatch):
+    fresh_at = datetime.now() - timedelta(minutes=10)
+    d, _ = _real_detector(monkeypatch, _NEW_BEARISH,
+                          {"000001": {"impact": 8, "abs_impact": 8, "updated_at": fresh_at}}, {})
+    await d.detect_themes(force=True)
+    assert d._stock_sentiments["000001"]["impact"] == 8       # 1시간 안의 더 큰 절댓값 유지(기존 계약)

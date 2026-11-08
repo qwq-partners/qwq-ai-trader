@@ -946,6 +946,9 @@ class ThemeDetector:
 
             # 2-2. 종목별 센티멘트 파싱 (themes[].stocks + stock_impacts)
             now = datetime.now()
+            # 병합 전에 1시간 만료 항목을 먼저 정리한다 — 아래 abs_impact 비교가 만료된 옛 값을
+            # 기준으로 새 결과를 버리지 않도록(2026-11-08 L01 Task 1 독립 리뷰 P1: 창 밖 대기 뒤 첫 탐지).
+            self._prune_stale()
 
             # stock_impacts에서 파싱 (새 스케일: -10~+10)
             for item in stock_impacts:
@@ -1053,23 +1056,7 @@ class ThemeDetector:
             # 3-2. US 시장 오버나이트 데이터로 테마 점수 보정
             await self._adjust_scores_by_us_market()
 
-            # 4. 오래된 테마 제거 (1시간 이상 업데이트 없음)
-            cutoff = datetime.now() - timedelta(hours=1)
-            self._themes = {
-                name: theme
-                for name, theme in self._themes.items()
-                if theme.last_updated > cutoff
-            }
-
-            # 4-1. 오래된 종목 센티멘트 제거 (1시간 이상)
-            stale_symbols = [
-                sym for sym, data in self._stock_sentiments.items()
-                if data.get("updated_at", datetime.min) < cutoff
-            ]
-            for sym in stale_symbols:
-                del self._stock_sentiments[sym]
-            if stale_symbols:
-                logger.debug(f"[ThemeDetector] 스테일 센티멘트 {len(stale_symbols)}개 제거")
+            # 4. 만료 정리는 병합 전 _prune_stale()에서 수행했다(새 항목은 모두 now 로 갱신됨).
 
             # 5. 테마 히스토리를 DB에 저장
             if self._storage and self._themes:
