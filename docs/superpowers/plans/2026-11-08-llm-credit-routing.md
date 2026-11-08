@@ -80,7 +80,8 @@
 - [x] GREEN(11/9, 브랜치 `feature/l01-bear-api-first-20261109`, 기준 main `9ca16289`): `_complete_claude` API 1차·CLI 대체, contract 두 순서, 생산자 운영 순서. **계획 대비 축소 2건:** ① `config/default.yml` `claude_transport_order` 키는 두지 않았다(합법값 1개인 키는 소음, 되돌림은 코드 롤백). ② runner/worker/wiring의 API 1차 이식(새 manifest 버전)은 하지 않았다 — 생산자만 운영 순서를 적고 wiring이 `unsupported_bear_transport_order`로 거부해 fail-closed(R1 OFF·worker 미설치라 영향 0, 비교 재가동 시 선행 과제). `llm_decision_record`는 trail 순서를 이미 그대로 적어 변경 없음.
 - [x] 독립 리뷰 1차(Codex gpt-6-astra/xhigh) P0 0·P1 1(전송 클라이언트 비JSON 5xx → `api_incomplete` 오분류로 CLI 대체 차단)·P2 2(계약 차단 증명·4초 바닥) 전부 반영.
 - [x] 독립 리뷰 2차(xhigh) P1 1(상태 수신 전 연결 종료·비정상 상태 본문 실패 → `api_incomplete` 오분류) 반영.
-- [ ] 독립 리뷰 3차·실제 WSL 전체·PR·사용자 승인 배포 — 원장.
+- [x] 독립 리뷰 3차(xhigh) P0/P1/P2 0 — 조건부 병합 가능.
+- [ ] 실제 WSL 직렬 전체 verify·PR·필수 CI·사용자 승인 배포 — 원장.
 - [ ] 기대 효과: Bear 의견 확보율 상승(API 지연 중앙값 약 4.4초 실측), 개발 세션 Claude Code 한도 사용 0, 크레딧 차감 월 약 USD12. 배포 7일 뒤 원장(Bear API/CLI 시도 수·성공률)으로 실측.
 
 ### Task 3: Claude 모델 신원·가격 확장 (D3·D4·D5 전제)
