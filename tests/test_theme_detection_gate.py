@@ -2,7 +2,7 @@
 
 11/8 월 예산 원장: gpt-5-mini 테마 탐지가 24시간·주말 포함 10분마다 돌아 OpenAI 청구의
 절반을 차지했다. 창 밖에서는 다음 창 시작까지 대기하고(상한 1시간, 휴장일 갱신 재평가),
-소비자(스크리너 뉴스 심리·보고·대시보드)는 마지막 성공 결과를 그대로 본다.
+소비자(스크리너 뉴스 심리·보고·대시보드)는 1시간 만료 안의 마지막 결과만 보고, 만료 뒤에는 결손(빈 결과)이다.
 """
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
