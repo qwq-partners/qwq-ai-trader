@@ -349,6 +349,29 @@ async def test_api_non_json_body_is_availability_failure_only_on_abnormal_status
     assert response.usage_known is False and response.billing_status == "unknown"
 
 
+class DisconnectReply(Reply):
+    """헤더를 받기 전 서버가 연결을 끊는다(aiohttp.ServerDisconnectedError)."""
+    def __init__(self):
+        super().__init__(None, None)
+    async def __aenter__(self):
+        raise aiohttp.ServerDisconnectedError()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage,status,kind", [
+    ("disconnect", None, "api_unavailable"), ("payload", 503, "api_http_error"), ("payload", 200, "api_incomplete")])
+async def test_api_connection_loss_is_availability_failure_unless_200_body(transport, stage, status, kind):
+    """독립 리뷰 2차 P1(2026-11-09): 상태 수신 전 연결 종료와 비정상 상태의 본문 수신 실패는 CLI 대체 대상이다."""
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    session = Session()
+    session.reply = DisconnectReply() if stage == "disconnect" else NonJsonReply(status, aiohttp.ClientPayloadError("cut"))
+    client._session = session
+    response = await client.complete("q", model=MODEL, deadline=deadline())
+    assert not response.success and response.transport_error_kind == kind
+    assert response.request_sent is True and response.http_status == status
+    assert response.usage_known is False and response.billing_status == "unknown"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["valid", "symlink", "mode", "oversize", "owner"])
 async def test_key_file_is_lazy_and_rejects_unsafe_files(transport, tmp_path, monkeypatch, case):

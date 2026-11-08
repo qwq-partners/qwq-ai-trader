@@ -523,7 +523,11 @@ class AnthropicAPIClient(_Client):
         except (OSError, UnicodeError):
             return _reject(response, "api_unavailable" if response.request_sent else "api_auth_unavailable")
         except (ValueError, aiohttp.ClientError):
-            return _reject(response, "api_incomplete" if response.request_sent else "api_unavailable")
+            # 독립 리뷰 2차 P1(2026-11-09): 응답 상태를 받기 전의 연결 종료는 가용성 실패, 비정상 상태의 본문 수신 실패는
+            # HTTP 오류다. 불완전한 200 응답만 api_incomplete(구독 CLI 대체 금지)로 남긴다.
+            if response.http_status is None:
+                return _reject(response, "api_unavailable")
+            return _reject(response, "api_incomplete" if response.http_status == 200 else "api_http_error")
         finally:
             response.latency_ms = (loop.time() - started) * 1000
             self._calls.discard(task)

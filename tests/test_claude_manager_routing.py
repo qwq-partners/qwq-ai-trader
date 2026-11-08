@@ -128,6 +128,32 @@ class _HtmlSession:
         self.closed = True
 
 
+class _DisconnectReply(_HtmlReply):
+    async def __aenter__(self):
+        import aiohttp
+        raise aiohttp.ServerDisconnectedError()
+
+
+class _DisconnectSession(_HtmlSession):
+    def post(self, url, **kwargs):
+        self.calls.append(url)
+        return _DisconnectReply(None)
+
+
+@pytest.mark.asyncio
+async def test_real_api_client_disconnect_before_status_reaches_cli(tmp_path):
+    """독립 리뷰 2차 P1 연결 회귀: 헤더 수신 전 연결 종료는 api_unavailable → 구독 CLI 대체."""
+    from src.utils.claude_transport import AnthropicAPIClient
+    m = manager(tmp_path, reply(channel='subscription'), reply())
+    m.config.anthropic_api_key = 'synthetic'
+    m.anthropic = AnthropicAPIClient(m.config)
+    m.anthropic._session = _DisconnectSession(None)
+    result = await m.complete_with('synthetic', LLMProvider.ANTHROPIC, max_tokens=400)
+    assert result.success and result.transport == 'claude_cli' and len(m.claude_cli.calls) == 1
+    assert result.attempt_trail[0]['transport_error_kind'] == 'api_unavailable' and result.attempt_trail[0]['request_sent'] is True
+    await m.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('status,cli_calls', [(502, 1), (503, 1), (200, 0)])
 async def test_real_api_client_non_json_5xx_reaches_cli_but_non_json_200_does_not(tmp_path, status, cli_calls):
