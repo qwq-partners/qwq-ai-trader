@@ -342,7 +342,7 @@ KR `ThemeDetector._extract_themes_from_news`만 `response_format={"type":"json_o
 
 ## Claude 엔진 연결 — 2026-10-28
 
-일반 뉴스·분석·보고는 GPT를 사용하고, 진입 반증/팀 Bear는 `claude-opus-5-5`/low로 검토한다. **L01 Task 2(2026-11-09 소스, 운영 적용은 배포 뒤):** 예산 내 Anthropic Messages API를 먼저 한 번 호출하고, API가 가용성 실패(시한·전송 불가·HTTP 오류·cooldown·전송 전 예산 차단)로 끝나며 남은 시한이 4초 이상일 때만 로그인된 CLI를 한 번 호출한다(Ultra 크레딧은 API만 덮는다). 종전 10/28~ 계약은 그 반대(CLI 우선·API 대체)였다. 신규 Gemini는 client 경계에서 차단하며 과거 원장은 보존한다. 아래 과거 LLM 계약의 모델/라우팅 설명보다 이 절과 [현재 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)을 우선한다.
+일반 뉴스·분석·보고는 GPT를 사용하고, 진입 반증/팀 Bear는 `claude-opus-5-5`/low로 검토한다. **L01 Task 2(2026-11-09, 운영 적용 `31edd820` 21:21:59 KST~, 자연 호출 인수 WAIT):** 예산 내 Anthropic Messages API를 먼저 한 번 호출하고, API가 가용성 실패(시한·전송 불가·HTTP 오류·cooldown·전송 전 예산 차단)로 끝나며 남은 시한이 4초 이상일 때만 로그인된 CLI를 한 번 호출한다(Ultra 크레딧은 API만 덮는다). 종전 10/28~ 계약은 그 반대(CLI 우선·API 대체)였다. 신규 Gemini는 client 경계에서 차단하며 과거 원장은 보존한다. 아래 과거 LLM 계약의 모델/라우팅 설명보다 이 절과 [현재 실행 원장](../operations/execution-roadmap.md#e04-gpt-claude-20261028)을 우선한다.
 
 CLI는 빈 임시 cwd·입력 stdin·도구/MCP0·safe mode·기존 구독 로그인·API 환경 제외를 사용한다. 기존 전체12초/20초 안에서 API에 시한 전부, CLI에는 API 정산 뒤 실제 남은 시한(4초 미만이면 미전송)을 준다. 모델 불일치·명시적 거절·빈/잘린 200 응답·요청 계약 위반·호출자 취소는 자동 대체하지 않는다. 두 검토가 완성되지 않으면 검토 미완료로 보류한다.
 
