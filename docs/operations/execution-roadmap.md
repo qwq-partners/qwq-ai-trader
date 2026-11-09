@@ -1,5 +1,16 @@
 # 엔진 개선 실행 원장 — 목표·진행·리뷰·다음 작업
 
+<a id="test-panel-deadline-loop-clock-20261109"></a>
+### TEST-PANEL-DEADLINE-LOOP-CLOCK — 공통 패널 시한 검사의 벽시계 플레이크 제거 (테스트 전용·제품 코드 0 / 수정·AWS 보조 반복·독립 리뷰 DONE / 실제 WSL·PR 병합 WAIT)
+
+**Plan:** 11/9 docs 전용 PR #352의 필수 CI `verify`(hosted runner 직렬 전체)가 `tests/test_model_comparison_current_flow.py::test_common_panel_deadline_is_fixed_before_roles_start`에서 1회 실패하고 재실행에서 통과했다. 실패 단정은 `bull_role_deadline_exceeded_after_response` 포함인데 실제 사유는 `bear_role_deadline_exceeded_after_response`였다. 검사(Codex 6회차 `56459e82` 추가)는 패널 0.5초·Bear 내부 0.4초·CLI 0.1초에 `guard._admit`(Bear 입장) `time.sleep(0.3)`·`guard._store_result`(Bull 저장) `time.sleep(0.25)`를 몽키패치해 벽시계로 늦은 Bull 의견을 만들었고, Bear 완료(0.3초+지터)와 내부 시한 0.4초 사이 여유가 0.1초라 느린 러너에서 Bear 시한이 먼저 걸렸다(11/9 PR #351·main·WSL·서버 verify 4회는 통과 — 간헐). 목표는 증명 성질(패널 시한은 task 생성 전에 고정되고, Bull이 자기 역할 기준 제때 끝나도 패널 기준 늦으면 hold)을 유지한 최소 변경, 제품 코드(`src/analytics/model_comparison_runner.py`) 변경 0.
+
+**Do(브랜치 `test/panel-deadline-loop-clock-20261109`, 기준 origin/main `5abfd02e`):** runner `_bear_role`/`_arm`/`run`과 `ClaudeSingleAttemptAdapter`가 시한을 전부 `loop.time()`으로 읽고 `asyncio.timeout_at`도 같은 시계를 쓰므로, `asyncio.Runner(loop_factory=…)`로 만든 테스트 루프의 `time`을 `실제 단조 시계 + 전진분`으로 바꾸고 sleep을 전진분 가산(Bear 입장 +10초·Bull 저장 +11초)으로 교체했다. 시한은 패널 20초·Bear 내부 19초·CLI 8초(계약 상한 `min(8, 내부/2)`)·API 19초. Bull은 자기 역할 시한(시작 T0+10 → T0+30) 안에 끝나지만 패널 기준 T0+21 > 20이라 hold·`bull_role_deadline_exceeded_after_response`; Bear는 T0+10+지터 < 19라 지터 9초까지 Bear 사유가 나지 않는다(부재 단정 추가). 완전 고정 시계는 채택하지 않았다 — 준비 콜백 없이 타이머만 남는 순간 `_run_once`가 영원히 대기한다. 실제 대기 0이라 검사 시간은 종전과 같다. CHANGELOG 1항목. 같은 파일의 `time.sleep` 패턴 2종(`test_admission_latency_cannot_extend_the_bear_internal_deadline` 0.15초·여유 5.75/11.5초, `test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted[bear|bull_current]` 0.35초·여유 0.3초 미만)은 범위 밖으로 목록만 남긴다.
+
+**See/검사(AWS 보조, Python 3.12.3·venv):** 대상 1건 passed → 돌연변이(Bull 전진분을 패널 안으로) `assert 'reject' == 'hold'` 실패로 단정의 판별력 확인 → 파일 전체 53검사 × 10회 연속 passed(10.3~11.8초) → CPU 부하(다른 pytest 2파일 + 소모 루프 동시, `nice -n 10`)에서 대상 passed. 같은 부하에서 범위 밖 `test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted` 2파라미터가 `policy_verdict == 'hold'`로 실패(단독 재현 1/3) — 후속 후보로만 기록. **독립 리뷰(Codex `scripts/dev/codex_review.sh --branch`, `QWQ_REVIEW_BASE=origin/main`, 래퍼 gpt-6-astra/high — 제어 호출·본 리뷰 헤더 `model: gpt-6-astra`·`reasoning effort: high` 확인, 로그 `~/.local/state/qwq-task-audit/20261109/test-panel-deadline/codex-review-1.log`):** 1차(`f50d054c`) P0 0·P1 0·P2 2 — ① 시계가 실제 시간도 반영해 Bear 여유 1초(당시 패널 5·내부 4·전진 3)가 남아 "러너 속도와 무관" 표현이 부정확 → 여유 9초로 재배치·문구 정정, ② docs 원장 미기록 → 이 항목. 2차(`bc08d626`, 로그 `codex-review-2.log`, 헤더 gpt-6-astra/high) **P0 0·P1 0·P2 0**, `git diff --check` 통과, "코드 리뷰 관점 조건부 병합 가능(사용자 WSL 직렬 전체·필수 CI 조건)". 리뷰어는 임시 SQLite 생성을 피해 pytest를 직접 돌리지 않았다(기록된 반복 결과는 리뷰어 재검증이 아님).
+
+**NEXT:** PR 생성 → 사용자 WSL `bash scripts/dev/verify.sh` 직렬 전체(AWS는 보조) → 필수 CI → 병합(사용자 승인). 운영 배포 대상이 아니다(테스트 전용). 범위 밖 `time.sleep` 검사 2종의 같은 패턴 전환은 별도 과제.
+
 <a id="r02-web-rejection-recurrence-20261109"></a>
 ### R02-WEB-REJECTION-RECURRENCE — 라벨 허용(PR #346) 뒤에도 웹 리포트 3/3 거절이 재발한 원인 조사 (판독·코드 대조·합성 재현 DONE / 최소 수정 ①② 구현·검사 DONE / 독립 리뷰·PR·실제 WSL·배포는 아래 Do/See)
 
