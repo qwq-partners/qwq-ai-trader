@@ -1,6 +1,6 @@
 # L01-LLM-CREDIT-ROUTING — Ultra 월 API 크레딧 기준 엔진 LLM 라우팅 재설계 계획
 
-> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 **계획서이며 승인 전이다.** 어느 Task도 아직 시작하지 않았다.
+> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 계획서다. **현재 상태(11/9):** 사전 결정 D1~D8 확정, Task 1 운영 인수 완료(`a1331059`), Task 2는 소스·독립 리뷰 3회·실제 WSL·PR #351 병합(main `31edd820`) 완료이며 운영 배포·자연 Bear 호출 인수는 원장과 아래 진행 기록을 따른다. Task 3~6은 미착수(사용자 지시 대기). 아래 각 Task의 Files/Interfaces는 착수 전 초안이고, 확정 범위는 체크 항목과 원장이 우선한다.
 
 **Goal:** 매월 소멸하는 Ultra 플랜 Claude API 크레딧 USD200을 엔진의 LLM 호출에 우선 배정해 OpenAI 유료 청구(현재 월 약 USD30 추세)를 0에 가깝게 줄이고, 그 과정에서 비용 출처가 바뀌어도 판단 품질·fail-closed 동작·예산 원장의 정확성을 유지한다.
 
@@ -68,12 +68,13 @@
 
 - [x] RED: 토 03:00·거래일 02:00·06:30·10:00·16:44:59·16:45·휴장일 10:00·전부 휴장 상한 + 루프 대기(상한 분할/정확 잔여)·장중 탐지 1회 — `tests/test_theme_detection_gate.py` 11건(헬퍼 부재로 실패 확인).
 - [x] GREEN(`_theme_window_wait_seconds`·루프 게이트)·관련 묶음(kr_scheduler 참조 38파일) AWS 보조 실행·CHANGELOG·아키텍처 문서. 기존 `test_real_scheduler_emits_only_fresh_events`는 벽시계 의존이라 게이트 시계만 고정.
-- [x] 독립 리뷰 3회(P1 1·P2 5 반영)·실제 WSL 직렬 전체 10,569 passed·PR #349. 사용자 승인 배포 WAIT.
-- [ ] 기대 효과: 140회/일(매일) → 거래일 약 62회/주말 0, OpenAI 월 약 USD10 절감. 배포 7일 뒤 원장으로 실측.
+- [x] 독립 리뷰 3회(P1 1·P2 5 반영)·실제 WSL 직렬 전체 10,569 passed·PR #349 병합 `a1331059`. **운영 배포·기동 인수 완료(11/9 01:24 KST, PID888110)**, 문서 PR #350 병합 `9ca16289`.
+- [ ] 기대 효과(실측 전 추정): 140회/일(매일) → 거래일 약 62회/주말 0, OpenAI 월 약 USD10 절감. 배포 7일 뒤(11/16) 원장으로 실측. **주의:** 창 밖은 '마지막 성공 결과 유지'지만 소비자(`get_all_stock_sentiments`·`/api/themes`)가 **1시간 만료**를 적용하므로 장 후 17:45 이후~익일 06:30 전에는 테마 입력이 결손(없음)이다. 결손을 0 심리로 바꾸지 않는다.
 
 ### Task 2: Bear 전송 순서 반전 (D1)
 
 **Files:** `src/utils/llm.py`(ANTHROPIC `complete_with` 순서·시한 배분), `config/default.yml`(새 키 `claude_transport_order`, 기본 `[anthropic_messages, claude_cli]`, 엄격 검증), `src/analytics/model_comparison_contract.py`/`model_comparison_input.py`/`model_comparison_worker.py`(새 manifest 버전, 역사적 순서 보존), `src/analytics/llm_decision_record.py`(attempt_trail 순서 표기), 관련 테스트·`docs/research/engine-model-allocation-2026-10-15.md`·CHANGELOG.
+**확정 범위(11/9, 초안과 다른 점):** `claude_transport_order` 설정 키는 두지 않았고(합법값 1개, 되돌림은 코드 롤백=배포), 비교 runner/worker의 새 manifest 버전·API 1차 이식은 하지 않았다(생산자만 운영 순서를 적고 wiring이 `unsupported_bear_transport_order`로 fail-closed 거부, R1 OFF·worker 미설치). `llm_decision_record`는 trail 순서를 이미 그대로 적어 변경 없음. 아래 Files 줄은 초안이다.
 **Interfaces:** API에 총 시한의 전부(기존 12초 기본·20초 상한 불변)를 주되 API가 허용 가용성 실패(`api_unavailable`/HTTP 5xx·429·크레딧 없음 4xx·시한)로 끝나고 남은 시한이 CLI 최소 기동 시간 이상일 때만 CLI 1회. API 거절·모델 불일치·빈 응답은 CLI로 우회하지 않는다(현 CLI→API 규칙의 거울). 월 원장 예약은 API 시도에만, CLI는 `billing_channel=subscription` 그대로.
 
 - [x] RED: API 성공 → CLI 0, API 5xx/429/400·시한·전송 불가·cooldown·예산 차단 → CLI 1, API 거절·신원 불일치·`api_incomplete`·`invalid_request`·취소 → CLI 0, 남은 시한 < 4.0초 → CLI 0, 비교 contract가 두 순서를 모두 해석 — `tests/test_claude_manager_routing.py`(전면 교체)·`tests/test_model_comparison_contract.py`.
@@ -81,8 +82,8 @@
 - [x] 독립 리뷰 1차(Codex gpt-6-astra/xhigh) P0 0·P1 1(전송 클라이언트 비JSON 5xx → `api_incomplete` 오분류로 CLI 대체 차단)·P2 2(계약 차단 증명·4초 바닥) 전부 반영.
 - [x] 독립 리뷰 2차(xhigh) P1 1(상태 수신 전 연결 종료·비정상 상태 본문 실패 → `api_incomplete` 오분류) 반영.
 - [x] 독립 리뷰 3차(xhigh) P0/P1/P2 0 — 조건부 병합 가능.
-- [ ] 실제 WSL 직렬 전체 verify·PR·필수 CI·사용자 승인 배포 — 원장.
-- [ ] 기대 효과: Bear 의견 확보율 상승(API 지연 중앙값 약 4.4초 실측), 개발 세션 Claude Code 한도 사용 0, 크레딧 차감 월 약 USD12. 배포 7일 뒤 원장(Bear API/CLI 시도 수·성공률)으로 실측.
+- [x] 실제 WSL 직렬 전체 verify(`cfc201d9`, **10,615 passed / 2 skipped / 2 xfailed**, rc 0, 격리 0)·PR #351 필수 verify success·main `31edd820` verify success. 운영 배포·자연 Bear 호출 인수는 원장(아래 진행 기록).
+- [ ] 기대 효과: Bear 의견 확보율 상승(API 지연 중앙값 약 4.4초 실측), 개발 세션 Claude Code 한도 사용 감소(API 가용성 실패 시 구독 CLI 대체가 남으므로 **0은 보장되지 않음**, 대체 발생 수를 원장 `billing_channel=subscription` 행으로 실측), 크레딧 차감 월 약 USD12(추정). 배포 7일 뒤 원장(Bear API/CLI 시도 수·성공률)으로 실측.
 
 ### Task 3: Claude 모델 신원·가격 확장 (D3·D4·D5 전제)
 
@@ -121,3 +122,4 @@
 - 2026-11-08: 사용자 "PR 올리고 착수" — 계획서 PR #348, Task 1 구현·검사 완료(브랜치 `feature/l01-theme-detection-gate-20261108`). 독립 리뷰·WSL·PR은 원장 참조.
 - 2026-11-09: Task 1 독립 리뷰 3회·실제 WSL 통과·PR #349, 문서 PR #348 병합(`4f0cbb64`). 사용자 "둘 다 병합해". 운영 배포는 별도 승인.
 - 2026-11-09: Task 1 운영 인수(`a1331059`·PID888110)·문서 PR #350 병합(`9ca16289`). 사용자 "Task2도 ㄱㄱ" → Task 2 구현·관련 검사 완료(위 체크). 독립 리뷰·WSL·PR은 원장.
+- 2026-11-09: Task 2 독립 리뷰 3회(xhigh, 3차 0건)·실제 WSL 10,615 passed·PR #351 병합 `31edd820`·main CI success. 사용자 "완료되면 배포 해줘" → 21:21:59 KST 운영 인수(PID986445, 서버 10,615 passed·롤백 0·postcheck rc0). 자연 Bear 호출 인수 WAIT(재시작 이후 Claude 호출 0). 11/9 웹 리포트 3/3 거절 재발 원인 조사는 별도 원장 항목(소스 수정 0). 다음 진입점은 Task 3(사용자 선행 확인: Anthropic 조직 데이터 보존 30일) — 사용자 지시 대기.
