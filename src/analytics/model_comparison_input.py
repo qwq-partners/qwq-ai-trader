@@ -108,7 +108,9 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
         "empty_retries": 1,  # legacy scalar: Bull / ordinary GPT calls
         "bear_empty_retries": 0,
         "bear_internal_timeout_seconds": max(0.001, av.LLM_TIMEOUT - 0.5),
-        "bear_transport_order": ["claude_cli", "anthropic_messages"],
+        # L01 Task 2(2026-11-09): 운영 LLMManager._complete_claude 는 API 1차·구독 CLI 대체다. 비교 runner/worker 는
+        # 아직 CLI→API(entry-independent-review-v1)만 구현하므로 이 값은 wiring 에서 unsupported 로 거부된다(fail-closed).
+        "bear_transport_order": ["anthropic_messages", "claude_cli"],
         "strict_on_disagreement": bool(av.STRICT_ON_DISAGREEMENT),
     }
 

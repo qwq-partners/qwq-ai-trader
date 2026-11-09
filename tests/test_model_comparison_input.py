@@ -57,6 +57,7 @@ def test_role_controls_copy_operating_adversarial_and_fallback_conditions():
     assert c["bear"]["reasoning_effort"] == "low" and c["bear_empty_retries"] == 0
     assert c["empty_retries"] == 1 and c["strict_on_disagreement"] is False and c["fallback_system"] == ""
     assert c["fallback_chain_timeout_seconds"] == 10.0     # 운영 SINGLE_FALLBACK_TIMEOUT 은 체인 전체 시한
+    assert c["bear_transport_order"] == ["anthropic_messages", "claude_cli"]   # L01 Task 2: 운영 Bear 는 API 1차·구독 CLI 대체
     unknown = mci.operating_role_controls(object(), fallback_prompt_suffix="x", fallback_timeout=10.0)
     assert unknown["bull"]["model"] is None          # 원천에서 못 읽은 값은 추정하지 않는다
 

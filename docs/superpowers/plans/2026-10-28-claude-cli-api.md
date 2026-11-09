@@ -1,5 +1,7 @@
 # Claude 구독 CLI 우선·API 대체 구현 계획
 
+> **2026-11-09 L01 Task 2:** 이 문서의 CLI 우선·API 대체 순서는 11/9 소스에서 **API 우선·CLI 대체**로 뒤집혔다(Ultra 크레딧은 API만 덮음). 전송 클라이언트·정산·시한 상한·비용 채널 계약은 그대로이며 순서 규칙의 현행 정본은 [L01 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 아래는 당시 이력이다.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. E04-D2의 후속이며 우선순위 정본은 실행 원장이다.
 
 **Goal:** Gemini 신규 호출 없이 GPT의 독립 위험 검토를 로그인된 Claude CLI로 수행하고, 가용성 실패 때만 Anthropic API를 한 번 사용한다.

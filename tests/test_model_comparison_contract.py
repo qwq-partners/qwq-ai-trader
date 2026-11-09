@@ -21,7 +21,12 @@ def attempt(role, model, effort, transport, channel):
                 subscription_estimated_cost_usd="0" if channel == "subscription" else None)
 
 
-def payload():
+CLI_FIRST = ["claude_cli", "anthropic_messages"]          # 역사적 순서(~2026-11-09)
+API_FIRST = ["anthropic_messages", "claude_cli"]          # L01 Task 2 운영 순서
+CHANNEL = {"claude_cli": "subscription", "anthropic_messages": "api"}
+
+
+def payload(order=CLI_FIRST):
     bull = dict(requested_model="gpt-5-mini", reasoning_effort="minimal", max_output_tokens=400,
                 temperature=0.3, seed=20260803, empty_retries=1)
     bear = dict(requested_model="claude-opus-5-5", reasoning_effort="low", max_output_tokens=400,
@@ -34,10 +39,105 @@ def payload():
                 evidence_kind="synthetic", comparison_id="synthetic-1", common_input_sha256="a" * 64,
                 policy=dict(requires_independent_review=True, missing_review_policy="hold", single_model_fallback=False,
                             strict_on_disagreement=False, panel_timeout_seconds=12.0,
-                            bear_internal_timeout_seconds=11.5, bear_transport_order=["claude_cli", "anthropic_messages"]),
+                            bear_internal_timeout_seconds=11.5, bear_transport_order=list(order)),
                 calls=dict(bull_current=call("current", bull, "openai_chat", "api", "APPROVE"),
                            bull_candidate=call("candidate", candidate, "openai_chat", "api", "APPROVE"),
-                           bear=call("bear", bear, "claude_cli", "subscription", "ACCEPT")))
+                           bear=call("bear", bear, order[0], CHANNEL[order[0]], "ACCEPT")))
+
+
+def bear_cli_after_api(first_status, first_kind, *, finish=9000, cli_status="success", api_finish=1000, cli_start=None):
+    """API 1차 증거: 첫 API 시도가 first_status/first_kind 로 끝나고 CLI 가 뒤따른다."""
+    p = payload(API_FIRST); b = p["calls"]["bear"]; api = b["attempts"][0]
+    api.update(status=first_status, transport_error_kind=first_kind, finished_ms=api_finish)
+    if first_status == "blocked":   # 전송 전 차단: 보낸 것도 비용도 없다
+        api.update(request_sent=False, resolved_model=None, usage_known=False, input_tokens=None, output_tokens=None,
+                   api_estimated_cost_usd=None)
+    cli = attempt("bear-cli", "claude-opus-5-5", "low", "claude_cli", "subscription")
+    cli.update(started_ms=api_finish if cli_start is None else cli_start, finished_ms=finish, status=cli_status)
+    b["attempts"].append(cli); b["whole_call_elapsed_ms"] = finish + 100
+    return p
+
+
+def test_api_first_single_api_success_is_conformant_and_billed_once():
+    r = evaluate_contract(payload(API_FIRST))
+    assert r["contract_status"] == "conformant" and r["arms"]["current"]["verdict"] == "approve"
+    assert r["costs"]["api_estimated_cost_usd_total"] == "0.03"
+    assert r["observations"]["bear"]["attempts"][0]["transport"] == "anthropic_messages"
+
+
+@pytest.mark.parametrize("status,kind", [("error", "api_http_error"), ("timeout", "api_timeout"), ("error", "api_unavailable"),
+                                         ("error", "api_auth_unavailable"), ("blocked", None), ("blocked", "transport_cooldown")])
+def test_api_first_availability_failure_then_cli_is_conformant(status, kind):
+    r = evaluate_contract(bear_cli_after_api(status, kind))
+    assert r["contract_status"] == "conformant", r["violations"]
+    assert r["arms"]["current"]["verdict"] == "approve" and r["attempt_count"] == 4
+    # 전송된 실패 API 시도의 알려진 견적은 합산되고, 전송 전 차단은 합산 대상이 아니다(미확인 아님)
+    assert r["costs"]["api_estimated_cost_usd_total"] == ("0.02" if status == "blocked" else "0.03")
+    assert r["costs"]["subscription_estimated_cost_usd_known_subtotal"] == "0"
+    assert r["observations"]["bear"]["attempts"][0]["transport_error_kind"] == kind   # API 허용 종류는 가리지 않는다
+
+
+@pytest.mark.parametrize("status,kind", [("success", None), ("empty", None), ("refusal", "api_http_error"),
+                                         ("identity_mismatch", "api_http_error"), ("error", "api_incomplete"),
+                                         ("error", "invalid_request"), ("error", None), ("cancelled", "api_timeout")])
+def test_api_first_unsafe_cli_fallback_is_nonconformant(status, kind):
+    r = evaluate_contract(bear_cli_after_api(status, kind))
+    assert "bear_fallback_not_authorized" in [v["code"] for v in r["violations"]]
+    assert r["arms"]["current"]["verdict"] == "hold"
+
+
+@pytest.mark.parametrize("sent", [True, None])
+def test_api_first_blocked_without_proven_not_sent_cannot_authorize_cli(sent):
+    """독립 리뷰 P2: '전송 전 차단' 은 request_sent False 로 증명돼야 한다."""
+    p = bear_cli_after_api("blocked", None); p["calls"]["bear"]["attempts"][0]["request_sent"] = sent
+    codes = [v["code"] for v in evaluate_contract(p)["violations"]]
+    assert "bear_fallback_not_authorized" in codes
+
+
+@pytest.mark.parametrize("api_finish,ok", [(7500, True), (7501, False), (9000, False)])
+def test_api_first_cli_fallback_requires_four_seconds_left(api_finish, ok):
+    """독립 리뷰 P2: 운영은 잔여 4초 미만이면 CLI 를 보내지 않으므로 계약도 같은 바닥을 본다."""
+    r = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", api_finish=api_finish, finish=api_finish + 1000))
+    assert ("cli_fallback_below_time_floor" in [v["code"] for v in r["violations"]]) is (not ok)
+    assert r["arms"]["current"]["verdict"] == ("approve" if ok else "hold")
+
+
+def test_api_first_cli_fallback_without_timing_is_unverified_not_approved():
+    p = bear_cli_after_api("timeout", "api_timeout"); cli = p["calls"]["bear"]["attempts"][1]
+    cli.update(started_ms=None, finished_ms=None)
+    r = evaluate_contract(p)
+    assert r["contract_status"] == "unverified" and "transport_timing_unknown" in [u["code"] for u in r["unknowns"]]
+    assert r["arms"]["current"]["verdict"] == "hold"
+
+
+def test_api_first_cli_success_late_in_internal_budget_is_not_cli_deadline_violation():
+    r = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", finish=11000))
+    assert "cli_success_after_deadline" not in [v["code"] for v in r["violations"]]
+    assert r["contract_status"] == "conformant", r["violations"]
+    late = evaluate_contract(bear_cli_after_api("timeout", "api_timeout", finish=11500))
+    assert "attempt_after_deadline" in [v["code"] for v in late["violations"]]    # Bear 내부 시한은 그대로 11.5초
+
+
+def test_api_first_rejects_cli_primary_and_second_api():
+    p = payload(API_FIRST); b = p["calls"]["bear"]
+    b["attempts"][0].update(transport="claude_cli", billing_channel="subscription", api_estimated_cost_usd=None,
+                            subscription_estimated_cost_usd="0")
+    assert "api_primary_missing" in [v["code"] for v in evaluate_contract(p)["violations"]]
+    p = payload(API_FIRST); b = p["calls"]["bear"]; b["attempts"][0].update(status="timeout", transport_error_kind="api_timeout")
+    a = attempt("second-api", "claude-opus-5-5", "low", "anthropic_messages", "api")
+    a.update(started_ms=1000, finished_ms=2000); b["attempts"].append(a); b["whole_call_elapsed_ms"] = 2000
+    assert "bear_transport_order" in [v["code"] for v in evaluate_contract(p)["violations"]]
+
+
+def test_cli_first_evidence_still_flags_api_primary_and_other_orders_are_rejected():
+    p = payload(CLI_FIRST); b = p["calls"]["bear"]
+    b["attempts"][0].update(transport="anthropic_messages", billing_channel="api", api_estimated_cost_usd="0",
+                            subscription_estimated_cost_usd=None)
+    assert "cli_primary_missing" in [v["code"] for v in evaluate_contract(p)["violations"]]
+    for bad in (["claude_cli"], ["anthropic_messages"], ["claude_cli", "claude_cli"], "claude_cli", []):
+        p = payload(); p["policy"]["bear_transport_order"] = bad
+        with pytest.raises(ValueError, match="bear_transport_order"):
+            evaluate_contract(p)
 
 
 def test_success_is_offline_and_shared_bear_cost_is_counted_once():

@@ -27,8 +27,24 @@ POLICY = {"daily_attempt_cap": 40, "max_output_tokens": 400, "allowed_models": [
 ALL = ('openai_chat', 'claude_cli', 'anthropic_messages')
 
 
-def controls():
-    return mci.operating_role_controls(_LLM(), fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0)
+LEGACY_BEAR_ORDER = ['claude_cli', 'anthropic_messages']     # runner/worker 가 구현한 순서(entry-independent-review-v1)
+
+
+def live_controls(manager=None):
+    return mci.operating_role_controls(_LLM() if manager is None else manager, fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0)
+
+
+def controls(manager=None):
+    """L01 Task 2(2026-11-09) 뒤 운영 생산자는 API 1차를 적는다. 이 모듈의 조립 검사는 runner 가 구현한 CLI→API 순서를
+    고정해 역사적 프로필을 검사하고, 실제 생산자 제어의 거부는 test_live_producer_controls_are_rejected_fail_closed 가 본다."""
+    return dict(live_controls(manager), bear_transport_order=list(LEGACY_BEAR_ORDER))
+
+
+def test_live_producer_controls_are_rejected_fail_closed():
+    live = live_controls()
+    assert live['bear_transport_order'] == ['anthropic_messages', 'claude_cli']
+    with pytest.raises(ValueError, match='unsupported_bear_transport_order'):
+        issue(live)
 
 
 def issue(c=None, **over):
@@ -210,7 +226,11 @@ def test_producer_envelope_flows_through_assembled_worker_to_receipts_and_recove
     recorder = DecisionRecorder(tmp_path / 'decisions', enabled=True)
     set_decision_recorder(recorder)
     cross = _cross(monkeypatch, _LLM())
-    man = issue(mci.operating_role_controls(cross._llm_manager, fallback_prompt_suffix=SUFFIX, fallback_timeout=10.0))
+    man = issue(controls(cross._llm_manager))
+    # 실제 생산자 경로는 그대로 쓰되 제어만 runner 가 구현한 역사적 순서로 고정한다(위 controls 설명 참조).
+    real = mci.operating_role_controls
+    monkeypatch.setattr(mci, 'operating_role_controls',
+                        lambda manager, **kw: dict(real(manager, **kw), bear_transport_order=list(LEGACY_BEAR_ORDER)))
     tr = transports(cli=SCRIPTS['timeout'])
     led = ledger(tmp_path)
     worker = w.assemble_comparison_worker(cross, manifest=man, ledger=led, transports=tr, approval=approval(man),

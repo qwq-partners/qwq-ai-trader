@@ -76,9 +76,13 @@
 **Files:** `src/utils/llm.py`(ANTHROPIC `complete_with` 순서·시한 배분), `config/default.yml`(새 키 `claude_transport_order`, 기본 `[anthropic_messages, claude_cli]`, 엄격 검증), `src/analytics/model_comparison_contract.py`/`model_comparison_input.py`/`model_comparison_worker.py`(새 manifest 버전, 역사적 순서 보존), `src/analytics/llm_decision_record.py`(attempt_trail 순서 표기), 관련 테스트·`docs/research/engine-model-allocation-2026-10-15.md`·CHANGELOG.
 **Interfaces:** API에 총 시한의 전부(기존 12초 기본·20초 상한 불변)를 주되 API가 허용 가용성 실패(`api_unavailable`/HTTP 5xx·429·크레딧 없음 4xx·시한)로 끝나고 남은 시한이 CLI 최소 기동 시간 이상일 때만 CLI 1회. API 거절·모델 불일치·빈 응답은 CLI로 우회하지 않는다(현 CLI→API 규칙의 거울). 월 원장 예약은 API 시도에만, CLI는 `billing_channel=subscription` 그대로.
 
-- [ ] RED: API 성공 → CLI 0, API 5xx/크레딧 4xx → CLI 1, API 거절 → CLI 0·hold, 남은 시한 부족 → CLI 0, 비교 contract가 두 순서 manifest를 모두 해석.
-- [ ] GREEN·독립 리뷰(판단 경로: xhigh)·실제 WSL 전체.
-- [ ] 기대 효과: Bear 의견 확보율 상승(API 지연 중앙값 약 4.4초 실측), 개발 세션 Claude Code 한도 사용 0, 크레딧 차감 월 약 USD12.
+- [x] RED: API 성공 → CLI 0, API 5xx/429/400·시한·전송 불가·cooldown·예산 차단 → CLI 1, API 거절·신원 불일치·`api_incomplete`·`invalid_request`·취소 → CLI 0, 남은 시한 < 4.0초 → CLI 0, 비교 contract가 두 순서를 모두 해석 — `tests/test_claude_manager_routing.py`(전면 교체)·`tests/test_model_comparison_contract.py`.
+- [x] GREEN(11/9, 브랜치 `feature/l01-bear-api-first-20261109`, 기준 main `9ca16289`): `_complete_claude` API 1차·CLI 대체, contract 두 순서, 생산자 운영 순서. **계획 대비 축소 2건:** ① `config/default.yml` `claude_transport_order` 키는 두지 않았다(합법값 1개인 키는 소음, 되돌림은 코드 롤백). ② runner/worker/wiring의 API 1차 이식(새 manifest 버전)은 하지 않았다 — 생산자만 운영 순서를 적고 wiring이 `unsupported_bear_transport_order`로 거부해 fail-closed(R1 OFF·worker 미설치라 영향 0, 비교 재가동 시 선행 과제). `llm_decision_record`는 trail 순서를 이미 그대로 적어 변경 없음.
+- [x] 독립 리뷰 1차(Codex gpt-6-astra/xhigh) P0 0·P1 1(전송 클라이언트 비JSON 5xx → `api_incomplete` 오분류로 CLI 대체 차단)·P2 2(계약 차단 증명·4초 바닥) 전부 반영.
+- [x] 독립 리뷰 2차(xhigh) P1 1(상태 수신 전 연결 종료·비정상 상태 본문 실패 → `api_incomplete` 오분류) 반영.
+- [x] 독립 리뷰 3차(xhigh) P0/P1/P2 0 — 조건부 병합 가능.
+- [ ] 실제 WSL 직렬 전체 verify·PR·필수 CI·사용자 승인 배포 — 원장.
+- [ ] 기대 효과: Bear 의견 확보율 상승(API 지연 중앙값 약 4.4초 실측), 개발 세션 Claude Code 한도 사용 0, 크레딧 차감 월 약 USD12. 배포 7일 뒤 원장(Bear API/CLI 시도 수·성공률)으로 실측.
 
 ### Task 3: Claude 모델 신원·가격 확장 (D3·D4·D5 전제)
 
@@ -116,3 +120,4 @@
 - 2026-11-08: 사용자 D1~D7 확정(D1 API 우선·D2 이전 뒤 200·D3 웹 Fable·D4 경량 Opus·D5 heavy/시장 보고 Fable·D6 OpenAI 충전 유지·D7 Anthropic 충전 OFF). D8(Bull 모델) 사용자 확정: gpt-5-mini 유지. 사전 결정 전부 완료, 다음 진입점은 Task 1 착수(사용자 지시 대기).
 - 2026-11-08: 사용자 "PR 올리고 착수" — 계획서 PR #348, Task 1 구현·검사 완료(브랜치 `feature/l01-theme-detection-gate-20261108`). 독립 리뷰·WSL·PR은 원장 참조.
 - 2026-11-09: Task 1 독립 리뷰 3회·실제 WSL 통과·PR #349, 문서 PR #348 병합(`4f0cbb64`). 사용자 "둘 다 병합해". 운영 배포는 별도 승인.
+- 2026-11-09: Task 1 운영 인수(`a1331059`·PID888110)·문서 PR #350 병합(`9ca16289`). 사용자 "Task2도 ㄱㄱ" → Task 2 구현·관련 검사 완료(위 체크). 독립 리뷰·WSL·PR은 원장.

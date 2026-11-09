@@ -642,6 +642,30 @@ class GeminiClient(BaseLLMClient):
             return {"error": "Invalid JSON response", "raw": response.content}
 
 
+# L01 Task 2 (D1, 2026-11-09): Ultra 플랜의 월 크레딧은 Claude API만 덮고 Claude Code CLI는 덮지 않으므로
+# 독립 Bear 는 예산 내 API 1회가 1차, 구독 CLI 는 API 가용성 실패의 대체다(종전 CLI→API 의 거울).
+# CLI 1turn 실측 3.4~4.5초: 그보다 적게 남으면 기동만 하고 죽으므로 대체를 보내지 않는다.
+_CLAUDE_CLI_FALLBACK_MIN_SECONDS = 4.0
+# HTTP 오류는 상태 코드 구분 없이 가용성 실패로 본다 — 크레딧 소진은 400 invalid_request_error 로 온다.
+# 상태·오류 종류는 시도 trail 에 그대로 남는다.
+_CLAUDE_API_FALLBACK_KINDS = frozenset({"api_timeout", "api_unavailable", "api_auth_unavailable",
+                                        "api_http_error", "transport_cooldown"})
+
+
+def _claude_cli_fallback_authorized(response: "LLMResponse") -> bool:
+    """API 시도가 가용성 실패로 끝났을 때만 구독 CLI 1회를 허용한다.
+
+    거절·신원 불일치·빈/잘린 200 응답(api_incomplete)·요청 계약 위반(invalid_request)·취소는 다른 전송으로 우회하지
+    않는다. 월/일 예산 차단은 전송 전 차단이라 구독 CLI 가 대신 검토할 수 있다(CLI 는 API 예산과 독립).
+    """
+    if response.success or response.refusal_detected:
+        return False
+    if response.transport_error_kind in _CLAUDE_API_FALLBACK_KINDS:
+        return True
+    return (response.budget_block_reason is not None and response.request_sent is False
+            and response.transport_error_kind is None)
+
+
 class LLMManager:
     """
     LLM 통합 관리자
@@ -1251,7 +1275,11 @@ class LLMManager:
         return response
 
     async def _complete_claude(self, prompt: str, system: str, **kwargs) -> LLMResponse:
-        """One subscription attempt, then at most one separately admitted API call."""
+        """One budgeted API attempt first, then at most one subscription CLI attempt on availability failure.
+
+        L01 Task 2 (2026-11-09). API 는 총 시한(기본 12초·상한 20초) 전부를 받고, 허용된 가용성 실패로 끝난 뒤 남은
+        시한이 CLI 최소 기동 시간 이상일 때만 CLI 1회. 월 원장 예약은 API 시도에만 걸리고 CLI 는 subscription 그대로다.
+        """
         has_api_cap = "api_max_tokens" in kwargs
         api_cap = kwargs.pop("api_max_tokens", None)
         if has_api_cap and (type(api_cap) is not int or not 1 <= api_cap <= 800):
@@ -1268,38 +1296,9 @@ class LLMManager:
         kwargs.setdefault("max_tokens", 400)
         model = self.config.claude_model
         loop = asyncio.get_running_loop()
-        started, deadline = loop.time(), loop.time() + total
+        deadline = loop.time() + total
         self._ensure_claude_clients()
-        cooldown = self._claude_cooldown_response(self.claude_cli, model)
-        if cooldown is not None:
-            response = cooldown
-            self._account_attempt(response, "complete_with", "primary")
-        elif self.config.claude_cli_enabled:
-            response = await self._complete_attempt(
-                self.claude_cli, prompt, system, model, "complete_with", "primary",
-                _deadline=min(deadline, started + min(8.0, total / 2)), **kwargs)
-            if response.transport_error_kind in {"cli_rate_limited", "cli_auth_unavailable"}:
-                self._claude_transport_cooldowns["claude_cli"] = (
-                    loop.time() + 300.0, response.transport_error_kind)
-        else:
-            response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
-                                   error="Claude CLI disabled", requested_model=model,
-                                   request_sent=False, usage_known=False, billing_status="not_sent",
-                                   transport_error_kind="cli_unavailable")
-            self._stamp_transport(response, self.claude_cli)
-            self._account_attempt(response, "complete_with", "primary")
-        permitted = {"cli_unavailable", "cli_timeout", "cli_rate_limited",
-                     "cli_auth_unavailable", "cli_incomplete"}
-        if (response.success or response.refusal_detected or self._closing
-                or response.transport_error_kind not in permitted or loop.time() >= deadline):
-            return response
-        # The subscription attempt is reaped/settled before API admission.
-        cooldown = self._claude_cooldown_response(self.anthropic, model)
-        if cooldown is not None:
-            self._account_attempt(cooldown, "complete_with", "fallback")
-            return cooldown
-        # Without an explicit API-only cap, preserve the original 400-token
-        # transport boundary even when the CLI was skipped by configuration/cooldown.
+        # Without an explicit API-only cap, preserve the original 400-token transport boundary before any attempt.
         base_cap = kwargs.get("max_tokens")
         if not has_api_cap and type(base_cap) is int and base_cap > 400:
             response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
@@ -1308,25 +1307,43 @@ class LLMManager:
                                    request_sent=False, usage_known=False, billing_status="not_sent",
                                    transport_error_kind="invalid_request")
             self._stamp_transport(response, self.anthropic)
-            self._account_attempt(response, "complete_with", "fallback")
+            self._account_attempt(response, "complete_with", "primary")
             return response
-        if not self._check_budget():
+        api_kwargs = dict(kwargs)
+        if has_api_cap:
+            api_kwargs["max_tokens"] = api_cap
+        response = self._claude_cooldown_response(self.anthropic, model)
+        if response is not None:
+            self._account_attempt(response, "complete_with", "primary")
+        elif not self._check_budget():
             response = self._monthly_blocked_response(
                 LLMProvider.ANTHROPIC, model,
                 "daily_unknown_cost" if self._daily_unknown_blocks() else "daily_limit_exceeded")
             self._stamp_transport(response, self.anthropic)
-            self._account_attempt(response, "complete_with", "fallback")
+            self._account_attempt(response, "complete_with", "primary")
+        else:
+            response = await self._complete_attempt(
+                self.anthropic, prompt, system, model, "complete_with", "primary",
+                _deadline=deadline, **api_kwargs)
+            if not response.success and response.http_status in {401, 402, 403, 429}:
+                self._claude_transport_cooldowns["anthropic_messages"] = (
+                    loop.time() + 300.0, "transport_cooldown")
+        if (self._closing or not self.config.claude_cli_enabled
+                or not _claude_cli_fallback_authorized(response)
+                or deadline - loop.time() < _CLAUDE_CLI_FALLBACK_MIN_SECONDS):
             return response
+        # The API attempt is settled before the subscription attempt; the CLI gets only the remaining budget.
+        cooldown = self._claude_cooldown_response(self.claude_cli, model)
+        if cooldown is not None:
+            self._account_attempt(cooldown, "complete_with", "fallback")
+            return cooldown
         self.stats["fallback_count"] += 1
-        api_kwargs = dict(kwargs)
-        if has_api_cap:
-            api_kwargs["max_tokens"] = api_cap
         response = await self._complete_attempt(
-            self.anthropic, prompt, system, model, "complete_with", "fallback",
-            _deadline=deadline, **api_kwargs)
-        if not response.success and response.http_status in {401, 402, 403, 429}:
-            self._claude_transport_cooldowns["anthropic_messages"] = (
-                loop.time() + 300.0, "transport_cooldown")
+            self.claude_cli, prompt, system, model, "complete_with", "fallback",
+            _deadline=deadline, **kwargs)
+        if response.transport_error_kind in {"cli_rate_limited", "cli_auth_unavailable"}:
+            self._claude_transport_cooldowns["claude_cli"] = (
+                loop.time() + 300.0, response.transport_error_kind)
         return response
 
     def _claude_cooldown_response(self, client, model):
