@@ -307,29 +307,39 @@ def test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted(tmp
 
 
 def test_common_panel_deadline_is_fixed_before_roles_start(tmp_path, monkeypatch):
-    import time
-    # 패널 0.5초. Bear 입장(동기)이 0.3초 걸려 Bull 역할 시작이 밀리고, Bull 저장에 0.25초가 더 걸리면 Bull 은 자기 역할
-    # 시작 기준 0.25초 만에 끝났어도 패널 시작 기준 0.55초라 운영처럼 늦은 의견이다.
-    spec = short_panel(0.5, bear_internal_timeout_seconds=0.4, bear_cli_timeout_seconds=0.1,
-                       bear_api_fallback=bear_controls('api', timeout_seconds=0.4))
+    # 패널 5초. Bear 입장(동기)이 3초 걸려 Bull 역할 시작이 밀리고, Bull 저장에 2.5초가 더 걸리면 Bull 은 자기 역할
+    # 시작 기준 2.5초 만에 끝났어도 패널 시작 기준 5.5초라 운영처럼 늦은 의견이다.
+    # 벽시계 sleep 대신 루프 시계(runner·어댑터가 읽는 loop.time())를 전진시킨다 — 러너 속도와 무관하게 결정적이고
+    # Bear 내부 시한(4초)에는 실행 지터가 1초 안이면 걸리지 않는다(11/9 CI: 0.4초 시한이 Bull 사유보다 먼저 걸린 플레이크).
+    spec = short_panel(5.0, bear_internal_timeout_seconds=4.0, bear_cli_timeout_seconds=1.0,
+                       bear_api_fallback=bear_controls('api', timeout_seconds=4.0))
     ledger, guard, runner, _, op, cli, api = setup(tmp_path, spec=spec)
     admit, store = guard._admit, guard._store_result
+    skew = [0.0]
 
     def slow_admit(attempt_id, request_json):
         if attempt_id.endswith(':bear:0'):
-            time.sleep(0.3)
+            skew[0] += 3.0
         return admit(attempt_id, request_json)
 
     def slow_store(attempt_id, token, payload):
         if ':bull_' in attempt_id:
-            time.sleep(0.25)
+            skew[0] += 2.5
         return store(attempt_id, token, payload)
     monkeypatch.setattr(guard, '_admit', slow_admit)
     monkeypatch.setattr(guard, '_store_result', slow_store)
-    row = asyncio.run(runner.run(spec))
+
+    def loop_factory():
+        loop = asyncio.new_event_loop()
+        real = loop.time
+        loop.time = lambda: real() + skew[0]
+        return loop
+    with asyncio.Runner(loop_factory=loop_factory) as run:
+        row = run.run(runner.run(spec))
     for arm in ('current', 'candidate'):
         assert row[arm]['verdict'] == 'hold'
         assert 'bull_role_deadline_exceeded_after_response' in row[arm]['reasons']
+        assert 'bear_role_deadline_exceeded_after_response' not in row[arm]['reasons']
         bull = [a for a in row[arm]['attempts'] if a['role'].startswith('bull_')][-1]
         assert bull['success'] is True and bull['ledger_state'] == 'known'   # 영수증은 보존된다
 

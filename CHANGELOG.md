@@ -1,5 +1,9 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-09 — 테스트 전용: 공통 패널 시한 검사의 벽시계 의존 제거 (제품 코드 변경 0)
+
+- `tests/test_model_comparison_current_flow.py::test_common_panel_deadline_is_fixed_before_roles_start`: PR #352 필수 CI `verify`가 1회 실패(`bull_role_deadline_exceeded_after_response` 대신 Bear 0.4초 시한 사유 — 느린 hosted runner에서 `time.sleep(0.3/0.25)` 뒤 실행 지터가 0.1초 여유를 넘음)한 플레이크를 고쳤다. runner·Claude 어댑터가 읽는 `loop.time()`에 가짜 오프셋을 더하는 `asyncio.Runner(loop_factory=…)`로 sleep을 **시계 전진**(Bear 입장 +3초·Bull 저장 +2.5초, 패널 5초·Bear 내부 4초·CLI 1초)으로 바꿔 러너 속도와 무관하게 결정적이다. 증명 성질(패널 시한은 역할 시작 전에 고정, Bull이 자기 역할 기준 제때 끝나도 패널 기준 늦으면 hold)은 그대로이고 `bear_role_deadline_exceeded_after_response` 부재 단정을 추가했다. 돌연변이(Bull +1.5초 → `reject`) 실패 확인, AWS 보조 파일 전체 10회·CPU 부하 1회 통과. 같은 파일의 `time.sleep` 검사 2종(`test_admission_latency_cannot_extend_the_bear_internal_deadline` 0.15초, `test_result_arriving_inside_deadline_but_settled_after_it_is_not_counted` 0.35초 — 후자는 부하에서 1/3 실패 재현)은 범위 밖으로 미수정. 운영·설정 변경 0.
+
 ## 2026-11-09 — R02-WEB-REJECTION-RECURRENCE 웹 리포트 거절 재발 원인 조사 (문서만, 소스 변경 0)
 
 - 11/9 웹 3슬롯 `failed`(morning `unsupported_latin @ summary[0]`, midday·after `unsupported_numeric @ market_view.text`)를 동결 facts·공개 근거 46건과 현행 `validate_web_analysis`로 합성 재현했다. 통과 12·거절 14 사례 모두 계약대로이며(인용하지 않은 뉴스 수준 `5000선/5100선`, 절삭·반올림·계산값·시각 한글화, 입력에 없는 `Fed/FOMC/HBM/Nasdaq`), 근거 표기를 잘못 거절한 사례 0. 실제 거절 토큰은 응답 비저장 설계라 미확정. 최소 수정안(①`validation_scope` 진단 ②프롬프트의 블록별 인용 범위·표기 그대로·등락률 없는 지수 서술 지시)과 검사 계획은 [원장](docs/operations/execution-roadmap.md#r02-web-rejection-recurrence-20261109). 운영·설정·슬롯 재실행·시험 발송 0.
