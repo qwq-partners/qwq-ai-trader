@@ -54,7 +54,12 @@ def test_rejections_raise_fixed_code_and_schema_path_without_response_text(updat
     assert (error.code, error.field) == (code, field)
     assert str(error) == f'{code}: {field}' and SENTINEL not in str(error)
     assert isinstance(error, ValueError)                      # 기존 ValueError 호출자 호환
-    assert web._web_validation_diagnostic(error) == {'validation_code': code, 'validation_field': field}
+    diagnostic = web._web_validation_diagnostic(error)
+    assert (diagnostic['validation_code'], diagnostic['validation_field']) == (code, field)
+    # R02-WEB-REJECTION-RECURRENCE: 숫자·영문 거절에만 범위가 붙고(여기 sentinel 은 입력에 없어 absent), 토큰은 어디에도 없다
+    expected_scope = {'validation_scope': 'absent'} if code in ('unsupported_numeric', 'unsupported_latin') else {}
+    assert diagnostic == {'validation_code': code, 'validation_field': field, **expected_scope}
+    assert SENTINEL not in json.dumps(diagnostic)
 
 
 def test_issue_field_paths_are_indexed_and_json_errors_are_safe():
