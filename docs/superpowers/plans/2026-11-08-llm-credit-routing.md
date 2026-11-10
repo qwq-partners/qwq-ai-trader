@@ -1,6 +1,6 @@
 # L01-LLM-CREDIT-ROUTING — Ultra 월 API 크레딧 기준 엔진 LLM 라우팅 재설계 계획
 
-> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 계획서다. **현재 상태(11/9):** 사전 결정 D1~D8 확정, Task 1 운영 인수 완료(`a1331059`), Task 2는 소스·독립 리뷰 3회·실제 WSL·PR #351 병합(main `31edd820`) 완료이며 운영 배포·자연 Bear 호출 인수는 원장과 아래 진행 기록을 따른다. Task 3~6은 미착수(사용자 지시 대기). 아래 각 Task의 Files/Interfaces는 착수 전 초안이고, 확정 범위는 체크 항목과 원장이 우선한다.
+> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 계획서다. **현재 상태(11/9):** 사전 결정 D1~D8 확정, Task 1 운영 인수 완료(`a1331059`), Task 2는 소스·독립 리뷰 3회·실제 WSL·PR #351 병합(main `31edd820`) 완료이며 운영 배포·자연 Bear 호출 인수는 원장과 아래 진행 기록을 따른다. Task 3 소스 RED/GREEN 완료(11/10, 실호출·사용자 선행 확인 대기), Task 4~6은 미착수(사용자 지시 대기). 아래 각 Task의 Files/Interfaces는 착수 전 초안이고, 확정 범위는 체크 항목과 원장이 우선한다.
 
 **Goal:** 매월 소멸하는 Ultra 플랜 Claude API 크레딧 USD200을 엔진의 LLM 호출에 우선 배정해 OpenAI 유료 청구(현재 월 약 USD30 추세)를 0에 가깝게 줄이고, 그 과정에서 비용 출처가 바뀌어도 판단 품질·fail-closed 동작·예산 원장의 정확성을 유지한다.
 
@@ -90,7 +90,7 @@
 **Files:** `src/utils/llm.py`(`claude_model` 허용 집합·역할별 모델), `src/utils/claude_transport.py`(모델별 `resolved_model` 검증·Fable `output_config.effort`·`stop_reason=refusal`/`stop_details`), `src/utils/llm_pricing.py`(Fable 5.1 입력 10/출력 50 USD/MTok·캐시 읽기, Opus 유지), `_validate_controls`, 테스트.
 **Interfaces:** 허용 모델 `{claude-opus-5-5, claude-fable-5-1}`(Haiku 미사용); 요청 모델과 응답 `model`이 다르면 실패(기존 규칙). Fable은 `thinking` 미지정(상시)·`output_config.effort`만 전달, `stop_reason=refusal`은 실패로 기록하고 다른 모델로 우회하지 않는다. 역할별 시한: 웹 리포트 180초·시장 보고/복기 90초가 Fable 응답 시간에 충분한지 신원 검증 호출의 실측 지연으로 판단하고, 부족하면 시한 상향을 별도 결정으로 올린다(자동 상향 금지).
 
-- [ ] RED/GREEN: 가격 계산·모델 검증·refusal 처리·Fable 파라미터 형태.
+- [x] RED/GREEN: 가격 계산·모델 검증·refusal 처리·Fable 파라미터 형태. (11/10 — `CLAUDE_MODELS`·API `_API_MODELS`/`_API_EFFORTS`·Fable `thinking` 미지정·`_CLAUDE_EFFORTS` {low, medium}·Fable 5.1 (10, 50)+1h 캐시 쓰기 상한; CLI는 Opus만. `stop_details.category` 미저장.)
 - [ ] **사용자 선행 확인:** Anthropic 콘솔의 조직 데이터 보존 설정이 30일 이상인지(Fable은 미만이면 400 `invalid_request_error`). 미충족이면 D3·D5는 Opus 5.5로 되돌리고 기록한다.
 - [ ] **실호출 신원 검증 1회/모델**(사용자 승인, 크레딧 차감 수 센트): `resolved_model`·usage·지연·rate-limit 헤더 기록. 거절/불일치가 나면 그 모델은 라우팅에서 제외하고 기록한다(정책: 우회 금지).
 
@@ -124,3 +124,4 @@
 - 2026-11-09: Task 1 운영 인수(`a1331059`·PID888110)·문서 PR #350 병합(`9ca16289`). 사용자 "Task2도 ㄱㄱ" → Task 2 구현·관련 검사 완료(위 체크). 독립 리뷰·WSL·PR은 원장.
 - 2026-11-09: Task 2 독립 리뷰 3회(xhigh, 3차 0건)·실제 WSL 10,615 passed·PR #351 병합 `31edd820`·main CI success. 사용자 "완료되면 배포 해줘" → 21:21:59 KST 운영 인수(PID986445, 서버 10,615 passed·롤백 0·postcheck rc0). 자연 Bear 호출 인수 WAIT(재시작 이후 Claude 호출 0). 11/9 웹 리포트 3/3 거절 재발 원인 조사는 별도 원장 항목(소스 수정 0). 다음 진입점은 Task 3(사용자 선행 확인: Anthropic 조직 데이터 보존 30일) — 사용자 지시 대기.
 - 2026-11-10: Task 2 자연 Bear 인수 DONE(15:50 KST 읽기 전용 판독) — 장중 4슬롯 Claude 48/48 `anthropic_messages`·api·`policy_attempts.role=primary`·`claude-opus-5-5` verified·HTTP 200, CLI 대체 0(가용성 실패 없음 → 대체 경로 운영 미실증). 11/9 구순서 45건은 모두 `fallback`. 다음은 11/16 7일 실측(Task 6 전제)과 사용자 선행 확인 뒤 Task 3.
+- 2026-11-10: 사용자 "ㄱㄱ" → Task 3 소스 RED(7 fail)→GREEN(신규 10검사, 관련 묶음 1,895 passed, 실호출 0). 공식 문서 확인: Fable 5.1 입력 10/출력 50/1h 캐시 쓰기 20/캐시 읽기 0.25, thinking "Adaptive (always on)", effort low~max, 거절은 HTTP 200+`stop_reason=refusal`+`stop_details`. 남은 Task 3: 사용자 데이터 보존 ≥30일 확인·승인 뒤 실호출 신원 검증 1회/모델. 역할 재배정(Task 4)·예산 이관(Task 5) 미착수.
