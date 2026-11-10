@@ -98,7 +98,7 @@ def test_migration_refuses_while_a_reservation_is_live_and_never_creates_a_ledge
     finally:
         ledger.settle(token, outcome='not_sent'); ledger.close()
     missing = tmp_path / 'absent.sqlite3'
-    with pytest.raises(BudgetBlocked, match='storage_unavailable'):
+    with pytest.raises(BudgetBlocked, match='storage_unavailable|previous_ledger_missing'):
         migrate_monthly_limit(missing, current_limit_usd=100, new_limit_usd=200, note='n', clock=CLOCK)
     assert not missing.exists()
 
@@ -190,3 +190,38 @@ def test_invalid_clock_is_rejected_not_defaulted(tmp_path):
     for bad in (0, 'now', object()):
         with pytest.raises(BudgetBlocked, match='invalid_clock'):
             migrate_monthly_limit(path, current_limit_usd=100, new_limit_usd=200, note='n', clock=bad)
+
+
+def test_level_recompute_uses_ledger_cost_accounting_not_raw_unknown_sums(tmp_path):
+    # 독립 리뷰 2차 P1: log_and_continue 에서 증서 없는 불명 비용은 합산 제외다. 확정 80 + 불명 추정 110 → 200 상한에서 normal.
+    ledger = MonthlyBudgetLedger(tmp_path / 'budget.sqlite3', 100, clock=CLOCK, policy_enabled=True,
+                                 missing_cost_policy='log_and_continue')
+    month = ledger.status()['month']
+    with sqlite3.connect(ledger.path) as db:
+        db.execute("INSERT INTO reservations VALUES(?,?,?,?,'settled',?,?,?)",
+                   ('seed', month, 'gpt-6-astra', 80 * 10 ** 9, 80 * 10 ** 9, month + '-01', month + '-01'))
+        for i in range(11):   # 금액 미확인(unknown) 예약 추정 10 USD × 11
+            db.execute("INSERT INTO reservations VALUES(?,?,?,?,'unknown',NULL,?,?)",
+                       (f'unk{i:02d}', month, 'gpt-6-astra', 10 * 10 ** 9, month + '-01', month + '-01'))
+    status = ledger.policy_status()
+    assert status['policy_mode'] == 'economy' and status['committed_usd'] == pytest.approx(80.0)   # 80/100
+    ledger.close()
+    receipt = migrate_monthly_limit(ledger.path, current_limit_usd=100, new_limit_usd=200, note='D2', clock=CLOCK,
+                                    missing_cost_policy='log_and_continue')
+    assert (receipt['policy_level_previous'], receipt['policy_level_new']) == (1, 0)    # 80/200, 불명 110 은 제외
+    reopened = MonthlyBudgetLedger(ledger.path, 200, clock=CLOCK, policy_enabled=True, missing_cost_policy='log_and_continue')
+    try:
+        assert reopened.policy_status()['policy_mode'] == 'normal'
+        token = reopened.reserve('gpt-5-mini', 'p', '', 100)        # 비필수 호출 허용
+        reopened.settle(token, outcome='not_sent')
+    finally:
+        reopened.close()
+
+
+def test_cli_check_reports_storage_error_as_json_exit_2(tmp_path, capsys):
+    import importlib, sys
+    sys.path.insert(0, 'scripts/ops')
+    cli = importlib.import_module('llm_budget_migrate')
+    corrupt = tmp_path / 'corrupt.sqlite3'; corrupt.write_bytes(b'not a sqlite file' * 64)
+    assert cli.main(['--check', '--path', str(corrupt)]) == 2
+    assert json.loads(capsys.readouterr().err)['error'] == 'storage_unavailable'

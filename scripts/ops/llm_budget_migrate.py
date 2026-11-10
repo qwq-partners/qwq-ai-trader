@@ -45,6 +45,8 @@ def main(argv=None) -> int:
     parser.add_argument("--from", dest="current", type=float, help="현재 상한 USD(원장과 일치해야 함)")
     parser.add_argument("--to", dest="new", type=float, help="새 상한 USD")
     parser.add_argument("--note", default="", help="승인 근거(사용자 결정 일자·크레딧 조건). 원장에 영구 기록")
+    parser.add_argument("--missing-cost-policy", default="log_and_continue", choices=("log_and_continue", "block"),
+                        help="정책 단계 재계산에 쓰는 불명 비용 정책(운영 default.yml 과 같게, 기본 log_and_continue)")
     args = parser.parse_args(argv)
     path = Path(args.path).expanduser()
     try:
@@ -54,13 +56,15 @@ def main(argv=None) -> int:
         if args.current is None or args.new is None or not args.note.strip():
             parser.error("--from, --to, --note 가 모두 필요하다(또는 --check)")
         hold_or_exit("llm_budget_migrate")   # 봇·다른 CLI 가 실행 중이면 exit 2
-        receipt = migrate_monthly_limit(path, current_limit_usd=args.current, new_limit_usd=args.new, note=args.note)
+        receipt = migrate_monthly_limit(path, current_limit_usd=args.current, new_limit_usd=args.new, note=args.note,
+                                        missing_cost_policy=args.missing_cost_policy)
         print(json.dumps(receipt, ensure_ascii=False, indent=1))
         return 0
     except BudgetBlocked as error:
         print(json.dumps({"error": error.reason, "path": str(path)}, ensure_ascii=False), file=sys.stderr)
         return 2
-    except OSError as error:
+    except (OSError, sqlite3.Error) as error:
+        # 독립 리뷰 2차 P2: --check 의 잠금 시한·손상 DB 도 같은 구조화 오류·exit 2 로 통일한다.
         print(json.dumps({"error": "storage_unavailable", "detail": error.__class__.__name__}, ensure_ascii=False), file=sys.stderr)
         return 2
 

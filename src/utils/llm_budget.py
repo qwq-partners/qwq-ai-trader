@@ -517,7 +517,7 @@ def _lock_held(lock_path: Path) -> bool:
 
 
 def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: float, note: str,
-                          clock: Optional[Callable] = None) -> dict:
+                          clock: Optional[Callable] = None, missing_cost_policy: str = 'log_and_continue') -> dict:
     """월 상한을 **명시 이관 명령**으로만 바꾼다(L01 D2, 2026-11-10). 설정만 바꾸면 종전대로
     `budget_configuration_mismatch` 로 막힌다.
 
@@ -538,8 +538,13 @@ def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: floa
     now = (clock if clock is not None else (lambda: datetime.now(timezone.utc)))()
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise BudgetStateError('invalid_clock')
+    # 독립 리뷰 2차 P1: 정책 단계 재계산은 원장의 집계(_snapshot: 불명 비용 정책·timeout 증서·고아 판정)를 그대로 쓴다.
+    # 현재 상한으로 원장을 열어 보는 것 자체가 상한 일치 검사다(불일치면 종전 사유로 거절). 파일이 없으면 만들지 않는다.
+    if not ledger_path.exists():
+        raise BudgetStateError('storage_unavailable')
+    probe = MonthlyBudgetLedger(ledger_path, current_limit_usd, clock=lambda: now, missing_cost_policy=missing_cost_policy)
+    probe.close()
     try:
-        ledger_path.stat()
         connection = sqlite3.connect(ledger_path.as_uri() + '?mode=rw', uri=True, timeout=0.1, isolation_level=None)
         connection.row_factory = sqlite3.Row
         try:
@@ -571,9 +576,7 @@ def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: floa
                 row = connection.execute('SELECT level FROM policy_months WHERE month=?', (month,)).fetchone()
                 if row is not None:
                     previous_level = row['level']
-                    committed = connection.execute(
-                        "SELECT COALESCE(SUM(CASE WHEN state='settled' THEN actual_units ELSE reserved_units END),0) "
-                        "FROM reservations WHERE month=? AND state IN ('settled','reserved','unknown')", (month,)).fetchone()[0]
+                    committed = probe._snapshot(connection, now=now)[1]   # 원장과 같은 이달 확정+예약+불명 상한 집계
                     new_level = (2 if committed * 100 >= new_units * 95 else 1 if committed * 100 >= new_units * 80 else 0)
                     connection.execute('UPDATE policy_months SET level=? WHERE month=?', (new_level, month))
             spent_units = connection.execute(
