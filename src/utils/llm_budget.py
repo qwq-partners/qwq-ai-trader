@@ -538,6 +538,7 @@ def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: floa
     now = (clock if clock is not None else (lambda: datetime.now(timezone.utc)))()
     if not isinstance(now, datetime) or now.tzinfo is None:
         raise BudgetStateError('invalid_clock')
+    now = now.astimezone(KST)   # 독립 리뷰 3차 P2: 월 판정·_snapshot 모두 KST 한 시각으로(월초 00~09시 전월 조회 방지)
     # 독립 리뷰 2차 P1: 정책 단계 재계산은 원장의 집계(_snapshot: 불명 비용 정책·timeout 증서·고아 판정)를 그대로 쓴다.
     # 현재 상한으로 원장을 열어 보는 것 자체가 상한 일치 검사다(불일치면 종전 사유로 거절). 파일이 없으면 만들지 않는다.
     if not ledger_path.exists():
@@ -570,7 +571,7 @@ def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: floa
             # 독립 리뷰 1차 P1: policy_months.level 은 월 고수위(高水位)로 잠겨 있어 상한만 올리면 essential/economy 가 남는다.
             # 이달 확정·예약·불명 상한을 보수적으로 더해 새 상한 기준 단계로 다시 쓴다(이력은 limit_migrations 에 보존,
             # 다음 policy_status() 관측이 종전 경로로 전환 알림을 낸다). 다른 달 행은 건드리지 않는다.
-            month = now.astimezone(KST).strftime('%Y-%m')
+            month = now.strftime('%Y-%m')
             previous_level = new_level = None
             if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_months'").fetchone():
                 row = connection.execute('SELECT level FROM policy_months WHERE month=?', (month,)).fetchone()
@@ -585,12 +586,12 @@ def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: floa
             connection.execute('UPDATE settings SET limit_units=? WHERE id=1', (new_units,))
             connection.execute('INSERT INTO limit_migrations(migrated_at,old_units,new_units,note,reservations_rows,spent_units,'
                                'previous_level,new_level) VALUES (?,?,?,?,?,?,?,?)',
-                               (now.astimezone(KST).isoformat(), current_units, new_units, note.strip(), total_rows,
+                               (now.isoformat(), current_units, new_units, note.strip(), total_rows,
                                 spent_units, previous_level, new_level))
             if _ledger_snapshot(connection) != before:
                 raise BudgetStateError('migration_altered_rows')
             connection.execute('COMMIT')
-            receipt = {'path': str(ledger_path), 'migrated_at': now.astimezone(KST).isoformat(),
+            receipt = {'path': str(ledger_path), 'migrated_at': now.isoformat(),
                        'old_limit_usd': current_units / _SCALE, 'new_limit_usd': new_units / _SCALE,
                        'note': note.strip(), 'reservations_rows': total_rows, 'spent_usd': spent_units / _SCALE,
                        'policy_level_previous': previous_level, 'policy_level_new': new_level,

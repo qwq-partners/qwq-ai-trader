@@ -28,9 +28,13 @@ DEFAULT_PATH = "~/.local/state/qwq-ai-trader/llm-budget.sqlite3"   # config/defa
 
 def check(path: Path) -> dict:
     path.stat()
+    if not path.is_absolute():
+        raise OSError('ledger path must be absolute')
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.1, isolation_level=None) as db:
         db.row_factory = sqlite3.Row
         settings = db.execute("SELECT limit_units, activated_at, baseline_month FROM settings").fetchone()
+        if settings is None or not isinstance(settings["limit_units"], int):
+            raise sqlite3.DatabaseError("settings row missing")   # 독립 리뷰 3차 P2: 구조화 오류·exit 2 로
         states = {r["state"]: r["n"] for r in db.execute("SELECT state, COUNT(*) AS n FROM reservations GROUP BY state")}
         migrations = (db.execute("SELECT COUNT(*) FROM limit_migrations").fetchone()[0]
                       if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='limit_migrations'").fetchone() else 0)
@@ -49,6 +53,8 @@ def main(argv=None) -> int:
                         help="정책 단계 재계산에 쓰는 불명 비용 정책(운영 default.yml 과 같게, 기본 log_and_continue)")
     args = parser.parse_args(argv)
     path = Path(args.path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path   # 독립 리뷰 3차 P2: 상대경로는 as_uri() 가 ValueError → 절대경로로 고정
     try:
         if args.check:
             print(json.dumps(check(path), ensure_ascii=False, indent=1))

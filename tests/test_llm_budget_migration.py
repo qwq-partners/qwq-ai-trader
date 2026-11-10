@@ -225,3 +225,33 @@ def test_cli_check_reports_storage_error_as_json_exit_2(tmp_path, capsys):
     corrupt = tmp_path / 'corrupt.sqlite3'; corrupt.write_bytes(b'not a sqlite file' * 64)
     assert cli.main(['--check', '--path', str(corrupt)]) == 2
     assert json.loads(capsys.readouterr().err)['error'] == 'storage_unavailable'
+
+
+def test_month_boundary_uses_kst_for_both_level_month_and_cost_snapshot(tmp_path):
+    # 독립 리뷰 3차 P2: 11/30 16:00Z = 12/01 01:00 KST. 전월(11월) 99 USD 지출·당월 0 → 100→101 이관은 당월 normal 이어야 한다.
+    boundary = lambda: datetime(2026, 11, 30, 16, 0, tzinfo=timezone.utc)
+    ledger = MonthlyBudgetLedger(tmp_path / 'budget.sqlite3', 100, clock=boundary, policy_enabled=True)
+    assert ledger.status()['month'] == '2026-12'
+    with sqlite3.connect(ledger.path) as db:
+        db.execute("INSERT INTO reservations VALUES(?,?,?,?,'settled',?,?,?)",
+                   ('nov', '2026-11', 'gpt-6-astra', 99 * 10 ** 9, 99 * 10 ** 9, '2026-11-15', '2026-11-15'))
+    ledger.policy_status(); ledger.close()
+    receipt = migrate_monthly_limit(ledger.path, current_limit_usd=100, new_limit_usd=101, note='boundary', clock=boundary)
+    assert receipt['migrated_at'].startswith('2026-12-01T01:00:00+09:00')
+    assert (receipt['policy_level_previous'], receipt['policy_level_new']) == (0, 0)
+    with sqlite3.connect(ledger.path) as db:
+        assert db.execute("SELECT month, level FROM policy_months ORDER BY month").fetchall() == [('2026-12', 0)]
+
+
+def test_cli_check_handles_relative_path_and_missing_settings(tmp_path, capsys, monkeypatch):
+    import importlib, sys
+    sys.path.insert(0, 'scripts/ops')
+    cli = importlib.import_module('llm_budget_migrate')
+    ledger = seeded_ledger(tmp_path); ledger.close()
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(['--check', '--path', 'budget.sqlite3']) == 0            # 상대경로도 구조화 출력
+    assert json.loads(capsys.readouterr().out)['limit_usd'] == 100
+    empty = tmp_path / 'empty.sqlite3'
+    sqlite3.connect(empty).close()                                           # settings 테이블 없음
+    assert cli.main(['--check', '--path', str(empty)]) == 2
+    assert json.loads(capsys.readouterr().err)['error'] == 'storage_unavailable'
