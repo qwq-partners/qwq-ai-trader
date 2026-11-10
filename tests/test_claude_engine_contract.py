@@ -1,4 +1,6 @@
-from src.utils.llm import LLMConfig, LLMProvider, LLMResponse
+import pytest
+
+from src.utils.llm import LLMConfig, LLMProvider, LLMResponse, _validate_controls
 from src.utils.llm_pricing import rate_quote
 
 
@@ -30,3 +32,24 @@ def test_claude_api_quote_covers_cache_write_ceiling():
     assert quote.cost_usd == 0.016
     assert 'cache_write' in quote.basis
     assert rate_quote('claude-opus-unknown', 1000, 400) is None
+
+
+FABLE = 'claude-fable-5-1'
+
+
+def test_claude_config_accepts_only_opus_and_fable_identities():
+    # L01 Task 3: 허용 집합 {opus-5-5, fable-5-1}. 다른 Fable/Mythos 세대·Sonnet·별칭은 거부(기존 규칙).
+    assert LLMConfig(claude_model=FABLE).claude_model == FABLE
+    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus'):
+        with pytest.raises(ValueError, match='Claude model identity'):
+            LLMConfig(claude_model=model)
+
+
+@pytest.mark.parametrize('model', ['claude-opus-5-5', FABLE])
+def test_anthropic_role_controls_allow_low_medium_effort_only(model):
+    for effort in ('low', 'medium'):
+        _validate_controls(model, LLMProvider.ANTHROPIC, {'reasoning_effort': effort})
+    _validate_controls(model, LLMProvider.ANTHROPIC, {})
+    for bad in ({'reasoning_effort': 'high'}, {'reasoning_effort': 'minimal'}, {'thinking_level': 'low'}):
+        with pytest.raises(ValueError):
+            _validate_controls(model, LLMProvider.ANTHROPIC, bad)

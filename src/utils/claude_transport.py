@@ -14,7 +14,9 @@ import aiohttp
 
 from .llm import LLMConfig, LLMProvider, LLMResponse, _billing_status
 
-_MODEL = "claude-opus-5-5"
+_MODEL = "claude-opus-5-5"          # 구독 CLI가 받는 유일한 모델
+_API_MODELS = frozenset({_MODEL, "claude-fable-5-1"})   # L01 Task 3: Fable 5.1은 API 전용
+_API_EFFORTS = frozenset({"low", "medium"})
 _INPUT_LIMIT = 64 * 1024
 _STDOUT_LIMIT = 1024 * 1024
 _STDERR_LIMIT = 64 * 1024
@@ -50,9 +52,10 @@ def _usage(response, usage):
     response.billing_status = "reported_usage"
 
 
-def _controls(prompt, system, model, effort, max_tokens, *, output_limit=400):
+def _controls(prompt, system, model, effort, max_tokens, *, output_limit=400,
+              models=frozenset({_MODEL}), efforts=frozenset({"low"})):
     return (isinstance(prompt, str) and isinstance(system, str)
-            and bool(prompt.strip()) and model == _MODEL and effort == "low"
+            and bool(prompt.strip()) and model in models and effort in efforts
             and type(max_tokens) is int and 1 <= max_tokens <= output_limit
             and len(prompt.encode("utf-8")) + len(system.encode("utf-8")) <= _INPUT_LIMIT)
 
@@ -460,7 +463,8 @@ class AnthropicAPIClient(_Client):
         started = loop.time()
         if self._closed:
             return _reject(response, "client_closed")
-        if not _controls(prompt, system, model, reasoning_effort, max_tokens, output_limit=800):
+        if not _controls(prompt, system, model, reasoning_effort, max_tokens, output_limit=800,
+                         models=_API_MODELS, efforts=_API_EFFORTS):
             return _reject(response, "invalid_request")
         deadline = started + 12 if deadline is None else deadline
         if not isinstance(deadline, (int, float)) or not math.isfinite(deadline):
@@ -475,7 +479,11 @@ class AnthropicAPIClient(_Client):
                 session = await self._get_session()
                 body = {"model": model, "max_tokens": max_tokens,
                         "messages": [{"role": "user", "content": prompt}],
-                        "output_config": {"effort": reasoning_effort}, "thinking": {"type": "adaptive"}}
+                        "output_config": {"effort": reasoning_effort}}
+                if model == _MODEL:
+                    # Opus는 운영 실측(11/10 48/48 HTTP 200) 요청 형태를 유지한다. Fable 5.1은 adaptive
+                    # thinking 상시라 thinking을 보내지 않고 effort만 전달한다(계획 Task 3).
+                    body["thinking"] = {"type": "adaptive"}
                 if system:
                     body["system"] = system
                 response.request_sent = True

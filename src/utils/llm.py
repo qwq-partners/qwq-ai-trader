@@ -67,6 +67,10 @@ class LLMTask(str, Enum):
     REPORT_SUMMARY = "report_summary"       # Non-decision summaries; economy eligible.
 
 
+# L01 Task 3(2026-11-10): Fable 5.1은 API 전용(구독 CLI는 Opus만). 다른 세대·Sonnet/Haiku는 미검증이라 거부.
+CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1"})
+
+
 @dataclass
 class LLMConfig:
     """LLM 설정"""
@@ -119,7 +123,7 @@ class LLMConfig:
     def __post_init__(self):
         if not isinstance(self.claude_cli_enabled, bool):
             raise ValueError("claude_cli_enabled must be boolean")
-        if self.claude_model != "claude-opus-5-5":
+        if self.claude_model not in CLAUDE_MODELS:
             raise ValueError("Unsupported Claude model identity")
         if not isinstance(self.claude_cli_command, str) or not self.claude_cli_command.strip():
             raise ValueError("claude_cli_command must be an executable name or path")
@@ -312,6 +316,9 @@ _OPENAI_EFFORTS = {
     "gpt-6-astra": {"low", "medium", "high", "xhigh", "max"},
     "gpt-6.1-sol": {"low", "medium", "high", "xhigh", "max"},
 }
+# Validated 2026-11-10: https://platform.claude.com/docs/en/api/messages (effort low|medium|high|xhigh|max).
+# 계획 D3/D4 범위(경량 low·heavy medium)만 허용한다. high 이상은 비용 결정이 별도라 지금 열지 않는다.
+_CLAUDE_EFFORTS = {model: {"low", "medium"} for model in ("claude-opus-5-5", "claude-fable-5-1")}
 # Validated 2026-10-12: https://ai.google.dev/gemini-api/docs/generate-content/gemini-3
 # Gemini 3.8: https://ai.google.dev/gemini-api/docs/generate-content/latest-model
 _GEMINI_LEVELS = {
@@ -337,6 +344,11 @@ def _validate_controls(model: str, provider: LLMProvider, controls: dict) -> Non
             raise ValueError("thinking_level is not supported by OpenAI transport")
         if effort is not None and (not isinstance(effort, str) or effort not in _OPENAI_EFFORTS.get(model, set())):
             raise ValueError("Unsupported reasoning_effort for requested OpenAI model")
+    elif provider == LLMProvider.ANTHROPIC:
+        if level is not None:
+            raise ValueError("thinking_level is not supported by Anthropic transport")
+        if effort is not None and (not isinstance(effort, str) or effort not in _CLAUDE_EFFORTS.get(model, set())):
+            raise ValueError("Unsupported reasoning_effort for requested Claude model")
     else:
         if effort is not None:
             raise ValueError("reasoning_effort is not supported by Gemini transport")

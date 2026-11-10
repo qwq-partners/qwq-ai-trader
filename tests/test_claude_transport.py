@@ -738,3 +738,67 @@ async def test_api_output_cap_is_bounded(transport, cap):
     client._session = Session()
     response = await client.complete('q', model=MODEL, max_tokens=cap, deadline=deadline())
     assert not response.success and not response.request_sent and not client._session.calls
+
+
+FABLE = "claude-fable-5-1"
+
+
+@pytest.mark.asyncio
+async def test_api_fable_request_omits_thinking_and_verifies_identity(transport):
+    # L01 Task 3: Fable 5.1은 adaptive thinking 상시라 thinking 미지정, output_config.effort만 보낸다.
+    body = api_body(); body["model"] = FABLE
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    client._session = Session(body)
+    response = await client.complete("question", "rules", model=FABLE, reasoning_effort="medium",
+                                     deadline=deadline())
+    assert response.success and response.resolved_model == FABLE
+    assert response.model_identity_status == "verified"
+    _, request = client._session.calls[0]
+    assert request["json"] == {"model": FABLE, "max_tokens": 400, "system": "rules",
+        "messages": [{"role": "user", "content": "question"}],
+        "output_config": {"effort": "medium"}}
+
+
+@pytest.mark.asyncio
+async def test_api_fable_refusal_is_failure_without_other_model(transport):
+    # 공식 문서: 거절은 HTTP 200 + stop_reason=refusal + stop_details(category/explanation은 null 가능), content 비어 있음.
+    body = api_body()
+    body.update(model=FABLE, stop_reason="refusal", content=[],
+                stop_details={"type": "refusal", "category": "cyber", "explanation": None})
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    client._session = Session(body)
+    response = await client.complete("q", model=FABLE, deadline=deadline())
+    assert not response.success and response.transport_error_kind == "refusal"
+    assert response.refusal_detected and response.content == ""
+    assert response.usage_known and len(client._session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested,actual", [(FABLE, MODEL), (MODEL, FABLE)])
+async def test_api_resolved_model_must_match_requested_claude_model(transport, requested, actual):
+    body = api_body(); body["model"] = actual
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    client._session = Session(body)
+    response = await client.complete("q", model=requested, deadline=deadline())
+    assert not response.success and response.transport_error_kind == "identity_mismatch"
+    assert response.resolved_model == actual and response.model_identity_status == "mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [{"model": "claude-fable-5-2"}, {"model": FABLE, "reasoning_effort": "high"},
+                                    {"model": MODEL, "reasoning_effort": "xhigh"}])
+async def test_api_rejects_unknown_claude_model_or_effort_before_send(transport, kwargs):
+    client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
+    client._session = Session()
+    response = await client.complete("q", deadline=deadline(), **kwargs)
+    assert response.transport_error_kind == "invalid_request" and not response.request_sent
+    assert client._session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cli_subscription_path_stays_opus_only(transport, tmp_path):
+    # Fable은 전역 라우팅 정책상 API 전용(구독 CLI의 refusal fallback 이력). CLI는 Opus 5.5만 받는다.
+    config, observed = fake_cli(tmp_path)
+    response = await transport.ClaudeCLIClient(config).complete("q", model=FABLE, deadline=deadline(2))
+    assert response.transport_error_kind == "invalid_request" and not response.request_sent
+    assert not observed.exists()

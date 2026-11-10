@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-10 — L01 Task 3 소스: Claude 허용 모델 `{opus-5-5, fable-5-1}`·Fable 5.1 가격·API 파라미터 형태 (실호출 0·역할 재배정 없음, [원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [계획서 Task 3](docs/superpowers/plans/2026-11-08-llm-credit-routing.md))
+
+- `src/utils/llm.py`: `CLAUDE_MODELS = {claude-opus-5-5, claude-fable-5-1}`로 `LLMConfig.claude_model` 검증(기본값 Opus 불변, 다른 세대·Sonnet·별칭 거부 유지). `_validate_controls`에 Anthropic 분기 — `thinking_level` 거부, effort는 `_CLAUDE_EFFORTS` {low, medium}만(공식 허용값 low~max 중 계획 D3/D4 범위).
+- `src/utils/claude_transport.py`: 구독 CLI는 종전대로 Opus 하나(`_MODEL`), API는 `_API_MODELS` 두 모델·`_API_EFFORTS` {low, medium}. Fable 요청은 `output_config.effort`만 보내고 `thinking`을 넣지 않는다(공식 "Adaptive (always on)"); Opus 요청 형태(`thinking: adaptive`)는 운영 실측 그대로. `stop_reason=refusal`은 기존 `refusal` 실패·우회 없음, `stop_details.category`는 저장하지 않는다.
+- `src/utils/llm_pricing.py`: `claude-fable-5-1` (10.0, 50.0) 추가, Claude 두 모델에 같은 1h 캐시 쓰기 상한(입력 2배=공식 1h write 20). 공식 가격 페이지 11/10 확인(5m 12.50·캐시 읽기 0.25는 가정하지 않음, 청구 확정액 아님).
+- 검사: 신규 10건(가격 1·설정/controls 3·전송 6: Fable 본문 형태·refusal·identity_mismatch 양방향·미지원 모델/effort 전송 전 거부·CLI Fable 거부), 관련 묶음 1,895 passed(AWS 보조). 독립 리뷰·실제 WSL 직렬 전체·PR은 원장 영수증. **실호출 신원 검증 1회/모델·데이터 보존 ≥30일 확인은 사용자 승인 대기**, 역할표·`default.yml`·`_complete_claude`·운영 불변.
+
 ## 2026-11-10 — 자연 인수 판독(문서만): L01 Task 2 Bear API 1차 48/48 DONE · R02-WEB 11/10 morning 거절(`recommendation_vocabulary`)/midday 첫 ready ([L01](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [R02-WEB](docs/operations/execution-roadmap.md#r02-web-rejection-recurrence-20261109))
 
 - 15:50 KST 읽기 전용 판독(LLM/시세 호출·재생성·예약·서버 변경 0, 소스 변경 0). 운영 `1f87b896`/PID1048208·NRestarts 0·recovery ready·pending 0·KILL_SWITCH_KR 유지, main `54b86f4a`(문서 차이만).
