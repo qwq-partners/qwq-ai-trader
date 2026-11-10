@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-10 — L01 Task 3 완료 영수증(문서만): PR #357 병합 `7a28163b`·실제 WSL 10,676 passed·Fable 5.1 실호출 신원 verified ([원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
+
+- 검증: Codex gpt-6-astra/xhigh 독립 리뷰 2회(P0/P1 0, 신규 P2 반영), CI verify, 실제 WSL 직렬 전체 1회차 `1 failed`(비교 작업자 재전달 검사 — WSL 벽시계 역행 `clock_reversal` 플레이크, 변경과 접점 0) → 같은 SHA 2회차 10,676 passed·rc 0. 사용자 "병합해" → main `7a28163b`·main CI success. 운영 `1f87b896` 미배포(Bear 동작 변화 없음).
+- 실호출: 사용자가 Anthropic 조직 데이터 보존 ≥30일 확인 → "보내" → 운영 전송 코드로 Fable 5.1 1회: `claude-fable-5-1` verified·HTTP 200·end_turn·거절 0·44/4토큰·1.18초·추정 USD 0.001(월 원장 밖 단발). Opus 5.5는 11/10 운영 48/48 verified로 대체. 역할 시한 판단은 Task 4 첫 자연 슬롯 실측으로.
+- 후속 부채 기록: `llm_pricing` float 계산 Decimal 정합(리뷰 P2), 비교 작업자 `clock` 주입(WSL 시계 역행 플레이크). 임시 WSL 키 제거·재접속 거부·AWS shred. 문서 영수증은 재배포하지 않는다.
+
 ## 2026-11-10 — L01 Task 3 소스: Claude 허용 모델 `{opus-5-5, fable-5-1}`·Fable 5.1 가격·API 파라미터 형태 (실호출 0·역할 재배정 없음, [원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [계획서 Task 3](docs/superpowers/plans/2026-11-08-llm-credit-routing.md))
 
 - `src/utils/llm.py`: `CLAUDE_MODELS = {claude-opus-5-5, claude-fable-5-1}`로 `LLMConfig.claude_model` 검증(기본값 Opus 불변, 다른 세대·Sonnet·별칭 거부 유지). `_validate_controls`에 Anthropic 분기 — `thinking_level` 거부, effort는 `_CLAUDE_EFFORTS` {low, medium}만(공식 허용값 low~max 중 계획 D3/D4 범위).
