@@ -17,7 +17,9 @@ from .llm import LLMConfig, LLMProvider, LLMResponse, _billing_status
 _MODEL = "claude-opus-5-5"          # 구독 CLI가 받는 유일한 모델
 _API_MODELS = frozenset({_MODEL, "claude-fable-5-1"})   # L01 Task 3: Fable 5.1은 API 전용
 _API_EFFORTS = frozenset({"low", "medium"})
+_API_OUTPUT_LIMIT = 16384   # 역할 최대 12288·task 기본 16000 수용(Fable 128K 이내). Bear 800은 manager가 따로 막는다.
 _INPUT_LIMIT = 64 * 1024
+_API_INPUT_LIMIT = 256 * 1024   # L01 Task 4: 역할 입력 상한(최대 128KiB)+JSON 지시. CLI(Bear 대체)는 64KiB 유지.
 _STDOUT_LIMIT = 1024 * 1024
 _STDERR_LIMIT = 64 * 1024
 _CLEANUP_RESERVE = .1
@@ -53,12 +55,12 @@ def _usage(response, usage):
 
 
 def _controls(prompt, system, model, effort, max_tokens, *, output_limit=400,
-              models=frozenset({_MODEL}), efforts=frozenset({"low"})):
+              models=frozenset({_MODEL}), efforts=frozenset({"low"}), input_limit=_INPUT_LIMIT):
     return (isinstance(prompt, str) and isinstance(system, str)
             and bool(prompt.strip()) and isinstance(model, str) and model in models
             and isinstance(effort, str) and effort in efforts
             and type(max_tokens) is int and 1 <= max_tokens <= output_limit
-            and len(prompt.encode("utf-8")) + len(system.encode("utf-8")) <= _INPUT_LIMIT)
+            and len(prompt.encode("utf-8")) + len(system.encode("utf-8")) <= input_limit)
 
 
 def _identity(response, actual):
@@ -464,8 +466,8 @@ class AnthropicAPIClient(_Client):
         started = loop.time()
         if self._closed:
             return _reject(response, "client_closed")
-        if not _controls(prompt, system, model, reasoning_effort, max_tokens, output_limit=800,
-                         models=_API_MODELS, efforts=_API_EFFORTS):
+        if not _controls(prompt, system, model, reasoning_effort, max_tokens, output_limit=_API_OUTPUT_LIMIT,
+                         models=_API_MODELS, efforts=_API_EFFORTS, input_limit=_API_INPUT_LIMIT):
             return _reject(response, "invalid_request")
         deadline = started + 12 if deadline is None else deadline
         if not isinstance(deadline, (int, float)) or not math.isfinite(deadline):

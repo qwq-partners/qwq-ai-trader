@@ -279,8 +279,8 @@ async def test_after_inputs_and_saved_analysis_survive_restart_without_second_fe
 async def test_unknown_cost_log_continue_does_not_reopen_analysis(tmp_path, content, monkeypatch):
     import time
     from src.utils.llm import LLMConfig, LLMManager
-    from tests.test_llm_transport_contract import Session, Reply
-    m = LLMManager(LLMConfig(openai_api_key='synthetic', monthly_budget_usd=100,
+    from tests.test_claude_transport import Session, Reply   # v6: market_brief 는 Anthropic API
+    m = LLMManager(LLMConfig(openai_api_key='synthetic', anthropic_api_key='synthetic', monthly_budget_usd=100,
         budget_state_path=str(tmp_path/'budget.db'), budget_policy_enabled=True,
         missing_cost_policy='log_and_continue'), audit_dir=tmp_path/'audit')
     reserve = m.monthly_budget.reserve
@@ -293,10 +293,10 @@ async def test_unknown_cost_log_continue_does_not_reopen_analysis(tmp_path, cont
     monkeypatch.setattr(m, 'complete_role', complete)
     class Waiting(Reply):
         async def json(self):
-            assert len(session.payloads) == 1
+            assert len(session.calls) == 1
             raise asyncio.TimeoutError('synthetic response-body timeout')
-    session = Session(Waiting({}))
-    m.openai._session = session
+    session = Session(); session.reply = Waiting({})
+    m._ensure_claude_clients(); m.anthropic._session = session
     store = ReportStore(tmp_path/'r.db')
     n = notifier()
     n.publish_report = AsyncMock(side_effect=RuntimeError('before delivery'))
@@ -309,7 +309,7 @@ async def test_unknown_cost_log_continue_does_not_reopen_analysis(tmp_path, cont
     assert m.monthly_budget.status()['unresolved_count'] == 1
     assert m._check_budget()  # Existing policy permits other independent calls.
     assert await ReportSchedule(store, notifier(), analysis_manager=m).tick(NOW, True, MARKET, '') == 'accepted'
-    assert len(session.payloads) == 1
+    assert len(session.calls) == 1
     complete.assert_awaited_once()
     assert store.analysis_receipt('market', 'morning', DAY) == r
     m.openai._session = None

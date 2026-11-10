@@ -10,7 +10,8 @@ from src.analytics.report_delivery import ReportStore
 from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_llm_roles import manager
-from tests.test_llm_transport_contract import Session, openai_reply
+from tests.test_claude_transport import Session
+from tests.test_llm_claude_roles import claude_body, FABLE
 from tests.test_market_report_analysis import DAY, NOW, response
 from tests.test_report_photo_delivery import notifier
 
@@ -22,8 +23,8 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
     output = response()
     if invalid:
         output['judgment']['text'] = '근거 없는 목표 수익률 99%입니다.'
-    session = Session(openai_reply(json.dumps(output, ensure_ascii=False)))
-    llm.openai._session = session
+    session = Session(claude_body(FABLE, json.dumps(output, ensure_ascii=False)))
+    llm.anthropic._session = session
     market = MarketSnapshot(
         sectors=tuple({'name': name, 'r1': value, 'as_of': '2026-10-28', 'source': 'KIS'}
                       for name, value in [('금융', 1.2), ('반도체', -.8), ('자동차', -1.4)]),
@@ -48,10 +49,10 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         assert '99%' not in receipt['body']
         assert '금융 +1.20%' in receipt['body'] and '자동차 -1.40%' in receipt['body']
         assert '전체 업종 순위 아님' in receipt['body']
-        assert len(session.payloads) == 1
-        payload = session.payloads[0]
-        assert payload['response_format'] == {'type': 'json_object'}
-        assert payload['model'] == 'gpt-6.1-sol'
+        assert len(session.calls) == 1
+        payload = session.calls[0][1]['json']
+        assert 'response_format' not in payload and 'JSON' in payload['system']
+        assert payload['model'] == FABLE and payload['max_tokens'] == 4096
         assert 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(payload)
         assert llm.monthly_budget.status()['settled_count'] == 1
         assert store.archived_photo('market', 'morning', DAY) is None
@@ -66,8 +67,8 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         assert dispatch.get('semantic_report_body') is None
         assert await ReportSchedule(ReportStore(store.path), telegram, record, analysis_manager=llm).tick(
             NOW.replace(minute=44), True, MarketSnapshot(), 'CHANGED_PRIVATE') == 'already_consumed'
-        assert len(session.payloads) == 1
+        assert len(session.calls) == 1
         telegram._session.post.assert_called_once()
     finally:
-        llm.openai._session = llm.gemini._session = None
+        llm.openai._session = llm.gemini._session = llm.anthropic._session = None
         await llm.close()

@@ -8,11 +8,13 @@ import pytest
 
 from src.utils.llm import LLMConfig, LLMManager, LLMProvider
 from tests.test_llm_transport_contract import Session, Reply, gemini_reply, openai_reply
+from tests.test_claude_transport import Session as ClaudeSession
+from tests.test_llm_claude_roles import claude_body, EchoSession, FABLE, OPUS
 
 
 def manager(tmp_path, *, spent=0, monthly=True):
     m = LLMManager(LLMConfig(
-        openai_api_key='synthetic', gemini_api_key='synthetic',
+        openai_api_key='synthetic', gemini_api_key='synthetic', anthropic_api_key='synthetic',
         monthly_budget_usd=100 if monthly else None,
         budget_state_path=str(tmp_path / 'budget.sqlite3') if monthly else None,
         budget_policy_enabled=monthly,
@@ -24,15 +26,16 @@ def manager(tmp_path, *, spent=0, monthly=True):
                        ('seed', month, 'gpt-5-mini', int(spent * 1e9), month + '-01', month + '-01'))
     m.openai._session = Session(openai_reply())
     m.gemini._session = Session(gemini_reply())
+    # v6: report_one_line/market_brief/post_exit_research/web_report 는 Anthropic API 다. 역할 공통 역학 검사는
+    # OpenAI 프로필이 남은 morning_brief 로, Anthropic 전용 계약은 test_llm_claude_roles 로 본다.
+    m._ensure_claude_clients()
+    m.anthropic._session = EchoSession(claude_body(FABLE))   # JSON 역할도 통과하는 '{"ok": true}'
     return m
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,model,cap,control', [
-    ('report_one_line', 'gpt-5-mini', 512, 'minimal'),
     ('morning_brief', 'gpt-5-mini', 1600, 'minimal'),
-    ('market_brief', 'gpt-6.1-sol', 4096, 'medium'),
-    ('post_exit_research', 'gpt-6.1-sol', 4096, 'medium'),
 ])
 @pytest.mark.parametrize('spent', [0, 80])
 async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model, cap, control, spent):
@@ -45,7 +48,7 @@ async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model,
     payload = m.openai._session.payloads[0]
     assert payload['model'] == model and payload['max_completion_tokens'] == cap
     assert payload['reasoning_effort'] == control and 'temperature' not in payload
-    assert payload.get('response_format') == ({'type': 'json_object'} if role == 'market_brief' else None)
+    assert payload.get('response_format') is None and m.anthropic._session.calls == []
     assert len(result.attempt_trail) == 1
     assert result.attempt_trail[0]['task'] == role
     with sqlite3.connect(m.monthly_budget.path) as db:
@@ -55,18 +58,18 @@ async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model,
     rows = [json.loads(line) for p in (tmp_path / 'audit').glob('*.jsonl') for line in p.read_text().splitlines()]
     assert len(rows) == 1 and rows[0]['task'] == role
     # Fake sessions have no close lifecycle; remove them before draining the real manager.
-    m.openai._session = m.gemini._session = None
+    m.openai._session = m.gemini._session = m.anthropic._session = None
     await m.close()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('role', ['report_one_line', 'morning_brief', 'market_brief', 'post_exit_research'])
+@pytest.mark.parametrize('role', ['report_one_line', 'morning_brief', 'market_brief', 'post_exit_research', 'web_report'])
 @pytest.mark.parametrize('spent,reason', [(95, 'essential_budget_reserved'), (100, 'monthly_limit_exceeded')])
 async def test_role_monthly_stop_never_sends(tmp_path, role, spent, reason):
     m = manager(tmp_path, spent=spent)
     result = await m.complete_role('p', role=role)
     assert result.budget_block_reason == reason and not result.request_sent
-    assert m.openai._session.payloads == []
+    assert m.openai._session.payloads == [] and m.anthropic._session.calls == []
     assert m.stats['fallback_count'] == 0
 
 
@@ -75,7 +78,7 @@ async def test_role_monthly_stop_never_sends(tmp_path, role, spent, reason):
 async def test_role_never_retries_empty_or_invalid_json(tmp_path, content):
     m = manager(tmp_path)
     m.openai._session = Session(openai_reply(content))
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert response.content == content
     assert len(m.openai._session.payloads) == 1 and len(response.attempt_trail) == 1
 
@@ -86,7 +89,7 @@ async def test_role_known_refusal_settles_once_without_fallback(tmp_path):
     reply = openai_reply()
     reply.data['choices'][0]['message']['refusal'] = 'synthetic refusal'
     m.openai._session = Session(reply)
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert not response.success and response.usage_known
     assert len(response.attempt_trail) == 1 and m.monthly_budget.status()['settled_count'] == 1
 
@@ -97,8 +100,8 @@ async def test_role_known_refusal_settles_once_without_fallback(tmp_path):
 async def test_role_does_not_accept_callsite_overrides(tmp_path, override):
     m = manager(tmp_path)
     with pytest.raises(TypeError):
-        await m.complete_role('p', role='report_one_line', **{override: 'unexpected'})
-    assert m.openai._session.payloads == []
+        await m.complete_role('p', role='morning_brief', **{override: 'unexpected'})
+    assert m.openai._session.payloads == [] and m.anthropic._session.calls == []
 
 
 @pytest.mark.asyncio
@@ -111,7 +114,7 @@ async def test_unknown_role_rejected_before_admission(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,bound', [('report_one_line', 32768), ('morning_brief', 65536),
-                                       ('market_brief', 65536),
+                                       ('market_brief', 65536), ('web_report', 98304),
                                        ('post_exit_research', 131072)])
 async def test_utf8_limit_counts_system_and_prompt_before_admission(tmp_path, role, bound):
     m = manager(tmp_path)
@@ -119,7 +122,7 @@ async def test_utf8_limit_counts_system_and_prompt_before_admission(tmp_path, ro
     assert not response.success and not response.request_sent
     assert response.error == 'Role input byte limit exceeded'
     assert m.monthly_budget.status()['reserved_usd'] == 0
-    assert m.openai._session.payloads == []
+    assert m.openai._session.payloads == [] and m.anthropic._session.calls == []
     valid = await m.complete_role('a' * (bound - 3), role=role, system='한')
     assert valid.success
 
@@ -134,7 +137,7 @@ async def test_role_preflight_fails_closed_even_without_monthly_budget(tmp_path,
     else:
         monkeypatch.setitem(llm._OPENAI_EFFORTS, 'gpt-5-mini', {'low'})
     with pytest.raises(ValueError):
-        await m.complete_role('p', role='report_one_line')
+        await m.complete_role('p', role='morning_brief')
     assert m.openai._session.payloads == []
 
 
@@ -150,7 +153,7 @@ async def test_closing_role_is_unsent(tmp_path):
 def short_role(monkeypatch, seconds=0.5):
     from src.utils import llm_roles
     profiles = dict(llm_roles.ROLE_PROFILES)
-    role = llm_roles.LLMRole.REPORT_ONE_LINE
+    role = llm_roles.LLMRole.MORNING_BRIEF
     profiles[role] = replace(profiles[role], timeout_seconds=seconds)
     monkeypatch.setattr(llm_roles, 'ROLE_PROFILES', profiles)
 
@@ -163,12 +166,12 @@ async def test_role_timeout_after_send_preserves_accounting_and_blocks_later(tmp
         async def json(self):
             await asyncio.Event().wait()
     m.openai._session = Session(SlowReply({}))
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert not response.success and response.request_sent and not response.usage_known
     assert len(response.attempt_trail) == 1
     assert m.daily_usage.unknown_usage_requests == 1
     assert m.monthly_budget.status()['unresolved_count'] == 1
-    blocked = await m.complete_role('p', role='report_one_line')
+    blocked = await m.complete_role('p', role='morning_brief')
     assert blocked.budget_block_reason == 'daily_unknown_cost'
     assert len(m.openai._session.payloads) == 1
 
@@ -182,7 +185,7 @@ async def test_role_external_cancel_preserves_trail_and_original_cancellation(tm
             entered.set()
             await asyncio.Event().wait()
     m.openai._session = Session(WaitingReply({}))
-    task = asyncio.create_task(m.complete_role('p', role='report_one_line'))
+    task = asyncio.create_task(m.complete_role('p', role='morning_brief'))
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError) as exc:
@@ -203,7 +206,7 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
         time.sleep(0.02)
         return token
     monkeypatch.setattr(m.monthly_budget, 'reserve', slow_reserve)
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert not response.success and not response.request_sent
     assert m.openai._session.payloads == []
     assert m.monthly_budget.status()['reserved_usd'] == 0
@@ -212,7 +215,7 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
 
 def test_role_table_is_versioned_and_immutable():
     from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
-    assert ROLE_POLICY_VERSION == 'engine-roles-v5-web-report'
+    assert ROLE_POLICY_VERSION == 'engine-roles-v6-claude-roles'
     research = ROLE_PROFILES[LLMRole.MARKET_BRIEF]
     assert research.timeout_seconds == 90.0 and research.max_input_bytes == 64 * 1024
     assert research.budget_priority == 'standard'
@@ -235,22 +238,24 @@ async def test_narrative_experts_use_one_line_role(tmp_path, expert, args):
     cls = {'macro': MacroEconomist, 'kr': KREconomyExpert, 'global': GlobalMicroExpert}[expert]
     obj = object.__new__(cls)
     obj.llm_manager = manager(tmp_path)
+    obj.llm_manager.anthropic._session = ClaudeSession(claude_body(OPUS, 'ok'))
     assert await obj._llm_synthesize(*args) == 'ok'
-    payload = obj.llm_manager.openai._session.payloads[0]
-    assert payload['model'] == 'gpt-5-mini' and payload['max_completion_tokens'] == 512
-    assert payload['reasoning_effort'] == 'minimal'
+    payload = obj.llm_manager.anthropic._session.calls[0][1]['json']
+    assert payload['model'] == OPUS and payload['max_tokens'] == 512
+    assert payload['output_config'] == {'effort': 'low'} and obj.llm_manager.openai._session.payloads == []
 
 
 @pytest.mark.asyncio
 async def test_post_exit_role_reaches_actual_transport_with_research_priority(tmp_path):
     from src.analytics.post_exit_review import PostExitReviewer
     m = manager(tmp_path)
+    m.anthropic._session = EchoSession(claude_body(FABLE, 'ok'))   # 복기 역할은 마크다운 본문
     reviewer = PostExitReviewer(llm_manager=m)
     result = await reviewer._generate_llm_insights(
         [], {'missed': [], 'avoided': [], 'neutral': []}, {'by_strategy': {}, 'by_exit_type': {}})
     assert result == 'ok'
-    payload = m.openai._session.payloads[0]
-    assert payload['model'] == 'gpt-6.1-sol' and payload['max_completion_tokens'] == 4096
+    payload = m.anthropic._session.calls[0][1]['json']
+    assert payload['model'] == FABLE and payload['max_tokens'] == 4096 and payload['output_config'] == {'effort': 'medium'}
     with sqlite3.connect(m.monthly_budget.path) as db:
         assert db.execute('SELECT task,priority FROM policy_attempts').fetchone() == ('post_exit_research', 'research')
 
@@ -297,7 +302,7 @@ async def test_deadline_during_settlement_keeps_completed_paid_attempt(tmp_path,
         account(*args, **kwargs)
         time.sleep(0.6)
     monkeypatch.setattr(m, '_account_attempt', slow_account)
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert response.request_sent and response.usage_known
     assert response.input_tokens == 100 and response.output_tokens == 50
     assert len(response.attempt_trail) == 1
@@ -321,7 +326,7 @@ async def test_role_incomplete_or_refused_output_is_not_usable_but_billed_once(
     if refusal:
         reply.data['choices'][0]['message']['refusal'] = 'synthetic refusal'
     m.openai._session = Session(reply)
-    role = 'report_one_line'
+    role = 'morning_brief'
     result = await m.complete_role('p', role=role)
     assert not result.success and result.request_sent and result.usage_known
     assert result.finish_reason == finish
@@ -353,13 +358,13 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
     reply = openai_reply('private-response', model='provider-reported-version')
     reply.data['choices'][0]['finish_reason'] = 'length'
     m.openai._session = Session(reply)
-    response = await m.complete_role('private-prompt', role='report_one_line')
+    response = await m.complete_role('private-prompt', role='morning_brief')
     assert not response.success
     audit_dir = tmp_path / 'role-audit'
     files = list(audit_dir.glob('llm-audit-*.jsonl'))
     assert len(files) == 1
     row = json.loads(files[0].read_text())
-    assert row['task'] == 'report_one_line' and row['role_policy_version'] == 'engine-roles-v5-web-report'
+    assert row['task'] == 'morning_brief' and row['role_policy_version'] == 'engine-roles-v6-claude-roles'
     assert row['requested_reasoning_effort'] == 'minimal'
     assert row['resolved_model'] == 'provider-reported-version'
     assert row['outcome'] == 'error' and row['elapsed_ms'] >= 0
@@ -374,7 +379,7 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
 async def test_no_monthly_path_does_not_enable_implicit_audit(tmp_path):
     m = manager(tmp_path, monthly=False)
     m.audit_dir = None
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert response.success and response.resolved_model is None
     assert not (tmp_path / 'role-audit').exists()
 
@@ -384,7 +389,7 @@ async def test_role_audit_write_failure_does_not_lose_budget_settlement(tmp_path
     m = manager(tmp_path)
     m.audit_dir = None
     (tmp_path / 'role-audit').write_text('synthetic path collision')
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert response.success and len(response.attempt_trail) == 1
     assert m.monthly_budget.status()['settled_count'] == 1
 
@@ -398,7 +403,7 @@ async def test_implicit_role_audit_never_follows_directory_symlink_for_retention
     historical = other / 'llm-audit-20000101.jsonl'
     historical.write_text('must remain')
     (tmp_path / 'role-audit').symlink_to(other, target_is_directory=True)
-    response = await m.complete_role('p', role='report_one_line')
+    response = await m.complete_role('p', role='morning_brief')
     assert response.success and historical.read_text() == 'must remain'
     assert list(other.iterdir()) == [historical]
     assert m.monthly_budget.status()['settled_count'] == 1
@@ -407,20 +412,23 @@ async def test_implicit_role_audit_never_follows_directory_symlink_for_retention
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['malformed', 'refusal', 'length', 'timeout', 'valid'])
 async def test_market_role_json_mode_never_repairs_falls_back_or_shadows(tmp_path, fault):
+    from tests.test_claude_transport import Reply as ClaudeReply
     m = manager(tmp_path)
     m.config.openai_model_light_shadow = 'gpt-6.1-sol'
-    reply = openai_reply('{bad' if fault == 'malformed' else '{"ok":true}')
-    if fault == 'refusal': reply.data['choices'][0]['message']['refusal'] = 'refused'
-    if fault == 'length': reply.data['choices'][0]['finish_reason'] = 'length'
+    body = claude_body(FABLE, '{bad' if fault == 'malformed' else '{"ok":true}')
+    if fault == 'refusal': body.update(stop_reason='refusal', content=[], stop_details={'type': 'refusal'})
+    if fault == 'length': body['stop_reason'] = 'max_tokens'
+    session = ClaudeSession(body)
     if fault == 'timeout':
-        class TimeoutReply(Reply):
+        class TimeoutReply(ClaudeReply):
             async def json(self): raise TimeoutError()
-        reply = TimeoutReply({})
-    m.openai._session = Session(reply)
+        session.reply = TimeoutReply({})
+    m.anthropic._session = session
     response = await m.complete_role('JSON report', role='market_brief')
     await asyncio.sleep(0)
-    assert len(m.openai._session.payloads) == 1
-    assert m.openai._session.payloads[0]['response_format'] == {'type': 'json_object'}
+    assert len(session.calls) == 1 and m.openai._session.payloads == []
+    payload = session.calls[0][1]['json']
+    assert 'response_format' not in payload and 'JSON' in payload['system'] and payload['model'] == FABLE
     assert len(response.attempt_trail) == 1
     assert not m._shadow_tasks and m.stats['fallback_count'] == 0
     assert response.success is (fault in {'malformed', 'valid'})
