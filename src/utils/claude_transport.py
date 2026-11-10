@@ -55,7 +55,8 @@ def _usage(response, usage):
 def _controls(prompt, system, model, effort, max_tokens, *, output_limit=400,
               models=frozenset({_MODEL}), efforts=frozenset({"low"})):
     return (isinstance(prompt, str) and isinstance(system, str)
-            and bool(prompt.strip()) and model in models and effort in efforts
+            and bool(prompt.strip()) and isinstance(model, str) and model in models
+            and isinstance(effort, str) and effort in efforts
             and type(max_tokens) is int and 1 <= max_tokens <= output_limit
             and len(prompt.encode("utf-8")) + len(system.encode("utf-8")) <= _INPUT_LIMIT)
 

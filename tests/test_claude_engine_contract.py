@@ -40,7 +40,7 @@ FABLE = 'claude-fable-5-1'
 def test_claude_config_accepts_only_opus_and_fable_identities():
     # L01 Task 3: 허용 집합 {opus-5-5, fable-5-1}. 다른 Fable/Mythos 세대·Sonnet·별칭은 거부(기존 규칙).
     assert LLMConfig(claude_model=FABLE).claude_model == FABLE
-    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus'):
+    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus', [], None):
         with pytest.raises(ValueError, match='Claude model identity'):
             LLMConfig(claude_model=model)
 

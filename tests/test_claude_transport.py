@@ -786,7 +786,9 @@ async def test_api_resolved_model_must_match_requested_claude_model(transport, r
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kwargs", [{"model": "claude-fable-5-2"}, {"model": FABLE, "reasoning_effort": "high"},
-                                    {"model": MODEL, "reasoning_effort": "xhigh"}])
+                                    {"model": MODEL, "reasoning_effort": "xhigh"},
+                                    # 독립 리뷰 1차 P2(2026-11-10): 해시 불가 입력도 예외 없이 전송 전 거절.
+                                    {"model": []}, {"model": MODEL, "reasoning_effort": {}}])
 async def test_api_rejects_unknown_claude_model_or_effort_before_send(transport, kwargs):
     client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key="synthetic-key"))
     client._session = Session()

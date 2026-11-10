@@ -123,7 +123,7 @@ class LLMConfig:
     def __post_init__(self):
         if not isinstance(self.claude_cli_enabled, bool):
             raise ValueError("claude_cli_enabled must be boolean")
-        if self.claude_model not in CLAUDE_MODELS:
+        if not isinstance(self.claude_model, str) or self.claude_model not in CLAUDE_MODELS:
             raise ValueError("Unsupported Claude model identity")
         if not isinstance(self.claude_cli_command, str) or not self.claude_cli_command.strip():
             raise ValueError("claude_cli_command must be an executable name or path")
