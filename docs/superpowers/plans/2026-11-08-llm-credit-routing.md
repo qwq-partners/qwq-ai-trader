@@ -99,7 +99,7 @@
 **Files:** `src/utils/llm_roles.py`(`ROLE_POLICY_VERSION` 승격·`WEB_REPORT`/`MARKET_BRIEF`/`POST_EXIT_RESEARCH` provider `anthropic`), `config/default.yml`(heavy/light 슬롯 provider·모델), `src/utils/llm.py`(`complete_role`의 Anthropic 분기·종료 사유·JSON 지시: Anthropic은 `response_format`이 없으므로 system에 JSON 전용 출력 지시 + 기존 파서/검증기 그대로), `src/analytics/web_report.py` 등 소비자는 불변, 테스트, `docs/agents/reporting.md`·`CLAUDE.md` LLM 표·CHANGELOG.
 **Interfaces(11/8 확정):** `WEB_REPORT`·`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·heavy 슬롯(`trade_review`/`strategy_analysis`/`market_analysis`) → `claude-fable-5-1`(effort medium, 출력 상한 유지, 시한은 Task 3 실측 뒤 결정). light 슬롯(테마 탐지·quick_*·wiki·news) → `claude-opus-5-5`(effort low). **Bull은 `gpt-5-mini` 유지(D8 확정)** — Bear와 다른 공급자를 보존한다. `REPORT_ONE_LINE`은 호출량이 크지 않아 Opus 5.5. 모닝 브리프는 결정론 조립이라 불변. 신원 검증(Task 3)에 실패한 모델은 그 역할을 이전하지 않고 현행 유지.
 
-- [ ] RED/GREEN: 역할별 provider·모델·상한·JSON 검증 통과·실패 시 대체 본문/hold 경로 불변.
+- [x] RED/GREEN: 역할별 provider·모델·상한·JSON 검증 통과·실패 시 대체 본문/hold 경로 불변. (11/10 — 역할표 v6 `engine-roles-v6-claude-roles`, task 라우팅은 `default.yml llm.task_routes`(코드 기본 openai), `_get_client(ANTHROPIC)`=API, Anthropic JSON 지시/`end_turn`/기본 출력 상한, 전송 API 상한 16384·입력 256KiB, 소비자 완료 사유 `stop|end_turn`; 신규 검사 26건·`tests/test_llm_claude_roles.py`)
 - [ ] 독립 리뷰·실제 WSL 전체·PR·사용자 승인 배포. 배포 뒤 첫 자연 슬롯(07:40 web morning 등)에서 `report_analyses.status`와 검증 거절 코드로 인수(수락 보장 아님).
 
 ### Task 5: 월 예산 상한 이관·소진 동작 (D2·D7)
@@ -126,3 +126,4 @@
 - 2026-11-10: Task 2 자연 Bear 인수 DONE(15:50 KST 읽기 전용 판독) — 장중 4슬롯 Claude 48/48 `anthropic_messages`·api·`policy_attempts.role=primary`·`claude-opus-5-5` verified·HTTP 200, CLI 대체 0(가용성 실패 없음 → 대체 경로 운영 미실증). 11/9 구순서 45건은 모두 `fallback`. 다음은 11/16 7일 실측(Task 6 전제)과 사용자 선행 확인 뒤 Task 3.
 - 2026-11-10: 사용자 "ㄱㄱ" → Task 3 소스 RED(7 fail)→GREEN(신규 10검사, 관련 묶음 1,895 passed, 실호출 0). 공식 문서 확인: Fable 5.1 입력 10/출력 50/1h 캐시 쓰기 20/캐시 읽기 0.25, thinking "Adaptive (always on)", effort low~max, 거절은 HTTP 200+`stop_reason=refusal`+`stop_details`. 남은 Task 3: 사용자 데이터 보존 ≥30일 확인·승인 뒤 실호출 신원 검증 1회/모델. 역할 재배정(Task 4)·예산 이관(Task 5) 미착수.
 - 2026-11-10: Task 3 DONE — Codex xhigh 리뷰 2회(P0/P1 0), CI·실제 WSL 2회차 10,676 passed(1회차 1건은 WSL 시계 역행 플레이크), 사용자 "병합해" → PR #357 main `7a28163b`. 사용자 보존 ≥30일 확인 → "보내" → Fable 5.1 실호출 verified(원장 참조). 다음 진입점은 Task 4(사용자 지시 대기).
+- 2026-11-10: 사용자 "Task4~6은 시작해도 될 것 같은데?" → Task 4 소스 RED→GREEN(브랜치 `feature/l01-task4-role-reassignment-20261110`, 기준 main `2c54efba`). Task 6은 11/16 날짜 대기. 독립 리뷰·WSL·PR·배포 승인은 원장.

@@ -801,17 +801,17 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 **10/28 사용자 지시:** Gemini 중단·GPT/Claude 전환. 아래 계약은10/28 17:40 운영 인수로 적용했다. 실제 적용·다음 조건은 [E04-D2](docs/operations/execution-roadmap.md#e04-gpt-claude-20261028)를 따른다. 사용자 선택은 구독 CLI 우선·API 대체이며 PR #284에 연결/실측/검증을 완료했다. 운영 적용은 완료했으며 실제 서비스의 자연 호출 결과는 별도 인수한다.
 
-고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v5-web-report`다(소스 계약이며 운영 적용은 원장 참조). 일반 task와 고정 보고/복기 역할을 구분한다.
+고정 역할 정책은 `src/utils/llm_roles.py`의 `engine-roles-v6-claude-roles`다(L01 Task 4 소스, 운영 적용은 원장 참조; 종전 v5는 OpenAI 역할표). 일반 task와 고정 보고/복기 역할을 구분한다. task 슬롯 라우팅은 `config/default.yml` `llm.task_routes`(heavy/light: anthropic)로 켜며 코드 기본값은 openai다(롤백 = 설정 두 줄 + 재시작).
 
 | 작업 | Primary | Fallback / 한도 |
 |------|---------|----------|
-| 테마·뉴스·일반 경량 분석·위키 생성 | GPT-5 mini / minimal | 일반 fallback 없음; 기존 JSON 형식 복구 유지 |
-| 거시·한국경제·글로벌미시 한 줄 설명 | GPT-5 mini / minimal | 없음; 출력512·20초 |
+| 테마·뉴스·일반 경량 분석·위키 생성(light 슬롯) | Claude Opus 5.5 / low (Anthropic API, `task_routes.light`) | fallback 없음; `response_format` 대신 system JSON 지시 + 기존 `_extract_json`; 기본 출력 상한 `max_output_tokens`(경량 절약 시 4096). `STOCK_MAPPING`(GPT-5 mini)·`REPORT_SUMMARY`(OpenAI heavy gpt-5.6-sol → light 폴백, 절약 모드에서 light)는 OpenAI 그대로 |
+| 거시·한국경제·글로벌미시 한 줄 설명(`REPORT_ONE_LINE`) | Claude Opus 5.5 / low | 없음; 출력512·20초 |
 | 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
-| 시장 조사 보고 고정 역할 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·입력64KiB·standard·JSON; 기존 공개 뉴스/공시/시장 근거 |
-| 주간 매도 후속 복기 | GPT-6.1 Sol / medium | 없음; 출력4096·90초·research 예산 |
-| 웹 데일리 리포트 고정 역할(R02-WEB v2) | GPT-6 Astra / medium | 없음; 출력12288·180초·입력96KiB·standard·JSON; 관측 사실 M+공개 근거 E, 숫자·날짜는 인용 근거만. 보수 추정 약 USD0.4/회·하루 3회 |
-| 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
+| 시장 조사 보고 고정 역할(`MARKET_BRIEF`) | Claude Fable 5.1 / medium | 없음; 출력4096(thinking 포함)·90초·입력64KiB·standard·JSON(system 지시, 완료 사유 `end_turn`); 시한은 첫 자연 슬롯 실측 뒤 별도 결정 |
+| 주간 매도 후속 복기(`POST_EXIT_RESEARCH`) | Claude Fable 5.1 / medium | 없음; 출력4096·90초·research 예산 |
+| 웹 데일리 리포트 고정 역할(`WEB_REPORT`) | Claude Fable 5.1 / medium | 없음; 출력12288·180초·입력96KiB·standard·JSON(system 지시). 보수 추정 입력 20/출력 50 USD/MTok(1h 캐시 쓰기 상한) |
+| 거래 복기·전략 진화·시장 심층 분석(heavy 슬롯) | Claude Fable 5.1 / medium (Anthropic API, `task_routes.heavy`) | 가용성 실패 시 종전대로 GPT light(gpt-5-mini) 1회; 거절/401·403/예산 차단은 우회하지 않음 |
 | Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | **L01 Task 2(운영 11/9 21:22~, `31edd820`): 예산 내 API 1회 우선·가용성 실패에서만 구독 CLI 1회 대체(남은 시한 ≥4초)** — 자연 호출 인수는 다음 거래일 WAIT. 종전(10/28~11/9) 구독 CLI 우선·API 대체는 이력. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
 
 월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지다. Claude 연결/모델 검증은 완료됐지만 실제 비교는 현재 Claude용 manifest/runner 지원·동일 입력/응답 후 가격·비용 상한 설계가 필요하며 옛 Gemini 합성 경로를 재활성화하지 않는다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
@@ -853,7 +853,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 매주 토요일 09:30~09:44 KST 실행 창 (`run_post_exit_review_scheduler`, 실제 루프 기준; 이전 09:00 문서 정정)
 - 최근 30일 KR 매도 거래 → KIS 현재가 조회 → 매도 후 변동 추적
 - 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
-- LLM: GPT-6.1 Sol / medium (`POST_EXIT_RESEARCH`), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
+- LLM: Claude Fable 5.1 / medium (`POST_EXIT_RESEARCH`, 역할표 v6 소스 — 운영 적용은 원장 L01 Task 4 참조; 종전 v5는 GPT-6.1 Sol), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
 - 출력: JSON + Wiki 페이지(`weekly_post_exit_YYYY-WNN.md`) + 텔레그램
 - Wiki 페이지는 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
 
@@ -862,7 +862,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 거래 교훈을 전략/섹터/시장체제/**종목**별 마크다운 위키로 축적 (종목 차원 2026-08-07~)
 - 위치: `~/.cache/ai_trader/wiki/`
 - 3가지 오퍼레이션:
-  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출. 최신 소스는 GPT light/minimal이며 운영 전환은 E04-D2 인수 후 확정(이전 Gemini 설명 대체)
+  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출. 소스는 light 슬롯(`WIKI_INGEST`) — `task_routes.light: anthropic`이면 Claude Opus 5.5/low, 아니면 GPT-5 mini/minimal(L01 Task 4 소스, 운영 적용은 원장)
   - **Query**: 크로스검증 시 전략/섹터/체제별 교훈 + **종목 노트**(query_symbol) 컨텍스트 반환
   - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지 + 180일 종목 페이지 아카이브)
 - **종목 페이지** (`symbols/<코드>.md`): 거래 이력·교훈 + 전문가 리서치 노트

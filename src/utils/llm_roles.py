@@ -4,7 +4,9 @@ from enum import Enum
 from types import MappingProxyType
 
 
-ROLE_POLICY_VERSION = 'engine-roles-v5-web-report'
+# v6(L01 Task 4, 2026-11-10 사용자 D3/D4/D5): 웹 리포트·시장 보고·복기 → Fable 5.1(medium), 한 줄 → Opus 5.5(low).
+# Anthropic은 response_format이 없어 manager가 system에 JSON 전용 지시를 붙이고 파서/검증기는 그대로 둔다.
+ROLE_POLICY_VERSION = 'engine-roles-v6-claude-roles'
 
 
 class LLMRole(str, Enum):
@@ -42,21 +44,22 @@ class RoleProfile:
 # 95% 필수 전용/100% 중단은 기존 공통 원장의 입장 검사로 적용한다.
 ROLE_PROFILES = MappingProxyType({
     LLMRole.REPORT_ONE_LINE: RoleProfile(
-        'openai', 'gpt-5-mini', 512, 20.0, 32 * 1024, 'standard',
-        reasoning_effort='minimal'),
+        'anthropic', 'claude-opus-5-5', 512, 20.0, 32 * 1024, 'standard',
+        reasoning_effort='low'),
     LLMRole.MORNING_BRIEF: RoleProfile(
         'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
         reasoning_effort='minimal'),
     LLMRole.MARKET_BRIEF: RoleProfile(
-        'openai', 'gpt-6.1-sol', 4096, 90.0, 64 * 1024, 'standard',
+        'anthropic', 'claude-fable-5-1', 4096, 90.0, 64 * 1024, 'standard',
         reasoning_effort='medium', response_format='json_object'),
     LLMRole.POST_EXIT_RESEARCH: RoleProfile(
-        'openai', 'gpt-6.1-sol', 4096, 90.0, 128 * 1024, 'research',
+        'anthropic', 'claude-fable-5-1', 4096, 90.0, 128 * 1024, 'research',
         reasoning_effort='medium'),
     # 웹 전용 데일리 리포트(사용자 10/31: 더 좋은 모델). 상위 모델 한 번, 출력 상한은
     # 추론 토큰을 포함하므로 넉넉히 둔다. 보수 추정 약 USD0.4/회·하루 3회.
+    # 시한 90/180초·출력 상한은 Task 4 첫 자연 슬롯 실측 전까지 유지(자동 상향 없음). 출력 토큰은 thinking 포함.
     LLMRole.WEB_REPORT: RoleProfile(
-        'openai', 'gpt-6-astra', 12288, 180.0, 96 * 1024, 'standard',
+        'anthropic', 'claude-fable-5-1', 12288, 180.0, 96 * 1024, 'standard',
         reasoning_effort='medium', response_format='json_object'),
 })
 
