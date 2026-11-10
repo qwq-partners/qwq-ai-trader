@@ -814,7 +814,7 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 | 거래 복기·전략 진화·시장 심층 분석 | GPT-5.6 Sol | 실패 시 별도 모델인 GPT light만; 거절/권한 오류/예산 차단은 우회하지 않음 |
 | Bull / 독립 Bear | Bull GPT / Bear Claude Opus5.5·low | **L01 Task 2(운영 11/9 21:22~, `31edd820`): 예산 내 API 1회 우선·가용성 실패에서만 구독 CLI 1회 대체(남은 시한 ≥4초)** — 자연 호출 인수는 다음 거래일 WAIT. 종전(10/28~11/9) 구독 CLI 우선·API 대체는 이력. 미완료 독립 검토를 단독 승인으로 바꾸지 않음 |
 
-월 USD100·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지다. Claude 연결/모델 검증은 완료됐지만 실제 비교는 현재 Claude용 manifest/runner 지원·동일 입력/응답 후 가격·비용 상한 설계가 필요하며 옛 Gemini 합성 경로를 재활성화하지 않는다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
+월 상한은 소스 기준 USD200(L01 Task 5, 운영 원장은 `scripts/ops/llm_budget_migrate.py` 명시 이관 뒤 일치 — 이관 전 운영은 100)·80/95/100% 정책·KST 월 전환과 `missing_cost_policy=log_and_continue`를 유지한다. Gemini의 과거 가격·비용/불명 비용 원장은 보존하지만 신규 key/model 설정은 호출을 재활성화하지 못한다. 과거 R1 비교는 비활성 유지다. Claude 연결/모델 검증은 완료됐지만 실제 비교는 현재 Claude용 manifest/runner 지원·동일 입력/응답 후 가격·비용 상한 설계가 필요하며 옛 Gemini 합성 경로를 재활성화하지 않는다. 모델 변경은 정확도나 순수익 향상의 증거가 아니다. [이전 비교 근거와 현행 전환 링크](docs/research/engine-model-allocation-2026-10-15.md)를 참고한다.
 
 ---
 

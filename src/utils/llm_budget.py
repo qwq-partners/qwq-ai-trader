@@ -488,3 +488,76 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         """Lose ownership only; unfinished attempts remain uncertain, never freed."""
         for token in tuple(self.active_reservations):
             self.abandon(token)
+
+
+def _ledger_snapshot(db) -> dict:
+    """이관 전후 비교용 — 사용액·예약·unknown·정책 시도 행이 그대로인지 본다."""
+    rows = db.execute('SELECT state, COUNT(*) AS n, COALESCE(SUM(reserved_units),0) AS reserved, '
+                      'COALESCE(SUM(actual_units),0) AS actual FROM reservations GROUP BY state ORDER BY state').fetchall()
+    snapshot = {'reservations': [(r['state'], r['n'], r['reserved'], r['actual']) for r in rows]}
+    for table in ('policy_attempts', 'policy_months', 'policy_notices', 'timeout_bounds', 'reconciliations'):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            snapshot[table] = db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+    return snapshot
+
+
+def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: float, note: str,
+                          clock: Optional[Callable] = None) -> dict:
+    """월 상한을 **명시 이관 명령**으로만 바꾼다(L01 D2, 2026-11-10). 설정만 바꾸면 종전대로
+    `budget_configuration_mismatch` 로 막힌다.
+
+    봇이 정지된 상태에서 운영자 CLI 가 부른다(봇 싱글톤 락은 CLI 가 잡는다). 활성(reserved) 예약이 있으면
+    거부하고, 사용액·예약·unknown·정책 행은 한 건도 바꾸지 않는다(전후 스냅샷 대조). 이관 영수증은 같은
+    트랜잭션의 `limit_migrations` 행이다. 원장 파일이 없으면 만들지 않는다.
+    """
+    if not isinstance(note, str) or not note.strip():
+        raise BudgetStateError('migration_note_required')
+    current_units, new_units = _units(current_limit_usd), _units(new_limit_usd)
+    if new_units == current_units:
+        raise BudgetStateError('migration_noop')
+    ledger_path = Path(path).expanduser()
+    if not ledger_path.is_absolute():
+        raise BudgetStateError('invalid_budget_state_path')
+    now = (clock or (lambda: datetime.now(timezone.utc)))()
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise BudgetStateError('invalid_clock')
+    try:
+        ledger_path.stat()
+        connection = sqlite3.connect(ledger_path.as_uri() + '?mode=rw', uri=True, timeout=0.1, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute('PRAGMA synchronous=FULL')
+            connection.execute('BEGIN IMMEDIATE')
+            rows = connection.execute('SELECT * FROM settings').fetchall()
+            if len(rows) != 1 or rows[0]['schema_version'] != 1 or rows[0]['baseline_units'] != 0:
+                raise BudgetStateError('storage_corrupt')
+            if rows[0]['limit_units'] != current_units:
+                raise BudgetStateError('budget_configuration_mismatch')
+            if connection.execute("SELECT COUNT(*) FROM reservations WHERE state='reserved'").fetchone()[0]:
+                raise BudgetStateError('active_reservations_present')
+            before = _ledger_snapshot(connection)
+            connection.execute('''CREATE TABLE IF NOT EXISTS limit_migrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, migrated_at TEXT NOT NULL,
+                old_units INTEGER NOT NULL CHECK(old_units>=0), new_units INTEGER NOT NULL CHECK(new_units>=0),
+                note TEXT NOT NULL, reservations_rows INTEGER NOT NULL, spent_units INTEGER NOT NULL)''')
+            spent_units = connection.execute(
+                "SELECT COALESCE(SUM(actual_units),0) FROM reservations WHERE state='settled'").fetchone()[0]
+            total_rows = connection.execute('SELECT COUNT(*) FROM reservations').fetchone()[0]
+            connection.execute('UPDATE settings SET limit_units=? WHERE id=1', (new_units,))
+            connection.execute('INSERT INTO limit_migrations(migrated_at,old_units,new_units,note,reservations_rows,spent_units) '
+                               'VALUES (?,?,?,?,?,?)', (now.astimezone(KST).isoformat(), current_units, new_units,
+                                                        note.strip(), total_rows, spent_units))
+            if _ledger_snapshot(connection) != before:
+                raise BudgetStateError('migration_altered_rows')
+            connection.execute('COMMIT')
+            receipt = {'path': str(ledger_path), 'migrated_at': now.astimezone(KST).isoformat(),
+                       'old_limit_usd': current_units / _SCALE, 'new_limit_usd': new_units / _SCALE,
+                       'note': note.strip(), 'reservations_rows': total_rows, 'spent_usd': spent_units / _SCALE,
+                       'migration_id': connection.execute('SELECT MAX(id) FROM limit_migrations').fetchone()[0]}
+        finally:
+            connection.close()
+    except BudgetBlocked:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise BudgetStateError('storage_unavailable') from None
+    return receipt

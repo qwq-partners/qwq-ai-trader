@@ -55,5 +55,6 @@ def test_shipped_configuration_has_user_limit_and_persistent_path():
     from src.utils.llm import LLMConfig
     raw = yaml.safe_load((Path(__file__).resolve().parents[1] / 'config/default.yml').read_text())
     cfg = LLMConfig.from_config(raw)
-    assert cfg.monthly_budget_usd == 100 and cfg.daily_budget_usd == 5
+    # L01 Task 5(2026-11-10, D2): 월 200. 운영 원장은 명시 이관(scripts/ops/llm_budget_migrate.py) 뒤에만 이 값과 일치한다.
+    assert cfg.monthly_budget_usd == 200 and cfg.daily_budget_usd == 5
     assert cfg.budget_state_path == '~/.local/state/qwq-ai-trader/llm-budget.sqlite3'
