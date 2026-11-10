@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-10 — L01 Task 5 소스: LLM 월 예산 상한 명시 이관(100→200) 도구·설정 (운영 원장 이관은 사용자 승인 배포 창, [원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [runbook](docs/operations/runbook.md))
+
+- `src/utils/llm_budget.py` `migrate_monthly_limit()`: 설정만 바꾸면 종전대로 `budget_configuration_mismatch`(D2). 이관은 한 트랜잭션에서 현재 상한 일치·활성 예약 0 확인 → `settings.limit_units` 갱신 + `limit_migrations` 영수증 행, 사용액·예약·unknown·정책/증서 행은 전후 스냅샷으로 불변 보증(다르면 롤백). 원장 파일 부재 시 생성 금지.
+- `scripts/ops/llm_budget_migrate.py`: `--check`(읽기 전용) / `--from --to --note`(봇 정지 중만, `hold_or_exit`). `config/default.yml llm.monthly_budget` 100 → 200 — 운영 원장을 이관하기 전까지 운영은 100이며 배포 순서·짧은 LLM-only 차단 창은 runbook 새 절.
+- 80/95/100% 문턱은 설정 상한에서 매번 계산되므로 이관 뒤 160/190/200. 검사: 신규 6건 + 출하 설정 검사 200, 예산 묶음 163 passed(AWS 보조). 독립 리뷰·실제 WSL·PR #360·운영 적용은 원장. `daily_budget` 5.0 상향은 별도 사용자 결정.
+
 ## 2026-11-10 — L01 Task 3 완료 영수증(문서만): PR #357 병합 `7a28163b`·실제 WSL 10,676 passed·Fable 5.1 실호출 신원 verified ([원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
 
 - 검증: Codex gpt-6-astra/xhigh 독립 리뷰 2회(P0/P1 0, 신규 P2 반영), CI verify, 실제 WSL 직렬 전체 1회차 `1 failed`(비교 작업자 재전달 검사 — WSL 벽시계 역행 `clock_reversal` 플레이크, 변경과 접점 0) → 같은 SHA 2회차 10,676 passed·rc 0. 사용자 "병합해" → main `7a28163b`·main CI success. 운영 `1f87b896` 미배포(Bear 동작 변화 없음).
