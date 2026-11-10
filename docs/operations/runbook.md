@@ -338,6 +338,37 @@ sudo systemctl restart qwq-ai-trader
 13. NXT 세션에 접수된 주문을 `new` 모드에서 취소·정정할 때 `EXCG_ID_DVSN_CD="KRX"` 가 수용되는가
     — 취소·정정에는 세션 분기가 없어 "KRX" 가 그 주문에 그대로 닿는다.
 
+## LLM 월 예산 상한 이관 (2026-11-10~ L01 Task 5, D2)
+
+월 상한은 `config/default.yml` `llm.monthly_budget`만 바꿔서는 적용되지 않는다 — 원장 `settings.limit_units`와 다르면
+`budget_configuration_mismatch`로 **유료 LLM 호출이 fail-closed**(거래·주문 경로 무관)된다. 상한 변경은 명시 이관 명령으로만 한다.
+
+```bash
+# 읽기 전용 확인(봇 가동 중에도 가능): 현재 상한·예약 상태·이관 이력
+python scripts/ops/llm_budget_migrate.py --check
+# 이관(봇 정지 중만 — 봇 싱글톤 락을 잡는다; 활성 예약(reserved)이 있으면 거부)
+sudo systemctl stop qwq-ai-trader
+python scripts/ops/llm_budget_migrate.py --from 100 --to 200 --note "2026-11-08 사용자 D2: Ultra 월 크레딧 USD200"
+sudo systemctl start qwq-ai-trader
+```
+
+- 보존: 사용액·예약·unknown·`policy_attempts`·timeout 증서 행은 그대로이고 전후 스냅샷이 다르면 롤백된다. 영수증은 같은 트랜잭션의
+  `limit_migrations` 행(시각·구/신 상한·메모·행 수·확정 사용액)이다. 원장 파일이 없으면 만들지 않는다(`storage_unavailable`).
+- 80/95/100% 문턱은 설정 상한에서 매번 계산되므로 이관 뒤 160/190/200 USD가 된다. 다만 `policy_months.level`은 월 고수위로 잠겨 있어
+  이관이 이달 단계를 새 상한 기준으로 다시 쓴다(이력은 `limit_migrations.previous_level/new_level`, 다음 관측이 전환 알림을 낸다).
+  월초 KST 복귀 규칙은 그대로다.
+- 배포 순서: 새 소스(설정 200)를 배포하면 봇이 재기동하며 이관 전까지 유료 LLM 호출이 mismatch로 막힌다 → 즉시 정지·이관·기동.
+  이 창에서 리스크 한도·청산 코드는 그대로지만 **LLM 독립 검토(Bull/Bear)가 필요한 신규 진입은 보류**될 수 있다(의견 미확보 = hold).
+  반대로 이관을 먼저 하면 구 소스(설정 100) 봇이 다음 예약에서 같은 사유로 막히므로 어느 순서든 짧은 차단 창이 있다 — 장외 배포 창에서만 한다.
+- 인수 조건: 기동 뒤 `--check` 상한이 200, 저널에 `budget_configuration_mismatch` 0, 첫 유료 호출의 원장 예약/정산 행이 생긴다.
+- 고아 예약(종료된 프로세스가 남긴 `reserved` 행, 잠금 없음)은 이관을 막지 않고 행 그대로 다음 기동이 비용 불명 증거로 처리한다. 잠금을 쥔 활성 예약은 거부(`active_reservations_present`).
+- **이관 뒤 코드 롤백 주의:** 원장이 200인데 설정 100인 이전 SHA로 되돌리면 `budget_configuration_mismatch`로 유료 호출이 계속 막힌다(배포기의 코드 자동 롤백은 원장 상한을 되돌리지 않고, 이전 SHA에는 이관 도구가 없다).
+  복구는 **봇 정지 중 역이관**이다: 이관 도구가 있는 체크아웃(새 SHA의 소스 트리, `.env` 불필요)에서
+  `python scripts/ops/llm_budget_migrate.py --from 200 --to 100 --note "롤백 사유"` → 구 SHA 기동 → `--check` 상한 100·저널 mismatch 0 확인.
+  역이관도 사용액·예약·unknown 행을 보존하며 `limit_migrations`에 한 줄 더 남는다. 이달 정책 단계는 100 기준으로 다시 계산돼 economy/essential로 **올라갈 수 있다**(정상).
+- 크레딧 주기(결제일~)와 원장 주기(KST 월초)는 어긋난다. 매월 1일~결제일 사이 크레딧이 남아 있지 않으면 API 4xx → 기존 실패 경로.
+  Anthropic 자동 충전 OFF 유지로 초과 과금 0.
+
 ## 킬스위치 (긴급 주문 차단, 2026-08-02~)
 
 파일 하나로 주문을 즉시 막는다. **봇 재시작이 필요 없고**, 엔진이 오작동 중이어도 동작한다

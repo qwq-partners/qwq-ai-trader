@@ -100,15 +100,15 @@
 **Interfaces(11/8 확정):** `WEB_REPORT`·`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·heavy 슬롯(`trade_review`/`strategy_analysis`/`market_analysis`) → `claude-fable-5-1`(effort medium, 출력 상한 유지, 시한은 Task 3 실측 뒤 결정). light 슬롯(테마 탐지·quick_*·wiki·news) → `claude-opus-5-5`(effort low). **Bull은 `gpt-5-mini` 유지(D8 확정)** — Bear와 다른 공급자를 보존한다. `REPORT_ONE_LINE`은 호출량이 크지 않아 Opus 5.5. 모닝 브리프는 결정론 조립이라 불변. 신원 검증(Task 3)에 실패한 모델은 그 역할을 이전하지 않고 현행 유지.
 
 - [x] RED/GREEN: 역할별 provider·모델·상한·JSON 검증 통과·실패 시 대체 본문/hold 경로 불변. (11/10 — 역할표 v6 `engine-roles-v6-claude-roles`, task 라우팅은 `default.yml llm.task_routes`(코드 기본 openai), `_get_client(ANTHROPIC)`=API, Anthropic JSON 지시/`end_turn`/기본 출력 상한, 전송 API 상한 16384·입력 256KiB, 소비자 완료 사유 `stop|end_turn`; 신규 검사 26건·`tests/test_llm_claude_roles.py`)
-- [ ] 독립 리뷰·실제 WSL 전체·PR·사용자 승인 배포. 배포 뒤 첫 자연 슬롯(07:40 web morning 등)에서 `report_analyses.status`와 검증 거절 코드로 인수(수락 보장 아님).
+- [x] 독립 리뷰 4회(xhigh)·실제 WSL 10,726 passed·PR #359 병합 `9d14c87d`(11/11) · [ ] 사용자 승인 배포. 배포 뒤 첫 자연 슬롯(07:40 web morning 등)에서 `report_analyses.status`와 검증 거절 코드로 인수(수락 보장 아님).
 
 ### Task 5: 월 예산 상한 이관·소진 동작 (D2·D7)
 
 **Files:** `src/utils/llm_budget.py`(상한 변경을 명시 이관 명령으로만 허용: `settings.limit_units` 갱신 + 변경 영수증, 사용액·예약·unknown 보존), `scripts/ops/llm_budget_migrate.py`(신규, 봇 정지 중만·`hold_or_exit`), `config/default.yml` `monthly_budget: 200.0`, `docs/operations/runbook.md`·CHANGELOG.
 **Interfaces:** 80%=160·95%=190·100%=200 USD 추정. 크레딧 주기(결제일~)와 원장 주기(KST 월초)의 어긋남은 수용하되 문서화: 매월 1일~결제일 사이에 크레딧이 남아 있지 않으면 API 4xx → 기존 실패 경로. Anthropic 자동 충전 OFF 유지로 초과 과금 0.
 
-- [ ] RED: 이관 없이 설정만 바꾸면 기존대로 `budget_configuration_mismatch`, 이관 후 사용액/예약 행 수 동일·상한만 변경.
-- [ ] GREEN·독립 리뷰·운영 적용(배포 창에서 봇 정지→이관→기동, 영수증).
+- [x] RED: 이관 없이 설정만 바꾸면 기존대로 `budget_configuration_mismatch`, 이관 후 사용액/예약 행 수 동일·상한만 변경. (11/10 `tests/test_llm_budget_migration.py`)
+- [x] GREEN(11/10 `migrate_monthly_limit`·`scripts/ops/llm_budget_migrate.py`·`default.yml 200`, PR #360) · [ ] 독립 리뷰·운영 적용(배포 창에서 봇 정지→이관→기동, 영수증).
 
 ### Task 6: 사후 측정 (배포 7일 뒤, 읽기 전용)
 
@@ -127,3 +127,5 @@
 - 2026-11-10: 사용자 "ㄱㄱ" → Task 3 소스 RED(7 fail)→GREEN(신규 10검사, 관련 묶음 1,895 passed, 실호출 0). 공식 문서 확인: Fable 5.1 입력 10/출력 50/1h 캐시 쓰기 20/캐시 읽기 0.25, thinking "Adaptive (always on)", effort low~max, 거절은 HTTP 200+`stop_reason=refusal`+`stop_details`. 남은 Task 3: 사용자 데이터 보존 ≥30일 확인·승인 뒤 실호출 신원 검증 1회/모델. 역할 재배정(Task 4)·예산 이관(Task 5) 미착수.
 - 2026-11-10: Task 3 DONE — Codex xhigh 리뷰 2회(P0/P1 0), CI·실제 WSL 2회차 10,676 passed(1회차 1건은 WSL 시계 역행 플레이크), 사용자 "병합해" → PR #357 main `7a28163b`. 사용자 보존 ≥30일 확인 → "보내" → Fable 5.1 실호출 verified(원장 참조). 다음 진입점은 Task 4(사용자 지시 대기).
 - 2026-11-10: 사용자 "Task4~6은 시작해도 될 것 같은데?" → Task 4 소스 RED→GREEN(브랜치 `feature/l01-task4-role-reassignment-20261110`, 기준 main `2c54efba`). Task 6은 11/16 날짜 대기. 독립 리뷰·WSL·PR·배포 승인은 원장.
+- 2026-11-10: 사용자 "Task4~6은 시작해도 될 것 같은데?" → Task 5 소스 RED→GREEN(브랜치 `feature/l01-task5-budget-limit-migration-20261110`, PR #360). Task 6은 11/16 날짜 대기.
+- 2026-11-11: Task 4 DONE(소스) — Codex xhigh 4회·CI·실제 WSL 10,726 passed, 사용자 "ㄱㄱ" → PR #359 병합 `9d14c87d`(운영 미배포). Task 5는 리뷰 4회·WSL 10,691 passed 뒤 main 병합·PR #360 병합 대기. 배포·원장 이관·`daily_budget` 상향은 사용자 승인.

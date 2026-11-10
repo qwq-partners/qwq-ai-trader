@@ -488,3 +488,118 @@ class MonthlyBudgetLedger(BudgetPolicyMixin):
         """Lose ownership only; unfinished attempts remain uncertain, never freed."""
         for token in tuple(self.active_reservations):
             self.abandon(token)
+
+
+def _ledger_snapshot(db) -> dict:
+    """이관 전후 비교용 — 사용액·예약·unknown·정책 시도 행이 그대로인지 본다."""
+    rows = db.execute('SELECT state, COUNT(*) AS n, COALESCE(SUM(reserved_units),0) AS reserved, '
+                      'COALESCE(SUM(actual_units),0) AS actual FROM reservations GROUP BY state ORDER BY state').fetchall()
+    snapshot = {'reservations': [(r['state'], r['n'], r['reserved'], r['actual']) for r in rows]}
+    for table in ('policy_attempts', 'policy_months', 'policy_notices', 'timeout_bounds', 'reconciliations'):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+            snapshot[table] = db.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+    return snapshot
+
+
+def _lock_held(lock_path: Path) -> bool:
+    """다른 프로세스가 예약 잠금을 쥐고 있으면 True. 파일이 없거나 바로 잡히면 고아(False)."""
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def migrate_monthly_limit(path, *, current_limit_usd: float, new_limit_usd: float, note: str,
+                          clock: Optional[Callable] = None, missing_cost_policy: str = 'log_and_continue') -> dict:
+    """월 상한을 **명시 이관 명령**으로만 바꾼다(L01 D2, 2026-11-10). 설정만 바꾸면 종전대로
+    `budget_configuration_mismatch` 로 막힌다.
+
+    봇이 정지된 상태에서 운영자 CLI 가 부른다(봇 싱글톤 락은 CLI 가 잡는다). 활성(reserved) 예약이 있으면
+    거부하고, 사용액·예약·unknown·정책 행은 한 건도 바꾸지 않는다(전후 스냅샷 대조). 이관 영수증은 같은
+    트랜잭션의 `limit_migrations` 행이다. 원장 파일이 없으면 만들지 않는다.
+    """
+    if not isinstance(note, str) or not note.strip():
+        raise BudgetStateError('migration_note_required')
+    current_units, new_units = _units(current_limit_usd), _units(new_limit_usd)
+    if new_units == current_units:
+        raise BudgetStateError('migration_noop')
+    ledger_path = Path(path).expanduser()
+    if not ledger_path.is_absolute():
+        raise BudgetStateError('invalid_budget_state_path')
+    if clock is not None and not callable(clock):
+        raise BudgetStateError('invalid_clock')
+    now = (clock if clock is not None else (lambda: datetime.now(timezone.utc)))()
+    if not isinstance(now, datetime) or now.tzinfo is None:
+        raise BudgetStateError('invalid_clock')
+    now = now.astimezone(KST)   # 독립 리뷰 3차 P2: 월 판정·_snapshot 모두 KST 한 시각으로(월초 00~09시 전월 조회 방지)
+    # 독립 리뷰 2차 P1: 정책 단계 재계산은 원장의 집계(_snapshot: 불명 비용 정책·timeout 증서·고아 판정)를 그대로 쓴다.
+    # 현재 상한으로 원장을 열어 보는 것 자체가 상한 일치 검사다(불일치면 종전 사유로 거절). 파일이 없으면 만들지 않는다.
+    if not ledger_path.exists():
+        raise BudgetStateError('storage_unavailable')
+    probe = MonthlyBudgetLedger(ledger_path, current_limit_usd, clock=lambda: now, missing_cost_policy=missing_cost_policy)
+    probe.close()
+    try:
+        connection = sqlite3.connect(ledger_path.as_uri() + '?mode=rw', uri=True, timeout=0.1, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        try:
+            connection.execute('PRAGMA synchronous=FULL')
+            connection.execute('BEGIN IMMEDIATE')
+            rows = connection.execute('SELECT * FROM settings').fetchall()
+            if len(rows) != 1 or rows[0]['schema_version'] != 1 or rows[0]['baseline_units'] != 0:
+                raise BudgetStateError('storage_corrupt')
+            if rows[0]['limit_units'] != current_units:
+                raise BudgetStateError('budget_configuration_mismatch')
+            lock_dir = ledger_path.with_name(ledger_path.name + '.locks')
+            for (token,) in connection.execute("SELECT token FROM reservations WHERE state='reserved'"):
+                # 독립 리뷰 1차 P2: 잠금을 실제로 쥔 예약만 활성이다. 종료된 프로세스의 고아 예약(잠금 없음)은 행을 그대로 두고
+                # 다음 원장 기동이 종전 규칙(비용 불명 증거 보존)으로 처리한다.
+                if _lock_held(lock_dir / (str(token) + '.lock')):
+                    raise BudgetStateError('active_reservations_present')
+            before = _ledger_snapshot(connection)
+            connection.execute('''CREATE TABLE IF NOT EXISTS limit_migrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, migrated_at TEXT NOT NULL,
+                old_units INTEGER NOT NULL CHECK(old_units>=0), new_units INTEGER NOT NULL CHECK(new_units>=0),
+                note TEXT NOT NULL, reservations_rows INTEGER NOT NULL, spent_units INTEGER NOT NULL,
+                previous_level INTEGER, new_level INTEGER)''')
+            # 독립 리뷰 1차 P1: policy_months.level 은 월 고수위(高水位)로 잠겨 있어 상한만 올리면 essential/economy 가 남는다.
+            # 이달 확정·예약·불명 상한을 보수적으로 더해 새 상한 기준 단계로 다시 쓴다(이력은 limit_migrations 에 보존,
+            # 다음 policy_status() 관측이 종전 경로로 전환 알림을 낸다). 다른 달 행은 건드리지 않는다.
+            month = now.strftime('%Y-%m')
+            previous_level = new_level = None
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='policy_months'").fetchone():
+                row = connection.execute('SELECT level FROM policy_months WHERE month=?', (month,)).fetchone()
+                if row is not None:
+                    previous_level = row['level']
+                    committed = probe._snapshot(connection, now=now)[1]   # 원장과 같은 이달 확정+예약+불명 상한 집계
+                    new_level = (2 if committed * 100 >= new_units * 95 else 1 if committed * 100 >= new_units * 80 else 0)
+                    connection.execute('UPDATE policy_months SET level=? WHERE month=?', (new_level, month))
+            spent_units = connection.execute(
+                "SELECT COALESCE(SUM(actual_units),0) FROM reservations WHERE state='settled'").fetchone()[0]
+            total_rows = connection.execute('SELECT COUNT(*) FROM reservations').fetchone()[0]
+            connection.execute('UPDATE settings SET limit_units=? WHERE id=1', (new_units,))
+            connection.execute('INSERT INTO limit_migrations(migrated_at,old_units,new_units,note,reservations_rows,spent_units,'
+                               'previous_level,new_level) VALUES (?,?,?,?,?,?,?,?)',
+                               (now.isoformat(), current_units, new_units, note.strip(), total_rows,
+                                spent_units, previous_level, new_level))
+            if _ledger_snapshot(connection) != before:
+                raise BudgetStateError('migration_altered_rows')
+            connection.execute('COMMIT')
+            receipt = {'path': str(ledger_path), 'migrated_at': now.isoformat(),
+                       'old_limit_usd': current_units / _SCALE, 'new_limit_usd': new_units / _SCALE,
+                       'note': note.strip(), 'reservations_rows': total_rows, 'spent_usd': spent_units / _SCALE,
+                       'policy_level_previous': previous_level, 'policy_level_new': new_level,
+                       'migration_id': connection.execute('SELECT MAX(id) FROM limit_migrations').fetchone()[0]}
+        finally:
+            connection.close()
+    except BudgetBlocked:
+        raise
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        raise BudgetStateError('storage_unavailable') from None
+    return receipt

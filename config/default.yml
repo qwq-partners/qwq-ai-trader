@@ -18,7 +18,10 @@ llm:
   daily_budget: 5.0
   # Shared ledger preserves historical provider spend, KST calendar month. Initial $0
   # by user instruction; persisted state must never be removed to reset spend.
-  monthly_budget: 100.0
+  # L01 Task 5 (2026-11-10, 사용자 D2): Ultra 월 API 크레딧 USD200 기준. 상한 변경은 설정만으로 적용되지 않는다 —
+  # 봇 정지 중 `python scripts/ops/llm_budget_migrate.py --from 100 --to 200 --note ...`(명시 이관, 사용액·예약 보존)을
+  # 먼저 실행해야 하며, 원장과 이 값이 다르면 budget_configuration_mismatch 로 유료 호출이 fail-closed 된다.
+  monthly_budget: 200.0
   budget_state_path: "~/.local/state/qwq-ai-trader/llm-budget.sqlite3"
   budget_policy_enabled: true  # 80% economy, 95% essential only, 100% paid stop; KST monthly restore
   # User approved 2026-10-17: log missing amounts and continue; never record them as $0.
