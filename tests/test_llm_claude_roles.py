@@ -264,7 +264,8 @@ async def test_anthropic_task_uses_config_timeout_not_bear_default(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kwargs', [{'thinking_level': 'high'}, {'response_format': {'type': 'text'}},
-                                    {'reasoning_effort': 'xhigh'}, {'seed': 'x'}])
+                                    {'reasoning_effort': 'xhigh'}, {'seed': 'x'},
+                                    {'seed': 0}, {'seed': 42}])   # 독립 리뷰 3차 P2: 유효한 정수 seed 도 거부(조용한 무시 금지)
 async def test_anthropic_task_rejects_unsupported_controls_before_send(tmp_path, kwargs):
     # 독립 리뷰 1차 P2: OpenAI 경로와 같은 공개 계약 — 잘못된 명시 제어값은 ValueError, 전송·예약 0.
     m = manager(tmp_path, routes={'heavy': 'anthropic', 'light': 'anthropic'})

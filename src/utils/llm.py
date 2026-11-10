@@ -1610,6 +1610,9 @@ class LLMManager:
                 if response_format is not None and (type(response_format) is not dict
                                                     or response_format != {"type": "json_object"}):
                     raise ValueError("Unsupported response_format")
+                if kwargs.get("seed") is not None:
+                    # 독립 리뷰 3차 P2: Anthropic Messages 에는 seed 가 없다. 유효한 정수(0 포함)도 조용히 버리지 않고 거부.
+                    raise ValueError("seed is not supported by Anthropic transport")
                 _validate_controls(_model, provider, kwargs)
             except ValueError as exc:
                 unsent = LLMResponse("", _model, provider, success=False, error="Invalid local controls",
