@@ -362,6 +362,10 @@ sudo systemctl start qwq-ai-trader
   반대로 이관을 먼저 하면 구 소스(설정 100) 봇이 다음 예약에서 같은 사유로 막히므로 어느 순서든 짧은 차단 창이 있다 — 장외 배포 창에서만 한다.
 - 인수 조건: 기동 뒤 `--check` 상한이 200, 저널에 `budget_configuration_mismatch` 0, 첫 유료 호출의 원장 예약/정산 행이 생긴다.
 - 고아 예약(종료된 프로세스가 남긴 `reserved` 행, 잠금 없음)은 이관을 막지 않고 행 그대로 다음 기동이 비용 불명 증거로 처리한다. 잠금을 쥔 활성 예약은 거부(`active_reservations_present`).
+- **이관 뒤 코드 롤백 주의:** 원장이 200인데 설정 100인 이전 SHA로 되돌리면 `budget_configuration_mismatch`로 유료 호출이 계속 막힌다(배포기의 코드 자동 롤백은 원장 상한을 되돌리지 않고, 이전 SHA에는 이관 도구가 없다).
+  복구는 **봇 정지 중 역이관**이다: 이관 도구가 있는 체크아웃(새 SHA의 소스 트리, `.env` 불필요)에서
+  `python scripts/ops/llm_budget_migrate.py --from 200 --to 100 --note "롤백 사유"` → 구 SHA 기동 → `--check` 상한 100·저널 mismatch 0 확인.
+  역이관도 사용액·예약·unknown 행을 보존하며 `limit_migrations`에 한 줄 더 남는다. 이달 정책 단계는 100 기준으로 다시 계산돼 economy/essential로 **올라갈 수 있다**(정상).
 - 크레딧 주기(결제일~)와 원장 주기(KST 월초)는 어긋난다. 매월 1일~결제일 사이 크레딧이 남아 있지 않으면 API 4xx → 기존 실패 경로.
   Anthropic 자동 충전 OFF 유지로 초과 과금 0.
 
