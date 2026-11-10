@@ -116,8 +116,9 @@ PR #315의 소스는 통합 운영5af43e48에 동일하게 포함됐고22:24 읽
 거시는 실제 기준일7달력일, 일정은 앞으로5달력일 범위이며 전체 DART/시장 완전성을
 뜻하지 않는다. 제공처·원천 날짜·자료 한계를 본문과 함께 보존한다.
 
-`MARKET_BRIEF`만 기존 연구 경로의 OpenAI `gpt-6.1-sol`/medium·출력4096 token·90초·
-입력64KiB·standard·JSON을 사용한다. 월USD100/log_and_continue와 공통 정산을 유지하며
+`MARKET_BRIEF`는 Anthropic API `claude-fable-5-1`/medium·출력4096 token(thinking 포함)·90초·
+입력64KiB·standard·JSON(Anthropic은 `response_format`이 없어 manager가 system에 JSON 전용 지시를 붙이고
+완료 사유 `end_turn`을 요구한다; `engine-roles-v6-claude-roles`, 종전 v5는 OpenAI `gpt-6.1-sol`)을 사용한다. 월USD100/log_and_continue와 공통 정산을 유지하며
 슬롯당 논리 분석 최대1회, 수정 재호출·다른 모델·shadow 호출은 없다. 사건 근거가 없으면
 유료 분석을 건너뛰고 사실 보고에 조사 근거 미확보를 표시한다. 숫자/영문 토큰·근거 ID
 검사는 허위 의미나 인과관계를 모두 검출하지 못하며 자연 결과의 내용 검토가 필요하다.

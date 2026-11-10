@@ -732,7 +732,7 @@ async def test_api_800_incomplete_is_rejected_with_known_usage(transport, stop, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('cap', [True, 0, 801])
+@pytest.mark.parametrize('cap', [True, 0, 16385])   # L01 Task 4: API 상한 16384(역할 12288·task 16000). Bear 800 은 manager 검사.
 async def test_api_output_cap_is_bounded(transport, cap):
     client = transport.AnthropicAPIClient(LLMConfig(anthropic_api_key='synthetic'))
     client._session = Session()

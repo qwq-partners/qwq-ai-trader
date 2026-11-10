@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-10 — L01 Task 4 소스: 보고/복기 역할·heavy/light task 슬롯을 Anthropic API(Fable 5.1/Opus 5.5)로 재배정 (설정 라우팅, 운영 미배포, [원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [계획서 Task 4](docs/superpowers/plans/2026-11-08-llm-credit-routing.md))
+
+- `src/utils/llm_roles.py` `engine-roles-v6-claude-roles`: `WEB_REPORT`·`MARKET_BRIEF`·`POST_EXIT_RESEARCH` → `claude-fable-5-1`/medium(출력·시한·입력 상한 불변), `REPORT_ONE_LINE` → `claude-opus-5-5`/low. `MORNING_BRIEF`(결정론 조립) 불변.
+- `src/utils/llm.py`: `LLMConfig.claude_model_heavy/light`·`task_route_heavy/light`(`llm.task_routes`, 기본 openai → 코드 기본 라우팅 불변) + `_task_route`: heavy(`market_analysis`/`trade_review`/`strategy_analysis`) → Fable medium, light(`theme_detection`/`quick_classify`/`quick_analysis`/`wiki_ingest`/`news_summary`) → Opus low; heavy 폴백 OpenAI light 1회·light 폴백 없음·`REPORT_SUMMARY`/`STOCK_MAPPING`/Bull 불변. `_get_client(ANTHROPIC)`=API 클라이언트(CLI는 Bear 대체 전용). Anthropic 경로: `response_format` 제거 + system JSON 전용 지시(예약 전), 기본 `max_tokens`=`max_output_tokens`, 역할 완료 사유 `end_turn`, JSON 역할의 비-JSON 시작은 `Invalid JSON mode response`(수리·재시도 없음).
+- `src/utils/claude_transport.py`: API 출력 상한 16384·입력 256KiB(`_API_OUTPUT_LIMIT`/`_API_INPUT_LIMIT`), CLI 64KiB·Bear 800(manager) 불변. `src/analytics/market_report_runner.py`·`web_report.py`: 완료 사유 `stop|end_turn`.
+- `config/default.yml`: `claude_model_heavy: claude-fable-5-1`·`claude_model_light: claude-opus-5-5`·`task_routes: {heavy: anthropic, light: anthropic}`(롤백 = openai + 재시작).
+- 검사: 신규 `tests/test_llm_claude_roles.py` 26건, 기존 역할 역학 검사는 `morning_brief`로 이전·시장 E2E/runner는 Anthropic 가짜 세션(계약 불변). 독립 리뷰·실제 WSL·PR·배포 승인은 원장. **주의:** light 슬롯 Opus 전환으로 일 비용이 `daily_budget` USD 5.0에 근접할 수 있어(초과 시 Bear 포함 전 호출 차단) 배포 전 상향 여부를 사용자 결정으로 올린다.
+
 ## 2026-11-10 — L01 Task 3 완료 영수증(문서만): PR #357 병합 `7a28163b`·실제 WSL 10,676 passed·Fable 5.1 실호출 신원 verified ([원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
 
 - 검증: Codex gpt-6-astra/xhigh 독립 리뷰 2회(P0/P1 0, 신규 P2 반영), CI verify, 실제 WSL 직렬 전체 1회차 `1 failed`(비교 작업자 재전달 검사 — WSL 벽시계 역행 `clock_reversal` 플레이크, 변경과 접점 0) → 같은 SHA 2회차 10,676 passed·rc 0. 사용자 "병합해" → main `7a28163b`·main CI success. 운영 `1f87b896` 미배포(Bear 동작 변화 없음).

@@ -10,7 +10,7 @@ from src.analytics.report_delivery import ReportStore
 from src.analytics.market_report_html import with_web_link
 from src.schedulers.report_scheduler import ReportSchedule
 from tests.test_llm_roles import manager
-from tests.test_llm_transport_contract import Session, openai_reply
+from tests.test_llm_claude_roles import SeqSession, claude_body, FABLE   # v6: 보고 역할은 Anthropic API
 from tests.test_market_report_analysis import DAY, NOW
 from tests.test_report_photo_delivery import notifier
 
@@ -51,9 +51,9 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         output['issues'][0]['evidence_ids'] = ['E999']
     from tests.test_web_report import web_response
     # Second reply serves the web-only report role; its JSON is independent of the Telegram schema.
-    session = Session(openai_reply(json.dumps(output, ensure_ascii=False)),
-                      openai_reply(json.dumps(web_response(), ensure_ascii=False)))
-    llm.openai._session = session
+    session = SeqSession(claude_body(FABLE, json.dumps(output, ensure_ascii=False)),
+                         claude_body(FABLE, json.dumps(web_response(), ensure_ascii=False)))
+    llm.anthropic._session = session
     bundle = research_fixture()
     factory = AsyncMock(return_value=bundle)
     if capture:
@@ -92,16 +92,16 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         assert analysis['public_evidence']['records'][0]['title'] == bundle['records'][0]['title']
         assert analysis['evidence_sha256']
         assert factory.await_count == 1
-        assert len(session.payloads) == 2
-        payload = session.payloads[0]
-        assert payload['model'] == 'gpt-6.1-sol'
-        assert payload['reasoning_effort'] == 'medium'
-        assert payload['response_format'] == {'type': 'json_object'}
+        assert len(session.calls) == 2
+        payload = session.calls[0][1]['json']
+        assert payload['model'] == FABLE and payload['max_tokens'] == 4096
+        assert payload['output_config'] == {'effort': 'medium'} and 'thinking' not in payload
+        assert 'response_format' not in payload and 'JSON' in payload['system']
         prompt = json.dumps(payload, ensure_ascii=False)
         assert '가온반도체' in prompt and '설비 투자 비용' in prompt
         assert all(secret not in prompt for secret in ('PRIVATE_ACCOUNT_CANARY', 'PRIVATE_SOURCE_CANARY', 'PRIVATE_BOT_CANARY'))
-        web_payload = session.payloads[1]
-        assert web_payload['model'] == 'gpt-6-astra' and web_payload['max_completion_tokens'] == 12288
+        web_payload = session.calls[1][1]['json']
+        assert web_payload['model'] == FABLE and web_payload['max_tokens'] == 12288 and 'JSON' in web_payload['system']
         assert '애널리스트' in json.dumps(web_payload, ensure_ascii=False) and 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(web_payload)
         web_row = store.analysis_receipt('web', 'morning', DAY)
         assert web_row['status'] == 'ready' and web_row['result']['analysis']['stance'] == '중립'
@@ -127,8 +127,8 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         assert await ReportSchedule(store, telegram, analysis_manager=llm,
                                     public_evidence_factory=AsyncMock(side_effect=AssertionError('refetched'))).tick(
                                         NOW.replace(minute=44), True, MarketSnapshot(), 'CHANGED_PRIVATE') == 'already_consumed'
-        assert len(session.payloads) == 2
+        assert len(session.calls) == 2
         telegram._session.post.assert_called_once()
     finally:
-        llm.openai._session = llm.gemini._session = None
+        llm.openai._session = llm.gemini._session = llm.anthropic._session = None
         await llm.close()

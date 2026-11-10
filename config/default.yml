@@ -40,6 +40,14 @@ llm:
   # API credential is read lazily from ANTHROPIC_API_KEY_FILE, never from this YAML.
   claude_model: "claude-opus-5-5"
   claude_cli_enabled: true
+  # L01 Task 4 (2026-11-10, 사용자 D3/D4/D5): task 슬롯을 Anthropic API로 돌린다(Ultra 크레딧). 코드 기본값은 openai라
+  # 롤백은 아래 두 줄을 openai로 바꾸고 재시작. heavy(trade_review/strategy_analysis/market_analysis) → Fable 5.1 medium,
+  # light(theme_detection/quick_*/wiki_ingest/news_summary) → Opus 5.5 low. Bull(gpt-5-mini, D8)·REPORT_SUMMARY·STOCK_MAPPING 불변.
+  claude_model_heavy: "claude-fable-5-1"
+  claude_model_light: "claude-opus-5-5"
+  task_routes:
+    heavy: anthropic
+    light: anthropic
   # 2026-06-17 Phase 3: Shadow A/B — gpt-5-mini 후속 비교
   # 활성화 시 openai_model_light 호출 직후 동일 프롬프트로 shadow 호출 (fire-and-forget)
   # 로그: ~/.cache/ai_trader/llm_shadow/YYYYMMDD.jsonl

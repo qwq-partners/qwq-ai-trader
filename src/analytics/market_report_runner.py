@@ -301,7 +301,7 @@ async def prepare_market_report(store, *, kind, day, source_snapshot_id=None,
                 reason = "refused"
             elif getattr(response, "success", False) is not True:
                 reason = "provider_failed"
-            elif getattr(response, "finish_reason", None) != "stop":
+            elif getattr(response, "finish_reason", None) not in ("stop", "end_turn"):   # OpenAI / Anthropic 완료
                 reason = "incomplete"
             else:
                 try:

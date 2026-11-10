@@ -78,7 +78,12 @@ class LLMConfig:
     gemini_api_key: str = ""  # Deprecated, ignored by the disabled client.
     anthropic_api_key: str = field(default="", repr=False)
     anthropic_api_key_file: str = ""
-    claude_model: str = "claude-opus-5-5"
+    claude_model: str = "claude-opus-5-5"          # Bear(독립 검토) — API 1차·CLI 대체
+    # L01 Task 4: task 슬롯 모델. 코드 기본 라우팅은 OpenAI 그대로이고 default.yml task_routes가 Anthropic으로 돌린다.
+    claude_model_heavy: str = "claude-fable-5-1"  # trade_review/strategy_analysis/market_analysis
+    claude_model_light: str = "claude-opus-5-5"   # theme_detection/quick_*/wiki_ingest/news_summary
+    task_route_heavy: str = "openai"                # openai | anthropic
+    task_route_light: str = "openai"
     claude_cli_enabled: bool = True
     claude_cli_command: str = "claude"
 
@@ -123,8 +128,12 @@ class LLMConfig:
     def __post_init__(self):
         if not isinstance(self.claude_cli_enabled, bool):
             raise ValueError("claude_cli_enabled must be boolean")
-        if not isinstance(self.claude_model, str) or self.claude_model not in CLAUDE_MODELS:
-            raise ValueError("Unsupported Claude model identity")
+        for model in (self.claude_model, self.claude_model_heavy, self.claude_model_light):
+            if not isinstance(model, str) or model not in CLAUDE_MODELS:
+                raise ValueError("Unsupported Claude model identity")
+        for route in (self.task_route_heavy, self.task_route_light):
+            if route not in ("openai", "anthropic"):
+                raise ValueError("task_routes must be openai or anthropic")
         if not isinstance(self.claude_cli_command, str) or not self.claude_cli_command.strip():
             raise ValueError("claude_cli_command must be an executable name or path")
         if (not isinstance(self.anthropic_api_key_file, str) or
@@ -181,6 +190,10 @@ class LLMConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
             claude_model=llm_cfg.get("claude_model", "claude-opus-5-5"),
+            claude_model_heavy=(llm_cfg.get("claude_model_heavy") or "claude-fable-5-1"),
+            claude_model_light=(llm_cfg.get("claude_model_light") or "claude-opus-5-5"),
+            task_route_heavy=(llm_cfg.get("task_routes") or {}).get("heavy", "openai"),
+            task_route_light=(llm_cfg.get("task_routes") or {}).get("light", "openai"),
             claude_cli_enabled=llm_cfg.get("claude_cli_enabled", True),
             claude_cli_command=os.getenv("CLAUDE_CLI_COMMAND", "claude"),
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
@@ -729,6 +742,15 @@ class LLMManager:
         },
     }
 
+    # L01 Task 4: default.yml task_routes 가 anthropic 이면 이 슬롯의 primary 만 Anthropic API 로 바뀐다.
+    # heavy 의 폴백(OpenAI light 1회)은 종전대로, light 는 폴백 없음. REPORT_SUMMARY·STOCK_MAPPING 은 OpenAI 유지.
+    _CLAUDE_HEAVY_TASKS = frozenset({LLMTask.MARKET_ANALYSIS, LLMTask.TRADE_REVIEW, LLMTask.STRATEGY_ANALYSIS})
+    _CLAUDE_LIGHT_TASKS = frozenset({LLMTask.THEME_DETECTION, LLMTask.QUICK_CLASSIFY, LLMTask.QUICK_ANALYSIS,
+                                     LLMTask.WIKI_INGEST, LLMTask.NEWS_SUMMARY})
+    # Anthropic 에는 response_format 이 없다. 기존 파서/검증기는 그대로 두고 system 에만 붙인다.
+    _CLAUDE_JSON_INSTRUCTION = ("출력 형식: 유효한 JSON 객체 하나만 출력한다. 코드 펜스(```), 머리말, 설명, "
+                                "후기를 붙이지 않는다. 첫 글자는 { 이고 마지막 글자는 } 이다.")
+
     # LLM 응답 로그 경로
     _LLM_LOG_DIR = Path.home() / ".cache" / "ai_trader" / "llm_responses"
     _LLM_LOG_RETENTION_DAYS = 7
@@ -822,8 +844,9 @@ class LLMManager:
         if provider == LLMProvider.GEMINI:
             return self.gemini
         if provider == LLMProvider.ANTHROPIC:
+            # 역할·task 슬롯은 예산 원장이 있는 API 만 쓴다. 구독 CLI 는 Bear 의 가용성 대체(_complete_claude)뿐이다.
             self._ensure_claude_clients()
-            return self.claude_cli
+            return self.anthropic
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
     def _get_model(self, provider: LLMProvider, weight: str) -> str:
@@ -833,8 +856,21 @@ class LLMManager:
         if provider == LLMProvider.GEMINI:
             return self.config.gemini_model_heavy if weight == "heavy" else self.config.gemini_model_light
         if provider == LLMProvider.ANTHROPIC:
+            if weight == "heavy":
+                return self.config.claude_model_heavy
+            if weight == "light":
+                return self.config.claude_model_light
             return self.config.claude_model
         raise ValueError(f"Unsupported LLM provider: {provider}")
+
+    def _task_route(self, task: LLMTask) -> dict:
+        """TASK_CONFIG 위에 설정 라우팅(task_routes)을 얹는다. 기본은 변화 없음."""
+        route = dict(self.TASK_CONFIG.get(task, self.TASK_CONFIG[LLMTask.QUICK_CLASSIFY]))
+        if self.config.task_route_heavy == "anthropic" and task in self._CLAUDE_HEAVY_TASKS:
+            route["primary"] = (LLMProvider.ANTHROPIC, "heavy")
+        elif self.config.task_route_light == "anthropic" and task in self._CLAUDE_LIGHT_TASKS:
+            route["primary"] = (LLMProvider.ANTHROPIC, "light")
+        return route
 
     def _ensure_claude_clients(self):
         if self.claude_cli is None or self.anthropic is None:
@@ -871,6 +907,10 @@ class LLMManager:
     def _task_controls(model: str, weight: str, controls: dict) -> dict:
         """Bound common light reasoning without changing explicit role controls."""
         result = dict(controls)
+        if model in CLAUDE_MODELS:
+            if result.get("reasoning_effort") is None:
+                result["reasoning_effort"] = "medium" if weight == "heavy" else "low"
+            return result
         if weight == "light" and result.get("reasoning_effort") is None:
             supported = _OPENAI_EFFORTS.get(model, set())
             for effort in ("minimal", "low"):
@@ -945,7 +985,7 @@ class LLMManager:
                         response = await self._complete_attempt(
                             self._get_client(provider), prompt, system, profile.model,
                             role.value, "primary", _deadline=deadline,
-                            _role_finish_reason="stop" if provider == LLMProvider.OPENAI else "STOP",
+                            _role_finish_reason={"openai": "stop", "anthropic": "end_turn"}.get(profile.provider, "STOP"),
                             budget_priority=profile.budget_priority, **controls)
                 except TimeoutError as exc:
                     # timeout이 변환한 취소 원인에는 공통 정산 경계의 응답이 남아 있다.
@@ -1032,7 +1072,7 @@ class LLMManager:
             # None이면 Manus 실패 → API 폴백 (로그는 _try_manus에서 남긴다)
 
         # 작업별 설정 가져오기
-        task_config = self.TASK_CONFIG.get(task, self.TASK_CONFIG[LLMTask.QUICK_CLASSIFY])
+        task_config = self._task_route(task)
 
         # Primary 시도
         primary_provider, primary_weight = task_config["primary"]
@@ -1527,6 +1567,14 @@ class LLMManager:
         if _role == "shadow":
             priority = "research"
         policy = None
+        json_mode = False
+        if provider == LLMProvider.ANTHROPIC and not subscription:
+            # response_format 은 OpenAI 전용. Anthropic 은 system 지시로 대신하고 예약 전에 반영해 원장 입력 바이트와 맞춘다.
+            json_mode = kwargs.pop("response_format", None) is not None
+            if json_mode:
+                _system = (_system + "\n\n" if _system else "") + self._CLAUDE_JSON_INSTRUCTION
+            if kwargs.get("max_tokens") is None:
+                kwargs["max_tokens"] = self.config.max_output_tokens   # 전송 기본 400 은 Bear 전용 경계
         original_model, original_kwargs = _model, dict(kwargs)
         if self.config.monthly_budget_usd is not None and not subscription:
             try:
@@ -1635,6 +1683,11 @@ class LLMManager:
                 or not (response.content or "").strip()):
             response.success = False
             response.error = "Role completion incomplete, refused or empty"
+        if json_mode and role_finish_reason is not None and response.success \
+                and not (response.content or "").lstrip().startswith(("{", "[")):
+            # 역할 소비자는 본문을 그대로 json.loads 한다. 펜스/머리말은 수리·재시도 없이 실패로 남긴다(OpenAI 와 같은 표식).
+            response.success = False
+            response.error = "Invalid JSON mode response"
         self._annotate_budget(response, policy, priority)
         self._settle_monthly(token, response, _model)
         account(response)
