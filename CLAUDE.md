@@ -805,7 +805,7 @@ KIS_TR_SET (기본 legacy — 구 TR 그대로. new 면 KIS 신 TR 5종 + EXCG_I
 
 | 작업 | Primary | Fallback / 한도 |
 |------|---------|----------|
-| 테마·뉴스·일반 경량 분석·위키 생성(light 슬롯) | Claude Opus 5.5 / low (Anthropic API, `task_routes.light`) | fallback 없음; `response_format` 대신 system JSON 지시 + 기존 `_extract_json`; 기본 출력 상한 `max_output_tokens`(경량 절약 시 4096). STOCK_MAPPING·REPORT_SUMMARY는 GPT-5 mini 유지 |
+| 테마·뉴스·일반 경량 분석·위키 생성(light 슬롯) | Claude Opus 5.5 / low (Anthropic API, `task_routes.light`) | fallback 없음; `response_format` 대신 system JSON 지시 + 기존 `_extract_json`; 기본 출력 상한 `max_output_tokens`(경량 절약 시 4096). `STOCK_MAPPING`(GPT-5 mini)·`REPORT_SUMMARY`(OpenAI heavy gpt-5.6-sol → light 폴백, 절약 모드에서 light)는 OpenAI 그대로 |
 | 거시·한국경제·글로벌미시 한 줄 설명(`REPORT_ONE_LINE`) | Claude Opus 5.5 / low | 없음; 출력512·20초 |
 | 아침 보고 고정 역할 | GPT-5 mini / minimal | 없음; 출력1600·45초; 현행 아침 본문은 결정론적 조립 |
 | 시장 조사 보고 고정 역할(`MARKET_BRIEF`) | Claude Fable 5.1 / medium | 없음; 출력4096(thinking 포함)·90초·입력64KiB·standard·JSON(system 지시, 완료 사유 `end_turn`); 시한은 첫 자연 슬롯 실측 뒤 별도 결정 |
@@ -853,7 +853,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 매주 토요일 09:30~09:44 KST 실행 창 (`run_post_exit_review_scheduler`, 실제 루프 기준; 이전 09:00 문서 정정)
 - 최근 30일 KR 매도 거래 → KIS 현재가 조회 → 매도 후 변동 추적
 - 분류: +3% 이상=놓침, -3% 이하=회피, 그 사이=타당
-- LLM: GPT-6.1 Sol / medium (`POST_EXIT_RESEARCH`), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
+- LLM: Claude Fable 5.1 / medium (`POST_EXIT_RESEARCH`, 역할표 v6 소스 — 운영 적용은 원장 L01 Task 4 참조; 종전 v5는 GPT-6.1 Sol), 출력4096·90초·research 예산, 자동 fallback 없음; 표본 ≥5건
 - 출력: JSON + Wiki 페이지(`weekly_post_exit_YYYY-WNN.md`) + 텔레그램
 - Wiki 페이지는 다음 weekly rebalance 시 LLM 컨텍스트로 자동 흡수
 
@@ -862,7 +862,7 @@ rm ~/.cache/ai_trader/KILL_SWITCH          # 해제
 - 거래 교훈을 전략/섹터/시장체제/**종목**별 마크다운 위키로 축적 (종목 차원 2026-08-07~)
 - 위치: `~/.cache/ai_trader/wiki/`
 - 3가지 오퍼레이션:
-  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출. 최신 소스는 GPT light/minimal이며 운영 전환은 E04-D2 인수 후 확정(이전 Gemini 설명 대체)
+  - **Ingest**: 매도 체결 → 관련 위키 3~5개 페이지 자동 업데이트 + LLM 교훈 추출. 소스는 light 슬롯(`WIKI_INGEST`) — `task_routes.light: anthropic`이면 Claude Opus 5.5/low, 아니면 GPT-5 mini/minimal(L01 Task 4 소스, 운영 적용은 원장)
   - **Query**: 크로스검증 시 전략/섹터/체제별 교훈 + **종목 노트**(query_symbol) 컨텍스트 반환
   - **Lint**: 토요일 주간 헬스체크 (stale/저조 페이지 감지 + 180일 종목 페이지 아카이브)
 - **종목 페이지** (`symbols/<코드>.md`): 거래 이력·교훈 + 전문가 리서치 노트

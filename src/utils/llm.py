@@ -694,6 +694,10 @@ def _claude_openai_fallback_authorized(response: "LLMResponse") -> bool:
     """
     if response.success or response.refusal_detected:
         return False
+    # 독립 리뷰 2차 P1: 400/402 등 금지 상태를 받은 뒤 본문 시한 초과/연결 종료는 api_timeout/api_http_error 로 끝나도
+    # 이미 확인된 상태 코드가 우선한다. 상태 코드가 없는 순수 가용성 실패(시한·연결)만 허용한다.
+    if response.http_status is not None and response.http_status not in _CLAUDE_AVAILABILITY_STATUSES:
+        return False
     kind = response.transport_error_kind
     if kind in {"api_timeout", "api_unavailable"}:
         return True
@@ -1379,10 +1383,13 @@ class LLMManager:
         self._ensure_claude_clients()
         # Without an explicit API-only cap, preserve the original 400-token transport boundary before any attempt.
         base_cap = kwargs.get("max_tokens")
-        if not has_api_cap and type(base_cap) is int and base_cap > 400:
+        # 독립 리뷰 2차 P2: 일반 task 의 기본 출력(16000)·API 입력 256KiB 확장과 분리해 Bear 경계를 여기서 고정한다 —
+        # 출력은 정수 1..400(명시 None 포함 거부), 입력은 64KiB. API 전용 상한(≤800)은 위 검사 그대로.
+        if (type(base_cap) is not int or base_cap < 1 or (not has_api_cap and base_cap > 400)
+                or len(prompt.encode("utf-8")) + len(system.encode("utf-8")) > 64 * 1024):
             response = LLMResponse("", model, LLMProvider.ANTHROPIC, success=False,
                                    error="invalid_request", requested_model=model,
-                                   requested_max_tokens=base_cap if base_cap <= 1000000 else None,
+                                   requested_max_tokens=base_cap if type(base_cap) is int and 1 <= base_cap <= 1000000 else None,
                                    request_sent=False, usage_known=False, billing_status="not_sent",
                                    transport_error_kind="invalid_request")
             self._stamp_transport(response, self.anthropic)
@@ -1727,8 +1734,9 @@ class LLMManager:
                 or not (response.content or "").strip()):
             response.success = False
             response.error = "Role completion incomplete, refused or empty"
+        content = response.content if response.content is not None else ""
         if json_mode and role_finish_reason is not None and response.success \
-                and not (response.content or "").lstrip().startswith(("{", "[")):
+                and not content.lstrip().startswith(("{", "[")):
             # 역할 소비자는 본문을 그대로 json.loads 한다. 펜스/머리말은 수리·재시도 없이 실패로 남긴다(OpenAI 와 같은 표식).
             response.success = False
             response.error = "Invalid JSON mode response"

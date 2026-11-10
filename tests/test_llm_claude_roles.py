@@ -273,3 +273,31 @@ async def test_anthropic_task_rejects_unsupported_controls_before_send(tmp_path,
     assert m.anthropic._session.calls == [] and m.openai._session.payloads == []
     status = m.monthly_budget.status()
     assert status['reserved_usd'] == 0 and status['settled_count'] == 0 and status['unresolved_count'] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,falls_back', [(400, False), (402, False), (403, False), (429, True), (529, True)])
+async def test_body_timeout_after_error_status_keeps_fallback_decision_by_status(tmp_path, status, falls_back):
+    # 독립 리뷰 2차 P1: 금지 상태(400/402/403)를 받은 뒤 본문 시한 초과는 api_timeout 이어도 유료 승격 없음.
+    from tests.test_claude_transport import Reply as ClaudeReply
+    class BodyTimeout(ClaudeReply):
+        async def json(self): raise TimeoutError()
+    m = manager(tmp_path, routes={'heavy': 'anthropic'})
+    m.anthropic._session = ClaudeSession(); m.anthropic._session.reply = BodyTimeout({}, status)
+    response = await m.complete('p', task=LLMTask.TRADE_REVIEW)
+    assert response.success is falls_back and len(m.openai._session.payloads) == (1 if falls_back else 0)
+    if not falls_back:
+        assert response.transport_error_kind == 'api_timeout' and response.http_status == status
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kwargs,prompt', [({'max_tokens': None}, 'p'), ({'max_tokens': 0}, 'p'),
+                                           ({'max_tokens': 400}, 'x' * 65537)])
+async def test_bear_boundaries_stay_independent_of_task_defaults(tmp_path, kwargs, prompt):
+    # 독립 리뷰 2차 P2: Bear(complete_with ANTHROPIC)는 출력 정수 1..400·입력 64KiB 를 예약·전송 전에 스스로 막는다.
+    m = manager(tmp_path, claude_body(OPUS), routes={'heavy': 'anthropic', 'light': 'anthropic'})
+    response = await m.complete_with(prompt, LLMProvider.ANTHROPIC, **kwargs)
+    assert not response.success and not response.request_sent and response.transport_error_kind == 'invalid_request'
+    assert m.anthropic._session.calls == [] and m.monthly_budget.status()['reserved_usd'] == 0
+    ok = await m.complete_with('p', LLMProvider.ANTHROPIC, max_tokens=400)
+    assert ok.success and m.anthropic._session.calls[0][1]['json']['max_tokens'] == 400
