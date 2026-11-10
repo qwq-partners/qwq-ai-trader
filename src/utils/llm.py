@@ -185,15 +185,21 @@ class LLMConfig:
         llm_cfg = cfg or {}
         if "llm" in llm_cfg and isinstance(llm_cfg["llm"], dict):
             llm_cfg = llm_cfg["llm"]
+        # 키 누락만 기본값이다. 명시된 값(빈 문자열·False·0 포함)은 그대로 넘겨 __post_init__ 이 거부한다(독립 리뷰 1차 P2).
+        task_routes = llm_cfg.get("task_routes")
+        if task_routes is None:
+            task_routes = {}
+        if not isinstance(task_routes, dict):
+            raise ValueError("llm.task_routes must be a mapping of heavy/light to openai|anthropic")
         return cls(
             openai_api_key=os.getenv("OPENAI_API_KEY", ""),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
             claude_model=llm_cfg.get("claude_model", "claude-opus-5-5"),
-            claude_model_heavy=(llm_cfg.get("claude_model_heavy") or "claude-fable-5-1"),
-            claude_model_light=(llm_cfg.get("claude_model_light") or "claude-opus-5-5"),
-            task_route_heavy=(llm_cfg.get("task_routes") or {}).get("heavy", "openai"),
-            task_route_light=(llm_cfg.get("task_routes") or {}).get("light", "openai"),
+            claude_model_heavy=llm_cfg.get("claude_model_heavy", "claude-fable-5-1"),
+            claude_model_light=llm_cfg.get("claude_model_light", "claude-opus-5-5"),
+            task_route_heavy=task_routes.get("heavy", "openai"),
+            task_route_light=task_routes.get("light", "openai"),
             claude_cli_enabled=llm_cfg.get("claude_cli_enabled", True),
             claude_cli_command=os.getenv("CLAUDE_CLI_COMMAND", "claude"),
             daily_budget_usd=llm_cfg.get("daily_budget", 5.0),
@@ -677,6 +683,23 @@ _CLAUDE_API_FALLBACK_KINDS = frozenset({"api_timeout", "api_unavailable", "api_a
                                         "api_http_error", "transport_cooldown"})
 
 
+_CLAUDE_AVAILABILITY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+
+
+def _claude_openai_fallback_authorized(response: "LLMResponse") -> bool:
+    """Anthropic heavy primary 가 **가용성 실패**로 끝났을 때만 종전 OpenAI light 폴백을 허용한다.
+
+    독립 리뷰 1차 P1(2026-11-10): 크레딧 소진(400/402)·인증/권한(401/403)·신원 불일치·정책 위반·잘린 200·거절·
+    요청 계약 위반·cooldown(401~403 뒤에도 걸린다)·로컬 자격 부재는 유료 OpenAI 로 승격하지 않는다(계획 D1/D2).
+    """
+    if response.success or response.refusal_detected:
+        return False
+    kind = response.transport_error_kind
+    if kind in {"api_timeout", "api_unavailable"}:
+        return True
+    return kind == "api_http_error" and response.http_status in _CLAUDE_AVAILABILITY_STATUSES
+
+
 def _claude_cli_fallback_authorized(response: "LLMResponse") -> bool:
     """API 시도가 가용성 실패로 끝났을 때만 구독 CLI 1회를 허용한다.
 
@@ -1131,6 +1154,10 @@ class LLMManager:
         if fallback is None:
             self.stats["error_count"] += 1
             return response
+        if primary_provider == LLMProvider.ANTHROPIC and not _claude_openai_fallback_authorized(response):
+            self.stats["error_count"] += 1
+            self.stats["fallback_skipped_claude_nonavailability"] = self.stats.get("fallback_skipped_claude_nonavailability", 0) + 1
+            return response
         fallback_provider, fallback_weight = fallback
         fallback_model = self._get_model(fallback_provider, fallback_weight)
         # Economy mode may already have selected light for the primary attempt.
@@ -1570,7 +1597,24 @@ class LLMManager:
         json_mode = False
         if provider == LLMProvider.ANTHROPIC and not subscription:
             # response_format 은 OpenAI 전용. Anthropic 은 system 지시로 대신하고 예약 전에 반영해 원장 입력 바이트와 맞춘다.
-            json_mode = kwargs.pop("response_format", None) is not None
+            response_format = kwargs.pop("response_format", None)
+            try:
+                # 독립 리뷰 1차 P2(2026-11-10): 일반 task 도 OpenAI 경로처럼 명시 제어값을 전송·예약 전에 거부한다.
+                if response_format is not None and (type(response_format) is not dict
+                                                    or response_format != {"type": "json_object"}):
+                    raise ValueError("Unsupported response_format")
+                _validate_controls(_model, provider, kwargs)
+            except ValueError as exc:
+                unsent = LLMResponse("", _model, provider, success=False, error="Invalid local controls",
+                                     request_sent=False, usage_known=False, billing_status="not_sent")
+                self._stamp_transport(unsent, _client)
+                account(unsent)
+                exc._llm_response = unsent
+                raise
+            if deadline is None:
+                # 독립 리뷰 1차 P1: 일반 task 는 OpenAI 와 같은 설정 시한(timeout_seconds)을 쓴다. 전송 기본 12초는 Bear 경계다.
+                deadline = asyncio.get_running_loop().time() + self.config.timeout_seconds
+            json_mode = response_format is not None
             if json_mode:
                 _system = (_system + "\n\n" if _system else "") + self._CLAUDE_JSON_INSTRUCTION
             if kwargs.get("max_tokens") is None:

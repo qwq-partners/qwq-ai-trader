@@ -205,7 +205,10 @@ def test_config_parses_task_routes_and_slot_models_and_rejects_unknown():
     default = LLMConfig.from_config({})
     assert (default.task_route_heavy, default.task_route_light) == ('openai', 'openai')
     for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-2'},
-                {'claude_model_light': 'claude-sonnet-5-5'}):
+                {'claude_model_light': 'claude-sonnet-5-5'},
+                # 독립 리뷰 1차 P2: 명시된 falsy 값은 기본값으로 치환하지 않고 거부한다.
+                {'claude_model_heavy': ''}, {'claude_model_light': 0}, {'claude_model_heavy': False},
+                {'task_routes': False}, {'task_routes': {'heavy': False}}, {'task_routes': 'anthropic'}):
         with pytest.raises(ValueError):
             LLMConfig.from_config({'llm': bad})
 
@@ -216,3 +219,57 @@ def test_production_default_yml_routes_heavy_and_light_to_anthropic():
     cfg = LLMConfig.from_config(llm)
     assert (cfg.task_route_heavy, cfg.task_route_light) == ('anthropic', 'anthropic')
     assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,error_type,falls_back', [
+    (400, 'invalid_request_error', False),   # 크레딧 소진·요청 오류 → 유료 OpenAI 승격 없음(독립 리뷰 1차 P1)
+    (402, 'billing_error', False), (401, 'authentication_error', False), (403, 'permission_error', False),
+    (408, 'api_error', True), (429, 'rate_limit_error', True), (500, 'api_error', True),
+    (503, 'api_error', True), (529, 'overloaded_error', True),
+])
+async def test_heavy_openai_fallback_only_on_availability_failure(tmp_path, status, error_type, falls_back):
+    m = manager(tmp_path, routes={'heavy': 'anthropic'})
+    m.anthropic._session = ClaudeSession({'error': {'type': error_type, 'message': 'x'}}, status)
+    response = await m.complete('p', task=LLMTask.TRADE_REVIEW)
+    assert response.success is falls_back
+    assert len(m.openai._session.payloads) == (1 if falls_back else 0)
+    assert m.stats['fallback_count'] == (1 if falls_back else 0)
+    assert len(m.anthropic._session.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', ['identity', 'incomplete', 'tool_use'])
+async def test_heavy_non_availability_failures_never_reach_openai(tmp_path, fault):
+    body = claude_body(FABLE, 'partial')
+    if fault == 'identity': body['model'] = OPUS
+    elif fault == 'incomplete': body['stop_reason'] = 'max_tokens'
+    elif fault == 'tool_use': body['content'] = [{'type': 'tool_use'}]
+    m = manager(tmp_path, body, routes={'heavy': 'anthropic'})
+    response = await m.complete('p', task=LLMTask.TRADE_REVIEW)
+    assert not response.success and m.openai._session.payloads == [] and m.stats['fallback_count'] == 0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_task_uses_config_timeout_not_bear_default(tmp_path):
+    # 독립 리뷰 1차 P1: 일반 task 의 시한은 OpenAI 와 같은 timeout_seconds(기본 120초). 전송 기본 12초는 Bear 경계.
+    m = manager(tmp_path, claude_body(OPUS), routes={'light': 'anthropic'})
+    await m.complete('p', task=LLMTask.QUICK_CLASSIFY)
+    total = m.anthropic._session.calls[0][1]['timeout'].total
+    assert m.config.timeout_seconds - 2 <= total <= m.config.timeout_seconds
+    m.anthropic._session = ClaudeSession(claude_body(FABLE))
+    await m.complete_role('p', role='web_report')
+    assert 178 <= m.anthropic._session.calls[0][1]['timeout'].total <= 180      # 역할 시한은 프로필(180초) 그대로
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kwargs', [{'thinking_level': 'high'}, {'response_format': {'type': 'text'}},
+                                    {'reasoning_effort': 'xhigh'}, {'seed': 'x'}])
+async def test_anthropic_task_rejects_unsupported_controls_before_send(tmp_path, kwargs):
+    # 독립 리뷰 1차 P2: OpenAI 경로와 같은 공개 계약 — 잘못된 명시 제어값은 ValueError, 전송·예약 0.
+    m = manager(tmp_path, routes={'heavy': 'anthropic', 'light': 'anthropic'})
+    with pytest.raises(ValueError):
+        await m.complete('p', task=LLMTask.TRADE_REVIEW, **kwargs)
+    assert m.anthropic._session.calls == [] and m.openai._session.payloads == []
+    status = m.monthly_budget.status()
+    assert status['reserved_usd'] == 0 and status['settled_count'] == 0 and status['unresolved_count'] == 0
