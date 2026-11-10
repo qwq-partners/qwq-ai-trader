@@ -25,7 +25,7 @@
 
 - 입력: 발송 시점 스냅샷의 적격 관측 사실 M#(지수는 확정/장중/분 단위 참고/제공기관 대비율을 `basis`로 구분, 미국 지수,
   섹터 ETF 전체) + 텔레그램 분석이 동결한 공개 근거 봉투 E#. 새 조회는 없다.
-- 생성: 고정 역할 `WEB_REPORT`(GPT-6 Astra/medium·JSON) 1회. 스키마 `web-report-v1`: `stance`(우호/중립/경계) · `headline` ·
+- 생성: 고정 역할 `WEB_REPORT`(역할표 v6 소스: Anthropic `claude-fable-5-1`/medium·JSON은 system 지시, 운영 적용은 원장 L01 Task 4 참조; 종전 v5는 GPT-6 Astra) 1회. 스키마 `web-report-v1`: `stance`(우호/중립/경계) · `headline` ·
   `summary` 2~4 · `market_view` · `sector_view` · `issues` 1~4(사건/영향/반론/확인) · `macro_view|null` · `outlook`(기본/상방/하방) ·
   `checklist` 2~5. 모든 문장은 한글 필수, 숫자·날짜는 인용한 M/E의 표시 값만(부호 포함 일치), 영문은 입력 표기만, 추천·목표가 어휘 금지, 이슈 하나 이상은 사건 E 인용.
   숫자 포함 표기(R02-WEB-LABEL-NUMERIC, 2026-11-06~): 인용한 출처 줄에 그대로 적힌, 숫자가 다른 문자와 붙은 표기(`S&P500`·`2차전지`·
