@@ -1,8 +1,8 @@
 # QWQ AI Trader — 기술 문서
 
-- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·배포/자연 인수는 원장. 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
+- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 11/16 WAIT. 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
 
-- [R02-WEB-REJECTION-RECURRENCE 웹 리포트 거절 재발 원인 조사](operations/execution-roadmap.md#r02-web-rejection-recurrence-20261109): 11/9 3/3 거절은 계약상 올바른 종류(인용 범위 밖 숫자·표기 변형·입력에 없는 영문)이며 검증기 오거절 재현 0건. 프롬프트-계약 불일치 3가지 → 최소 수정(scope 진단·프롬프트 정합, 계약 불변) PR #353 병합·운영 `1f87b896` 11/10 00:22 인수 완료, 자연 수락 WAIT.
+- [R02-WEB-REJECTION-RECURRENCE 웹 리포트 거절 재발 원인 조사](operations/execution-roadmap.md#r02-web-rejection-recurrence-20261109): 11/9 3/3 거절은 계약상 올바른 종류(인용 범위 밖 숫자·표기 변형·입력에 없는 영문)이며 검증기 오거절 재현 0건. 프롬프트-계약 불일치 3가지 → 최소 수정(scope 진단·프롬프트 정합, 계약 불변) PR #353 병합·운영 `1f87b896` 11/10 00:22 인수 완료. 자연 수락 11/10: morning 거절(`recommendation_vocabulary`)·midday ready(11/3 이후 첫 수락)·after WAIT.
 
 - [R02-WEB-LABEL-NUMERIC 웹 리포트 숫자 포함 표기 경계](operations/execution-roadmap.md#r02-web-label-numeric-20261106): 11/3~11/6 웹 12/12 거절 원인(값 표기만 허용 vs 프롬프트의 라벨·표본 수·관측 시각)과 최소 수정, 전후 합성 판단, 독립 리뷰 4회·WSL 10,553·PR #346 병합 `b127577c`·운영 11/7 00:15 인수. 자연 수락 WAIT.
 
