@@ -2,7 +2,7 @@
 
 <a id="test-panel-deadline-loop-clock-20261109"></a>
 <a id="l02-gpt5mini-successor-20261111"></a>
-### L02-GPT5MINI-SUCCESSOR — `gpt-5-mini` 2026-12-11 API 제거 대비 후속 모델 교체 (소스 PR #362 병합 `22f8be07`·리뷰 3회·terra 실호출 신원 verified DONE / 운영 배포 WAIT·사용자 승인)
+### L02-GPT5MINI-SUCCESSOR — `gpt-5-mini` 2026-12-11 API 제거 대비 후속 모델 교체 (소스 PR #362 병합 `22f8be07`·리뷰 3회·terra 실호출 신원 verified DONE / **운영 `3caaeaa9` 11/11 22:38 인수 DONE** / 자연 호출 인수 WAIT)
 
 **Plan(11/11, 사용자 "이내용도 참고해줘" → "니가 결정해서 진행해"):** OpenAI 공식 폐기 공지 [2026-06-11 GPT-5 and o3 model deprecations](https://developers.openai.com/api/docs/deprecations#2026-06-11-gpt-5-and-o3-model-deprecations) — API 제거 **2026-12-11**: `gpt-5`→`gpt-5.6-sol`, `gpt-5-mini`/`gpt-5-mini-2025-08-07`→**`gpt-5.6-terra`**, `gpt-5-nano`→`gpt-5.6-luna`, `gpt-5-pro`/`o3`/`o3-pro`→`gpt-5.6-sol`. 내부 CHANGELOG의 "12-10"은 11일로 정정. 영향 없음: gpt-5.6-sol·gpt-6-astra·gpt-6.1-sol·전역 라우팅 정책 모델. `f29a250a` 운영에 남은 `gpt-5-mini` 경로: Bull(`model_comparison_contract.DOCUMENTED_SNAPSHOTS`/BULL minimal 400, D8 "Bull gpt-5-mini 유지"), `MORNING_BRIEF`(결정론 조립의 역할표 항목), heavy→GPT light 폴백·`REPORT_SUMMARY` 절약 light·`STOCK_MAPPING`·`openai_model_light` 기본값(`llm.py`·`default.yml`), `_OPENAI_EFFORTS`(terra 항목 없음), `llm_pricing._RATES`(terra 단가 없음), `report_premarket_check.RECOGNIZED_OPENAI_MODELS`, 프로브 스크립트 3종, 테스트 34파일. **결정:** L01과 독립이고 기한까지 30일 여유가 있어 L01 Task 6(11/16) 뒤 별도 과제로 착수한다 — 단가·effort 표·snapshot 실호출 재검증·테스트를 건드리므로 11/11 배포에 섞지 않았다. 첫 하위 단계는 **D8 재결정**: 기본안 공급자 분리 유지 → Bull `gpt-5.6-terra`(공식 권장 대체); Opus 전환은 Bull/Bear 동일 공급자가 되어 교차 독립 검토 계약을 깨므로 사용자 명시 승인 없이는 택하지 않는다.
 
@@ -14,7 +14,9 @@
 
 **See/병합·실호출(11/11 21:2x KST):** 3차 리뷰(`cd52f7b3`, xhigh) 신규 P0/P1/P2 0(기존 P2 3: `or` 기본값·float 단가·장전 점검 v2 고정 — 부채 기록) → PR #362 CI verify pass 6m28s → 사용자 "병합해" → head 고정 병합 main `22f8be07`. 사용자 "보내" → 운영 전송 코드(`OpenAIClient`)로 `gpt-5.6-terra` 1회(effort none·JSON·64토큰): **`resolved_model=gpt-5.6-terra` exact·verified**, HTTP 200·`stop`·거절 0·입력 31/출력 11/추론 0·2.79초·추정 USD 0.0002(월 원장 밖 단발). dated snapshot 없음 → `DOCUMENTED_SNAPSHOTS` 불변, 현행 exact 신원 정책으로 Bull 인증 가능. 운영 `f29a250a` 불변. 영수증 `~/.local/state/qwq-task-audit/20261111/l02-terra/`(비공개).
 
-**NEXT:** ① 운영 배포 창 사용자 승인(장 마감 뒤 `local_deploy.sh <main SHA>`, 2026-12-11 이전; 11/16 L01 Task 6 실측과 분리 권고 — Bull 단가 변화가 실측에 섞이지 않게). ② 배포 뒤 Bull 장중 자연 호출(4슬롯)·`MORNING_BRIEF`(v7) 행의 `resolved_model`/effort none/비용 인수, Bull 월 ~USD 9 추정 대조. ③ 기존 부채 3건은 별도 과제.
+**See/운영 배포(11/11 22:38 KST, 사용자 "지금 배포"):** 장 밖 22:22 운영 호스트 `local_deploy.sh 3caaeaa9`(main = 소스 `22f8be07` + #363) — 사전 pending []·pytest 0·보호 48파일 스냅샷(이전 `f29a250a`). 서버 verify **10,756 passed / 2 skipped / 2 xfailed (870초)**·롤백 0·22:38:06 재기동(PID 1331574·NRestarts 0), 기동 로그 `light=gpt-5.6-terra`·상한 불일치 0(원장 변경 없음). postcheck rc 0(22:40:40): HTTP 500 0·EGW00201 0·EGW00215 0·ERROR 0·pending []·실행 원장 ready·정체 0(이번엔 기동 KIS 버스트 거절 0). 보호 48파일 중 변동은 `default.yml` 1건(커밋 대상과 동일, `openai_model_light` mini→terra)·cron/KILL/`evolved_overrides`/월 200/R1 OFF/worker 비활성 보존. **completed.** 영수증 `~/.local/state/qwq-task-audit/20261111/l02-terra-deploy/`(비공개). 사용자가 11/16 실측 분리 권고 대신 즉시 배포를 택했으므로 Task 6 실측에는 Bull 단가 변화가 섞인다.
+
+**NEXT:** ① 다음 거래일 자연 호출 인수 — 장중 Bull(4슬롯) `requested_model=gpt-5.6-terra`·`resolved_model` exact·effort none·판정 분포, `MORNING_BRIEF` v7 행, 일 비용(`daily_budget` 5.0 근접 여부)·Bull 월 ~USD 9 추정 대조(새 대기자·시험 발송 없음). ② 11/16 L01 Task 6 실측에서 11/11 22:38 전후를 나눠 읽는다. ③ 기존 부채 3건(`or` 기본값·float 단가·장전 점검 v2 정책 고정)은 별도 과제.
 
 ### TEST-PANEL-DEADLINE-LOOP-CLOCK — 공통 패널 시한 검사의 벽시계 플레이크 제거 (테스트 전용·제품 코드 0 / 수정·AWS 보조 반복·독립 리뷰·PR #354 병합 `1f87b896` DONE — WSL 전체는 검사 전용이라 생략, 서버 배포 verify 10,659 passed에 포함)
 
