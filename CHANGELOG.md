@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-11 — L01 Task 3·4·5 운영 인수(문서만): 고정 `f29a250a` 18:28 배포·월 예산 원장 100→200 이관·L02 후속 과제 등록 ([원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
+
+- 병합: PR #360(Task 5) main `f29a250a`(병합 커밋 `c00dcd27` 경유)·main CI success(verify 8m32s). 누적 배포 대상 = Task 3 `7a28163b`(허용 모델 Opus/Fable) + Task 4 `9d14c87d`(역할 v6 Fable/Opus·`task_routes` anthropic) + Task 5(이관 도구·`monthly_budget` 200) + 문서 #355/#356/#358.
+- 배포(사용자 승인 "1. 진행 2. 유지", 장 마감 뒤 18:05~19:20 창): 운영 호스트 `scripts/deploy/local_deploy.sh f29a250a`(WSL 드라이버와 같은 서버 스크립트, 임시 WSL 키 없음) — 서버 verify **10,741 passed / 2 skipped / 2 xfailed (881초)**·비밀정보 검사 통과·롤백 0·18:28:00 재기동(PID 1272958). 예상된 `budget_configuration_mismatch` 창: 18:28:07 `monthly budget storage unavailable; paid calls blocked` 1건(유료 LLM만 차단, 주문 경로 무관).
+- 원장 이관(runbook "즉시 정지·이관·기동"): 18:28:52 정지 → 18:28:55 `llm_budget_migrate.py --from 100 --to 200`(`migration_id` 1, 사용액 USD 27.296·예약 7,075행·불명 337건 보존, 정책 단계 0→0) → 18:28:55 기동(PID 1274063·NRestarts 0). `--check`: `limit_usd` 200·migrations 1·reservation_states {released 2, settled 6736, unknown 337}. 기동 로그 `[LLM] 월 예산 $200 (KST)`·80/95/100 정책 모니터 시작, 재기동 뒤 mismatch 0·ERROR/Traceback 0. `daily_budget` 5.0 유지(사용자 "2. 유지").
+- 사후: postcheck rc 0(18:31:34)·pending []·실행 원장 ready·보호 48파일 중 변동은 `config/default.yml` 1건(커밋 대상과 동일 — `claude_model_heavy/light`·`task_routes.heavy/light`·`monthly_budget` 200)·crontab/KILL_SWITCH_KR/`evolved_overrides` 미커밋 수정 보존·R1 OFF·worker 비활성. 기동 직후 KIS EGW00201 9줄·HTTP 500 3줄(FHKST03010100, 리미터 1초 정지 뒤 재시도)은 11/5·11/10과 같은 기동 버스트로 기록(해결 아님). **completed_with_findings.**
+- 미실증: Task 4 역할(Fable 5.1 `MARKET_BRIEF`/`WEB_REPORT`/`POST_EXIT_RESEARCH`, Opus light 슬롯)의 자연 호출은 다음 거래일 슬롯 WAIT, CLI 대체 경로(가용성 실패 없음), OpenAI 청구 0 여부는 Task 6(11/16).
+- **L02-GPT5MINI-SUCCESSOR 등록(결정 11/11, 사용자 "니가 결정해서 진행해"):** OpenAI 공식 폐기 공지(2026-06-11 절) — `gpt-5-mini`(및 `gpt-5-mini-2025-08-07`)는 **2026-12-11** API 제거, 권장 대체 `gpt-5.6-terra`(`gpt-5`→`gpt-5.6-sol`, `gpt-5-nano`→`gpt-5.6-luna`). 내부 메모의 "12-10"은 11일로 정정. L01 뒤 별도 과제로 두며 첫 하위 단계는 D8(Bull 공급자 분리) 재결정 — 기본안 분리 유지·Bull `gpt-5.6-terra`, Opus 전환은 Bull/Bear 동일 공급자가 되므로 사용자 명시 승인 필요. 오늘 코드 변경 0. 재배포 없음.
+
 ## 2026-11-10 — L01 Task 5 소스: LLM 월 예산 상한 명시 이관(100→200) 도구·설정 (운영 원장 이관은 사용자 승인 배포 창, [원장](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108) · [runbook](docs/operations/runbook.md))
 
 - `src/utils/llm_budget.py` `migrate_monthly_limit()`: 설정만 바꾸면 종전대로 `budget_configuration_mismatch`(D2). 이관은 한 트랜잭션에서 현재 상한 일치·활성 예약 0 확인 → `settings.limit_units` 갱신 + `limit_migrations` 영수증 행, 사용액·예약·unknown·정책/증서 행은 전후 스냅샷으로 불변 보증(다르면 롤백). 원장 파일 부재 시 생성 금지.
