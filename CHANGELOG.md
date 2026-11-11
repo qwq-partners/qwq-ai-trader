@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-11 — L02 운영 인수(문서만): 고정 `3caaeaa9` 22:38 KST 배포 — 운영 light 모델 gpt-5.6-terra 전환 ([원장 L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
+
+- 사용자 "지금 배포" → 장 밖 22:22 운영 호스트 `scripts/deploy/local_deploy.sh 3caaeaa9`(main = 소스 `22f8be07` + 영수증 문서 #363). 사전: pending []·pytest 0·보호 48파일 스냅샷(이전 `f29a250a`·PID 1274063). 서버 verify **10,756 passed / 2 skipped / 2 xfailed (870초)**·롤백 0·22:38:06 재기동(PID 1331574·NRestarts 0). 기동 로그 `[LLM] 월 예산 $200 (KST), OpenAI heavy=gpt-5.6-sol, light=gpt-5.6-terra`·KIS 연결·엔진 시작, 상한 불일치 0(원장 변경 없음).
+- postcheck rc 0(22:40:40): HTTP 500 0·EGW00201 0·EGW00215 0·ERROR/Traceback 0·pending []·실행 원장 ready·정체 0 — 11/11 18:28 배포의 기동 KIS 버스트 거절은 이번엔 0. 보호 48파일 중 변동은 `config/default.yml` 1건(커밋 대상과 동일, YAML 차이 `llm.openai_model_light` gpt-5-mini → gpt-5.6-terra), crontab·KILL_SWITCH_KR·`evolved_overrides` 미커밋 수정·월 200/`log_and_continue`·R1 OFF·worker 비활성 보존. **completed.**
+- 운영 효과: Bull·토론·STOCK_MAPPING·REPORT_SUMMARY 절약/heavy→light 폴백·`MORNING_BRIEF`(v7) 가 gpt-5.6-terra/none 으로 간다. 미실증: 장중 Bull 자연 호출의 `resolved_model`/판정, MORNING_BRIEF 행, 일 비용(`daily_budget` 5.0)·Bull 월 ~USD 9 추정 — 다음 거래일 인수. 11/16 Task 6 실측에는 단가 변화가 섞인다(사용자 선택). 영수증 `~/.local/state/qwq-task-audit/20261111/l02-terra-deploy/`(비공개). 문서 영수증은 재배포하지 않는다.
+
 ## 2026-11-11 — L02 병합·실호출 영수증(문서만): PR #362 main `22f8be07`, gpt-5.6-terra 신원 verified·운영 미배포 ([원장 L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
 
 - 병합: 사용자 "병합해" → PR #362 head `cd52f7b3` 고정 병합 → main `22f8be07`(CI verify pass 6m28s·mergeable). 독립 리뷰 3회(Codex gpt-6-astra/xhigh 헤더 확인) 1차 P1 1·P2 3 → 2차 신규 P2 2 → 3차 신규 0, 기존 P2 3건(`or` 기본값·float 단가·장전 점검 v2 정책 고정)은 부채 기록. AWS 보조 전체 verify(`2743c7f8`) 10,746 passed.
