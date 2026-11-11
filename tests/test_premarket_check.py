@@ -193,3 +193,13 @@ def test_terra_successor_rows_verify_only_with_matching_none_effort():
     assert mixed['morning_brief']['status'] == 'review_required'
     legacy = a.summarize_roles([row()], now)
     assert legacy['morning_brief']['status'] == 'call_metadata_verified'
+
+
+def test_cross_model_response_is_not_verified_even_when_both_ids_are_recognized():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    crossed = a.summarize_roles([row(resolved_model='gpt-5.6-terra')], now)                 # mini/minimal 요청에 terra 응답
+    assert crossed['morning_brief']['status'] == 'review_required'
+    reverse = a.summarize_roles([row(requested_model='gpt-5.6-terra', requested_reasoning_effort='none',
+                                     resolved_model='gpt-5-mini-2025-08-07')], now)
+    assert reverse['morning_brief']['status'] == 'review_required'

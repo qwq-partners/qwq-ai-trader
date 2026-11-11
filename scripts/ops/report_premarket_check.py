@@ -17,8 +17,9 @@ KST = ZoneInfo('Asia/Seoul')
 MAX_BYTES = 8 * 1024 * 1024
 ROLES = ('report_one_line', 'morning_brief')
 # L02 2026-11-11: morning_brief 역할이 gpt-5.6-terra/none 으로 바뀜(dated snapshot 미공개 → 모델 id 그대로).
-RECOGNIZED_OPENAI_MODELS = frozenset(('gpt-5-mini', 'gpt-5-mini-2025-08-07', 'gpt-5.6-terra'))
-LIGHT_REQUEST_CONTROLS = frozenset((('gpt-5-mini', 'minimal'), ('gpt-5.6-terra', 'none')))
+# 요청(모델, effort) → 허용 응답 id. 교차(mini 요청에 terra 응답 등)는 신원 불일치로 인증하지 않는다(L02 리뷰 P2).
+RECOGNIZED_OPENAI_MODELS = {('gpt-5-mini', 'minimal'): frozenset(('gpt-5-mini', 'gpt-5-mini-2025-08-07')),
+                            ('gpt-5.6-terra', 'none'): frozenset(('gpt-5.6-terra',))}
 
 
 def safe_path(path):
@@ -84,9 +85,8 @@ def summarize_roles(rows, now):
         verified = [r for r in found if r.get('provider') == 'openai' and r.get('request_sent') is True
                     and r.get('refusal_detected') is False
                     and r.get('role_policy_version') == 'engine-roles-v2-openai'
-                    and (r.get('requested_model'), r.get('requested_reasoning_effort')) in LIGHT_REQUEST_CONTROLS
                     and isinstance(r.get('resolved_model'), str)
-                    and r['resolved_model'] in RECOGNIZED_OPENAI_MODELS
+                    and r['resolved_model'] in RECOGNIZED_OPENAI_MODELS.get((r.get('requested_model'), r.get('requested_reasoning_effort')), ())
                     and r.get('outcome') == 'success'
                     and r.get('usage_known') is True and r.get('finish_reason') == 'stop'
                     and all(finite(r.get(k)) for k in ('input_tokens', 'output_tokens', 'elapsed_ms', 'estimated_cost_usd'))]

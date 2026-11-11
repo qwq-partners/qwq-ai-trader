@@ -353,6 +353,16 @@ _GEMINI_LEVELS = {
 }
 
 
+def light_default_effort(model) -> Optional[str]:
+    """경량(light) OpenAI 호출의 기본 reasoning_effort — 모델이 지원하는 첫 값(minimal → none → low), 모르면 None.
+    gpt-5-mini 는 minimal, gpt-5.6 계열은 none(둘 다 reasoning 토큰 0). Bull/토론·비교 입력·_task_controls 가 공유한다."""
+    supported = _OPENAI_EFFORTS.get(model, set()) if isinstance(model, str) else set()
+    for effort in ("minimal", "none", "low"):
+        if effort in supported:
+            return effort
+    return None
+
+
 def _validate_controls(model: str, provider: LLMProvider, controls: dict) -> None:
     # Public contract: invalid explicit controls raise ValueError before any HTTP.
     effort, level = controls.get("reasoning_effort"), controls.get("thinking_level")
@@ -943,12 +953,9 @@ class LLMManager:
                 result["reasoning_effort"] = "medium" if weight == "heavy" else "low"
             return result
         if weight == "light" and result.get("reasoning_effort") is None:
-            supported = _OPENAI_EFFORTS.get(model, set())
-            # minimal(gpt-5-mini) → none(gpt-5.6 계열): 둘 다 reasoning 토큰 0 의 경량 기본값.
-            for effort in ("minimal", "none", "low"):
-                if effort in supported:
-                    result["reasoning_effort"] = effort
-                    break
+            effort = light_default_effort(model)
+            if effort is not None:
+                result["reasoning_effort"] = effort
         return result
 
     def _daily_unknown_blocks(self) -> bool:
