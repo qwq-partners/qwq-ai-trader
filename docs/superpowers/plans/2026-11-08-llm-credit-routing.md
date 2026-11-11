@@ -1,6 +1,6 @@
 # L01-LLM-CREDIT-ROUTING — Ultra 월 API 크레딧 기준 엔진 LLM 라우팅 재설계 계획
 
-> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 계획서다. **현재 상태(11/9):** 사전 결정 D1~D8 확정, Task 1 운영 인수 완료(`a1331059`), Task 2는 소스·독립 리뷰 3회·실제 WSL·PR #351 병합(main `31edd820`) 완료이며 운영 배포·자연 Bear 호출 인수는 원장과 아래 진행 기록을 따른다. Task 3 완료(11/10 PR #357 병합 `7a28163b`·Fable 5.1 실호출 신원 verified), Task 4~6은 미착수(사용자 지시 대기). 아래 각 Task의 Files/Interfaces는 착수 전 초안이고, 확정 범위는 체크 항목과 원장이 우선한다.
+> **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. 우선순위 정본은 [실행 원장](../../operations/execution-roadmap.md#l01-llm-credit-routing-20261108)이다. 이 문서는 계획서다. **현재 상태(11/9):** 사전 결정 D1~D8 확정, Task 1 운영 인수 완료(`a1331059`), Task 2는 소스·독립 리뷰 3회·실제 WSL·PR #351 병합(main `31edd820`) 완료이며 운영 배포·자연 Bear 호출 인수는 원장과 아래 진행 기록을 따른다. Task 3 완료(11/10 PR #357 병합 `7a28163b`·Fable 5.1 실호출 신원 verified), Task 4 PR #359 `9d14c87d`·Task 5 PR #360 `f29a250a` 병합, **11/11 18:28 운영 `f29a250a` 인수·원장 100→200 이관 완료**(아래 진행 기록). Task 6은 11/16, 후속 L02(gpt-5-mini 2026-12-11 폐기 대비)는 원장. 아래 각 Task의 Files/Interfaces는 착수 전 초안이고, 확정 범위는 체크 항목과 원장이 우선한다.
 
 **Goal:** 매월 소멸하는 Ultra 플랜 Claude API 크레딧 USD200을 엔진의 LLM 호출에 우선 배정해 OpenAI 유료 청구(현재 월 약 USD30 추세)를 0에 가깝게 줄이고, 그 과정에서 비용 출처가 바뀌어도 판단 품질·fail-closed 동작·예산 원장의 정확성을 유지한다.
 
@@ -108,7 +108,7 @@
 **Interfaces:** 80%=160·95%=190·100%=200 USD 추정. 크레딧 주기(결제일~)와 원장 주기(KST 월초)의 어긋남은 수용하되 문서화: 매월 1일~결제일 사이에 크레딧이 남아 있지 않으면 API 4xx → 기존 실패 경로. Anthropic 자동 충전 OFF 유지로 초과 과금 0.
 
 - [x] RED: 이관 없이 설정만 바꾸면 기존대로 `budget_configuration_mismatch`, 이관 후 사용액/예약 행 수 동일·상한만 변경. (11/10 `tests/test_llm_budget_migration.py`)
-- [x] GREEN(11/10 `migrate_monthly_limit`·`scripts/ops/llm_budget_migrate.py`·`default.yml 200`, PR #360) · [ ] 독립 리뷰·운영 적용(배포 창에서 봇 정지→이관→기동, 영수증).
+- [x] GREEN(11/10 `migrate_monthly_limit`·`scripts/ops/llm_budget_migrate.py`·`default.yml 200`, PR #360) · [x] 독립 리뷰 4회(xhigh)·운영 적용(11/11 18:28:52 정지→18:28:55 이관 `migration_id` 1→18:28:55 기동 PID 1274063, `--check` 200/migrations 1, 영수증은 원장).
 
 ### Task 6: 사후 측정 (배포 7일 뒤, 읽기 전용)
 
@@ -129,3 +129,4 @@
 - 2026-11-10: 사용자 "Task4~6은 시작해도 될 것 같은데?" → Task 4 소스 RED→GREEN(브랜치 `feature/l01-task4-role-reassignment-20261110`, 기준 main `2c54efba`). Task 6은 11/16 날짜 대기. 독립 리뷰·WSL·PR·배포 승인은 원장.
 - 2026-11-10: 사용자 "Task4~6은 시작해도 될 것 같은데?" → Task 5 소스 RED→GREEN(브랜치 `feature/l01-task5-budget-limit-migration-20261110`, PR #360). Task 6은 11/16 날짜 대기.
 - 2026-11-11: Task 4 DONE(소스) — Codex xhigh 4회·CI·실제 WSL 10,726 passed, 사용자 "ㄱㄱ" → PR #359 병합 `9d14c87d`(운영 미배포). Task 5는 리뷰 4회·WSL 10,691 passed 뒤 main 병합·PR #360 병합 대기. 배포·원장 이관·`daily_budget` 상향은 사용자 승인.
+- 2026-11-11: PR #360 병합 `f29a250a`·main CI success. 사용자 "1. 진행 2. 유지" → 18:12 창 재개, 운영 호스트 `local_deploy.sh f29a250a`(서버 verify 10,741 passed·롤백 0·18:28:00 재기동) → 즉시 정지·`--from 100 --to 200` 이관(`migration_id` 1, 사용액·예약·불명 보존)·18:28:55 기동(PID 1274063) → postcheck rc 0·mismatch 0·보호 48파일 중 `default.yml`만 커밋 내용대로 변동·cron/KILL 보존. `daily_budget` 5.0 유지. Task 4 자연 호출은 다음 거래일 WAIT, Task 6은 11/16. gpt-5-mini 2026-12-11 폐기 후속은 원장 L02-GPT5MINI-SUCCESSOR(사용자 "니가 결정해서 진행해" → L01 뒤 착수, D8 재결정 기본안 Bull `gpt-5.6-terra`).
