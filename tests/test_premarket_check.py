@@ -203,3 +203,10 @@ def test_cross_model_response_is_not_verified_even_when_both_ids_are_recognized(
     reverse = a.summarize_roles([row(requested_model='gpt-5.6-terra', requested_reasoning_effort='none',
                                      resolved_model='gpt-5-mini-2025-08-07')], now)
     assert reverse['morning_brief']['status'] == 'review_required'
+
+
+def test_unhashable_request_fields_mark_the_row_unverified_without_failing_the_check():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    result = a.summarize_roles([row(requested_model=[]), row(requested_reasoning_effort={})], now)   # TypeError 없이 미인증
+    assert result['morning_brief']['status'] == 'review_required' and result['morning_brief']['verified_metadata_rows'] == 0

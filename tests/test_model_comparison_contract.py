@@ -789,4 +789,3 @@ def test_terra_profile_does_not_accept_legacy_minimal_effort_or_two_candidate_ch
     p = _terra_payload(V2); p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = "gpt-5.6-terra-2026-11-11"
     r = evaluate_contract(p)
     assert r["observations"]["bull_current"]["attempts"][0]["identity_match"] == "mismatch" and r["arms"]["current"]["verdict"] == "hold"
-

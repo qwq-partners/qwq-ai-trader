@@ -86,7 +86,8 @@ def summarize_roles(rows, now):
                     and r.get('refusal_detected') is False
                     and r.get('role_policy_version') == 'engine-roles-v2-openai'
                     and isinstance(r.get('resolved_model'), str)
-                    and r['resolved_model'] in RECOGNIZED_OPENAI_MODELS.get((r.get('requested_model'), r.get('requested_reasoning_effort')), ())
+                    and isinstance(r.get('requested_model'), str) and isinstance(r.get('requested_reasoning_effort'), str)
+                    and r['resolved_model'] in RECOGNIZED_OPENAI_MODELS.get((r['requested_model'], r['requested_reasoning_effort']), ())
                     and r.get('outcome') == 'success'
                     and r.get('usage_known') is True and r.get('finish_reason') == 'stop'
                     and all(finite(r.get(k)) for k in ('input_tokens', 'output_tokens', 'elapsed_ms', 'estimated_cost_usd'))]
