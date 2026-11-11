@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-11 — L02 병합·실호출 영수증(문서만): PR #362 main `22f8be07`, gpt-5.6-terra 신원 verified·운영 미배포 ([원장 L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
+
+- 병합: 사용자 "병합해" → PR #362 head `cd52f7b3` 고정 병합 → main `22f8be07`(CI verify pass 6m28s·mergeable). 독립 리뷰 3회(Codex gpt-6-astra/xhigh 헤더 확인) 1차 P1 1·P2 3 → 2차 신규 P2 2 → 3차 신규 0, 기존 P2 3건(`or` 기본값·float 단가·장전 점검 v2 정책 고정)은 부채 기록. AWS 보조 전체 verify(`2743c7f8`) 10,746 passed.
+- 실호출(사용자 "보내", 월 원장 밖 단발): 운영 전송 코드 `OpenAIClient` 그대로 `gpt-5.6-terra`·effort none·JSON 모드·64토큰 → **`resolved_model=gpt-5.6-terra` exact·verified**, HTTP 200·`stop`·거절 0·입력 31/출력 11/추론 0 토큰·2.79초·추정 USD 0.0002. dated snapshot 없음 → `DOCUMENTED_SNAPSHOTS` 변경 불필요, 현행 신원 정책(exact)으로 Bull 인증 가능. 영수증 `~/.local/state/qwq-task-audit/20261111/l02-terra/`(비공개).
+- 운영 `f29a250a`·PID 1274063 불변(gpt-5-mini/minimal 그대로). **NEXT:** 운영 배포 창 사용자 승인(장 마감 뒤, 2026-12-11 이전) → 배포 뒤 Bull 장중 자연 호출·`MORNING_BRIEF` 행 `resolved_model`/effort/비용 인수. 문서 영수증은 재배포하지 않는다.
+
 ## 2026-11-11 — L02 소스: `gpt-5-mini`(2026-12-11 API 제거) → 공식 권장 대체 `gpt-5.6-terra`, `minimal` → `none` (운영 미배포·실호출 0, [원장 L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
 
 - 근거: OpenAI 폐기 공지 2026-06-11 절(`gpt-5-mini`/`gpt-5-mini-2025-08-07` → `gpt-5.6-terra`, 2026-12-11 제거)과 모델 페이지(2026-11-11 확인: 입력 2/캐시 0.2/출력 12 USD/MTok, 캐시 쓰기 1.25x, >272K 입력 2x·출력 1.5x, effort `none|low|medium(기본)|high|xhigh|max`, **`minimal` 없음**, dated snapshot 미공개·default snapshot `gpt-5.6-terra`). D8(Bull 공급자 분리)은 사용자 "ㄱㄱ"으로 기본안 유지 — Bull은 OpenAI terra, Bear는 Claude Opus 5.5.
