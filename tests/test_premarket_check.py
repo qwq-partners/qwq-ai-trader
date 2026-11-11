@@ -182,3 +182,31 @@ def test_failed_collection_preserves_consumed_attempt(tmp_path, monkeypatch):
     assert a.run(manifest, now) == 2
     assert json.loads((tmp_path / 'out/result.json').read_text())['status'] == 'read_failed'
     assert a.run(manifest, now) == 3
+
+
+def test_terra_successor_rows_verify_only_with_matching_none_effort():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    ok = a.summarize_roles([row(requested_model='gpt-5.6-terra', resolved_model='gpt-5.6-terra', requested_reasoning_effort='none')], now)
+    assert ok['morning_brief']['status'] == 'call_metadata_verified' and ok['morning_brief']['resolved_models'] == ['gpt-5.6-terra']
+    mixed = a.summarize_roles([row(requested_model='gpt-5.6-terra', resolved_model='gpt-5.6-terra')], now)   # minimal 그대로
+    assert mixed['morning_brief']['status'] == 'review_required'
+    legacy = a.summarize_roles([row()], now)
+    assert legacy['morning_brief']['status'] == 'call_metadata_verified'
+
+
+def test_cross_model_response_is_not_verified_even_when_both_ids_are_recognized():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    crossed = a.summarize_roles([row(resolved_model='gpt-5.6-terra')], now)                 # mini/minimal 요청에 terra 응답
+    assert crossed['morning_brief']['status'] == 'review_required'
+    reverse = a.summarize_roles([row(requested_model='gpt-5.6-terra', requested_reasoning_effort='none',
+                                     resolved_model='gpt-5-mini-2025-08-07')], now)
+    assert reverse['morning_brief']['status'] == 'review_required'
+
+
+def test_unhashable_request_fields_mark_the_row_unverified_without_failing_the_check():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    result = a.summarize_roles([row(requested_model=[]), row(requested_reasoning_effort={})], now)   # TypeError 없이 미인증
+    assert result['morning_brief']['status'] == 'review_required' and result['morning_brief']['verified_metadata_rows'] == 0

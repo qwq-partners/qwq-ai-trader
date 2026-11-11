@@ -21,7 +21,7 @@ from tests.test_model_comparison_input import _LLM, _cross
 from tests.test_model_comparison_runner import NOW
 from tests.test_model_comparison_worker import SUFFIX, envelope, wait
 
-POLICY = {"daily_attempt_cap": 40, "max_output_tokens": 400, "allowed_models": ["gpt-5-mini", CLAUDE],
+POLICY = {"daily_attempt_cap": 40, "max_output_tokens": 400, "allowed_models": ["gpt-5.6-terra", CLAUDE],
           "experiment_usd_ceiling": "100", "valid_from": "2026-01-01", "valid_until": "2027-12-31",
           "pairs_per_day": 20, "max_common_context_bytes": 65536, "required_policy_mode": "normal"}
 ALL = ('openai_chat', 'claude_cli', 'anthropic_messages')
@@ -295,7 +295,7 @@ def test_invalid_profile_is_rejected_before_any_policy_is_pinned_in_the_shared_l
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert 'comparison_policy' not in names and untouched(tr)        # 원장에 정책 행이 남지 않는다
     # 같은 원장에서 다른 실험 ID·허용 모델의 올바른 manifest 가 조립된다.
-    fixed = issue(experiment_id='W2', execution_policy=dict(POLICY, allowed_models=['gpt-5-mini', CLAUDE]))
+    fixed = issue(experiment_id='W2', execution_policy=dict(POLICY, allowed_models=['gpt-5.6-terra', CLAUDE]))
     worker = w.assemble_comparison_worker(SimpleNamespace(), manifest=fixed, ledger=led, transports=tr, approval=approval(fixed),
                                           journal_dir=tmp_path / 'journal')
     worker.stop(5)

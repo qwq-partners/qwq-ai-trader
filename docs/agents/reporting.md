@@ -161,6 +161,8 @@ LLM 호출 정책은 유지하고, 텍스트를 래스터 이미지로 만드는
 
 `MARKET_BRIEF` 역할은 기존 공통 예산·정산·감사 경로에서 OpenAI
 `gpt-5-mini`/minimal, 출력 1,600 token·45초·입력 64KiB·standard를 사용한다.
+(위 문단은 당시 계약의 이력이다. 현행: `MARKET_BRIEF` 는 L01 Task 4 부터 Claude Fable 5.1/medium·4096·90초·JSON,
+`MORNING_BRIEF` 는 L02(2026-11-11 소스, 운영 미배포) 부터 OpenAI `gpt-5.6-terra`/none·1,600·45초·JSON 미설정(본문은 결정론 조립)이다.)
 JSON-object 출력과 필드·근거 ID·길이 검사를 거치며 수정 재호출·fallback 모델·
 shadow 호출은 없다. 이는 슬롯당 논리 분석 실행의 상한이며 HTTP 전송 총량과
 같은 지표가 아니다. 월 USD100 및 `log_and_continue` 정책은 유지한다.

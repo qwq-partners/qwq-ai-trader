@@ -49,7 +49,7 @@ def test_envelope_is_attested_and_hash_excludes_transport_times():
 
 def test_role_controls_copy_operating_adversarial_and_fallback_conditions():
     c = _controls()
-    assert c["bull"] == {"model": "openai-light", "max_output_tokens": MAX_TOKENS, "reasoning_effort": "minimal",
+    assert c["bull"] == {"model": "openai-light", "max_output_tokens": MAX_TOKENS, "reasoning_effort": "none",
                          "temperature": 0.3, "seed": VERDICT_SEED, "timeout_seconds": 12.0}
     assert c["bear"]["model"] == "anthropic-light" and c["bear"]["temperature"] is None and c["bear"]["seed"] is None
     assert [f["model"] for f in c["fallback_chain"]] == ["openai-heavy", "openai-light"]
@@ -123,7 +123,7 @@ class _LLM:
         self.delay, self.prompts = delay, []
 
     def _get_model(self, provider, weight):
-        return {(LLMProvider.ANTHROPIC, "light"): "claude-opus-5-5", (LLMProvider.OPENAI, "light"): "gpt-5-mini", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
+        return {(LLMProvider.ANTHROPIC, "light"): "claude-opus-5-5", (LLMProvider.OPENAI, "light"): "gpt-5.6-terra", (LLMProvider.GEMINI, "light"): "gemini-3.1-flash-lite",
                 (LLMProvider.OPENAI, "heavy"): "gpt-5.6-sol", (LLMProvider.GEMINI, "heavy"): "gemini-3.1-pro-preview"}[(provider, weight)]
 
     async def complete_with(self, prompt, *, provider, **kwargs):
@@ -178,7 +178,7 @@ def test_handoff_happens_before_provider_await_and_id_propagates(monkeypatch, re
     assert env["decision_id"] == row["decision_id"] == cross.last_llm_decision["decision_id"]
     assert env["common_context"] == row["inputs"]["common_context"] and env["input_available_at"] == row["inputs"]["collected_at"]
     assert cross.last_llm_decision["comparison_handoff"] == "accepted"
-    assert env["role_controls"]["bull"]["model"] == "gpt-5-mini"
+    assert env["role_controls"]["bull"]["model"] == "gpt-5.6-terra"
     from src.core.cross_validator import SINGLE_FALLBACK_TIMEOUT
     assert env["role_controls"]["fallback_chain_timeout_seconds"] == SINGLE_FALLBACK_TIMEOUT   # 운영 체인 시한 복사
 
@@ -268,5 +268,5 @@ def test_light_fallback_snapshot_records_effective_reasoning_control():
         fallback_prompt_suffix="YES/NO", fallback_timeout=10.0)
     primary, fallback = controls["fallback_chain"]
     assert primary["reasoning_effort"] is None
-    assert fallback["model"] == "gpt-5-mini"
-    assert fallback["reasoning_effort"] == "minimal"
+    assert fallback["model"] == "gpt-5.6-terra"
+    assert fallback["reasoning_effort"] == "none"      # L02: terra 는 minimal 이 없어 경량 기본 none

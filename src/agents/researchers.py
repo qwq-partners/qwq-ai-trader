@@ -48,7 +48,9 @@ MAX_TOKENS = 400
 #   실측(각 5회): low는 reasoning 128~320토큰을 소비하고 총 236~437토큰,
 #   minimal은 reasoning 0에 총 112~156토큰. 응답 품질 차이는 없었고
 #   토큰을 덜 쓸수록 본문이 잘려 빈 응답이 될 여지도 줄어든다.
-REASONING_EFFORT = "minimal"
+#   2026-11-11 L02: light 가 gpt-5.6-terra 로 바뀌며 minimal 이 없어 none(reasoning 0) 으로 대응. 실제 값은 호출 시점의
+#   light 모델로 고른다(adversarial_validator.bull_reasoning_effort: mini → minimal, terra → none). 아래는 그 기본값이다.
+REASONING_EFFORT = "none"
 
 # 빈 응답 재시도 — gpt-5 계열은 200 응답에 content만 비어 오는 경우가 있다.
 #   실측: LLMManager 경유 6회 중 1회 발생. 판정 호출에서 빈 응답은 곧 판단 불가이고,
@@ -213,7 +215,8 @@ class ResearchTeam:
             controls = {"reasoning_effort": "low", "api_max_tokens": 800,
                         "call_timeout_seconds": max(0.001, ROUND_TIMEOUT - 0.5)}
         elif provider == LLMProvider.OPENAI:
-            controls = {"reasoning_effort": REASONING_EFFORT, "seed": DEBATE_SEED}
+            from ..core.adversarial_validator import bull_reasoning_effort
+            controls = {"reasoning_effort": bull_reasoning_effort(self._llm), "seed": DEBATE_SEED}
         else:
             controls = {"temperature": DEBATE_TEMPERATURE}
         resp = await self._llm.complete_with(

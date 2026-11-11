@@ -65,14 +65,14 @@ async def test_only_bull_reaches_http_when_claude_unavailable_cannot_form_consen
     assert result.bear_final is None and result.consensus is None
     assert len(manager.openai._session.payloads) == 1
     assert manager.gemini._session.payloads == []
-    assert manager.openai._session.payloads[0]["reasoning_effort"] == "minimal"
+    assert manager.openai._session.payloads[0]["reasoning_effort"] == "none"
     assert rows[0]["request_sent"] is True and rows[0]["verdict"] is True
     assert rows[1]["provider"] == "anthropic" and rows[1]["role"] == "bear"
     assert rows[1]["request_sent"] is False and rows[1]["billing_status"] == "not_sent"
     assert rows[1]["success"] is False and rows[1]["verdict"] is None
     assert rows[1]["error"] == "offline unavailable"
     assert rows[1]["response"] == ""
-    assert rows[0]["params"]["reasoning_effort"] == "minimal"
+    assert rows[0]["params"]["reasoning_effort"] == "none"
     assert rows[1]["params"]["reasoning_effort"] == "low"
     assert "seed" not in rows[1]["params"]
     assert "temperature" not in rows[1]["params"]

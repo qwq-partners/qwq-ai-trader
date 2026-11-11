@@ -460,7 +460,8 @@ async def test_429_with_reported_usage_is_charged():
 
 @pytest.mark.asyncio
 async def test_light_fallback_does_not_translate_unsupported_explicit_controls():
-    manager = LLMManager(LLMConfig(openai_api_key='secret'))
+    # 역사 표의 gpt-5-mini 는 none 을 모른다(terra 는 heavy 와 같은 effort 집합이라 이 경계를 못 만든다).
+    manager = LLMManager(LLMConfig(openai_api_key='secret', openai_model_light='gpt-5-mini'))
     manager.openai._session = Session(Reply({'error': {'message': 'rejected'}}, status=429))
     with pytest.raises(ValueError, match='reasoning_effort'):
         await manager.complete('prompt', task=LLMTask.MARKET_ANALYSIS, reasoning_effort='none')
@@ -645,7 +646,7 @@ async def test_shadow_schedule_strong_reference_and_close_accounts_cancellation(
             self.closed = True
     manager = LLMManager(LLMConfig(openai_api_key='secret', openai_model_light_shadow='gpt-6.1-sol'), audit_dir=tmp_path)
     manager.openai._session = ClosableSession(PendingReply())
-    manager._maybe_fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, LLMResponse('ok', 'gpt-5-mini', LLMProvider.OPENAI))
+    manager._maybe_fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, LLMResponse('ok', 'gpt-5.6-terra', LLMProvider.OPENAI))
     await asyncio.wait_for(started.wait(), timeout=1)
     assert len(manager._shadow_tasks) == 1
     await manager.close()
@@ -720,7 +721,7 @@ async def test_actual_shadow_schedule_completion_releases_reference(tmp_path):
     manager = LLMManager(LLMConfig(openai_api_key='secret', openai_model_light_shadow='gpt-6.1-sol'), audit_dir=tmp_path / 'audit')
     manager._SHADOW_LOG_DIR = tmp_path / 'shadow'
     manager.openai._session = Session(openai_reply())
-    manager._maybe_fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, LLMResponse('ok', 'gpt-5-mini', LLMProvider.OPENAI))
+    manager._maybe_fire_shadow('prompt', '', LLMTask.QUICK_CLASSIFY, {}, LLMResponse('ok', 'gpt-5.6-terra', LLMProvider.OPENAI))
     assert len(manager._shadow_tasks) == 1
     await asyncio.gather(*manager._shadow_tasks)
     assert not manager._shadow_tasks

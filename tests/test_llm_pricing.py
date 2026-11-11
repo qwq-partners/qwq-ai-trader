@@ -150,3 +150,13 @@ def test_claude_fable_quote_uses_official_1h_cache_write_ceiling():
     assert quote.output_usd_per_million == 50.0
     assert quote.cost_usd == pytest.approx(0.04)
     assert 'cache_write_1h_ceiling' in quote.basis and 'not_invoice' in quote.basis
+
+
+def test_terra_successor_matches_official_page_with_cache_write_and_long_context_premium():
+    # 2026-11-11 https://developers.openai.com/api/docs/models/gpt-5.6-terra: 입력 2/출력 12, 캐시 쓰기 1.25x, >272K 2x/1.5x
+    quote = rate_quote('gpt-5.6-terra', 1000, 1000)
+    assert quote.input_usd_per_million == 2.5 and quote.output_usd_per_million == 12.0
+    assert quote.cost_usd == pytest.approx(0.0145)
+    assert 'cache_write_ceiling' in quote.basis and 'long_context' not in quote.basis
+    long = rate_quote('gpt-5.6-terra', 300_000, 1000)
+    assert long.input_usd_per_million == 5.0 and long.output_usd_per_million == 18.0 and 'long_context' in long.basis

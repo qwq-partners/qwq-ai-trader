@@ -83,24 +83,24 @@ def test_enabled_gemini_manifest_rejected_before_manager_and_clients(tmp_path, m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('explicit', [None, 'high'])
-async def test_common_light_uses_minimal_unless_caller_supplies_effort(explicit):
+async def test_common_light_uses_none_unless_caller_supplies_effort(explicit):   # L02: terra 경량 기본 none(종전 mini minimal)
     manager = LLMManager(LLMConfig(openai_api_key='synthetic'))
     manager.openai._session = Session(openai_reply())
     kwargs = {} if explicit is None else {'reasoning_effort': explicit}
     response = await manager.complete('input', task=LLMTask.QUICK_CLASSIFY, **kwargs)
-    assert manager.openai._session.payloads[0]['reasoning_effort'] == (explicit or 'minimal')
-    assert response.requested_reasoning_effort == (explicit or 'minimal')
+    assert manager.openai._session.payloads[0]['reasoning_effort'] == (explicit or 'none')
+    assert response.requested_reasoning_effort == (explicit or 'none')
 
 
 @pytest.mark.asyncio
-async def test_heavy_fallback_uses_light_minimal_effort_only_on_second_attempt():
+async def test_heavy_fallback_uses_light_none_effort_only_on_second_attempt():
     manager = LLMManager(LLMConfig(openai_api_key='synthetic'))
     manager.openai._session = Session(Reply({'error': {'code': 'rate_limit_exceeded'}}, 429), openai_reply())
     response = await manager.complete('input', task=LLMTask.MARKET_ANALYSIS)
     assert response.success
     first, second = manager.openai._session.payloads
     assert 'reasoning_effort' not in first
-    assert second['reasoning_effort'] == 'minimal'
+    assert second['reasoning_effort'] == 'none'
 
 
 @pytest.mark.asyncio
@@ -126,8 +126,8 @@ def test_comparison_raw_clients_require_a_replacement_independent_provider(monke
 async def test_resolved_primary_identity_cannot_be_retried_as_light_alias():
     manager = LLMManager(LLMConfig(openai_api_key='synthetic'))
     manager.openai._session = Session(Reply({'error': {'code': 'rate_limit_exceeded'},
-        'model': 'gpt-5-mini'}, 429), openai_reply())
+        'model': 'gpt-5.6-terra'}, 429), openai_reply())
     response = await manager.complete('input', task=LLMTask.MARKET_ANALYSIS)
     assert not response.success
     assert len(manager.openai._session.payloads) == 1
-    assert response.resolved_model == 'gpt-5-mini'
+    assert response.resolved_model == 'gpt-5.6-terra'

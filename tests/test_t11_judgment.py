@@ -299,7 +299,7 @@ def test_research_team_ledger_records_prompt_version_and_real_reasoning_effort()
     assert rows, "원장에 최소 1건은 기록돼야 한다"
     row = rows[0]
     assert row["prompt_version"] == PROMPT_VERSION == "debate-v2-2026-09-15"
-    assert row["params"]["reasoning_effort"] == REASONING_EFFORT == "minimal"   # "low" 하드코딩 버그 수정
+    assert row["params"]["reasoning_effort"] == REASONING_EFFORT == "none"   # "low" 하드코딩 버그 수정; L02 terra 는 minimal 대신 none
     assert row["params"]["seed"] == DEBATE_SEED
     assert "temperature" not in row["params"]
     bear_row = next(item for item in rows if item["role"] == "bear")

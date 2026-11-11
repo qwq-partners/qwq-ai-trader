@@ -35,9 +35,10 @@ llm:
   #   ② gpt-5.6-sol은 priority 1 최신 모델이며 일반 OpenAI API에서도 동작 확인
   #   heavy는 거래 복기·전략 진화·시장 분석 등 하루 수십 회 수준의 중요 판단에만 쓰인다.
   openai_model_heavy: "gpt-5.6-sol"    # 거래 복기, 전략 진화, 시장 분석 (heavy)
-  # light는 그대로 둔다 — Bull/Bear 토론이 종목당 2~4회씩 부르므로 호출량이 크다.
-  # frontier 모델로 올리면 비용이 급증한다. (2026-12-10 deprecation 예정이라 후속 검토 필요)
-  openai_model_light: "gpt-5-mini"     # 테마 탐지, 뉴스 요약, 일반 경량 작업 (light)
+  # 2026-11-11 L02: gpt-5-mini 는 2026-12-11 API 제거(공식 폐기 공지 2026-06-11 절) → 권장 대체 gpt-5.6-terra
+  #   (입력 2/출력 12 USD/MTok, effort none|low|medium|high|xhigh|max — minimal 없음, 코드가 none 으로 대응).
+  #   운영 사용처는 Bull(D8 공급자 분리 유지)·STOCK_MAPPING·REPORT_SUMMARY 절약/heavy→light 폴백·MORNING_BRIEF 역할.
+  openai_model_light: "gpt-5.6-terra"  # Bull·STOCK_MAPPING·OpenAI light 폴백 (light; task 슬롯은 아래 task_routes 가 anthropic)
   # Independent Bear (L01 Task 2, 2026-11-09): one budgeted Anthropic API attempt first (Ultra credits cover
   # the API only), then the subscribed CLI once on API availability failure. Order lives in LLMManager._complete_claude.
   # API credential is read lazily from ANTHROPIC_API_KEY_FILE, never from this YAML.
@@ -45,7 +46,7 @@ llm:
   claude_cli_enabled: true
   # L01 Task 4 (2026-11-10, 사용자 D3/D4/D5): task 슬롯을 Anthropic API로 돌린다(Ultra 크레딧). 코드 기본값은 openai라
   # 롤백은 아래 두 줄을 openai로 바꾸고 재시작. heavy(trade_review/strategy_analysis/market_analysis) → Fable 5.1 medium,
-  # light(theme_detection/quick_*/wiki_ingest/news_summary) → Opus 5.5 low. Bull(gpt-5-mini, D8)·REPORT_SUMMARY·STOCK_MAPPING 불변.
+  # light(theme_detection/quick_*/wiki_ingest/news_summary) → Opus 5.5 low. Bull(OpenAI light, D8 공급자 분리)·REPORT_SUMMARY·STOCK_MAPPING 불변.
   claude_model_heavy: "claude-fable-5-1"
   claude_model_light: "claude-opus-5-5"
   task_routes:

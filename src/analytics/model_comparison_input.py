@@ -96,7 +96,7 @@ def operating_role_controls(llm_manager, *, fallback_prompt_suffix: str, fallbac
 
     route = LLMManager.TASK_CONFIG[LLMTask.STRATEGY_ANALYSIS]
     return {
-        "bull": role(LLMProvider.OPENAI, "light", av.MAX_TOKENS, "minimal", 0.3, av.VERDICT_SEED, av.LLM_TIMEOUT),
+        "bull": role(LLMProvider.OPENAI, "light", av.MAX_TOKENS, av.bull_reasoning_effort(llm_manager), 0.3, av.VERDICT_SEED, av.LLM_TIMEOUT),
         "bear": role(LLMProvider.ANTHROPIC, "light", av.MAX_TOKENS, "low", None, None, av.LLM_TIMEOUT),
         "fallback_chain": [role(p, w, 100, LLMManager._task_controls(model(p, w), w, {}).get("reasoning_effort"),
                                 0.3, None, fallback_timeout)

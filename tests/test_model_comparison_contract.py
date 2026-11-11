@@ -754,3 +754,38 @@ def test_v1_still_accepts_snapshot_as_comparison_model():
     c["attempts"][0].update(requested_model=SNAPSHOT, requested_reasoning_effort="minimal", resolved_model=SNAPSHOT)
     r = evaluate_contract(p)
     assert r["contract_status"] == "conformant" and r["arms"]["candidate"]["verdict"] == "approve"
+
+
+TERRA = "gpt-5.6-terra"
+
+
+def _terra_payload(version="model-comparison-offline-contract-v1"):
+    """L02(2026-11-11) 현행 Bull 프로필: gpt-5.6-terra/none(terra 는 minimal 미지원), 후보는 effort 하나만 다르다."""
+    p = payload(); p["schema_version"] = version
+    for role, effort in (("bull_current", "none"), ("bull_candidate", "low")):
+        c = p["calls"][role]
+        c["controls"].update(requested_model=TERRA, reasoning_effort=effort)
+        c["attempts"][0].update(requested_model=TERRA, requested_reasoning_effort=effort, resolved_model=TERRA)
+    return p
+
+
+@pytest.mark.parametrize("version", ["model-comparison-offline-contract-v1", V2])
+def test_current_terra_bull_profile_is_conformant_with_exact_identity(version):
+    r = evaluate_contract(_terra_payload(version))
+    assert r["contract_status"] == "conformant"
+    assert r["arms"]["current"]["verdict"] == "approve" and r["arms"]["candidate"]["verdict"] == "approve"
+    if version == V2:
+        assert r["observations"]["bull_current"]["attempts"][0]["identity_match"] == "exact"
+    # 역사 프로필(gpt-5-mini/minimal)도 그대로 해석된다.
+    assert evaluate_contract(payload())["contract_status"] == "conformant"
+
+
+def test_terra_profile_does_not_accept_legacy_minimal_effort_or_two_candidate_changes():
+    p = _terra_payload(); p["calls"]["bull_current"]["controls"]["reasoning_effort"] = "minimal"
+    with pytest.raises(ValueError, match="bull_current.controls.reasoning_effort"): evaluate_contract(p)
+    p = _terra_payload(); p["calls"]["bull_candidate"]["controls"].update(requested_model="gpt-5-mini", reasoning_effort="low")
+    with pytest.raises(ValueError, match="one_comparison_variable_required"): evaluate_contract(p)
+    # terra 의 dated snapshot 은 공식 미공개 → requested 와 다른 resolved 는 mismatch(hold), 문서화 snapshot 으로 승격되지 않는다.
+    p = _terra_payload(V2); p["calls"]["bull_current"]["attempts"][0]["resolved_model"] = "gpt-5.6-terra-2026-11-11"
+    r = evaluate_contract(p)
+    assert r["observations"]["bull_current"]["attempts"][0]["identity_match"] == "mismatch" and r["arms"]["current"]["verdict"] == "hold"
