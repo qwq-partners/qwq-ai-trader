@@ -35,7 +35,7 @@ def manager(tmp_path, *, spent=0, monthly=True):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,model,cap,control', [
-    ('morning_brief', 'gpt-5-mini', 1600, 'minimal'),
+    ('morning_brief', 'gpt-5.6-terra', 1600, 'none'),
 ])
 @pytest.mark.parametrize('spent', [0, 80])
 async def test_role_exact_payload_and_durable_attribution(tmp_path, role, model, cap, control, spent):
@@ -135,7 +135,7 @@ async def test_role_preflight_fails_closed_even_without_monthly_budget(tmp_path,
     if fault == 'price':
         monkeypatch.setattr(llm, 'rate_quote', lambda *a, **kw: None)
     else:
-        monkeypatch.setitem(llm._OPENAI_EFFORTS, 'gpt-5-mini', {'low'})
+        monkeypatch.setitem(llm._OPENAI_EFFORTS, 'gpt-5.6-terra', {'low'})
     with pytest.raises(ValueError):
         await m.complete_role('p', role='morning_brief')
     assert m.openai._session.payloads == []
@@ -215,7 +215,7 @@ async def test_deadline_expired_during_sync_admission_never_sends(tmp_path, monk
 
 def test_role_table_is_versioned_and_immutable():
     from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
-    assert ROLE_POLICY_VERSION == 'engine-roles-v6-claude-roles'
+    assert ROLE_POLICY_VERSION == 'engine-roles-v7-terra'
     research = ROLE_PROFILES[LLMRole.MARKET_BRIEF]
     assert research.timeout_seconds == 90.0 and research.max_input_bytes == 64 * 1024
     assert research.budget_priority == 'standard'
@@ -364,8 +364,8 @@ async def test_production_role_audit_is_private_metadata_only_without_enabling_l
     files = list(audit_dir.glob('llm-audit-*.jsonl'))
     assert len(files) == 1
     row = json.loads(files[0].read_text())
-    assert row['task'] == 'morning_brief' and row['role_policy_version'] == 'engine-roles-v6-claude-roles'
-    assert row['requested_reasoning_effort'] == 'minimal'
+    assert row['task'] == 'morning_brief' and row['role_policy_version'] == 'engine-roles-v7-terra'
+    assert row['requested_reasoning_effort'] == 'none'
     assert row['resolved_model'] == 'provider-reported-version'
     assert row['outcome'] == 'error' and row['elapsed_ms'] >= 0
     assert 'private-prompt' not in files[0].read_text() and 'private-response' not in files[0].read_text()

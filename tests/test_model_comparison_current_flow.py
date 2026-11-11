@@ -481,11 +481,15 @@ def test_worker_accepts_envelope_built_from_real_operating_role_controls(tmp_pat
 
     class Manager:   # 생산자가 읽는 최소 표면: light 모델명만. 네트워크·자격 없음.
         def _get_model(self, provider, weight):
-            return CLAUDE if provider == LLMProvider.ANTHROPIC else 'gpt-5-mini'
+            return CLAUDE if provider == LLMProvider.ANTHROPIC else 'gpt-5.6-terra'
     controls = mci.operating_role_controls(Manager(), fallback_prompt_suffix='\nYES/NO', fallback_timeout=10.0)
+    # L02(2026-11-11): 운영 Bull 은 gpt-5.6-terra/none — worker 의 현행 manifest 도 같은 프로필이어야 봉투를 받는다.
+    cur = dict(model='gpt-5.6-terra', max_output_tokens=400, reasoning_effort='none', temperature=0.3, seed=20260803, timeout_seconds=12.0)
+    terra_manifest = current_manifest(current=cur, candidate=dict(cur, reasoning_effort='low'))
+    terra_manifest['execution_policy'] = dict(terra_manifest['execution_policy'], allowed_models=['gpt-5.6-terra', CLAUDE])
     # L01 Task 2(2026-11-09): 생산자는 운영 순서(API 1차)를 적고, CLI→API 만 구현한 현행 worker 는 그 봉투를 거부한다(fail-closed).
     assert controls['bear_transport_order'] == ['anthropic_messages', 'claude_cli'] and 'billing_channel' not in controls['bear']
-    worker, ledger, op, cli, api = build_current_worker(tmp_path, current_manifest(), cli=SCRIPTS['timeout'])
+    worker, ledger, op, cli, api = build_current_worker(tmp_path, terra_manifest, cli=SCRIPTS['timeout'])
     worker.start()
     try:
         assert worker.offer(envelope(worker, role_controls=controls)) == 'rejected_control_mismatch'

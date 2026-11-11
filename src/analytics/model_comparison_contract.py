@@ -13,6 +13,9 @@ INPUT_VERSION_V2 = "model-comparison-offline-contract-v2"
 REPORT_VERSION_V2 = "model-comparison-offline-report-v2"
 IDENTITY_POLICY_VERSION = "documented-model-identity-v1"
 # Qualified 2026-11-01: https://developers.openai.com/api/docs/models/gpt-5-mini
+# gpt-5.6-terra(2026-11-11 https://developers.openai.com/api/docs/models/gpt-5.6-terra): 문서화된 dated snapshot 없음
+# (default snapshot = gpt-5.6-terra) → 신원은 requested==resolved 의 exact 매치로만 인정한다. 실호출이 dated id 를
+# 돌려주면 공식 표에서 확인한 뒤 여기 추가한다(그 전까지 그 응답은 mismatch → hold).
 DOCUMENTED_SNAPSHOTS = frozenset({("openai_chat", "gpt-5-mini", "gpt-5-mini-2025-08-07")})
 PROFILE = "entry-independent-review-v1"
 POLICY = {"requires_independent_review": True, "missing_review_policy": "hold",
@@ -22,8 +25,13 @@ POLICY = {"requires_independent_review": True, "missing_review_policy": "hold",
 # 역사적(CLI 1차, ~2026-11-09)과 현행(L01 Task 2: API 1차) 두 순서의 증거를 모두 해석한다. 두 번째 시도의 인가 규칙은
 # 첫 전송의 허용 실패 집합(FALLBACK / API_FALLBACK)으로 갈린다.
 BEAR_TRANSPORT_ORDERS = (["claude_cli", "anthropic_messages"], ["anthropic_messages", "claude_cli"])
-BULL = {"requested_model": "gpt-5-mini", "reasoning_effort": "minimal", "max_output_tokens": 400,
+# Bull 기준도 두 시점을 해석한다: 역사적(gpt-5-mini/minimal, ~2026-11-11)과 현행(L02: gpt-5.6-terra/none —
+# gpt-5-mini 는 2026-12-11 API 제거, terra 는 minimal 미지원). bull_current.requested_model 로 어느 프로필인지 고른다.
+BULL_LEGACY = {"requested_model": "gpt-5-mini", "reasoning_effort": "minimal", "max_output_tokens": 400,
+               "temperature": .3, "seed": 20260803, "empty_retries": 1}
+BULL = {"requested_model": "gpt-5.6-terra", "reasoning_effort": "none", "max_output_tokens": 400,
         "temperature": .3, "seed": 20260803, "empty_retries": 1}
+BULL_PROFILES = (BULL_LEGACY, BULL)
 BEAR = {"requested_model": "claude-opus-5-5", "reasoning_effort": "low", "max_output_tokens": 400,
         "temperature": None, "seed": None, "empty_retries": 0}
 ATTEMPT_FIELDS = {"attempt_id", "transport", "billing_channel", "requested_model", "resolved_model",
@@ -134,13 +142,16 @@ def evaluate_contract(payload):
              "api_possibly_sent_unknown_estimate_count": 0, "missing_trace_count": 0,
              "api_unknown_usage_count": 0, "subscription_unknown_usage_count": 0, "unknown_transmission_count": 0}
     results = {}
+    bull_ref = BULL
     for role in ("bull_current", "bull_candidate", "bear"):
         path = "calls." + role
         call = calls[role]
         _fields(call, {"controls", "whole_call_elapsed_ms", "outcome", "content", "attempts"}, path)
         controls = call["controls"]
         _fields(controls, BULL, path + ".controls")
-        reference = BEAR if role == "bear" else BULL
+        if role == "bull_current":
+            bull_ref = next((p for p in BULL_PROFILES if p["requested_model"] == controls["requested_model"]), BULL)
+        reference = BEAR if role == "bear" else bull_ref
         for key, expected in reference.items():
             if role == "bull_candidate" and key in {"requested_model", "reasoning_effort", "max_output_tokens"}:
                 continue
@@ -151,8 +162,8 @@ def evaluate_contract(payload):
             _identifier(controls["reasoning_effort"], path + ".controls.reasoning_effort")
             cap = controls["max_output_tokens"]
             if type(cap) is not int or not 1 <= cap <= 1000000: _error(path + ".controls.max_output_tokens")
-            if (sum(controls[k] != BULL[k] for k in ("requested_model", "reasoning_effort", "max_output_tokens")) != 1
-                    or (v2 and ("openai_chat", BULL["requested_model"], controls["requested_model"]) in DOCUMENTED_SNAPSHOTS)):
+            if (sum(controls[k] != bull_ref[k] for k in ("requested_model", "reasoning_effort", "max_output_tokens")) != 1
+                    or (v2 and ("openai_chat", bull_ref["requested_model"], controls["requested_model"]) in DOCUMENTED_SNAPSHOTS)):
                 _error(path + ".controls", "one_comparison_variable_required")
         elapsed = call["whole_call_elapsed_ms"]
         _number(elapsed, path + ".whole_call_elapsed_ms", True)

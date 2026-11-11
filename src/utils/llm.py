@@ -92,7 +92,8 @@ class LLMConfig:
     # 2026-08-02: gpt-5.4 → gpt-5.6-sol (gpt-5.4 deprecated 예정, sol은 일반 API 동작 확인)
     openai_model_heavy: str = "gpt-5.6-sol"
     # Light: 빠른 분류, 테마 탐지에 사용
-    openai_model_light: str = "gpt-5-mini"
+    # 2026-11-11 L02: gpt-5-mini(2026-12-11 API 제거) → 공식 권장 대체 gpt-5.6-terra
+    openai_model_light: str = "gpt-5.6-terra"
     # Inert compatibility labels for legacy callers and historical audit rows.
     gemini_model_heavy: str = "gemini-3.1-pro-preview"
     gemini_model_light: str = "gemini-3.1-flash-lite"
@@ -208,7 +209,7 @@ class LLMConfig:
             budget_policy_enabled=llm_cfg.get("budget_policy_enabled", False),
             missing_cost_policy=llm_cfg.get("missing_cost_policy", "block"),
             openai_model_heavy=(llm_cfg.get("openai_model_heavy") or "gpt-5.6-sol"),
-            openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5-mini"),
+            openai_model_light=(llm_cfg.get("openai_model_light") or "gpt-5.6-terra"),
             openai_model_light_shadow=(llm_cfg.get("openai_model_light_shadow") or ""),
             manus_enabled=bool((llm_cfg.get("manus") or {}).get("enabled", False)),
             manus_agent_profile=(
@@ -329,8 +330,11 @@ def _billing_status(data: dict, status: int, usage_known: bool) -> str:
 
 # Validated 2026-10-12 against https://developers.openai.com/api/docs/models
 # and https://developers.openai.com/api/docs/guides/reasoning
+# Validated 2026-11-11 against https://developers.openai.com/api/docs/models/gpt-5.6-terra
+# (none|low|medium|high|xhigh|max — `minimal` 없음; gpt-5-mini 의 minimal 은 실측 reasoning 0 이라 none 이 대응).
 _OPENAI_EFFORTS = {
     "gpt-5-mini": {"minimal", "low", "medium", "high"},
+    "gpt-5.6-terra": {"none", "low", "medium", "high", "xhigh", "max"},
     "gpt-5.6-sol": {"none", "low", "medium", "high", "xhigh", "max"},
     "gpt-6-astra": {"low", "medium", "high", "xhigh", "max"},
     "gpt-6.1-sol": {"low", "medium", "high", "xhigh", "max"},
@@ -940,7 +944,8 @@ class LLMManager:
             return result
         if weight == "light" and result.get("reasoning_effort") is None:
             supported = _OPENAI_EFFORTS.get(model, set())
-            for effort in ("minimal", "low"):
+            # minimal(gpt-5-mini) → none(gpt-5.6 계열): 둘 다 reasoning 토큰 0 의 경량 기본값.
+            for effort in ("minimal", "none", "low"):
                 if effort in supported:
                     result["reasoning_effort"] = effort
                     break

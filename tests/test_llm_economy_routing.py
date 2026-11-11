@@ -25,7 +25,7 @@ def manager(tmp_path, monkeypatch, spent=0):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('spent,expected', [(0, 'gpt-5.6-sol'), (80, 'gpt-5-mini')])
+@pytest.mark.parametrize('spent,expected', [(0, 'gpt-5.6-sol'), (80, 'gpt-5.6-terra')])
 async def test_summary_model_changes_and_attribution_is_durable(tmp_path, monkeypatch, spent, expected):
     m = manager(tmp_path, monkeypatch, spent)
     result = await m.complete('summary', task=LLMTask.REPORT_SUMMARY)
@@ -104,7 +104,7 @@ async def test_profile_race_reselects_before_any_send_and_is_bounded(tmp_path, m
         return reserve(*a, **kw)
     monkeypatch.setattr(m.monthly_budget, 'reserve', racing)
     result = await m.complete('p', task=LLMTask.REPORT_SUMMARY)
-    assert result.success and result.model == 'gpt-5-mini' and n == 2
+    assert result.success and result.model == 'gpt-5.6-terra' and n == 2
     assert m.openai.complete.call_count == 1
     def never_stable(*a, **kw):
         nonlocal n

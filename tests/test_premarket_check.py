@@ -182,3 +182,14 @@ def test_failed_collection_preserves_consumed_attempt(tmp_path, monkeypatch):
     assert a.run(manifest, now) == 2
     assert json.loads((tmp_path / 'out/result.json').read_text())['status'] == 'read_failed'
     assert a.run(manifest, now) == 3
+
+
+def test_terra_successor_rows_verify_only_with_matching_none_effort():
+    a = api()
+    now = datetime.fromisoformat('2026-10-16T07:35:00+09:00')
+    ok = a.summarize_roles([row(requested_model='gpt-5.6-terra', resolved_model='gpt-5.6-terra', requested_reasoning_effort='none')], now)
+    assert ok['morning_brief']['status'] == 'call_metadata_verified' and ok['morning_brief']['resolved_models'] == ['gpt-5.6-terra']
+    mixed = a.summarize_roles([row(requested_model='gpt-5.6-terra', resolved_model='gpt-5.6-terra')], now)   # minimal 그대로
+    assert mixed['morning_brief']['status'] == 'review_required'
+    legacy = a.summarize_roles([row()], now)
+    assert legacy['morning_brief']['status'] == 'call_metadata_verified'

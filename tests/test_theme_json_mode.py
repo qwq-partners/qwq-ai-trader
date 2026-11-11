@@ -24,9 +24,9 @@ async def test_detector_requests_json_mode_and_preserves_controls(tmp_path):
     assert await detect(manager) == {'themes': ['synthetic'], 'stock_impacts': []}
     body = manager.openai._session.payloads[0]
     assert body['response_format'] == {'type': 'json_object'}
-    assert body['model'] == 'gpt-5-mini'
+    assert body['model'] == 'gpt-5.6-terra'
     assert body['max_completion_tokens'] == 16000
-    assert body['reasoning_effort'] == 'minimal'
+    assert body['reasoning_effort'] == 'none'
     assert len(body['messages']) == 1 and body['messages'][0]['role'] == 'user'
     assert '합성 뉴스' in body['messages'][0]['content']
     assert '다음 JSON 형식으로만 응답하세요:' in body['messages'][0]['content']

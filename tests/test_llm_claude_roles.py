@@ -60,13 +60,13 @@ def claude_request(m, index=0):
     return m.anthropic._session.calls[index][1]['json']
 
 
-def test_role_table_v6_moves_report_roles_to_anthropic_api():
-    assert ROLE_POLICY_VERSION == 'engine-roles-v6-claude-roles'
+def test_role_table_v7_moves_report_roles_to_anthropic_api_and_morning_brief_to_terra():
+    assert ROLE_POLICY_VERSION == 'engine-roles-v7-terra'
     expect = {LLMRole.REPORT_ONE_LINE: ('anthropic', OPUS, 512, 20.0, 'low', None),
               LLMRole.MARKET_BRIEF: ('anthropic', FABLE, 4096, 90.0, 'medium', 'json_object'),
               LLMRole.POST_EXIT_RESEARCH: ('anthropic', FABLE, 4096, 90.0, 'medium', None),
               LLMRole.WEB_REPORT: ('anthropic', FABLE, 12288, 180.0, 'medium', 'json_object'),
-              LLMRole.MORNING_BRIEF: ('openai', 'gpt-5-mini', 1600, 45.0, 'minimal', None)}
+              LLMRole.MORNING_BRIEF: ('openai', 'gpt-5.6-terra', 1600, 45.0, 'none', None)}
     for role, (provider, model, cap, timeout, effort, fmt) in expect.items():
         p = ROLE_PROFILES[role]
         assert (p.provider, p.model, p.max_output_tokens, p.timeout_seconds, p.reasoning_effort, p.response_format) == \
@@ -141,7 +141,7 @@ async def test_default_task_routes_stay_openai(tmp_path):
     m = manager(tmp_path)
     m.openai._session = OpenAISession(openai_reply('{"themes": []}'))
     assert await m.complete_json('p', task=LLMTask.THEME_DETECTION, response_format={'type': 'json_object'}) == {'themes': []}
-    assert m.anthropic._session.calls == [] and m.openai._session.payloads[0]['model'] == 'gpt-5-mini'
+    assert m.anthropic._session.calls == [] and m.openai._session.payloads[0]['model'] == 'gpt-5.6-terra'
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_heavy_anthropic_failure_falls_back_to_openai_light_but_refusal_do
     m.anthropic._session = ClaudeSession({'error': {'type': 'overloaded_error', 'message': 'x'}}, 529)
     response = await m.complete('p', task=LLMTask.TRADE_REVIEW)
     assert response.success and response.content == 'fallback'
-    assert m.openai._session.payloads[0]['model'] == 'gpt-5-mini' and m.stats['fallback_count'] == 1
+    assert m.openai._session.payloads[0]['model'] == 'gpt-5.6-terra' and m.stats['fallback_count'] == 1
     assert [a['role'] for a in response.attempt_trail] == ['primary', 'fallback']
 
     m2 = manager(tmp_path / 'b', claude_body(FABLE, None, 'refusal', stop_details={'type': 'refusal'}), routes={'heavy': 'anthropic'})

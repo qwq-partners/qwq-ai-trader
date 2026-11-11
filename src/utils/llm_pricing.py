@@ -25,6 +25,7 @@ class PriceQuote:
 
 _RATES = {
     'gpt-5-mini': (0.25, 2.0),
+    'gpt-5.6-terra': (2.0, 12.0),
     'gpt-5.6-sol': (4.0, 20.0),
     'gpt-6.1-sol': (2.0, 10.0),
     'gpt-6-astra': (10.0, 50.0),
@@ -59,7 +60,8 @@ def rate_quote(model: str, input_tokens: int, output_tokens: int,
         # CLI list-price estimates are never API spend.
         input_rate *= 2
         basis += '_cache_write_1h_ceiling'
-    if model in {'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6-astra'}:
+    # gpt-5.6-terra 2026-11-11 공식: 입력 2/출력 12, 캐시 쓰기 1.25x, >272K 입력 2x·출력 1.5x (sol 과 같은 규칙).
+    if model in {'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6-astra'}:
         input_rate *= 1.25
         basis += '_cache_write_ceiling'
         if input_tokens > 272_000:

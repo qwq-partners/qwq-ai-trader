@@ -8,7 +8,11 @@
 
 **완료 조건(초안):** terra 공식 단가 입력(`llm_pricing`), `_OPENAI_EFFORTS`/`RECOGNIZED_OPENAI_MODELS`/`DOCUMENTED_SNAPSHOTS` 갱신, 실호출 1회 resolved snapshot 신원 verified(사용자 승인), `MORNING_BRIEF`·light 기본값·heavy→light 폴백·`REPORT_SUMMARY`·`STOCK_MAPPING` 교체, 운영 배포 2026-12-11 이전. 모델 교체는 정확도·순수익 향상의 증거가 아니다.
 
-**NEXT:** 사용자 지시 대기(L01 Task 6 뒤). 착수 시 D8 재결정부터.
+**Do(11/11 20:1x~ KST, 사용자 "ㄱㄱ" → L01 Task 6 전 착수, 브랜치 `feature/l02-gpt5mini-successor-terra-20261111`, 기준 main `b65e3dc7`):** D8 재결정은 기본안 유지(Bull OpenAI `gpt-5.6-terra` / Bear Claude Opus 5.5, Opus 전환 없음). 공식 모델 페이지(2026-11-11) 확인: 입력 2/캐시 0.2/출력 12, 캐시 쓰기 1.25x, >272K 2x/1.5x, effort none|low|medium|high|xhigh|max(**minimal 없음**), dated snapshot 미공개(default `gpt-5.6-terra`). 소스 교체 9파일: `llm.py`(light 기본·`_OPENAI_EFFORTS`·경량 기본 effort `minimal→none→low`), `llm_pricing.py`(terra 단가+sol 규칙), `llm_roles.py` v7(`MORNING_BRIEF` terra/none), `adversarial_validator.BULL_REASONING_EFFORT="none"`·`researchers.REASONING_EFFORT="none"`·`model_comparison_input`(공용 상수), `model_comparison_contract`(Bull 역사/현행 두 프로필·snapshot 표 불변), `report_premarket_check`(terra 인식), `default.yml`. 역사 프로브/드라이런·R1 manifest·과거 단가는 보존. 영향 검사 41파일 1,444 passed(AWS 보조)·신규 검사 5건(단가·contract 3·premarket). 상세 CHANGELOG 11/11 L02.
+
+**비용·신원 메모:** 출력 단가 6배 — Bull 월 약 USD 9 추정(11/16 실측 대조). terra 응답 `model` 이 dated id 면 현행 신원 정책에서 mismatch→hold 라 **운영 배포 전 실호출 1회로 `resolved_model` 확인이 배포 게이트**(사용자 승인, 추정 USD 0.001).
+
+**NEXT:** ① 전체 verify(AWS 보조 → CI 직렬 전체; WSL 은 임시 키 재등록 시) → Codex 독립 리뷰 → PR. ② 사용자 승인 뒤 실호출 1회(`gpt-5.6-terra` → `resolved_model`·effort none 수락·JSON) — dated id 면 `DOCUMENTED_SNAPSHOTS` 추가 후 재검사. ③ 운영 배포는 L01 Task 6(11/16) 실측과 겹치지 않게 사용자 창 승인(2026-12-11 이전). ④ 배포 뒤 Bull 자연 호출(장중 4슬롯)·MORNING_BRIEF 행의 `resolved_model`/effort/비용 인수.
 
 ### TEST-PANEL-DEADLINE-LOOP-CLOCK — 공통 패널 시한 검사의 벽시계 플레이크 제거 (테스트 전용·제품 코드 0 / 수정·AWS 보조 반복·독립 리뷰·PR #354 병합 `1f87b896` DONE — WSL 전체는 검사 전용이라 생략, 서버 배포 verify 10,659 passed에 포함)
 

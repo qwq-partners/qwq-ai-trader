@@ -179,7 +179,7 @@ async def test_empty_retry_and_shadow_each_get_reservation(tmp_path):
     await m._fire_shadow('p', '', LLMTask.QUICK_CLASSIFY, {'max_tokens': 100}, response(), 'gpt-5-mini')
     status = m.get_monthly_budget_status()
     assert status['settled_count'] == 3
-    assert status['spent_usd'] == pytest.approx(0.0000675)
+    assert status['spent_usd'] == pytest.approx(0.0003125)   # terra 2건(0.000145씩) + shadow gpt-5-mini 1건(0.0000225)
     assert status['reserved_usd'] == 0
 
 
@@ -423,7 +423,7 @@ async def test_failed_settlement_does_not_abandon_other_inflight_request(tmp_pat
     status = manager(tmp_path).get_monthly_budget_status()
     assert status['unresolved_count'] == 1
     assert status['settled_count'] == 1
-    assert status['spent_usd'] == pytest.approx(0.0000225)
+    assert status['spent_usd'] == pytest.approx(0.000145)    # gpt-5.6-terra 10/10 토큰: 2.5·10 + 12·10 = 145e-6
 
 
 @pytest.mark.asyncio

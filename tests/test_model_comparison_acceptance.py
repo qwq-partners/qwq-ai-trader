@@ -68,8 +68,8 @@ def test_prepare_writes_fixed_scope_without_calls_or_prompt_text(tmp_path):
     assert man["enabled"] is True and man["experiment_id"] == "ACC-1" and man["pairs_per_day"] == 1
     assert (pol["pairs_per_day"], pol["daily_attempt_cap"], pol["max_output_tokens"], pol["experiment_usd_ceiling"]) == (1, 4, 400, "0.50")
     assert pol["valid_from"] == pol["valid_until"] == day
-    assert set(pol["allowed_models"]) == {"gpt-5-mini", "claude-opus-5-5"}      # 운영 Bull/Bear 요청 모델만
-    assert man["current"]["reasoning_effort"] == "minimal" and man["candidate"]["reasoning_effort"] == "low"
+    assert set(pol["allowed_models"]) == {"gpt-5.6-terra", "claude-opus-5-5"}      # 운영 Bull/Bear 요청 모델만
+    assert man["current"]["reasoning_effort"] == "none" and man["candidate"]["reasoning_effort"] == "low"
     assert man["bear"]["billing_channel"] == "subscription" and man["bear_api_fallback"]["billing_channel"] == "api"
     appr = json.loads((tmp_path / "acc" / acc.APPROVAL_FILE).read_text())
     assert appr["approved_by"] is None and appr["manifest_sha256"] == w.manifest_sha256(man)

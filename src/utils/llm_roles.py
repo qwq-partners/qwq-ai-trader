@@ -6,7 +6,7 @@ from types import MappingProxyType
 
 # v6(L01 Task 4, 2026-11-10 사용자 D3/D4/D5): 웹 리포트·시장 보고·복기 → Fable 5.1(medium), 한 줄 → Opus 5.5(low).
 # Anthropic은 response_format이 없어 manager가 system에 JSON 전용 지시를 붙이고 파서/검증기는 그대로 둔다.
-ROLE_POLICY_VERSION = 'engine-roles-v6-claude-roles'
+ROLE_POLICY_VERSION = 'engine-roles-v7-terra'
 
 
 class LLMRole(str, Enum):
@@ -46,9 +46,10 @@ ROLE_PROFILES = MappingProxyType({
     LLMRole.REPORT_ONE_LINE: RoleProfile(
         'anthropic', 'claude-opus-5-5', 512, 20.0, 32 * 1024, 'standard',
         reasoning_effort='low'),
+    # L02 2026-11-11: gpt-5-mini(2026-12-11 제거) → gpt-5.6-terra, minimal → none(terra 는 minimal 미지원).
     LLMRole.MORNING_BRIEF: RoleProfile(
-        'openai', 'gpt-5-mini', 1600, 45.0, 64 * 1024, 'standard',
-        reasoning_effort='minimal'),
+        'openai', 'gpt-5.6-terra', 1600, 45.0, 64 * 1024, 'standard',
+        reasoning_effort='none'),
     LLMRole.MARKET_BRIEF: RoleProfile(
         'anthropic', 'claude-fable-5-1', 4096, 90.0, 64 * 1024, 'standard',
         reasoning_effort='medium', response_format='json_object'),

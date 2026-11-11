@@ -50,6 +50,9 @@ MAX_TOKENS = 400
 # 재현성 — gpt-5는 temperature 커스텀이 막혀 있어 seed로만 판정을 고정할 수 있다.
 # (실측: seed 없이 6회 중 1회 반전, seed 고정 시 6회 일치)
 VERDICT_SEED = 20260803
+# Bull 추론 강도 — gpt-5-mini 의 minimal(실측 reasoning 0) 을 gpt-5.6-terra 의 none 으로 대응 (L02 2026-11-11).
+# 오프라인 비교 입력(model_comparison_input)도 이 값을 읽는다.
+BULL_REASONING_EFFORT = "none"
 
 BULL_SYSTEM = (
     "당신은 한국 주식 트레이딩 심사역이다. "
@@ -175,7 +178,7 @@ class AdversarialValidator:
             system=BULL_SYSTEM, max_tokens=MAX_TOKENS,
             budget_priority="essential",
             # 판정만 필요하므로 추론을 최소화한다. 토큰을 덜 쓸수록 빈 응답 여지도 준다.
-            reasoning_effort="minimal",
+            reasoning_effort=BULL_REASONING_EFFORT,
             retry_on_empty=1,   # 200 + 빈 content가 실측으로 확인됨 (6회 중 1회)
             seed=VERDICT_SEED,
         )
