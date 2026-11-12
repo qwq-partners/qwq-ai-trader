@@ -1,5 +1,11 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-12 — L01/L02 자연 호출 인수 판독(문서만): 신원 전부 verified, `daily_budget` 5.0이 13:19 소진돼 이후 LLM 호출 차단 ([원장 L01](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
+
+- 읽기 전용 판독(13:50 KST, 운영 `3caaeaa9`/PID 1331574, 새 호출·재실행·시험 발송·설정 변경 0). Bull 3슬롯 **36/36** `gpt-5.6-terra` exact·effort none·HTTP 200(p50 2.05초, 정산 USD 0.075 → 월 약 2), Bear 36/36 Opus API, Fable 5.1 고정 역할 4/4 verified·`end_turn`(`MARKET_BRIEF` 33~35초, `WEB_REPORT` 82~112초·출력 최대 10,032), light Opus 테마 탐지 40/40.
+- 내용 수락: 시장 보고 0/2(`unsupported_numeric @ issues[0].counterpoint`, `unsupported_date @ issues[1].event` — 대체 본문 발송 accepted), 웹 1/2(morning `unsupported_numeric`·scope absent, midday ready). 1일 표본, 검증 완화·모델 교체 결론 없음.
+- **발견:** 월 원장 13:10까지 5.56 USD(Opus 3.20·Fable 2.28·terra 0.07; 종전 일 1.7~1.8) → 프로세스 지역 일 예산 5.0 초과로 13:19:07부터 `Daily budget exceeded`(테마 탐지 4회 차단 확인, 16:40 보고·저녁 복기 차단 예상). 14:00 슬롯은 일 예산 소진으로 Bull 12/12 `Daily budget exceeded`(미전송)였고, Bear는 API 단계가 같은 사유로 차단돼 구독 CLI 대체 12회 → 성공 2·`cli_timeout` 7·`cli_incomplete` 3(CLI 대체 경로의 첫 운영 관측, 구독 한도 사용 발생; 팀 심의는 Bear 단독 응답·매수 판정 0). 하루 전체 보수 추정 USD 8~9. `daily_budget` 조정은 사용자 재결정 대기(11/11 "2. 유지"는 관측 조건부). 운영 불변·재배포 없음.
+
 ## 2026-11-11 — L02 운영 인수(문서만): 고정 `3caaeaa9` 22:38 KST 배포 — 운영 light 모델 gpt-5.6-terra 전환 ([원장 L02](docs/operations/execution-roadmap.md#l02-gpt5mini-successor-20261111))
 
 - 사용자 "지금 배포" → 장 밖 22:22 운영 호스트 `scripts/deploy/local_deploy.sh 3caaeaa9`(main = 소스 `22f8be07` + 영수증 문서 #363). 사전: pending []·pytest 0·보호 48파일 스냅샷(이전 `f29a250a`·PID 1274063). 서버 verify **10,756 passed / 2 skipped / 2 xfailed (870초)**·롤백 0·22:38:06 재기동(PID 1331574·NRestarts 0). 기동 로그 `[LLM] 월 예산 $200 (KST), OpenAI heavy=gpt-5.6-sol, light=gpt-5.6-terra`·KIS 연결·엔진 시작, 상한 불일치 0(원장 변경 없음).
