@@ -15,7 +15,10 @@ llm:
   # 월 예산 원장은 두 경로가 공유하며 역할 실패에 자동 유료 승격은 없다.
   primary: openai_gpt5_mini
   fallback: none  # Light: none; heavy: one distinct OpenAI light attempt.
-  daily_budget: 5.0
+  # L01 (2026-11-13, 사용자 결정): 5.0 → 12.0. 11/12 실측 — 역할을 Claude(Fable 5.1 보고·Opus 5.5 경량)로 옮긴 뒤
+  # 하루 보수 추정 USD 8~9, 13:10까지 5.56 → 13:19부터 전송 전 차단(오후 보고·14:00 심의 Bull·저녁 복기).
+  # 일 상한은 프로세스 로컬 폭주 방지선이며 실제 지출 통제는 아래 월 원장(200·80/95/100%)이 맡는다. 원장 이관 불필요.
+  daily_budget: 12.0
   # Shared ledger preserves historical provider spend, KST calendar month. Initial $0
   # by user instruction; persisted state must never be removed to reset spend.
   # L01 Task 5 (2026-11-10, 사용자 D2): Ultra 월 API 크레딧 USD200 기준. 상한 변경은 설정만으로 적용되지 않는다 —
