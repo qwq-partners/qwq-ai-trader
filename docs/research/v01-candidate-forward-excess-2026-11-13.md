@@ -81,9 +81,9 @@
 
 가격 수집 뒤, 후보 수익을 계산하기 전에 2절의 벤치마크 대조를 먼저 했다. 공개 일봉의 069500 종가가 KIS 수정 종가와 최대 0.79% 다르고 일간 수익 차이가 최대 0.45%p였다(공개 일봉은 ETF 분배금 미반영). 분배락을 걸치는 구간에서 벤치마크 수익이 낮게 잡혀 초과수익이 부풀 수 있으므로, **벤치마크 OHLC를 KIS 수정 종가 비율로 맞춰** 쓴다(`--bench-adjust`). 엔진에 불리한 방향의 보정이다. 개별 종목의 현금 배당은 공개 일봉에 반영되지 않아 후보 수익이 소폭 낮게 잡힌다(역시 엔진에 불리, 보정하지 않음).
 
-## 7. 결과 (최종 실행 2026-11-13 07:55:42 KST, 코드 `0538adac`, 분석 종료일 2026-11-12 고정)
+## 7. 결과 (최종 실행 2026-11-13 08:04:14 KST, 코드 `d80e19ee`, 분석 종료일 2026-11-12 고정)
 
-커밋 순서: 사전 등록 `a3968ff5` → 스크립트·검사 `7d6f364e`(가격 조회 전) → 벤치마크 보정 `53afc7fd`(후보 수익 계산 전) → 결과. 판정 기준은 바꾸지 않았다. 집계 요약은 [v01-candidate-forward-excess-summary-2026-11-13.json](v01-candidate-forward-excess-summary-2026-11-13.json), 실행 영수증(코드 SHA·명령·입력/출력 해시·검증)은 [v01-candidate-forward-excess-receipt-2026-11-13.json](v01-candidate-forward-excess-receipt-2026-11-13.json)에 있다. 7.1·7.2의 판정과 수치는 검사(`test_doc_table_matches_committed_summary`)가 요약 파일과 대조한다. 종목이 드러나는 원자료(관측·신호·일봉)는 비공개 `~/.local/state/qwq-task-audit/20261113/v01/`에 둔다.
+커밋 순서: 사전 등록 `a3968ff5` → 스크립트·검사 `7d6f364e`(가격 조회 전) → 벤치마크 보정 `53afc7fd`(후보 수익 계산 전) → 결과. 판정 기준은 바꾸지 않았다. 집계 요약은 [v01-candidate-forward-excess-summary-2026-11-13.json](v01-candidate-forward-excess-summary-2026-11-13.json), 실행 영수증(코드 SHA·명령·입력/출력 해시·검증)은 [v01-candidate-forward-excess-receipt-2026-11-13.json](v01-candidate-forward-excess-receipt-2026-11-13.json)에 있다. 7.1·7.2의 행은 검사(`test_doc_table_matches_committed_summary`)가 요약 파일에서 생성한 행과 글자 단위로 대조한다. 종목이 드러나는 원자료(관측·신호·일봉)는 비공개 `~/.local/state/qwq-task-audit/20261113/v01/`에 둔다.
 
 ### 7.1 판정
 
@@ -201,9 +201,9 @@ python scripts/research/candidate_forward_excess.py prices --obs obs.jsonl --out
 python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --price-dir prices --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --out summary.json --through 2026-11-12
 ```
 
-모든 단계가 같은 종료일(`--through`, KST 포함)을 필수로 받는다. 종료일 뒤의 후보·신호·심의·일봉은 쓰지 않으므로 나중에 다시 돌려도 같은 표본이 나온다.
+모든 단계가 같은 종료일(`--through`, KST 포함)을 필수로 받는다. 종료일 뒤의 후보·신호·심의·일봉은 쓰지 않으므로 나중에 다시 돌려도 같은 표본이 나온다. `report`는 가격 파일이 종목의 첫 관측일부터 벤치마크 끝날까지를 덮지 못하면 실패한다(거래정지·상장폐지가 맞으면 `--allow-partial-prices`로 명시).
 
-- 최종 실행: 관측 4,450건, 종목 327개(마지막 봉이 벤치마크 끝날보다 이른 종목 0), 벤치마크 185거래일(2026-02-09~11-12). 관측·가격·보정 자료·출력의 전체 SHA-256은 영수증 파일에 있다.
+- 최종 실행: 관측 4,450건, 종목 327개(분석 기간을 덮지 못하는 가격 파일 0), 벤치마크 185거래일(2026-02-09~11-12). 관측·가격·보정 자료·출력의 전체 SHA-256은 영수증 파일에 있다.
 - `prices`는 미수집 종목이 있으면 비정상 종료하고 `report`는 가격 파일이 없는 종목이 있으면 실패한다.
 - "거래일 아님"으로 제외된 날짜는 9/25(추석), 5/1, 6/3, 7/17로 실제 휴장일이다.
 
@@ -269,7 +269,16 @@ python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --pri
 | P2 `approved`를 truthiness로 판정 | **반영** — 정확히 `True`/`False`만 인정하고 그 밖의 값은 `invalid` 집단으로 분리. 이번 자료에 `invalid`는 0건 |
 | P2 "지수 방향을 따라간다"는 표현이 수치와 반대 | **반영** — "지수 방향에 좌우된다(급등 시 열위, 급락 시 우위)"로 통일 |
 
-일곱 차례 반영 뒤에도 주 판정(두 계열 미입증)과 순초과수익 평균은 바뀌지 않았다. t값은 5차의 거래일 간격 보정으로 소폭 바뀌었다.
+**8차(같은 모델·effort, 병합 불가) 처분:**
+
+| 지적 | 처분 |
+|---|---|
+| P1 기존 가격 캐시의 기간을 검증하지 않음 | **반영** — `report`가 종목별 가격 파일이 첫 관측일~벤치마크 끝날을 덮는지 확인하고 아니면 실패. 이번 캐시는 327개 모두 덮음 |
+| P1 현재 코드의 WSL 전체 검증 근거 없음 | **인계** — WSL 접근 불가는 그대로다. 이 과제의 상태를 "판독 완료·WSL 정본 검증 인계"로 고치고 원장에 인계 항목으로 남겼다. GitHub 필수 검사 `verify` 통과가 병합 조건이다 |
+| P2 `approved` 누락이 invalid가 아님 | **반영** — 결정 없음·키 누락·비 bool 모두 `invalid`. 이번 자료 0건 |
+| P2 문서-요약 일치 검사가 느슨함 | **반영** — 라벨을 포함한 7.1·7.2의 행 전체를 요약에서 생성해 문서와 글자 단위로 대조 |
+
+여덟 차례 반영 뒤에도 주 판정(두 계열 미입증)과 순초과수익 평균은 바뀌지 않았다. t값은 5차의 거래일 간격 보정으로 소폭 바뀌었다.
 
 ### 7.10 이 결과의 한계
 

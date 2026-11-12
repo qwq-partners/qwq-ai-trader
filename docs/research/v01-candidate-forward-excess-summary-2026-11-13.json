@@ -15,7 +15,8 @@
  "prices": {
   "symbols": 327,
   "sha256": "185ed85e28584df8eb6daac8df93072c9d12ca81eccb2fa97fb83a948ebb924e",
-  "last_bar_before_bench_end": 0
+  "partial_coverage": 0,
+  "allow_partial_prices": false
  },
  "excluded": {
   "A": {

@@ -1,8 +1,8 @@
 {
  "task": "V01 candidate forward excess",
- "code_sha": "0538adacb7d561ca49a286ae53f19077f7de7d3b",
+ "code_sha": "d80e19ee26303b442db65bf74f8bb0eaa85fccc5",
  "through": "2026-11-12",
- "run_at_kst": "2026-11-13 07:55:42 KST",
+ "run_at_kst": "2026-11-13 08:04:14 KST",
  "host": "ops host (AWS Lightsail), dev worktree, venv python — read-only inputs",
  "commands": [
   "python scripts/research/candidate_forward_excess.py signals --out signals.jsonl --through 2026-11-12",
@@ -17,21 +17,22 @@
   "signals_file_sha256": "b7e008aa34ec406a8b49a6f8b393ec035906ca3a41199be75a1ed499cd7efe8d",
   "prices_symbols": 327,
   "prices_sha256": "185ed85e28584df8eb6daac8df93072c9d12ca81eccb2fa97fb83a948ebb924e",
-  "prices_note": "cache fetched 2026-11-13 07:0x KST before --through existed; last bar of every file is 2026-11-12 (last_bar_before_bench_end=0), so the fixed end date selects the same rows",
+  "prices_note": "cache fetched 2026-11-13 07:0x KST before --through existed; report now fails unless every file covers first observation date..bench end (partial_coverage=0 here)",
   "bench_adjust_sha256": "77662d037d8d0c923fd8fcb5a93d491d0cd3f2bc7601d5e636d50b43de3fee71",
   "bench_rows": 185,
   "bench_first": "2026-02-09",
-  "bench_last": "2026-11-12"
+  "bench_last": "2026-11-12",
+  "prices_partial_coverage": 0
  },
  "output": {
   "file": "v01-candidate-forward-excess-summary-2026-11-13.json",
-  "sha256": "360ad3f6729b03ade419c3adcf59a736746a5a087dff5289f7f2d8a0cdc6c77f"
+  "sha256": "e42e04b14a465f81aeeec5a797d70f9f6e44cb428b77aa8f18d295a569f35617"
  },
  "verification": {
   "targeted_tests": {
    "command": "venv/bin/python -m pytest -q -p no:cacheprovider tests/test_candidate_forward_excess.py",
    "where": "ops host dev worktree",
-   "result": "37 passed",
+   "result": "41 passed",
    "rc": 0
   },
   "full_verify": "GitHub required check `verify` (serial full scripts/dev/verify.sh) on the PR #368 head; the run id, rc and counts for the merged head are recorded in the roadmap after merge",
@@ -40,7 +41,8 @@
    "run_id": 43322392542,
    "conclusion": "success"
   },
-  "wsl_verify": "NOT RUN — the WSL task sshd temporary key is not registered in this session, so the AGENTS.md WSL pre-push verify could not be executed; reduced assurance accepted by the coordinator for research-only code (no src/ change) and reported to the user"
+  "wsl_verify": "NOT RUN — the WSL task sshd temporary key is not registered in this session, so the AGENTS.md WSL pre-push verify could not be executed; reduced assurance accepted by the coordinator for research-only code (no src/ change) and reported to the user",
+  "status": "analysis complete; WSL canonical verify handed off (not run) — see wsl_verify"
  },
  "raw_inputs_location": "private (not committed): ~/.local/state/qwq-task-audit/20261113/v01/ — obs/signals/prices contain symbols"
 }
