@@ -160,13 +160,20 @@ def test_spread_uses_only_days_with_both_groups():
     assert out["days"] == 2 and out["mean"] == pytest.approx(0.03)
 
 
-def test_c4_removes_by_contribution_to_date_weighted_mean():
-    # d1 은 관측 1건(기여 큼), d2 는 10건. 값이 가장 큰 관측은 d2 에 있지만 기여는 d1 의 단독 관측이 더 크다.
-    days = [f"d{i:02d}" for i in range(3, 33)]
-    top = [("d01", {"net5": 0.20})] + [("d02", {"net5": 0.30})] * 10 + [(d, {"net5": -0.001}) for d in days]
-    j = m.judge({"high": top, "mid": [], "low": []}, 5)
-    # 기여 상위 3건 = d01 단독 관측 + d02 의 2건 → d01 날짜가 사라지고 d02 평균(0.30)은 유지
-    assert j["ex_top3"] == pytest.approx((0.30 + 30 * -0.001) / 31)
+def test_c4_drops_by_actual_removal_effect_on_date_weighted_mean():
+    # d01 은 단독 관측(빼면 날짜가 사라짐), d02 는 값이 큰 1건 + 작은 1건(빼면 그날 평균이 크게 내려감), 나머지는 0
+    days = [f"d{i:02d}" for i in range(3, 13)]
+    rows = [("d01", {"net5": 0.20}), ("d02", {"net5": 0.50}), ("d02", {"net5": 0.00})] + [(d, {"net5": 0.0}) for d in days]
+    # 1번째: d02 의 0.50 제거(평균 0.45/12 → 0.20/12), 2번째: d01 제거(→ 0), 3번째: 더 내릴 관측 없음
+    assert m.drop_top_contributors(rows, "net5", 1) == pytest.approx(0.20 / 12)
+    assert m.drop_top_contributors(rows, "net5", 3) == pytest.approx(0.0)
+    # 값은 가장 크지만 빼면 평균이 오르는 관측(다른 날보다 낮은 날의 단독 관측)은 빼지 않는다
+    low = [("a", {"net5": 0.01})] + [(f"b{i}", {"net5": 0.05}) for i in range(5)]
+    assert m.drop_top_contributors(low, "net5", 1) == pytest.approx((0.01 + 4 * 0.05) / 5)
+
+
+def test_slope_recovers_linear_relation():
+    assert m.slope([(x / 10, 0.5 * x / 10 + 0.01) for x in range(10)]) == pytest.approx(0.5)
 
 
 def test_load_bars_drops_nonfinite_or_nonpositive_rows_and_rejects_duplicates(tmp_path):

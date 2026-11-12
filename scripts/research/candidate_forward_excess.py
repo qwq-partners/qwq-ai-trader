@@ -109,6 +109,48 @@ def spread_stat(high, low, key, lag):
     return {"days": len(xs), "mean": mean(xs) if xs else None, "t": nw_t(xs, lag)}
 
 
+def drop_top_contributors(rows, key, n=3):
+    """날짜별 평균의 평균을 가장 많이 끌어올리는 관측을 하나씩 n번 뺀다(실제 제거 영향 기준).
+
+    관측을 빼면 그날 평균의 분모가 바뀌고, 그날의 유일한 관측이면 날짜 자체가 사라진다.
+    """
+    by = defaultdict(list)
+    for d, v in rows:
+        if v.get(key) is not None:
+            by[d].append(v[key])
+    for _ in range(n):
+        if not by:
+            break
+        total = sum(mean(xs) for xs in by.values())
+        cur, best = total / len(by), None
+        for d, xs in by.items():
+            x = max(xs)   # 같은 날에서는 가장 큰 값을 빼는 것이 평균을 가장 많이 낮춘다
+            if len(xs) > 1:
+                after = (total - mean(xs) + (sum(xs) - x) / (len(xs) - 1)) / len(by)
+            elif len(by) > 1:
+                after = (total - x) / (len(by) - 1)
+            else:
+                after = None
+            drop = cur - after if after is not None else float("inf")
+            if best is None or drop > best[0]:
+                best = (drop, d, x)
+        if best[0] <= 0:
+            break   # 더 빼도 평균이 내려가지 않는다
+        by[best[1]].remove(best[2])
+        if not by[best[1]]:
+            del by[best[1]]
+    return mean(mean(xs) for xs in by.values()) if by else None
+
+
+def slope(pairs):
+    """탐색용: 후보 수익을 같은 구간 벤치마크 수익에 회귀한 기울기(절편 포함 OLS)."""
+    if len(pairs) < 3:
+        return None
+    mx, my = mean(p[0] for p in pairs), mean(p[1] for p in pairs)
+    sxx = sum((x - mx) ** 2 for x, _y in pairs)
+    return sum((x - mx) * (y - my) for x, y in pairs) / sxx if sxx > 0 else None
+
+
 def judge(rows_by_tercile, h):
     """6절 판정의 한 보유기간 분: C1~C4 와 음의 신호 여부."""
     key = f"net{h}"
@@ -120,13 +162,7 @@ def judge(rows_by_tercile, h):
     days = sorted({d for d, v in top if v.get(key) is not None})
     mid_day = days[len(days) // 2]
     halves = [daily_stat([r for r in top if (r[0] < mid_day) == first], key, h - 1)["mean"] for first in (True, False)]
-    valid = [r for r in top if r[1].get(key) is not None]
-    per_day = defaultdict(int)
-    for d, _v in valid:
-        per_day[d] += 1
-    # 날짜별 평균의 평균에서 관측 하나의 기여는 값 ÷ 그날 관측 수에 비례한다
-    kept = sorted(valid, key=lambda r: r[1][key] / per_day[r[0]])[:-3]
-    ex3 = daily_stat(kept, key, h - 1)["mean"]
+    ex3 = drop_top_contributors(top, key)
     enough = hi["days"] >= MIN_DAYS_FOR_T and hi["t"] is not None
     means = [st[k]["mean"] for k in ("high", "mid", "low")]
     return {
@@ -276,7 +312,7 @@ def report(obs, price_dir, bench_adjust):
             ret, clip, mae, clip_day, gapped = res
             b, _ = forward(bench, cal, o["date"], o["entry"], h)
             base = bench[o["date"]][0] if o["entry"] == "open" else bench[o["date"]][3]
-            v.update({f"ret{h}": ret, f"net{h}": ret - b[0] - COST, f"mae{h}": mae,
+            v.update({f"ret{h}": ret, f"bench{h}": b[0], f"net{h}": ret - b[0] - COST, f"mae{h}": mae,
                       # 갭 종료면 벤치마크도 그날 시가, 장중 손절·만기 종료는 그날 종가(일봉 근사)
                       f"clipnet{h}": clip - (bench[clip_day][0 if gapped else 3] / base - 1) - COST})
         rows.append((o, v))
@@ -308,7 +344,15 @@ def report(obs, price_dir, bench_adjust):
                                 "all": table(sel, lambda o: "all")["all"],
                                 "tercile": table(scored, tier),
                                 "mae5_hit": {str(x): mean(1.0 if v["mae5"] <= -x else 0.0 for _o, v in sel if "mae5" in v)
-                                             for x in (0.035, 0.05, 0.08)}}
+                                             for x in (0.035, 0.05, 0.08)},
+                                # 탐색용: 20일 뒤 결과(상승/하락)별 5일 안 −5% 도달률, 벤치마크 수익에 대한 기울기
+                                "mae5_hit_5pct_by_ret20": {
+                                    name: (lambda xs: {"n": len(xs), "rate": mean(xs) if xs else None})(
+                                        [1.0 if v["mae5"] <= -0.05 else 0.0 for _o, v in sel
+                                         if "mae5" in v and "ret20" in v and ok(v["ret20"])])
+                                    for name, ok in (("up", lambda r: r > 0), ("down", lambda r: r <= 0))},
+                                "slope_vs_bench": {f"h{h}": slope([(v[f"bench{h}"], v[f"ret{h}"]) for _o, v in sel
+                                                                  if f"ret{h}" in v]) for h in (5, 20)}}
     fam = lambda f: [r for r in rows if r[0]["family"] == f]  # noqa: E731
     out["tables"] = {
         "A_by_strategy": table(fam("A"), lambda o: o["group"]),
