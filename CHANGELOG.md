@@ -2,8 +2,9 @@
 
 ## 2026-11-13 — V07 고정 보고 역할 3개 Fable 5.1 → 5.2 (역할표 v8, 소스·신원 실호출 DONE / 운영 배포 대기) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
-- 변경(소스 4·설정 주석 1): `src/utils/llm_roles.py`(`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·`WEB_REPORT` → `claude-fable-5-2`, 출력 상한 4096→6144·4096→6144·12288→16384, `engine-roles-v8-fable52`), `src/utils/llm.py`(허용 모델·effort에 5.2 추가), `src/utils/claude_transport.py`(API 허용 모델·상한 주석), `src/utils/llm_pricing.py`(5.2 단가 입력 8/출력 40, 1h 캐시 쓰기 상한 2배), `config/default.yml`(주석만 — `claude_model_heavy`는 5.1 그대로).
-- 검사 7파일: `test_claude_engine_contract`·`test_claude_transport`(5.1·5.2 모두 전송 계약 고정, `max_tokens` 종료는 미완료)·`test_llm_claude_roles`·`test_llm_pricing`·`test_llm_roles`·`test_market_llm_report_e2e`·`test_market_research_e2e`. 관련 284건 통과(운영 호스트 dev worktree).
+- 변경(소스 4·설정 주석 1): `src/utils/llm_roles.py`(`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·`WEB_REPORT` → `claude-fable-5-2`, 출력 상한 4096→6144·4096→6144·12288→16384, `engine-roles-v8-fable52`), `src/utils/llm.py`(전송 허용 모델·effort에 5.2 추가, 설정 슬롯 허용 집합 분리), `src/utils/claude_transport.py`(API 허용 모델·상한 주석), `src/utils/llm_pricing.py`(5.2 단가 입력 8/출력 40, 1h 캐시 쓰기 상한 2배), `config/default.yml`(주석만 — `claude_model_heavy`는 5.1 그대로).
+- 검사 7파일: `test_claude_engine_contract`·`test_claude_transport`(5.1·5.2 모두 전송 계약 고정, `max_tokens` 종료는 미완료)·`test_llm_claude_roles`·`test_llm_pricing`·`test_llm_roles`·`test_market_llm_report_e2e`·`test_market_research_e2e`. 관련 검사 통과(운영 호스트 dev worktree, 건수는 PR 코멘트).
+- **5.2는 설정 슬롯에서 거부**(독립 리뷰 2차 P1): `claude_model`·`claude_model_heavy`·`claude_model_light`는 `{opus-5-5, fable-5-1}`만 받는다(`CLAUDE_SLOT_MODELS`). 5.2는 고정 보고 역할 전송에만 쓴다.
 - **heavy task 슬롯은 5.1 유지**(독립 리뷰 P1 반영): 크로스검증(100토큰)·시장 레짐(150토큰)처럼 출력 상한이 작은 heavy 소비자가 있다. 5.2는 medium 이상에서 thinking을 줄이지 않고 thinking 토큰이 출력 상한에 포함돼 본문 전에 `max_tokens`로 끝날 수 있다. 운영에서 heavy 호출이 0건이라 5.1에서도 미관측인 잠재 문제이며 별도 점검 과제로 남긴다.
 - 근거: 공식 문서(11/9 출시, 5.1 대비 20% 인하, API 표면 동일). 우리 역할 호출은 단발 요청이라 5.2의 호환성 변경 4건에 해당 없음. 시한(90/180초)은 첫 자연 슬롯 실측 뒤 결정. 모델 교체는 판단 품질·순수익의 증거가 아니다.
 - 롤백: 역할표 3줄을 5.1로 되돌리고 재시작(5.1은 허용 모델로 유지).

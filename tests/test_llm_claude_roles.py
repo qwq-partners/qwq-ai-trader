@@ -200,12 +200,12 @@ async def test_light_anthropic_failure_has_no_fallback(tmp_path):
 
 def test_config_parses_task_routes_and_slot_models_and_rejects_unknown():
     cfg = LLMConfig.from_config({'llm': {'task_routes': {'heavy': 'anthropic', 'light': 'anthropic'},
-                                         'claude_model_heavy': FABLE, 'claude_model_light': OPUS}})
+                                         'claude_model_heavy': HEAVY, 'claude_model_light': OPUS}})
     assert (cfg.task_route_heavy, cfg.task_route_light) == ('anthropic', 'anthropic')
-    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
+    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (HEAVY, OPUS, OPUS)
     default = LLMConfig.from_config({})
     assert (default.task_route_heavy, default.task_route_light) == ('openai', 'openai')
-    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-3'},
+    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-2'}, {'claude_model_light': 'claude-fable-5-2'}, {'claude_model_heavy': 'claude-fable-5-3'},
                 {'claude_model_light': 'claude-sonnet-5-5'},
                 # 독립 리뷰 1차 P2: 명시된 falsy 값은 기본값으로 치환하지 않고 거부한다.
                 {'claude_model_heavy': ''}, {'claude_model_light': 0}, {'claude_model_heavy': False},

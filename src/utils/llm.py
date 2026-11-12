@@ -68,7 +68,10 @@ class LLMTask(str, Enum):
 
 
 # L01 Task 3(2026-11-10): Fable 5.1은 API 전용(구독 CLI는 Opus만). 다른 세대·Sonnet/Haiku는 미검증이라 거부.
-CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2"})
+CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2"})   # 전송·고정 역할이 받을 수 있는 모델
+# 설정 슬롯(Bear `claude_model`·heavy·light)은 5.2 를 받지 않는다(V07): 출력 상한 100~150토큰 소비자가 있어
+# thinking 이 본문 전에 상한을 다 쓸 수 있다. 5.2 는 출력 상한을 올린 고정 보고 역할(llm_roles.py)에서만 쓴다.
+CLAUDE_SLOT_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1"})
 
 
 @dataclass
@@ -132,7 +135,7 @@ class LLMConfig:
         if not isinstance(self.claude_cli_enabled, bool):
             raise ValueError("claude_cli_enabled must be boolean")
         for model in (self.claude_model, self.claude_model_heavy, self.claude_model_light):
-            if not isinstance(model, str) or model not in CLAUDE_MODELS:
+            if not isinstance(model, str) or model not in CLAUDE_SLOT_MODELS:
                 raise ValueError("Unsupported Claude model identity")
         for route in (self.task_route_heavy, self.task_route_light):
             if route not in ("openai", "anthropic"):
