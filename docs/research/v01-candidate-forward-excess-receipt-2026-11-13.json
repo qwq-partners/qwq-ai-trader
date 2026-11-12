@@ -1,8 +1,8 @@
 {
  "task": "V01 candidate forward excess",
- "code_sha": "d80e19ee26303b442db65bf74f8bb0eaa85fccc5",
+ "code_sha": "85ec8c90edb4dbf4fe5dd2a7e88aac334383223b",
  "through": "2026-11-12",
- "run_at_kst": "2026-11-13 08:04:14 KST",
+ "run_at_kst": "2026-11-13 08:14:14 KST",
  "host": "ops host (AWS Lightsail), dev worktree, venv python — read-only inputs",
  "commands": [
   "python scripts/research/candidate_forward_excess.py signals --out signals.jsonl --through 2026-11-12",
@@ -35,7 +35,7 @@
    "result": "41 passed",
    "rc": 0
   },
-  "full_verify": "GitHub required check `verify` (serial full scripts/dev/verify.sh) on the PR #368 head; the run id, rc and counts for the merged head are recorded in the roadmap after merge",
+  "full_verify": "GitHub required check `verify` (serial full scripts/dev/verify.sh) on the PR #368 head is the merge condition; its run id, conclusion and pass counts for the final head are recorded as a PR #368 comment (a receipt committed here would change the head it describes)",
   "last_full_ci_before_this_commit": {
    "head": "3c43da3b",
    "run_id": 43322392542,
