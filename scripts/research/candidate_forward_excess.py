@@ -30,6 +30,7 @@ HORIZONS = (1, 5, 10, 20)
 STOP = Decimal("0.05")             # 손절 클립(참고)
 MAX_DAILY_MOVE = Decimal("0.35")   # 초과 시 자료 오류로 제외
 MIN_DAYS_FOR_T = 20
+MAE_LEVELS = ("0.035", "0.05", "0.08")
 
 
 # ---------- 순수 계산 ----------
@@ -200,6 +201,14 @@ def combine(verdicts):
     return dict(verdicts)
 
 
+def doc_cells(group):
+    """연구 문서 7.2 표의 수치 칸: 5일 순초과 | t | 20일 순초과 | t | 5일 관측 / 날짜."""
+    pct = lambda x: f"{x * 100:+.2f}%".replace("-", "−")   # noqa: E731
+    tt = lambda x: f"{x:+.2f}".replace("-", "−")            # noqa: E731
+    h5, h20 = group["h5"], group["h20"]
+    return f"| {pct(h5['mean'])} | {tt(h5['t'])} | {pct(h20['mean'])} | {tt(h20['t'])} | {h5['n']:,} / {h5['days']} |"
+
+
 # ---------- 입출력 ----------
 
 def build_obs(pit_dir, signals, team_dir):
@@ -226,8 +235,11 @@ def build_obs(pit_dir, signals, team_dir):
                     "score": r["score"], "rep_score": adj if adj is not None else rep["score"], "entry": "close"})
     first = {}
     for f in sorted(glob.glob(os.path.join(team_dir, "deliberations_*.jsonl"))):
-        for line in open(f):
+        by_id = {}   # 같은 deliberation_id 는 마지막 행이 정본 — src/agents/team_ledger.load_day(dedup=True) 와 같은 계약
+        for n, line in enumerate(open(f)):
             r = json.loads(line)
+            by_id[str(r["deliberation_id"]) if r.get("deliberation_id") is not None else f"row{n}"] = r
+        for r in by_id.values():
             t = r["decided_at"] if r.get("decided_at") is not None else r["recorded_at"]
             k = (r["symbol"], t[:10])
             if k not in first or t < first[k][0]:
@@ -343,7 +355,8 @@ def report(obs, price_dir, bench_adjust):
             base = bench[o["date"]][0] if o["entry"] == "open" else bench[o["date"]][3]
             # 가격·비용 산식은 Decimal 로 끝내고 여기서 통계용 float 로 바꾼다
             v.update({f"ret{h}": float(ret), f"bench{h}": float(b[0]), f"net{h}": float(ret - b[0] - COST),
-                      f"mae{h}": float(mae),
+                      f"mae{h}": float(mae), f"up{h}": ret > 0,
+                      f"hit{h}": {x: mae <= -Decimal(x) for x in MAE_LEVELS},   # 경계 비교는 float 로 바꾸기 전에
                       # 갭 종료면 벤치마크도 그날 시가, 장중 손절·만기 종료는 그날 종가(일봉 근사)
                       f"clipnet{h}": float(clip - (bench[clip_day][0 if gapped else 3] / base - 1) - COST)})
         rows.append((o, v))
@@ -378,15 +391,14 @@ def report(obs, price_dir, bench_adjust):
                                 "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20], "spread": spreads,
                                 "all": table(sel, lambda o: "all")["all"],
                                 "tercile": table(scored, tier),
-                                "mae5_hit": {x: mean(1.0 if Decimal(str(v["mae5"])) <= -Decimal(x) else 0.0
-                                                         for _o, v in sel if "mae5" in v)
-                                             for x in ("0.035", "0.05", "0.08")},
+                                "mae5_hit": {x: mean(1.0 if v["hit5"][x] else 0.0 for _o, v in sel if "hit5" in v)
+                                             for x in MAE_LEVELS},
                                 # 탐색용: 20일 뒤 결과(상승/하락)별 5일 안 −5% 도달률, 벤치마크 수익에 대한 기울기
                                 "mae5_hit_5pct_by_ret20": {
                                     name: (lambda xs: {"n": len(xs), "rate": mean(xs) if xs else None})(
-                                        [1.0 if v["mae5"] <= -0.05 else 0.0 for _o, v in sel
-                                         if "mae5" in v and "ret20" in v and ok(v["ret20"])])
-                                    for name, ok in (("up", lambda r: r > 0), ("down", lambda r: r <= 0))},
+                                        [1.0 if v["hit5"]["0.05"] else 0.0 for _o, v in sel
+                                         if "hit5" in v and "up20" in v and v["up20"] == want])
+                                    for name, want in (("up", True), ("down", False))},
                                 "slope_vs_bench": {f"h{h}": slope([(v[f"bench{h}"], v[f"ret{h}"]) for _o, v in sel
                                                                   if f"ret{h}" in v]) for h in (5, 20)}}
     for name, v in combine({k: p["verdict"] for k, p in out["primary"].items()}).items():

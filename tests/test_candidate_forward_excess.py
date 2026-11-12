@@ -121,10 +121,14 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     (team / "deliberations_20260102.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
         {"symbol": "000001", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": True}},
         {"symbol": "000001", "decided_at": "2026-01-02T11:30:00", "decision": {"stance": "hold", "approved": True}},
-        {"symbol": "000002", "decided_at": None, "recorded_at": "2026-01-02T10:31:00", "decision": None}]))
+        {"symbol": "000002", "decided_at": None, "recorded_at": "2026-01-02T10:31:00", "decision": None},
+        # 같은 deliberation_id 의 정정 행: 마지막 행(hold)이 정본이다
+        {"symbol": "000003", "deliberation_id": "x1", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": True}},
+        {"symbol": "000003", "deliberation_id": "x1", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "hold", "approved": True}}]))
     obs = m.build_obs(str(pit), str(sig), str(team))
     b = {(o["family"], o["symbol"]): o for o in obs}
-    assert len(obs) == 8
+    assert len(obs) == 9
+    assert b[("C", "000003")]["group"] == "hold"
     assert b[("B", "000001")]["group"] == "penalized" and b[("B", "000001")]["score"] == 60.0   # 그날 첫 이벤트
     p2 = b[("B", "000002")]
     assert p2["group"] == "passed" and p2["score"] == 75.0             # 주 판정 점수는 사전 등록대로 첫 이벤트
@@ -227,3 +231,33 @@ def test_daily_stat_passes_calendar_positions():
 ])
 def test_single_family_pass_is_provisional(raw, expect):
     assert m.combine(raw) == expect
+
+
+def test_report_counts_exact_stop_boundary_in_decimal(tmp_path):
+    prices = tmp_path / "prices"
+    prices.mkdir()
+    days = [f"2026-01-{d:02d}" for d in range(1, 31)]
+    flat = "date,open,high,low,close\n" + "".join(f"{d},100,100,100,100\n" for d in days)
+    (prices / f"{m.BENCH}.csv").write_text(flat)
+    for sym, low in (("000001", "95"), ("000002", "95.01"), ("000003", "94.99")):   # 정확히 −5%, 바로 위, 바로 아래
+        (prices / f"{sym}.csv").write_text(flat.replace(f"{days[2]},100,100,100,100", f"{days[2]},100,100,{low},100"))
+    adj = tmp_path / "adj.csv"
+    adj.write_text("date,close\n" + "".join(f"{d},100\n" for d in days))
+    obs = [{"family": "B", "date": days[0], "symbol": s, "group": "passed", "strategy": "x", "score": sc, "rep_score": sc,
+            "entry": "close"} for s, sc in (("000001", 90.0), ("000002", 80.0), ("000003", 70.0))]
+    obs += [{"family": "A", "date": days[0], "symbol": "000001", "group": "sepa_trend", "score": sc, "entry": "open"}
+            for sc in (90.0, 80.0, 70.0)]
+    out = m.report(obs, str(prices), str(adj))
+    assert out["primary"]["B-all"]["mae5_hit"]["0.05"] == pytest.approx(2 / 3)   # 95 와 94.99 만 닿음
+
+
+def test_doc_table_matches_committed_summary():
+    """문서 7.1·7.2 의 판정과 수치가 커밋된 요약 산출물과 일치한다."""
+    import json
+    root = Path(__file__).resolve().parents[1] / "docs/research"
+    summary = json.loads((root / "v01-candidate-forward-excess-summary-2026-11-13.json").read_text())
+    doc = (root / "v01-candidate-forward-excess-2026-11-13.md").read_text()
+    for name, p in summary["primary"].items():
+        assert p["verdict"] == "미입증" and f"| {name} " in doc
+        for g in (p["all"], p["tercile"]["high"], p["tercile"]["mid"], p["tercile"]["low"]):
+            assert m.doc_cells(g) in doc, (name, m.doc_cells(g))
