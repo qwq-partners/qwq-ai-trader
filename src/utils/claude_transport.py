@@ -484,8 +484,8 @@ class AnthropicAPIClient(_Client):
                         "messages": [{"role": "user", "content": prompt}],
                         "output_config": {"effort": reasoning_effort}}
                 if model == _MODEL:
-                    # Opus는 운영 실측(11/10 48/48 HTTP 200) 요청 형태를 유지한다. Fable 5.1은 adaptive
-                    # thinking 상시라 thinking을 보내지 않고 effort만 전달한다(계획 Task 3).
+                    # Opus는 운영 실측(11/10 48/48 HTTP 200) 요청 형태를 유지한다. Fable 5.1·5.2는 adaptive
+                    # thinking 상시라 thinking을 보내지 않고 effort만 전달한다(계획 Task 3, V07).
                     body["thinking"] = {"type": "adaptive"}
                 if system:
                     body["system"] = system
