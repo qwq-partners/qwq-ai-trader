@@ -96,6 +96,17 @@ def daily_stat(rows, key, lag):
             "t": nw_t(xs, lag) if len(days) >= 2 else None}
 
 
+def spread_stat(high, low, key, lag):
+    """탐색용(판정에 쓰지 않음): 같은 날의 점수 상 − 하 평균 차이. 지수 방향이 상쇄된다."""
+    by = {}
+    for name, rows in (("h", high), ("l", low)):
+        for d, v in rows:
+            if v.get(key) is not None:
+                by.setdefault(d, {"h": [], "l": []})[name].append(v[key])
+    xs = [mean(g["h"]) - mean(g["l"]) for _d, g in sorted(by.items()) if g["h"] and g["l"]]
+    return {"days": len(xs), "mean": mean(xs) if xs else None, "t": nw_t(xs, lag)}
+
+
 def judge(rows_by_tercile, h):
     """6절 판정의 한 보유기간 분: C1~C4 와 음의 신호 여부."""
     key = f"net{h}"
@@ -113,6 +124,7 @@ def judge(rows_by_tercile, h):
     means = [st[k]["mean"] for k in ("high", "mid", "low")]
     return {
         "stats": st, "halves": halves, "ex_top3": ex3,
+        "spread": spread_stat(top, rows_by_tercile["low"], key, h - 1),
         "c1": bool(enough and hi["mean"] > 0 and hi["t"] >= 2),
         "c2": bool(all(m is not None for m in means) and means[0] > means[1] > means[2]),
         "c3": bool(all(x is not None and x > 0 for x in halves)),
@@ -246,8 +258,9 @@ def report(obs, price_dir, bench_adjust=None):
         tier = lambda o: "low" if o["score"] <= q1 else "mid" if o["score"] <= q2 else "high"  # noqa: E731
         by = {k: [(o["date"], v) for o, v in scored if tier(o) == k] for k in ("high", "mid", "low")}
         j = {h: judge(by, h) for h in (5, 20)}
+        spreads = {f"h{h}": spread_stat(by["high"], by["low"], f"net{h}", h - 1) for h in HORIZONS}
         out["primary"][name] = {"n": len(sel), "scored": len(scored), "q1": q1, "q2": q2,
-                                "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20],
+                                "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20], "spread": spreads,
                                 "all": table(sel, lambda o: "all")["all"],
                                 "tercile": table(scored, tier),
                                 "mae5_hit": {str(x): mean(1.0 if v["mae5"] <= -x else 0.0 for _o, v in sel if "mae5" in v)

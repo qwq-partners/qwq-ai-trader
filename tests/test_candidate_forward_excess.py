@@ -84,3 +84,10 @@ def test_bench_adjust_scales_ohlc_to_adjusted_close(tmp_path):
     p.write_text("date,close\n2026-01-01,110\n")
     out = m.adjust_bench({"2026-01-01": (90.0, 105.0, 80.0, 100.0), "2026-01-02": (1.0, 1.0, 1.0, 1.0)}, p)
     assert out == {"2026-01-01": pytest.approx((99.0, 115.5, 88.0, 110.0))}
+
+
+def test_spread_uses_only_days_with_both_groups():
+    high = [("d1", {"net5": 0.03}), ("d2", {"net5": 0.05}), ("d3", {"net5": 0.9})]
+    low = [("d1", {"net5": 0.01}), ("d2", {"net5": 0.01})]
+    out = m.spread_stat(high, low, "net5", 0)
+    assert out["days"] == 2 and out["mean"] == pytest.approx(0.03)
