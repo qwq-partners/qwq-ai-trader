@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — L01 일 상한 `llm.daily_budget` 5.0 → 12.0 (사용자 결정) + 휴장일 LLM 실행 판독 ([원장 L01](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
+
+- 변경: `config/default.yml` `llm.daily_budget` 12.0(주석에 근거), `tests/test_llm_budget_application.py` 출하 설정 검사 12. 코드·역할표·월 상한 200·모델·매수 중지 불변. 일 상한은 프로세스 로컬 폭주 방지선이라 원장 이관 없음.
+- 근거: 11/12 실측 — Claude 이전 뒤 13:10까지 USD 5.56, 13:19부터 전송 전 차단(14:00 Bull 12/12 미전송·Bear CLI 대체 2/12, 오후 보고·저녁 복기 차단). 하루 보수 추정 8~9.
+- 휴장일 판독: 테마 탐지·보고 3슬롯·팀 심의·저녁 복기는 거래일 게이트가 있어 휴장일에 호출 0. 주간 작업(일요일 21:00 전문가 패널 4건, 토요일 후속 복기)은 설계상 주말에 돈다. 11/7~8의 `gpt-5-mini` 140건/일은 11/9 Task 1 이전 동작.
+- 검증·배포 영수증은 원장에 별도 기록.
+
 ## 2026-11-12 — L01/L02 자연 호출 인수 판독(문서만): 신원 전부 verified, `daily_budget` 5.0이 13:19 소진돼 이후 LLM 호출 차단 ([원장 L01](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
 
 - 읽기 전용 판독(13:50 KST, 운영 `3caaeaa9`/PID 1331574, 새 호출·재실행·시험 발송·설정 변경 0). Bull 3슬롯 **36/36** `gpt-5.6-terra` exact·effort none·HTTP 200(p50 2.05초, 정산 USD 0.075 → 월 약 2), Bear 36/36 Opus API, Fable 5.1 고정 역할 4/4 verified·`end_turn`(`MARKET_BRIEF` 33~35초, `WEB_REPORT` 82~112초·출력 최대 10,032), light Opus 테마 탐지 40/40.
