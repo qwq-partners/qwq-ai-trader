@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — 엔진 종합 평가와 우선순위 과제 V01~V12 (문서만) + 일 상한 12 운영 인수 영수증 ([평가](docs/reviews/engine-evaluation-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 평가(읽기 전용, 새 호출 0): 실거래 253건 KODEX200 대비 −1.62%/포지션(t −3.89), 양수인 전략·진입 월 없음. 손실은 보유 0~1일 131건(−1.57%)·손절 단독 92건(−4.25%)에 몰림. 현금 0.5%·매수 중지·G1 차단으로 10/7 이후 신규 표본 0, 재개 기준 부재(순환 대기). LLM 하루 8~9달러 중 약 80%가 보고서·테마 탐지.
+- 과제: V01 기존 후보 사후 초과수익 판독 → V02 후보 전수 기록 → V03 재개 기준 → V04 진입 직후 손실 해부 → V05 LLM 판단 가치 시험 → V06~V09 비용·운영 정렬 → V10~V12 연구 기반. 착수는 사용자 결정 대기.
+- Fable 5.2 확인(공식 문서): `claude-fable-5-2`, 입력 8·출력 40달러/MTok(5.1 대비 −20%), API 표면 동일·대체로 그대로 교체. 보고·heavy 전환 권장(V07), 장중 판단 투입은 V05 통과 뒤.
+- 일 상한 12 운영 인수: `b00cdbdc` 11/13 06:39:44 KST, PID 1400705, 서버 10,756 passed·롤백 0·사후 점검 통과, 보호 48파일 중 `default.yml`의 `llm.daily_budget` 한 키만 변동.
+- CLAUDE.md 사실 수정: 현금 19.4%·보유 3종목(9/29) → 현금 0.5%·보유 1종목(11/13).
+
 ## 2026-11-13 — L01 일 상한 `llm.daily_budget` 5.0 → 12.0 (사용자 결정) + 휴장일 LLM 실행 판독 ([원장 L01](docs/operations/execution-roadmap.md#l01-llm-credit-routing-20261108))
 
 - 변경: `config/default.yml` `llm.daily_budget` 12.0(주석에 근거), `tests/test_llm_budget_application.py` 출하 설정 검사 12. 코드·역할표·월 상한 200·모델·매수 중지 불변. 일 상한은 프로세스 로컬 폭주 방지선이라 원장 이관 없음.
