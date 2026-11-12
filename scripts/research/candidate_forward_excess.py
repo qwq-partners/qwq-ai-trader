@@ -273,14 +273,15 @@ def build_obs(pit_dir, signals, team_dir, through):
 
 
 def load_bars(path):
-    """비유한·비양수 OHLC 행(거래정지 등)은 버려 결측 봉으로 만든다. 중복 날짜는 손상으로 보고 실패."""
+    """비유한·비양수·고저 역전 OHLC 행은 버려 결측 봉으로 만든다(그 봉을 걸치는 관측은 missing_bar 로 제외·집계). 중복 날짜는 실패."""
     bars = {}
     with open(path) as f:
         for r in csv.DictReader(f):
             v = tuple(Decimal(r[k]) for k in ("open", "high", "low", "close"))
             if r["date"] in bars:
                 raise SystemExit(f"가격 캐시 중복 날짜: {path} {r['date']}")
-            if all(x.is_finite() and x > 0 for x in v):
+            # 유한·양수이고 저가 ≤ 시가·종가 ≤ 고가인 봉만 쓴다(구조적으로 불가능한 봉은 MAE·손절 도달률을 왜곡한다)
+            if all(x.is_finite() and x > 0 for x in v) and v[2] <= min(v[0], v[3]) and max(v[0], v[3]) <= v[1]:
                 bars[r["date"]] = v
             else:
                 bars[r["date"]] = None

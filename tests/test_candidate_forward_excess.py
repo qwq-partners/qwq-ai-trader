@@ -204,8 +204,9 @@ def test_slope_recovers_linear_relation():
 
 def test_load_bars_drops_nonfinite_or_nonpositive_rows_and_rejects_duplicates(tmp_path):
     p = tmp_path / "x.csv"
-    p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-02,nan,1,1,1\n2026-01-03,0,0,0,5\n2026-01-04,inf,1,1,1\n")
-    assert list(m.load_bars(p)) == ["2026-01-01"]
+    p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-02,nan,1,1,1\n2026-01-03,0,0,0,5\n2026-01-04,inf,1,1,1\n"
+                 "2026-01-05,10,12,11,10\n2026-01-06,10,9,8,10\n2026-01-07,10,12,9,11\n")   # 저가>시가, 고가<시가, 정상
+    assert list(m.load_bars(p)) == ["2026-01-01", "2026-01-07"]
     p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-01,2,2,2,2\n")
     with pytest.raises(SystemExit):
         m.load_bars(p)
