@@ -21,13 +21,14 @@ import math
 import os
 import time
 from collections import defaultdict
+from decimal import Decimal
 from statistics import mean
 
 BENCH = "069500"
-COST = 0.00227          # KR 왕복 수수료+거래세
+COST = Decimal("0.00227")          # KR 왕복 수수료+거래세
 HORIZONS = (1, 5, 10, 20)
-STOP = 0.05             # 손절 클립(참고)
-MAX_DAILY_MOVE = 0.35   # 초과 시 자료 오류로 제외
+STOP = Decimal("0.05")             # 손절 클립(참고)
+MAX_DAILY_MOVE = Decimal("0.35")   # 초과 시 자료 오류로 제외
 MIN_DAYS_FOR_T = 20
 
 
@@ -36,7 +37,8 @@ MIN_DAYS_FOR_T = 20
 def forward(bars, cal, day, entry, h):
     """(수익, 손절클립 수익, 최대역행, 종료일, 갭 종료 여부) 또는 (None, 제외사유).
 
-    bars: {date: (o, h, l, c)}, cal: 거래일 오름차순 목록(벤치마크 기준).
+    bars: {date: (o, h, l, c)} 가격은 Decimal, cal: 거래일 오름차순 목록(벤치마크 기준). 반환 수익도 Decimal 이며
+    통계 계층(report 의 관측값)에 들어갈 때만 float 로 바꾼다.
     entry='open' → D 시가 매수·D 포함 h번째 종가 매도 / 'close' → D 종가 매수·D 다음 h번째 종가 매도.
     """
     if day not in cal:
@@ -54,7 +56,7 @@ def forward(bars, cal, day, entry, h):
             return None, "data_error"
     ret = bars[cal[last]][3] / px - 1
     stop_px, clip, clip_day = px * (1 - STOP), ret, cal[last]
-    mae, stopped, gapped = 0.0, False, False
+    mae, stopped, gapped = Decimal(0), False, False
     for d in cal[first:last + 1]:
         o, _h, low, _c = bars[d]
         mae = min(mae, low / px - 1)
@@ -230,10 +232,10 @@ def load_bars(path):
     bars = {}
     with open(path) as f:
         for r in csv.DictReader(f):
-            v = tuple(float(r[k]) for k in ("open", "high", "low", "close"))
+            v = tuple(Decimal(r[k]) for k in ("open", "high", "low", "close"))
             if r["date"] in bars:
                 raise SystemExit(f"가격 캐시 중복 날짜: {path} {r['date']}")
-            if all(math.isfinite(x) and x > 0 for x in v):
+            if all(x.is_finite() and x > 0 for x in v):
                 bars[r["date"]] = v
             else:
                 bars[r["date"]] = None
@@ -243,7 +245,7 @@ def load_bars(path):
 def fetch_prices(symbols, out_dir, start, pause=0.4):
     import FinanceDataReader as fdr  # 지연 임포트: 계산·검사는 네트워크 라이브러리 없이 돈다
     os.makedirs(out_dir, exist_ok=True)
-    fails = 0
+    fails, failed = 0, []
     for s in symbols:
         p = os.path.join(out_dir, f"{s}.csv")
         if os.path.exists(p):
@@ -261,10 +263,13 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
             fails = 0
         except Exception as e:  # 원천 오류는 종목 단위로 건너뛰고, 연속되면 멈춘다
             fails += 1
+            failed.append(s)
             print(f"[실패] {s}: {type(e).__name__}")
             if fails >= 5:
                 raise SystemExit("연속 실패 5회 — 중단")
         time.sleep(pause)
+    if failed:
+        raise SystemExit(f"미수집 {len(failed)}종목: {failed[:10]} — 다시 실행해 채운다(report 는 가격 파일이 없으면 실패)")
 
 
 def adjust_bench(bench, adj_csv):
@@ -274,9 +279,9 @@ def adjust_bench(bench, adj_csv):
     보정 기간 밖(앞·뒤)의 공개 일봉은 버린다.
     """
     with open(adj_csv) as f:
-        rows = [(r["date"], float(r["close"])) for r in csv.DictReader(f)]
+        rows = [(r["date"], Decimal(r["close"])) for r in csv.DictReader(f)]
     adj = dict(rows)
-    if len(adj) != len(rows) or any(not (math.isfinite(c) and c > 0) for c in adj.values()):
+    if len(adj) != len(rows) or any(not (c.is_finite() and c > 0) for c in adj.values()):
         raise SystemExit("벤치마크 보정 자료에 중복 날짜 또는 비양수·비유한 종가가 있다")
     lo, hi = min(adj), max(adj)
     inside = {d for d in bench if lo <= d <= hi}
@@ -297,12 +302,19 @@ def top_n_per_day(rows, n=3):
 def report(obs, price_dir, bench_adjust):
     bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust)
     cal = sorted(bench)
+    symbols = sorted({o["symbol"] for o in obs})
+    missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
+    if missing:
+        raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
+    fingerprint = hashlib.sha256()
     cache, excluded, rows = {}, defaultdict(lambda: defaultdict(int)), []
+    for s in symbols:
+        with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
+            fingerprint.update(s.encode() + hashlib.sha256(f.read()).digest())
+        cache[s] = load_bars(os.path.join(price_dir, f"{s}.csv"))
+    stale = sum(1 for s in symbols if not cache[s] or max(cache[s]) < cal[-1])
     for o in obs:
         s = o["symbol"]
-        if s not in cache:
-            p = os.path.join(price_dir, f"{s}.csv")
-            cache[s] = load_bars(p) if os.path.exists(p) else {}
         v = {}
         for h in HORIZONS:
             res, why = forward(cache[s], cal, o["date"], o["entry"], h)
@@ -312,9 +324,11 @@ def report(obs, price_dir, bench_adjust):
             ret, clip, mae, clip_day, gapped = res
             b, _ = forward(bench, cal, o["date"], o["entry"], h)
             base = bench[o["date"]][0] if o["entry"] == "open" else bench[o["date"]][3]
-            v.update({f"ret{h}": ret, f"bench{h}": b[0], f"net{h}": ret - b[0] - COST, f"mae{h}": mae,
+            # 가격·비용 산식은 Decimal 로 끝내고 여기서 통계용 float 로 바꾼다
+            v.update({f"ret{h}": float(ret), f"bench{h}": float(b[0]), f"net{h}": float(ret - b[0] - COST),
+                      f"mae{h}": float(mae),
                       # 갭 종료면 벤치마크도 그날 시가, 장중 손절·만기 종료는 그날 종가(일봉 근사)
-                      f"clipnet{h}": clip - (bench[clip_day][0 if gapped else 3] / base - 1) - COST})
+                      f"clipnet{h}": float(clip - (bench[clip_day][0 if gapped else 3] / base - 1) - COST)})
         rows.append((o, v))
 
     def table(sel, keyfn):
@@ -328,8 +342,10 @@ def report(obs, price_dir, bench_adjust):
 
     with open(bench_adjust, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
-    out = {"cost": COST, "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
+    out = {"cost": float(COST), "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
                                    "first": cal[0], "last": cal[-1]},
+           # 마지막 봉이 벤치마크 끝날보다 이른 종목 수(거래정지·상장폐지 또는 오래된 캐시)를 함께 남긴다
+           "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "last_bar_before_bench_end": stale},
            "excluded": {k: dict(v) for k, v in excluded.items()}, "primary": {}, "tables": {}}
     for name, sel in (("A-sepa", [r for r in rows if r[0]["family"] == "A" and r[0]["group"] == "sepa_trend"]),
                       ("B-all", [r for r in rows if r[0]["family"] == "B"])):
@@ -343,8 +359,9 @@ def report(obs, price_dir, bench_adjust):
                                 "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20], "spread": spreads,
                                 "all": table(sel, lambda o: "all")["all"],
                                 "tercile": table(scored, tier),
-                                "mae5_hit": {str(x): mean(1.0 if v["mae5"] <= -x else 0.0 for _o, v in sel if "mae5" in v)
-                                             for x in (0.035, 0.05, 0.08)},
+                                "mae5_hit": {x: mean(1.0 if Decimal(str(v["mae5"])) <= -Decimal(x) else 0.0
+                                                         for _o, v in sel if "mae5" in v)
+                                             for x in ("0.035", "0.05", "0.08")},
                                 # 탐색용: 20일 뒤 결과(상승/하락)별 5일 안 −5% 도달률, 벤치마크 수익에 대한 기울기
                                 "mae5_hit_5pct_by_ret20": {
                                     name: (lambda xs: {"n": len(xs), "rate": mean(xs) if xs else None})(

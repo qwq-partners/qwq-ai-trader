@@ -1,5 +1,6 @@
 """V01 판독 스크립트의 순수 계산 검사 (합성 일봉, 네트워크 없음)."""
 import importlib.util
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -15,28 +16,29 @@ CAL = [f"2026-01-{d:02d}" for d in range(1, 11)]
 def bars(closes, opens=None, lows=None):
     opens = closes if opens is None else opens
     lows = [min(o, c) for o, c in zip(opens, closes)] if lows is None else lows
-    return {d: (o, max(o, c), low, c) for d, o, low, c in zip(CAL, opens, lows, closes)}
+    dec = lambda x: Decimal(str(x))  # noqa: E731
+    return {d: (dec(o), dec(max(o, c)), dec(low), dec(c)) for d, o, low, c in zip(CAL, opens, lows, closes)}
 
 
 def test_open_entry_sells_on_hth_close_including_entry_day():
     b = bars([100, 110, 121, 121, 121, 121, 121, 121, 121, 121], opens=[100] * 10, lows=[100] * 10)
     (ret, clip, mae, _, _), why = m.forward(b, CAL, CAL[0], "open", 2)
-    assert why is None and ret == pytest.approx(0.10) and clip == ret and mae == 0
+    assert why is None and ret == Decimal("0.1") and clip == ret and mae == 0   # Decimal 이라 정확히 일치
 
 
 def test_close_entry_starts_next_day_and_ignores_entry_day_low():
     b = bars([100, 105, 110] + [110] * 7, lows=[50, 105, 110] + [110] * 7)
     (ret, clip, mae, _, _), _ = m.forward(b, CAL, CAL[0], "close", 2)
-    assert ret == pytest.approx(0.10) and clip == ret and mae == 0
+    assert ret == Decimal("0.1") and clip == ret and mae == 0
 
 
 def test_stop_clip_intraday_and_gap():
     b = bars([100, 99, 99] + [99] * 7, opens=[100, 100, 99] + [99] * 7, lows=[100, 94, 99] + [99] * 7)
     (_, clip, mae, day, gapped), _ = m.forward(b, CAL, CAL[0], "close", 3)
-    assert clip == pytest.approx(-0.05) and day == CAL[1] and mae == pytest.approx(-0.06) and not gapped
+    assert clip == Decimal("-0.05") and day == CAL[1] and mae == Decimal("-0.06") and not gapped
     g = bars([100, 92, 92] + [92] * 7, opens=[100, 93, 92] + [92] * 7, lows=[100, 91, 92] + [92] * 7)
     (_, clip, _, _, gapped), _ = m.forward(g, CAL, CAL[0], "close", 3)
-    assert clip == pytest.approx(-0.07) and gapped   # 갭 하락은 시가로 종료
+    assert clip == Decimal("-0.07") and gapped   # 갭 하락은 시가로 종료
 
 
 @pytest.mark.parametrize("day,h,patch,why", [
@@ -50,7 +52,7 @@ def test_exclusions(day, h, patch, why):
     if patch and patch[0] == "drop":
         del b[patch[1]]
     if patch and patch[0] == "jump":
-        b[patch[1]] = (100, 140, 100, 140)
+        b[patch[1]] = tuple(Decimal(x) for x in (100, 140, 100, 140))
     assert m.forward(b, CAL, day, "close", h) == (None, why)
 
 
@@ -82,8 +84,9 @@ def test_terciles_split_into_thirds():
 def test_bench_adjust_scales_ohlc_and_drops_only_days_outside_adjust_range(tmp_path):
     p = tmp_path / "adj.csv"
     p.write_text("date,close\n2026-01-02,110\n")
-    raw = {"2026-01-01": (1.0, 1.0, 1.0, 1.0), "2026-01-02": (90.0, 105.0, 80.0, 100.0), "2026-01-03": (1.0, 1.0, 1.0, 1.0)}
-    assert m.adjust_bench(raw, p) == {"2026-01-02": pytest.approx((99.0, 115.5, 88.0, 110.0))}
+    one = tuple(Decimal(1) for _ in range(4))
+    raw = {"2026-01-01": one, "2026-01-02": tuple(Decimal(x) for x in (90, 105, 80, 100)), "2026-01-03": one}
+    assert m.adjust_bench(raw, p) == {"2026-01-02": tuple(Decimal(x) for x in ("99", "115.5", "88", "110"))}
 
 
 @pytest.mark.parametrize("adj,raw_days", [
@@ -96,7 +99,7 @@ def test_bench_adjust_fails_closed_on_calendar_mismatch_or_bad_values(tmp_path, 
     p = tmp_path / "adj.csv"
     p.write_text(adj)
     with pytest.raises(SystemExit):
-        m.adjust_bench({d: (100.0, 100.0, 100.0, 100.0) for d in raw_days}, p)
+        m.adjust_bench({d: tuple(Decimal(100) for _ in range(4)) for d in raw_days}, p)
 
 
 def test_build_obs_and_report_end_to_end(tmp_path):
@@ -146,11 +149,22 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     out = m.report(obs, str(prices), str(adj))
     a = out["primary"]["A-sepa"]
     assert a["n"] == 3 and a["verdict"] == "미입증"                     # 날짜 1일 → 판정 불가
-    assert a["tercile"]["high"]["h5"]["mean"] == pytest.approx(1.01 ** 5 - 1 - m.COST)
-    assert a["tercile"]["low"]["h5"]["mean"] == pytest.approx(0.99 ** 5 - 1 - m.COST)
+    assert a["tercile"]["high"]["h5"]["mean"] == pytest.approx(1.01 ** 5 - 1 - float(m.COST))
+    assert a["tercile"]["low"]["h5"]["mean"] == pytest.approx(0.99 ** 5 - 1 - float(m.COST))
     assert out["tables"]["B_by_gate"]["passed"]["h5"]["n"] == 1
     assert out["tables"]["daily_top3"]["A-sepa"]["h5"]["n"] == 3
     assert out["bench"]["rows"] == 30 and len(out["bench"]["sha256"]) == 64
+    assert out["prices"]["symbols"] == 3 and out["prices"]["last_bar_before_bench_end"] == 0
+    (prices / "000003.csv").unlink()
+    with pytest.raises(SystemExit):       # 가격 파일이 없는 종목이 있으면 조용히 제외하지 않고 실패한다
+        m.report(obs, str(prices), str(adj))
+
+
+def test_stop_threshold_is_exact_at_boundary():
+    # 저가가 정확히 −5% 인 경우: float 였다면 100*0.95 표현 오차로 경계 판정이 흔들릴 수 있다
+    b = bars([100, 100, 100] + [100] * 7, lows=[100, 95, 100] + [100] * 7)
+    (_, clip, mae, day, _), _ = m.forward(b, CAL, CAL[0], "close", 3)
+    assert clip == Decimal("-0.05") and day == CAL[1] and mae == Decimal("-0.05")
 
 
 def test_spread_uses_only_days_with_both_groups():
