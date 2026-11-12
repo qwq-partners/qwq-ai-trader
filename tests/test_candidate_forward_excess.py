@@ -137,7 +137,7 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     assert p2["group"] == "passed" and p2["score"] == 75.0             # 주 판정 점수는 사전 등록대로 첫 이벤트
     assert p2["strategy"] == "sepa_trend" and p2["rep_score"] == 81.0   # 참고 집계는 통과 이벤트의 전략·조정 점수
     assert b[("B", "000001")]["rep_score"] == 60.0                     # 조정 점수가 없으면 원점수
-    assert b[("C", "000001")]["group"] == "buy_approved" and b[("C", "000002")]["group"] == "not_approved"
+    assert b[("C", "000001")]["group"] == "buy_approved" and b[("C", "000002")]["group"] == "invalid"   # 결정 없음
 
     days = [f"2026-01-{d:02d}" for d in range(1, 31)]
     def write(sym, daily):
@@ -161,7 +161,7 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     assert out["tables"]["B_by_gate"]["passed"]["h5"]["n"] == 1
     assert out["tables"]["daily_top3"]["A-sepa"]["h5"]["n"] == 3
     assert out["bench"]["rows"] == 30 and len(out["bench"]["sha256"]) == 64
-    assert out["prices"]["symbols"] == 3 and out["prices"]["last_bar_before_bench_end"] == 0
+    assert out["prices"]["symbols"] == 3 and out["prices"]["partial_coverage"] == 0
     before = (out["prices"]["sha256"], out["obs"]["sha256"])
     bench_csv = prices / f"{m.BENCH}.csv"
     bench_csv.write_text(bench_csv.read_text().replace("2026-01-05,100.0,100.0", "2026-01-05,100.0,100.5", 1))
@@ -260,15 +260,34 @@ def test_doc_table_matches_committed_summary():
     root = Path(__file__).resolve().parents[1] / "docs/research"
     summary = json.loads((root / "v01-candidate-forward-excess-summary-2026-11-13.json").read_text())
     doc = (root / "v01-candidate-forward-excess-2026-11-13.md").read_text()
-    for name, p in summary["primary"].items():
-        assert p["verdict"] == "미입증" and f"| {name} " in doc
-        for g in (p["all"], p["tercile"]["high"], p["tercile"]["mid"], p["tercile"]["low"]):
-            assert m.doc_cells(g) in doc, (name, m.doc_cells(g))
+    lines = set(doc.splitlines())
+    verdicts, table = m.doc_rows(summary)
+    assert len(verdicts) == 2 and len(table) == 8
+    for row in verdicts + table:     # 라벨까지 포함한 행 전체가 문서에 그대로 있어야 한다
+        assert row in lines, row
+
+
+def test_report_rejects_price_cache_that_does_not_cover_the_period(tmp_path):
+    prices = tmp_path / "prices"
+    prices.mkdir()
+    days = [f"2026-01-{d:02d}" for d in range(1, 31)]
+    row = lambda d: f"{d},100,100,100,100\n"   # noqa: E731
+    (prices / f"{m.BENCH}.csv").write_text("date,open,high,low,close\n" + "".join(map(row, days)))
+    (prices / "000001.csv").write_text("date,open,high,low,close\n" + "".join(map(row, days[:20])))   # 끝이 짧은 캐시
+    (prices / "000002.csv").write_text("date,open,high,low,close\n" + "".join(map(row, days[5:])))    # 첫 관측일보다 늦게 시작
+    adj = tmp_path / "adj.csv"
+    adj.write_text("date,close\n" + "".join(f"{d},100\n" for d in days))
+    mk = lambda s: [{"family": f, "date": days[0], "symbol": s, "group": g, "strategy": "x", "score": sc, "rep_score": sc,  # noqa: E731
+                     "entry": e} for f, g, e in (("A", "sepa_trend", "open"), ("B", "passed", "close")) for sc in (90.0, 80.0, 70.0)]
+    for sym in ("000001", "000002"):
+        with pytest.raises(SystemExit):
+            m.report(mk(sym), str(prices), str(adj), "2026-01-31")
+        assert m.report(mk(sym), str(prices), str(adj), "2026-01-31", allow_partial_prices=True)["prices"]["partial_coverage"] == 1
 
 
 @pytest.mark.parametrize("approved,label", [
     (True, "buy_approved"), (False, "not_approved"), (1, "invalid"), (0, "invalid"), ("yes", "invalid"), ("", "invalid"),
-    (None, "invalid"),
+    (None, "invalid"), ("MISSING_KEY", "invalid"), ("NO_DECISION", "invalid"), ("EMPTY_DECISION", "invalid"),
 ])
 def test_team_approved_must_be_exactly_bool(tmp_path, approved, label):
     import json
@@ -276,8 +295,10 @@ def test_team_approved_must_be_exactly_bool(tmp_path, approved, label):
     pit.mkdir()
     team.mkdir()
     (tmp_path / "s.jsonl").write_text("")
+    decision = {"MISSING_KEY": {"stance": "buy"}, "NO_DECISION": None, "EMPTY_DECISION": {}}.get(
+        approved, {"stance": "buy", "approved": approved}) if isinstance(approved, str) else {"stance": "buy", "approved": approved}
     (team / "deliberations_20260102.jsonl").write_text(json.dumps(
-        {"symbol": "000001", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": approved}}) + "\n")
+        {"symbol": "000001", "decided_at": "2026-01-02T10:30:00", "decision": decision}) + "\n")
     obs = m.build_obs(str(pit), str(tmp_path / "s.jsonl"), str(team), "2026-01-31")
     assert [o["group"] for o in obs] == [label]
 

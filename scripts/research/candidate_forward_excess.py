@@ -202,12 +202,21 @@ def combine(verdicts):
     return dict(verdicts)
 
 
-def doc_cells(group):
-    """연구 문서 7.2 표의 수치 칸: 5일 순초과 | t | 20일 순초과 | t | 5일 관측 / 날짜."""
+def doc_rows(summary):
+    """연구 문서 7.1(판정)·7.2(순초과 표)의 행을 요약에서 그대로 만든다 — 문서와 산출물의 일치 검사용."""
     pct = lambda x: f"{x * 100:+.2f}%".replace("-", "−")   # noqa: E731
     tt = lambda x: f"{x:+.2f}".replace("-", "−")            # noqa: E731
-    h5, h20 = group["h5"], group["h20"]
-    return f"| {pct(h5['mean'])} | {tt(h5['t'])} | {pct(h20['mean'])} | {tt(h20['t'])} | {h5['n']:,} / {h5['days']} |"
+    mark = lambda j: " / ".join("✓" if j[c] else "✗" for c in ("c1", "c2", "c3", "c4"))  # noqa: E731
+    verdicts, table = [], []
+    for name, p in summary["primary"].items():
+        verdicts.append(f"| {name} | **{p['verdict']}** | {mark(p['h5'])} | {mark(p['h20'])} |")
+        q1, q2 = f"{round(p['q1'], 1):g}", f"{round(p['q2'], 1):g}"
+        for label, g in ((f"{name} 전체", p["all"]), (f"{name} 점수 상(>{q2})", p["tercile"]["high"]),
+                         (f"{name} 점수 중({q1}~{q2})", p["tercile"]["mid"]), (f"{name} 점수 하(≤{q1})", p["tercile"]["low"])):
+            h5, h20 = g["h5"], g["h20"]
+            table.append(f"| {label} | {pct(h5['mean'])} | {tt(h5['t'])} | {pct(h20['mean'])} | {tt(h20['t'])} "
+                         f"| {h5['n']:,} / {h5['days']} |")
+    return verdicts, table
 
 
 # ---------- 입출력 ----------
@@ -253,7 +262,7 @@ def build_obs(pit_dir, signals, team_dir, through):
             if k not in first or t < first[k][0]:
                 d = r["decision"] if r.get("decision") is not None else {}
                 approved = d.get("approved")   # 정확히 True/False 만 인정 — 1·"yes"·누락은 invalid 로 따로 센다
-                label = ("invalid" if d and not isinstance(approved, bool)
+                label = ("invalid" if not isinstance(approved, bool)   # 결정 없음·키 누락·비 bool 모두 invalid
                          else "buy_approved" if d.get("stance") == "buy" and approved is True
                          else "hold" if d.get("stance") == "hold" and approved is True
                          else "sell" if d.get("stance") == "sell" else "not_approved")
@@ -338,7 +347,7 @@ def top_n_per_day(rows, n=3):
     return [r for rs in by.values() for r in sorted(rs, key=lambda r: (-r[0]["score"], r[0]["symbol"]))[:n]]
 
 
-def report(obs, price_dir, bench_adjust, through):
+def report(obs, price_dir, bench_adjust, through, allow_partial_prices=False):
     late = sorted({o["date"] for o in obs if o["date"] > through})
     if late:
         raise SystemExit(f"고정 종료일 {through} 이후 관측이 있다: {late[:5]}")
@@ -357,7 +366,16 @@ def report(obs, price_dir, bench_adjust, through):
         with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
             fingerprint.update(s.encode() + hashlib.sha256(f.read()).digest())
         cache[s] = {d: v for d, v in load_bars(os.path.join(price_dir, f"{s}.csv")).items() if d <= through}
-    stale = sum(1 for s in symbols if not cache[s] or max(cache[s]) < cal[-1])
+    # 캐시가 분석 기간을 덮는지 확인한다: 첫 봉이 첫 관측일보다 늦거나 마지막 봉이 벤치마크 끝날보다 이르면
+    # 짧은 캐시(다른 기간으로 받은 파일)이거나 신규 상장·거래정지다. 조용히 missing_bar 로 흡수하지 않는다.
+    first_obs = {}
+    for o in obs:
+        first_obs[o["symbol"]] = min(first_obs.get(o["symbol"], o["date"]), o["date"])
+    partial = sorted(s for s in symbols if not cache[s] or max(cache[s]) < cal[-1] or min(cache[s]) > first_obs[s])
+    if partial and not allow_partial_prices:
+        raise SystemExit(f"가격 캐시가 분석 기간을 덮지 못하는 종목 {len(partial)}개: {partial[:10]} — "
+                         "prices 를 새 디렉터리로 다시 받거나, 거래정지·상장폐지가 맞으면 --allow-partial-prices 로 명시한다")
+    stale = len(partial)
     for o in obs:
         s = o["symbol"]
         v = {}
@@ -393,7 +411,8 @@ def report(obs, price_dir, bench_adjust, through):
            # 마지막 봉이 벤치마크 끝날보다 이른 종목 수(거래정지·상장폐지 또는 오래된 캐시)를 함께 남긴다
            "obs": {"n": len(obs), "sha256": hashlib.sha256(
                json.dumps(sorted(obs, key=lambda o: json.dumps(o, sort_keys=True)), sort_keys=True).encode()).hexdigest()},
-           "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "last_bar_before_bench_end": stale},
+           "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "partial_coverage": stale,
+                      "allow_partial_prices": allow_partial_prices},
            "excluded": {k: dict(v) for k, v in excluded.items()}, "primary": {}, "tables": {}}
     for name, sel in (("A-sepa", [r for r in rows if r[0]["family"] == "A" and r[0]["group"] == "sepa_trend"]),
                       ("B-all", [r for r in rows if r[0]["family"] == "B"])):
@@ -407,8 +426,8 @@ def report(obs, price_dir, bench_adjust, through):
                                 "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20], "spread": spreads,
                                 "all": table(sel, lambda o: "all")["all"],
                                 "tercile": table(scored, tier),
-                                "mae5_hit": {x: mean(1.0 if v["hit5"][x] else 0.0 for _o, v in sel if "hit5" in v)
-                                             for x in MAE_LEVELS},
+                                "mae5_hit": {x: (lambda xs: mean(xs) if xs else None)(
+                                    [1.0 if v["hit5"][x] else 0.0 for _o, v in sel if "hit5" in v]) for x in MAE_LEVELS},
                                 # 탐색용: 20일 뒤 결과(상승/하락)별 5일 안 −5% 도달률, 벤치마크 수익에 대한 기울기
                                 "mae5_hit_5pct_by_ret20": {
                                     name: (lambda xs: {"n": len(xs), "rate": mean(xs) if xs else None})(
@@ -481,6 +500,7 @@ def main():
     c.add_argument("--price-dir", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--bench-adjust", required=True, help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정(필수)")
+    c.add_argument("--allow-partial-prices", action="store_true", help="분석 기간을 다 덮지 못하는 가격 파일을 명시적으로 허용")
     for name in ("signals", "obs", "prices", "report"):   # 모든 단계가 같은 고정 종료일을 받는다
         sub.choices[name].add_argument("--through", required=True, help="분석 종료일 YYYY-MM-DD(KST, 포함)")
     args = ap.parse_args()
@@ -497,7 +517,7 @@ def main():
     if args.cmd == "prices":
         fetch_prices([BENCH] + sorted({o["symbol"] for o in obs}), args.out_dir, args.start, args.through)
     else:
-        out = report(obs, args.price_dir, args.bench_adjust, args.through)
+        out = report(obs, args.price_dir, args.bench_adjust, args.through, args.allow_partial_prices)
         with open(args.out, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
         for name, p in out["primary"].items():
