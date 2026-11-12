@@ -50,7 +50,7 @@ llm:
   # L01 Task 4 (2026-11-10, 사용자 D3/D4/D5): task 슬롯을 Anthropic API로 돌린다(Ultra 크레딧). 코드 기본값은 openai라
   # 롤백은 아래 두 줄을 openai로 바꾸고 재시작. heavy(trade_review/strategy_analysis/market_analysis) → Fable 5.1 medium,
   # light(theme_detection/quick_*/wiki_ingest/news_summary) → Opus 5.5 low. Bull(OpenAI light, D8 공급자 분리)·REPORT_SUMMARY·STOCK_MAPPING 불변.
-  claude_model_heavy: "claude-fable-5-1"
+  claude_model_heavy: "claude-fable-5-2"   # V07 2026-11-13: 5.1 → 5.2 (롤백은 이 줄을 5.1 로 + 재시작, 5.1 도 허용 모델로 유지)
   claude_model_light: "claude-opus-5-5"
   task_routes:
     heavy: anthropic

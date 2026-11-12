@@ -34,13 +34,14 @@ def test_claude_api_quote_covers_cache_write_ceiling():
     assert rate_quote('claude-opus-unknown', 1000, 400) is None
 
 
-FABLE = 'claude-fable-5-1'
+FABLE = 'claude-fable-5-2'
 
 
 def test_claude_config_accepts_only_opus_and_fable_identities():
-    # L01 Task 3: 허용 집합 {opus-5-5, fable-5-1}. 다른 Fable/Mythos 세대·Sonnet·별칭은 거부(기존 규칙).
+    # 허용 집합 {opus-5-5, fable-5-1(롤백용), fable-5-2(V07 2026-11-13)}. 다른 Fable/Mythos 세대·Sonnet·별칭은 거부(기존 규칙).
     assert LLMConfig(claude_model=FABLE).claude_model == FABLE
-    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus', [], None):
+    assert LLMConfig(claude_model='claude-fable-5-1').claude_model == 'claude-fable-5-1'
+    for model in ('claude-fable-5-3', 'claude-fable-5', 'claude-mythos-5-2', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus', [], None):
         with pytest.raises(ValueError, match='Claude model identity'):
             LLMConfig(claude_model=model)
 

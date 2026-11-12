@@ -50,7 +50,7 @@ def test_gemini_post_promo_ceiling_survives_intro_expiry(model, input_rate, outp
 
 @pytest.mark.parametrize('model', [
     'gpt-6.1-sol-unknown', 'gpt-6-astra-latest', 'gemini-4-argon-preview',
-    'gemini-3.8-flash-unknown', 'claude-sonnet-5-5', 'claude-fable-5-2', 'claude-fable-5',
+    'gemini-3.8-flash-unknown', 'claude-sonnet-5-5', 'claude-fable-5-3', 'claude-fable-5',
     'claude-mythos-5-1', 'unpriced-model',
 ])
 def test_unknown_exact_id_does_not_inherit_family_price(model):
@@ -150,6 +150,15 @@ def test_claude_fable_quote_uses_official_1h_cache_write_ceiling():
     assert quote.output_usd_per_million == 50.0
     assert quote.cost_usd == pytest.approx(0.04)
     assert 'cache_write_1h_ceiling' in quote.basis and 'not_invoice' in quote.basis
+
+
+def test_claude_fable_52_quote_uses_official_price_and_1h_cache_write_ceiling():
+    # 2026-11-13 공식 가격(platform.claude.com/docs/en/models/fable-5-2/overview): 입력 8·출력 40·1h 캐시 쓰기 16 USD/MTok.
+    quote = rate_quote('claude-fable-5-2', 1000, 400)
+    assert quote is not None
+    assert quote.input_usd_per_million == 16.0 and quote.output_usd_per_million == 40.0
+    assert quote.cost_usd == pytest.approx(0.032)
+    assert 'cache_write_1h_ceiling' in quote.basis
 
 
 def test_terra_successor_matches_official_page_with_cache_write_and_long_context_premium():

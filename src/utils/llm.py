@@ -68,7 +68,7 @@ class LLMTask(str, Enum):
 
 
 # L01 Task 3(2026-11-10): Fable 5.1은 API 전용(구독 CLI는 Opus만). 다른 세대·Sonnet/Haiku는 미검증이라 거부.
-CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1"})
+CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2"})
 
 
 @dataclass
@@ -80,7 +80,7 @@ class LLMConfig:
     anthropic_api_key_file: str = ""
     claude_model: str = "claude-opus-5-5"          # Bear(독립 검토) — API 1차·CLI 대체
     # L01 Task 4: task 슬롯 모델. 코드 기본 라우팅은 OpenAI 그대로이고 default.yml task_routes가 Anthropic으로 돌린다.
-    claude_model_heavy: str = "claude-fable-5-1"  # trade_review/strategy_analysis/market_analysis
+    claude_model_heavy: str = "claude-fable-5-2"  # trade_review/strategy_analysis/market_analysis (V07 2026-11-13: 5.1 → 5.2)
     claude_model_light: str = "claude-opus-5-5"   # theme_detection/quick_*/wiki_ingest/news_summary
     task_route_heavy: str = "openai"                # openai | anthropic
     task_route_light: str = "openai"
@@ -197,7 +197,7 @@ class LLMConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
             claude_model=llm_cfg.get("claude_model", "claude-opus-5-5"),
-            claude_model_heavy=llm_cfg.get("claude_model_heavy", "claude-fable-5-1"),
+            claude_model_heavy=llm_cfg.get("claude_model_heavy", "claude-fable-5-2"),
             claude_model_light=llm_cfg.get("claude_model_light", "claude-opus-5-5"),
             task_route_heavy=task_routes.get("heavy", "openai"),
             task_route_light=task_routes.get("light", "openai"),
@@ -341,7 +341,7 @@ _OPENAI_EFFORTS = {
 }
 # Validated 2026-11-10: https://platform.claude.com/docs/en/api/messages (effort low|medium|high|xhigh|max).
 # 계획 D3/D4 범위(경량 low·heavy medium)만 허용한다. high 이상은 비용 결정이 별도라 지금 열지 않는다.
-_CLAUDE_EFFORTS = {model: {"low", "medium"} for model in ("claude-opus-5-5", "claude-fable-5-1")}
+_CLAUDE_EFFORTS = {model: {"low", "medium"} for model in ("claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2")}
 # Validated 2026-10-12: https://ai.google.dev/gemini-api/docs/generate-content/gemini-3
 # Gemini 3.8: https://ai.google.dev/gemini-api/docs/generate-content/latest-model
 _GEMINI_LEVELS = {

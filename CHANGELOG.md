@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — V07 보고·heavy 역할 Fable 5.1 → 5.2 (역할표 v8, 소스·신원 실호출 DONE / 운영 배포 대기) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 변경: `src/utils/llm.py`(허용 모델·effort·`claude_model_heavy` 기본값), `src/utils/claude_transport.py`(API 허용 모델), `src/utils/llm_pricing.py`(5.2 단가 입력 8/출력 40, 1h 캐시 쓰기 상한 2배), `src/utils/llm_roles.py`(`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·`WEB_REPORT` → `claude-fable-5-2`, 출력 상한 4096→6144·4096→6144·12288→16384, `engine-roles-v8-fable52`), `config/default.yml`(`claude_model_heavy`), 관련 검사 8파일.
+- 근거: 공식 문서(11/9 출시, 5.1 대비 20% 인하, API 표면 동일·"대체로 그대로 교체"). 우리 호출은 단발 요청이라 5.2의 호환성 변경 4건에 해당 없음. 5.2는 medium 이상에서 thinking을 줄이지 않고 thinking 토큰이 출력 상한에 포함돼 상한을 올렸다. 시한(90/180초)은 첫 자연 슬롯 실측 뒤 결정.
+- 5.1은 허용 모델로 남긴다(롤백: 역할표 3줄 + `claude_model_heavy` + 재시작). 모델 교체는 판단 품질·순수익의 증거가 아니다.
+- 신원 실호출 1회(사용자 승인 11/13): `resolved_model=claude-fable-5-2` verified·HTTP 200·`end_turn`·거절 0·1.2초·추정 USD 0.0025(원장 밖 단발).
+
 ## 2026-11-13 — V01 기존 후보의 사후 초과수익 판독: 두 주 판정 계열 모두 "미입증" ([사전 등록·결과](docs/research/v01-candidate-forward-excess-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 추가: `scripts/research/candidate_forward_excess.py`(signals/obs/prices/report, KIS 무접촉), `tests/test_candidate_forward_excess.py` 41건. 제품 코드·설정·운영 변경 0.

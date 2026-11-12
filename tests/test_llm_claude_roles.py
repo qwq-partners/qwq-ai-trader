@@ -10,7 +10,7 @@ from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
 from tests.test_claude_transport import Session as ClaudeSession, api_body
 from tests.test_llm_transport_contract import Session as OpenAISession, openai_reply
 
-OPUS, FABLE = 'claude-opus-5-5', 'claude-fable-5-1'
+OPUS, FABLE = 'claude-opus-5-5', 'claude-fable-5-2'
 JSON_HINT = 'JSON'
 
 
@@ -60,12 +60,12 @@ def claude_request(m, index=0):
     return m.anthropic._session.calls[index][1]['json']
 
 
-def test_role_table_v7_moves_report_roles_to_anthropic_api_and_morning_brief_to_terra():
-    assert ROLE_POLICY_VERSION == 'engine-roles-v7-terra'
+def test_role_table_v8_report_roles_on_fable_52_and_morning_brief_on_terra():
+    assert ROLE_POLICY_VERSION == 'engine-roles-v8-fable52'
     expect = {LLMRole.REPORT_ONE_LINE: ('anthropic', OPUS, 512, 20.0, 'low', None),
-              LLMRole.MARKET_BRIEF: ('anthropic', FABLE, 4096, 90.0, 'medium', 'json_object'),
-              LLMRole.POST_EXIT_RESEARCH: ('anthropic', FABLE, 4096, 90.0, 'medium', None),
-              LLMRole.WEB_REPORT: ('anthropic', FABLE, 12288, 180.0, 'medium', 'json_object'),
+              LLMRole.MARKET_BRIEF: ('anthropic', FABLE, 6144, 90.0, 'medium', 'json_object'),
+              LLMRole.POST_EXIT_RESEARCH: ('anthropic', FABLE, 6144, 90.0, 'medium', None),
+              LLMRole.WEB_REPORT: ('anthropic', FABLE, 16384, 180.0, 'medium', 'json_object'),
               LLMRole.MORNING_BRIEF: ('openai', 'gpt-5.6-terra', 1600, 45.0, 'none', None)}
     for role, (provider, model, cap, timeout, effort, fmt) in expect.items():
         p = ROLE_PROFILES[role]
@@ -77,9 +77,9 @@ def test_role_table_v7_moves_report_roles_to_anthropic_api_and_morning_brief_to_
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,model,cap,effort,json_mode,priority', [
     ('report_one_line', OPUS, 512, 'low', False, 'standard'),
-    ('market_brief', FABLE, 4096, 'medium', True, 'standard'),
-    ('post_exit_research', FABLE, 4096, 'medium', False, 'research'),
-    ('web_report', FABLE, 12288, 'medium', True, 'standard'),
+    ('market_brief', FABLE, 6144, 'medium', True, 'standard'),
+    ('post_exit_research', FABLE, 6144, 'medium', False, 'research'),
+    ('web_report', FABLE, 16384, 'medium', True, 'standard'),
 ])
 async def test_anthropic_role_exact_payload_and_durable_attribution(tmp_path, role, model, cap, effort, json_mode, priority):
     m = manager(tmp_path, claude_body(model))
@@ -204,7 +204,7 @@ def test_config_parses_task_routes_and_slot_models_and_rejects_unknown():
     assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
     default = LLMConfig.from_config({})
     assert (default.task_route_heavy, default.task_route_light) == ('openai', 'openai')
-    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-2'},
+    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-3'},
                 {'claude_model_light': 'claude-sonnet-5-5'},
                 # 독립 리뷰 1차 P2: 명시된 falsy 값은 기본값으로 치환하지 않고 거부한다.
                 {'claude_model_heavy': ''}, {'claude_model_light': 0}, {'claude_model_heavy': False},
