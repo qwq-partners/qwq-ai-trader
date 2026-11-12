@@ -14,6 +14,7 @@ ponytail: 날짜별 평균 + Newey-West 만 쓴다. 종목 군집·부트스트�
 
 import argparse
 import csv
+import datetime
 import glob
 import hashlib
 import json
@@ -211,10 +212,13 @@ def doc_cells(group):
 
 # ---------- 입출력 ----------
 
-def build_obs(pit_dir, signals, team_dir):
+def build_obs(pit_dir, signals, team_dir, through):
+    """through(YYYY-MM-DD, KST) 이후 날짜의 입력은 쓰지 않는다 — 나중에 다시 돌려도 같은 코호트가 나오게 한다."""
     obs = []
     for f in sorted(glob.glob(os.path.join(pit_dir, "*.json"))):
         j = json.load(open(f))
+        if j["date"] > through:
+            continue
         for c in j["candidates"]:
             obs.append({"family": "A", "date": j["date"], "symbol": c["symbol"], "group": c.get("strategy"),
                         "score": c.get("score"), "entry": "open"})
@@ -222,6 +226,8 @@ def build_obs(pit_dir, signals, team_dir):
     for line in open(signals):
         r = json.loads(line)
         k = (r["symbol"], r["t"][:10])
+        if k[1] > through:
+            continue
         if r["type"] == "passed" and (k not in passed or r["t"] < passed[k]["t"]):
             passed[k] = r
         if k not in first or r["t"] < first[k]["t"]:
@@ -242,10 +248,14 @@ def build_obs(pit_dir, signals, team_dir):
         for r in by_id.values():
             t = r["decided_at"] if r.get("decided_at") is not None else r["recorded_at"]
             k = (r["symbol"], t[:10])
+            if k[1] > through:
+                continue
             if k not in first or t < first[k][0]:
                 d = r["decision"] if r.get("decision") is not None else {}
-                label = ("buy_approved" if d.get("stance") == "buy" and d.get("approved")
-                         else "hold" if d.get("stance") == "hold" and d.get("approved")
+                approved = d.get("approved")   # 정확히 True/False 만 인정 — 1·"yes"·누락은 invalid 로 따로 센다
+                label = ("invalid" if d and not isinstance(approved, bool)
+                         else "buy_approved" if d.get("stance") == "buy" and approved is True
+                         else "hold" if d.get("stance") == "hold" and approved is True
                          else "sell" if d.get("stance") == "sell" else "not_approved")
                 first[k] = (t, label)
     for k, (_t, label) in first.items():
@@ -268,7 +278,7 @@ def load_bars(path):
     return {d: v for d, v in bars.items() if v is not None}
 
 
-def fetch_prices(symbols, out_dir, start, pause=0.4):
+def fetch_prices(symbols, out_dir, start, through, pause=0.4):
     import FinanceDataReader as fdr  # 지연 임포트: 계산·검사는 네트워크 라이브러리 없이 돈다
     os.makedirs(out_dir, exist_ok=True)
     fails, failed = 0, []
@@ -277,7 +287,7 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
         if os.path.exists(p):
             continue
         try:
-            df = fdr.DataReader(s, start)
+            df = fdr.DataReader(s, start, through)
             if df is None or df.empty:
                 raise ValueError("empty")
             with open(p + ".tmp", "w", newline="") as f:
@@ -298,7 +308,7 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
         raise SystemExit(f"미수집 {len(failed)}종목: {failed[:10]} — 다시 실행해 채운다(report 는 가격 파일이 없으면 실패)")
 
 
-def adjust_bench(bench, adj_csv):
+def adjust_bench(bench, adj_csv, through=None):
     """공개 일봉의 069500 은 분배금 미반영이다 — 초과수익 원장의 KIS 수정 종가 비율로 OHLC 를 맞춘다.
 
     보정 자료의 기간 [첫날, 끝날] 안에서 두 원천의 거래일이 다르면 달력이 조용히 줄어 보유 기간이 밀린다 → 실패시킨다.
@@ -306,6 +316,9 @@ def adjust_bench(bench, adj_csv):
     """
     with open(adj_csv) as f:
         rows = [(r["date"], Decimal(r["close"])) for r in csv.DictReader(f)]
+    if through is not None:   # 보정 자료·공개 일봉 모두 고정 종료일까지만 쓴다
+        rows = [r for r in rows if r[0] <= through]
+        bench = {d: v for d, v in bench.items() if d <= through}
     adj = dict(rows)
     if len(adj) != len(rows) or any(not (c.is_finite() and c > 0) for c in adj.values()):
         raise SystemExit("벤치마크 보정 자료에 중복 날짜 또는 비양수·비유한 종가가 있다")
@@ -325,8 +338,11 @@ def top_n_per_day(rows, n=3):
     return [r for rs in by.values() for r in sorted(rs, key=lambda r: (-r[0]["score"], r[0]["symbol"]))[:n]]
 
 
-def report(obs, price_dir, bench_adjust):
-    bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust)
+def report(obs, price_dir, bench_adjust, through):
+    late = sorted({o["date"] for o in obs if o["date"] > through})
+    if late:
+        raise SystemExit(f"고정 종료일 {through} 이후 관측이 있다: {late[:5]}")
+    bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust, through)
     cal = sorted(bench)
     pos = {d: i for i, d in enumerate(cal)}
     symbols = sorted({o["symbol"] for o in obs})
@@ -340,7 +356,7 @@ def report(obs, price_dir, bench_adjust):
     for s in symbols:
         with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
             fingerprint.update(s.encode() + hashlib.sha256(f.read()).digest())
-        cache[s] = load_bars(os.path.join(price_dir, f"{s}.csv"))
+        cache[s] = {d: v for d, v in load_bars(os.path.join(price_dir, f"{s}.csv")).items() if d <= through}
     stale = sum(1 for s in symbols if not cache[s] or max(cache[s]) < cal[-1])
     for o in obs:
         s = o["symbol"]
@@ -372,7 +388,7 @@ def report(obs, price_dir, bench_adjust):
 
     with open(bench_adjust, "rb") as f:
         digest = hashlib.sha256(f.read()).hexdigest()
-    out = {"cost": float(COST), "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
+    out = {"cost": float(COST), "through": through, "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
                                    "first": cal[0], "last": cal[-1]},
            # 마지막 봉이 벤치마크 끝날보다 이른 종목 수(거래정지·상장폐지 또는 오래된 캐시)를 함께 남긴다
            "obs": {"n": len(obs), "sha256": hashlib.sha256(
@@ -421,8 +437,8 @@ def report(obs, price_dir, bench_adjust):
     return out
 
 
-def export_signals(out_path):
-    """signal_events 전체를 읽기 전용으로 내보낸다. 날짜는 KST 기준."""
+def export_signals(out_path, through):
+    """signal_events 를 읽기 전용으로 내보낸다. 날짜는 KST 기준이며 through(포함)까지만."""
     import asyncio
 
     import asyncpg  # 지연 임포트: 계산·검사는 DB 라이브러리 없이 돈다
@@ -433,7 +449,8 @@ def export_signals(out_path):
             await conn.execute("SET default_transaction_read_only = on")
             return await conn.fetch(
                 "select event_time at time zone 'Asia/Seoul' as t, symbol, strategy, score, adjusted_score, event_type, block_gate "
-                "from signal_events where side = 'buy' order by id")
+                "from signal_events where side = 'buy' "
+                "and (event_time at time zone 'Asia/Seoul')::date <= $1::date order by id", through)
         finally:
             await conn.close()
 
@@ -464,21 +481,23 @@ def main():
     c.add_argument("--price-dir", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--bench-adjust", required=True, help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정(필수)")
+    for name in ("signals", "obs", "prices", "report"):   # 모든 단계가 같은 고정 종료일을 받는다
+        sub.choices[name].add_argument("--through", required=True, help="분석 종료일 YYYY-MM-DD(KST, 포함)")
     args = ap.parse_args()
     if args.cmd == "signals":
-        export_signals(args.out)
+        export_signals(args.out, datetime.date.fromisoformat(args.through))
         return
     if args.cmd == "obs":
-        obs = build_obs(args.pit_dir, args.signals, args.team_dir)
+        obs = build_obs(args.pit_dir, args.signals, args.team_dir, args.through)
         with open(args.out, "w") as f:
             f.writelines(json.dumps(o, ensure_ascii=False) + "\n" for o in obs)
         print(len(obs), "관측")
         return
     obs = [json.loads(line) for line in open(args.obs)]
     if args.cmd == "prices":
-        fetch_prices([BENCH] + sorted({o["symbol"] for o in obs}), args.out_dir, args.start)
+        fetch_prices([BENCH] + sorted({o["symbol"] for o in obs}), args.out_dir, args.start, args.through)
     else:
-        out = report(obs, args.price_dir, args.bench_adjust)
+        out = report(obs, args.price_dir, args.bench_adjust, args.through)
         with open(args.out, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
         for name, p in out["primary"].items():

@@ -125,9 +125,12 @@ def test_build_obs_and_report_end_to_end(tmp_path):
         # 같은 deliberation_id 의 정정 행: 마지막 행(hold)이 정본이다
         {"symbol": "000003", "deliberation_id": "x1", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": True}},
         {"symbol": "000003", "deliberation_id": "x1", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "hold", "approved": True}}]))
-    obs = m.build_obs(str(pit), str(sig), str(team))
+    obs = m.build_obs(str(pit), str(sig), str(team), "2026-01-31")
     b = {(o["family"], o["symbol"]): o for o in obs}
     assert len(obs) == 9
+    assert m.build_obs(str(pit), str(sig), str(team), "2026-01-01") == []      # 종료일 이후 입력은 쓰지 않는다
+    with pytest.raises(SystemExit):                                            # 종료일 이후 관측이 섞이면 report 가 실패
+        m.report(obs, str(tmp_path), str(tmp_path / "none.csv"), "2026-01-01")
     assert b[("C", "000003")]["group"] == "hold"
     assert b[("B", "000001")]["group"] == "penalized" and b[("B", "000001")]["score"] == 60.0   # 그날 첫 이벤트
     p2 = b[("B", "000002")]
@@ -150,7 +153,7 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     write("000003", -0.01)
     adj = tmp_path / "adj.csv"
     adj.write_text("date,close\n" + "".join(f"{d},100.0\n" for d in days))
-    out = m.report(obs, str(prices), str(adj))
+    out = m.report(obs, str(prices), str(adj), "2026-01-31")
     a = out["primary"]["A-sepa"]
     assert a["n"] == 3 and a["verdict"] == "미입증"                     # 날짜 1일 → 판정 불가
     assert a["tercile"]["high"]["h5"]["mean"] == pytest.approx(1.01 ** 5 - 1 - float(m.COST))
@@ -162,11 +165,11 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     before = (out["prices"]["sha256"], out["obs"]["sha256"])
     bench_csv = prices / f"{m.BENCH}.csv"
     bench_csv.write_text(bench_csv.read_text().replace("2026-01-05,100.0,100.0", "2026-01-05,100.0,100.5", 1))
-    again = m.report(obs, str(prices), str(adj))
+    again = m.report(obs, str(prices), str(adj), "2026-01-31")
     assert again["prices"]["sha256"] != before[0] and again["obs"]["sha256"] == before[1]   # 벤치마크 원본이 바뀌면 지문도 바뀐다
     (prices / "000003.csv").unlink()
     with pytest.raises(SystemExit):       # 가격 파일이 없는 종목이 있으면 조용히 제외하지 않고 실패한다
-        m.report(obs, str(prices), str(adj))
+        m.report(obs, str(prices), str(adj), "2026-01-31")
 
 
 def test_stop_threshold_is_exact_at_boundary():
@@ -247,7 +250,7 @@ def test_report_counts_exact_stop_boundary_in_decimal(tmp_path):
             "entry": "close"} for s, sc in (("000001", 90.0), ("000002", 80.0), ("000003", 70.0))]
     obs += [{"family": "A", "date": days[0], "symbol": "000001", "group": "sepa_trend", "score": sc, "entry": "open"}
             for sc in (90.0, 80.0, 70.0)]
-    out = m.report(obs, str(prices), str(adj))
+    out = m.report(obs, str(prices), str(adj), "2026-01-31")
     assert out["primary"]["B-all"]["mae5_hit"]["0.05"] == pytest.approx(2 / 3)   # 95 와 94.99 만 닿음
 
 
@@ -261,3 +264,27 @@ def test_doc_table_matches_committed_summary():
         assert p["verdict"] == "미입증" and f"| {name} " in doc
         for g in (p["all"], p["tercile"]["high"], p["tercile"]["mid"], p["tercile"]["low"]):
             assert m.doc_cells(g) in doc, (name, m.doc_cells(g))
+
+
+@pytest.mark.parametrize("approved,label", [
+    (True, "buy_approved"), (False, "not_approved"), (1, "invalid"), (0, "invalid"), ("yes", "invalid"), ("", "invalid"),
+    (None, "invalid"),
+])
+def test_team_approved_must_be_exactly_bool(tmp_path, approved, label):
+    import json
+    pit, team = tmp_path / "pit", tmp_path / "team"
+    pit.mkdir()
+    team.mkdir()
+    (tmp_path / "s.jsonl").write_text("")
+    (team / "deliberations_20260102.jsonl").write_text(json.dumps(
+        {"symbol": "000001", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": approved}}) + "\n")
+    obs = m.build_obs(str(pit), str(tmp_path / "s.jsonl"), str(team), "2026-01-31")
+    assert [o["group"] for o in obs] == [label]
+
+
+def test_through_truncates_bench_and_adjust_rows(tmp_path):
+    p = tmp_path / "adj.csv"
+    p.write_text("date,close\n2026-01-01,100\n2026-01-02,100\n2026-01-03,100\n")
+    one = tuple(Decimal(100) for _ in range(4))
+    raw = {"2026-01-01": one, "2026-01-02": one, "2026-01-03": one, "2026-01-04": one}
+    assert sorted(m.adjust_bench(raw, p, "2026-01-02")) == ["2026-01-01", "2026-01-02"]
