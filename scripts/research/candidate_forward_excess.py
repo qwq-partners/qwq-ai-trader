@@ -67,16 +67,20 @@ def forward(bars, cal, day, entry, h):
     return (ret, clip, mae, clip_day, gapped), None
 
 
-def nw_t(xs, lag):
-    """평균의 Newey-West t (Bartlett 가중)."""
+def nw_t(xs, lag, idx=None):
+    """평균의 Newey-West t (Bartlett 가중).
+
+    idx 는 각 값의 거래일 위치(달력 인덱스). 주면 시차를 **실제 거래일 거리**로 잰다 — 후보가 없는 날이 사이에 끼면
+    두 관측은 인접 시차가 아니다. 없으면 연속 위치로 본다.
+    """
     n = len(xs)
     if n < 2:
         return None
     m = mean(xs)
-    e = [x - m for x in xs]
-    var = sum(v * v for v in e) / n
-    for k in range(1, min(lag, n - 1) + 1):
-        var += 2 * (1 - k / (lag + 1)) * sum(e[t] * e[t - k] for t in range(k, n)) / n
+    at = dict(zip(idx if idx is not None else range(n), (x - m for x in xs)))
+    var = sum(v * v for v in at.values()) / n
+    for k in range(1, lag + 1):
+        var += 2 * (1 - k / (lag + 1)) * sum(e * at[i - k] for i, e in at.items() if i - k in at) / n
     return m / math.sqrt(var / n) if var > 0 else None
 
 
@@ -86,8 +90,8 @@ def terciles(scores):
     return s[len(s) // 3 - 1], s[2 * len(s) // 3 - 1]
 
 
-def daily_stat(rows, key, lag):
-    """rows=[(date, value dict)] → 날짜별 평균의 평균·t."""
+def daily_stat(rows, key, lag, pos=None):
+    """rows=[(date, value dict)] → 날짜별 평균의 평균·t. pos={date: 거래일 위치} 를 주면 t 의 시차를 거래일 거리로 잰다."""
     by = defaultdict(list)
     for d, v in rows:
         if v.get(key) is not None:
@@ -97,18 +101,20 @@ def daily_stat(rows, key, lag):
     if not xs:
         return {"n": 0, "days": 0, "mean": None, "t": None}
     return {"n": sum(len(by[d]) for d in days), "days": len(days), "mean": mean(xs),
-            "t": nw_t(xs, lag) if len(days) >= 2 else None}
+            "t": nw_t(xs, lag, [pos[d] for d in days] if pos is not None else None) if len(days) >= 2 else None}
 
 
-def spread_stat(high, low, key, lag):
+def spread_stat(high, low, key, lag, pos=None):
     """탐색용(판정에 쓰지 않음): 같은 날의 점수 상 − 하 평균 차이. 지수 방향이 상쇄된다."""
     by = {}
     for name, rows in (("h", high), ("l", low)):
         for d, v in rows:
             if v.get(key) is not None:
                 by.setdefault(d, {"h": [], "l": []})[name].append(v[key])
-    xs = [mean(g["h"]) - mean(g["l"]) for _d, g in sorted(by.items()) if g["h"] and g["l"]]
-    return {"days": len(xs), "mean": mean(xs) if xs else None, "t": nw_t(xs, lag)}
+    days = [d for d, g in sorted(by.items()) if g["h"] and g["l"]]
+    xs = [mean(by[d]["h"]) - mean(by[d]["l"]) for d in days]
+    return {"days": len(xs), "mean": mean(xs) if xs else None,
+            "t": nw_t(xs, lag, [pos[d] for d in days] if pos is not None else None)}
 
 
 def drop_top_contributors(rows, key, n=3):
@@ -153,11 +159,11 @@ def slope(pairs):
     return sum((x - mx) * (y - my) for x, y in pairs) / sxx if sxx > 0 else None
 
 
-def judge(rows_by_tercile, h):
+def judge(rows_by_tercile, h, pos=None):
     """6절 판정의 한 보유기간 분: C1~C4 와 음의 신호 여부."""
     key = f"net{h}"
     top = rows_by_tercile["high"]
-    st = {k: daily_stat(v, key, h - 1) for k, v in rows_by_tercile.items()}
+    st = {k: daily_stat(v, key, h - 1, pos) for k, v in rows_by_tercile.items()}
     hi = st["high"]
     if hi["mean"] is None:
         return {"stats": st, "c1": False, "c2": False, "c3": False, "c4": False, "negative": False}
@@ -169,7 +175,7 @@ def judge(rows_by_tercile, h):
     means = [st[k]["mean"] for k in ("high", "mid", "low")]
     return {
         "stats": st, "halves": halves, "ex_top3": ex3,
-        "spread": spread_stat(top, rows_by_tercile["low"], key, h - 1),
+        "spread": spread_stat(top, rows_by_tercile["low"], key, h - 1, pos),
         "c1": bool(enough and hi["mean"] > 0 and hi["t"] >= 2),
         "c2": bool(all(m is not None for m in means) and means[0] > means[1] > means[2]),
         "c3": bool(all(x is not None and x > 0 for x in halves)),
@@ -184,6 +190,14 @@ def verdict(j5, j20):
     if all(j[c] for j in (j5, j20) for c in ("c1", "c2", "c3", "c4")):
         return "선정 신호 있음"
     return "미입증"
+
+
+def combine(verdicts):
+    """사전 등록 6절: 주 판정 계열 중 하나만 통과하면 그 판정은 '잠정'이다(V02 신규 자료에서 재확인)."""
+    passed = [k for k, v in verdicts.items() if v == "선정 신호 있음"]
+    if len(passed) == 1 and len(verdicts) > 1:
+        return {**verdicts, passed[0]: "선정 신호 있음(잠정)"}
+    return dict(verdicts)
 
 
 # ---------- 입출력 ----------
@@ -302,11 +316,14 @@ def top_n_per_day(rows, n=3):
 def report(obs, price_dir, bench_adjust):
     bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust)
     cal = sorted(bench)
+    pos = {d: i for i, d in enumerate(cal)}
     symbols = sorted({o["symbol"] for o in obs})
     missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
     if missing:
         raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
     fingerprint = hashlib.sha256()
+    with open(os.path.join(price_dir, f"{BENCH}.csv"), "rb") as f:   # 벤치마크 원본 OHLC 도 지문에 넣는다
+        fingerprint.update(BENCH.encode() + hashlib.sha256(f.read()).digest())
     cache, excluded, rows = {}, defaultdict(lambda: defaultdict(int)), []
     for s in symbols:
         with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
@@ -335,7 +352,7 @@ def report(obs, price_dir, bench_adjust):
         groups = defaultdict(list)
         for o, v in sel:
             groups[keyfn(o)].append((o["date"], v))
-        return {str(g): {f"h{h}": {**daily_stat(rs, f"net{h}", h - 1),
+        return {str(g): {f"h{h}": {**daily_stat(rs, f"net{h}", h - 1, pos),
                                    "abs": daily_stat(rs, f"ret{h}", h - 1)["mean"],
                                    "clip": daily_stat(rs, f"clipnet{h}", h - 1)["mean"]} for h in HORIZONS}
                 for g, rs in sorted(groups.items(), key=lambda kv: str(kv[0]))}
@@ -345,6 +362,8 @@ def report(obs, price_dir, bench_adjust):
     out = {"cost": float(COST), "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
                                    "first": cal[0], "last": cal[-1]},
            # 마지막 봉이 벤치마크 끝날보다 이른 종목 수(거래정지·상장폐지 또는 오래된 캐시)를 함께 남긴다
+           "obs": {"n": len(obs), "sha256": hashlib.sha256(
+               json.dumps(sorted(obs, key=lambda o: json.dumps(o, sort_keys=True)), sort_keys=True).encode()).hexdigest()},
            "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "last_bar_before_bench_end": stale},
            "excluded": {k: dict(v) for k, v in excluded.items()}, "primary": {}, "tables": {}}
     for name, sel in (("A-sepa", [r for r in rows if r[0]["family"] == "A" and r[0]["group"] == "sepa_trend"]),
@@ -353,8 +372,8 @@ def report(obs, price_dir, bench_adjust):
         q1, q2 = terciles([r[0]["score"] for r in scored])
         tier = lambda o: "low" if o["score"] <= q1 else "mid" if o["score"] <= q2 else "high"  # noqa: E731
         by = {k: [(o["date"], v) for o, v in scored if tier(o) == k] for k in ("high", "mid", "low")}
-        j = {h: judge(by, h) for h in (5, 20)}
-        spreads = {f"h{h}": spread_stat(by["high"], by["low"], f"net{h}", h - 1) for h in HORIZONS}
+        j = {h: judge(by, h, pos) for h in (5, 20)}
+        spreads = {f"h{h}": spread_stat(by["high"], by["low"], f"net{h}", h - 1, pos) for h in HORIZONS}
         out["primary"][name] = {"n": len(sel), "scored": len(scored), "q1": q1, "q2": q2,
                                 "verdict": verdict(j[5], j[20]), "h5": j[5], "h20": j[20], "spread": spreads,
                                 "all": table(sel, lambda o: "all")["all"],
@@ -370,6 +389,8 @@ def report(obs, price_dir, bench_adjust):
                                     for name, ok in (("up", lambda r: r > 0), ("down", lambda r: r <= 0))},
                                 "slope_vs_bench": {f"h{h}": slope([(v[f"bench{h}"], v[f"ret{h}"]) for _o, v in sel
                                                                   if f"ret{h}" in v]) for h in (5, 20)}}
+    for name, v in combine({k: p["verdict"] for k, p in out["primary"].items()}).items():
+        out["primary"][name]["verdict"] = v
     fam = lambda f: [r for r in rows if r[0]["family"] == f]  # noqa: E731
     out["tables"] = {
         "A_by_strategy": table(fam("A"), lambda o: o["group"]),

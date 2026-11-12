@@ -155,6 +155,11 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     assert out["tables"]["daily_top3"]["A-sepa"]["h5"]["n"] == 3
     assert out["bench"]["rows"] == 30 and len(out["bench"]["sha256"]) == 64
     assert out["prices"]["symbols"] == 3 and out["prices"]["last_bar_before_bench_end"] == 0
+    before = (out["prices"]["sha256"], out["obs"]["sha256"])
+    bench_csv = prices / f"{m.BENCH}.csv"
+    bench_csv.write_text(bench_csv.read_text().replace("2026-01-05,100.0,100.0", "2026-01-05,100.0,100.5", 1))
+    again = m.report(obs, str(prices), str(adj))
+    assert again["prices"]["sha256"] != before[0] and again["obs"]["sha256"] == before[1]   # 벤치마크 원본이 바뀌면 지문도 바뀐다
     (prices / "000003.csv").unlink()
     with pytest.raises(SystemExit):       # 가격 파일이 없는 종목이 있으면 조용히 제외하지 않고 실패한다
         m.report(obs, str(prices), str(adj))
@@ -197,3 +202,28 @@ def test_load_bars_drops_nonfinite_or_nonpositive_rows_and_rejects_duplicates(tm
     p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-01,2,2,2,2\n")
     with pytest.raises(SystemExit):
         m.load_bars(p)
+
+
+def test_newey_west_uses_trading_day_distance_not_array_position():
+    xs = [1.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0, 3.0]
+    adjacent = m.nw_t(xs, 2, list(range(8)))
+    assert adjacent == pytest.approx(m.nw_t(xs, 2))                 # 연속 거래일이면 위치 기준과 같다
+    far = m.nw_t(xs, 2, [i * 10 for i in range(8)])                 # 시차보다 멀리 떨어진 날들은 서로 보정하지 않는다
+    assert far == pytest.approx(m.nw_t(xs, 0)) and abs(adjacent) < abs(far)
+
+
+def test_daily_stat_passes_calendar_positions():
+    rows = [(f"d{i}", {"net5": x}) for i, x in enumerate([1.0, 1.0, 1.0, 1.0, 3.0, 3.0, 3.0, 3.0])]
+    near = m.daily_stat(rows, "net5", 2, {f"d{i}": i for i in range(8)})["t"]
+    far = m.daily_stat(rows, "net5", 2, {f"d{i}": i * 10 for i in range(8)})["t"]
+    assert abs(near) < abs(far)
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ({"A": "선정 신호 있음", "B": "선정 신호 있음"}, {"A": "선정 신호 있음", "B": "선정 신호 있음"}),
+    ({"A": "선정 신호 있음", "B": "미입증"}, {"A": "선정 신호 있음(잠정)", "B": "미입증"}),
+    ({"A": "미입증", "B": "미입증"}, {"A": "미입증", "B": "미입증"}),
+    ({"A": "음의 신호", "B": "선정 신호 있음"}, {"A": "음의 신호", "B": "선정 신호 있음(잠정)"}),
+])
+def test_single_family_pass_is_provisional(raw, expect):
+    assert m.combine(raw) == expect
