@@ -77,3 +77,10 @@ def test_judge_requires_all_four_and_flags_negative():
 def test_terciles_split_into_thirds():
     q1, q2 = m.terciles(list(range(1, 10)))
     assert (q1, q2) == (3, 6)
+
+
+def test_bench_adjust_scales_ohlc_to_adjusted_close(tmp_path):
+    p = tmp_path / "adj.csv"
+    p.write_text("date,close\n2026-01-01,110\n")
+    out = m.adjust_bench({"2026-01-01": (90.0, 105.0, 80.0, 100.0), "2026-01-02": (1.0, 1.0, 1.0, 1.0)}, p)
+    assert out == {"2026-01-01": pytest.approx((99.0, 115.5, 88.0, 110.0))}

@@ -52,14 +52,14 @@ def forward(bars, cal, day, entry, h):
             return None, "data_error"
     ret = bars[cal[last]][3] / px - 1
     stop_px, clip, clip_day = px * (1 - STOP), ret, cal[last]
-    mae = 0.0
+    mae, stopped = 0.0, False
     for d in cal[first:last + 1]:
         o, _h, low, _c = bars[d]
         mae = min(mae, low / px - 1)
-        if clip_day == cal[last] and clip == ret and low <= stop_px:
+        if not stopped and low <= stop_px:
             # 시가 매수 당일의 시가는 매수가 자체라 갭 종료가 아니다
             gap = o <= stop_px and not (entry == "open" and d == day)
-            clip, clip_day = (o / px - 1 if gap else -STOP), d
+            clip, clip_day, stopped = (o / px - 1 if gap else -STOP), d, True
     return (ret, clip, mae, clip_day), None
 
 
@@ -198,8 +198,17 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
         time.sleep(pause)
 
 
-def report(obs, price_dir):
+def adjust_bench(bench, adj_csv):
+    """공개 일봉의 069500 은 분배금 미반영이다 — 초과수익 원장의 KIS 수정 종가 비율로 OHLC 를 맞춘다."""
+    with open(adj_csv) as f:
+        adj = {r["date"]: float(r["close"]) for r in csv.DictReader(f)}
+    return {d: tuple(x * adj[d] / b[3] for x in b) for d, b in bench.items() if d in adj}
+
+
+def report(obs, price_dir, bench_adjust=None):
     bench = load_bars(os.path.join(price_dir, f"{BENCH}.csv"))
+    if bench_adjust:
+        bench = adjust_bench(bench, bench_adjust)
     cal = sorted(bench)
     cache, excluded, rows = {}, defaultdict(lambda: defaultdict(int)), []
     for o in obs:
@@ -215,11 +224,9 @@ def report(obs, price_dir):
                 continue
             ret, clip, mae, clip_day = res
             b, _ = forward(bench, cal, o["date"], o["entry"], h)
-            i = cal.index(o["date"])
             base = bench[o["date"]][0] if o["entry"] == "open" else bench[o["date"]][3]
             v.update({f"ret{h}": ret, f"net{h}": ret - b[0] - COST, f"mae{h}": mae,
                       f"clipnet{h}": clip - (bench[clip_day][3] / base - 1) - COST})
-            assert cal[i] == o["date"]
         rows.append((o, v))
 
     def table(sel, keyfn):
@@ -273,6 +280,7 @@ def main():
     c.add_argument("--obs", required=True)
     c.add_argument("--price-dir", required=True)
     c.add_argument("--out", required=True)
+    c.add_argument("--bench-adjust", help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정")
     args = ap.parse_args()
     if args.cmd == "obs":
         obs = build_obs(args.pit_dir, args.signals, args.team_dir)
@@ -284,7 +292,7 @@ def main():
     if args.cmd == "prices":
         fetch_prices([BENCH] + sorted({o["symbol"] for o in obs}), args.out_dir, args.start)
     else:
-        out = report(obs, args.price_dir)
+        out = report(obs, args.price_dir, args.bench_adjust)
         with open(args.out, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
         for name, p in out["primary"].items():
