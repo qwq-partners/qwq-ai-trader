@@ -11,6 +11,7 @@ from tests.test_claude_transport import Session as ClaudeSession, api_body
 from tests.test_llm_transport_contract import Session as OpenAISession, openai_reply
 
 OPUS, FABLE = 'claude-opus-5-5', 'claude-fable-5-2'
+HEAVY = 'claude-fable-5-1'   # heavy task 슬롯은 V07 에서 5.1 유지(작은 출력 상한 소비자 점검 전) — 고정 보고 역할만 5.2
 JSON_HINT = 'JSON'
 
 
@@ -149,8 +150,8 @@ async def test_default_task_routes_stay_openai(tmp_path):
     (LLMTask.THEME_DETECTION, OPUS, 'low', 'light'), (LLMTask.QUICK_CLASSIFY, OPUS, 'low', 'light'),
     (LLMTask.WIKI_INGEST, OPUS, 'low', 'light'), (LLMTask.NEWS_SUMMARY, OPUS, 'low', 'light'),
     (LLMTask.QUICK_ANALYSIS, OPUS, 'low', 'light'),
-    (LLMTask.TRADE_REVIEW, FABLE, 'medium', 'heavy'), (LLMTask.STRATEGY_ANALYSIS, FABLE, 'medium', 'heavy'),
-    (LLMTask.MARKET_ANALYSIS, FABLE, 'medium', 'heavy'),
+    (LLMTask.TRADE_REVIEW, HEAVY, 'medium', 'heavy'), (LLMTask.STRATEGY_ANALYSIS, HEAVY, 'medium', 'heavy'),
+    (LLMTask.MARKET_ANALYSIS, HEAVY, 'medium', 'heavy'),
 ])
 async def test_configured_task_routes_use_anthropic_api_with_slot_models(tmp_path, task, model, effort, weight):
     m = manager(tmp_path, claude_body(model, '{"themes": []}'), routes={'heavy': 'anthropic', 'light': 'anthropic'})
@@ -184,7 +185,7 @@ async def test_heavy_anthropic_failure_falls_back_to_openai_light_but_refusal_do
     assert m.openai._session.payloads[0]['model'] == 'gpt-5.6-terra' and m.stats['fallback_count'] == 1
     assert [a['role'] for a in response.attempt_trail] == ['primary', 'fallback']
 
-    m2 = manager(tmp_path / 'b', claude_body(FABLE, None, 'refusal', stop_details={'type': 'refusal'}), routes={'heavy': 'anthropic'})
+    m2 = manager(tmp_path / 'b', claude_body(HEAVY, None, 'refusal', stop_details={'type': 'refusal'}), routes={'heavy': 'anthropic'})
     refused = await m2.complete('p', task=LLMTask.TRADE_REVIEW)
     assert not refused.success and refused.refusal_detected and m2.openai._session.payloads == []
 
@@ -218,7 +219,7 @@ def test_production_default_yml_routes_heavy_and_light_to_anthropic():
     llm = yaml.safe_load(open('config/default.yml'))['llm']
     cfg = LLMConfig.from_config(llm)
     assert (cfg.task_route_heavy, cfg.task_route_light) == ('anthropic', 'anthropic')
-    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
+    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (HEAVY, OPUS, OPUS)   # 출하 설정: heavy 는 5.1 유지
 
 
 @pytest.mark.asyncio
@@ -241,7 +242,7 @@ async def test_heavy_openai_fallback_only_on_availability_failure(tmp_path, stat
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['identity', 'incomplete', 'tool_use'])
 async def test_heavy_non_availability_failures_never_reach_openai(tmp_path, fault):
-    body = claude_body(FABLE, 'partial')
+    body = claude_body(HEAVY, 'partial')
     if fault == 'identity': body['model'] = OPUS
     elif fault == 'incomplete': body['stop_reason'] = 'max_tokens'
     elif fault == 'tool_use': body['content'] = [{'type': 'tool_use'}]

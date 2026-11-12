@@ -17,7 +17,7 @@ from .llm import LLMConfig, LLMProvider, LLMResponse, _billing_status
 _MODEL = "claude-opus-5-5"          # 구독 CLI가 받는 유일한 모델
 _API_MODELS = frozenset({_MODEL, "claude-fable-5-1", "claude-fable-5-2"})   # Fable 은 API 전용(5.1 L01 Task 3, 5.2 V07 — 5.1 은 롤백용으로 유지)
 _API_EFFORTS = frozenset({"low", "medium"})
-_API_OUTPUT_LIMIT = 16384   # 역할 최대 12288·task 기본 16000 수용(Fable 128K 이내). Bear 800은 manager가 따로 막는다.
+_API_OUTPUT_LIMIT = 16384   # 역할 최대 16384(WEB_REPORT, V07)·task 기본 16000 수용(Fable 128K 이내). Bear 800은 manager가 따로 막는다.
 _INPUT_LIMIT = 64 * 1024
 _API_INPUT_LIMIT = 256 * 1024   # L01 Task 4: 역할 입력 상한(최대 128KiB)+JSON 지시. CLI(Bear 대체)는 64KiB 유지.
 _STDOUT_LIMIT = 1024 * 1024

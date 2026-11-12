@@ -80,7 +80,9 @@ class LLMConfig:
     anthropic_api_key_file: str = ""
     claude_model: str = "claude-opus-5-5"          # Bear(독립 검토) — API 1차·CLI 대체
     # L01 Task 4: task 슬롯 모델. 코드 기본 라우팅은 OpenAI 그대로이고 default.yml task_routes가 Anthropic으로 돌린다.
-    claude_model_heavy: str = "claude-fable-5-2"  # trade_review/strategy_analysis/market_analysis (V07 2026-11-13: 5.1 → 5.2)
+    # heavy task 는 5.1 유지(V07 리뷰 P1): 크로스검증 100·레짐 150 토큰처럼 작은 출력 상한을 쓰는 소비자가 있고,
+    # 5.2 는 medium 에서 thinking 을 줄이지 않아 본문 전에 상한에 닿을 수 있다. 상한 전수 점검 뒤 별도 전환.
+    claude_model_heavy: str = "claude-fable-5-1"  # trade_review/strategy_analysis/market_analysis
     claude_model_light: str = "claude-opus-5-5"   # theme_detection/quick_*/wiki_ingest/news_summary
     task_route_heavy: str = "openai"                # openai | anthropic
     task_route_light: str = "openai"
@@ -197,7 +199,7 @@ class LLMConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
             anthropic_api_key_file=os.getenv("ANTHROPIC_API_KEY_FILE", "~/.config/qwq-ai-trader/anthropic-api-key"),
             claude_model=llm_cfg.get("claude_model", "claude-opus-5-5"),
-            claude_model_heavy=llm_cfg.get("claude_model_heavy", "claude-fable-5-2"),
+            claude_model_heavy=llm_cfg.get("claude_model_heavy", "claude-fable-5-1"),
             claude_model_light=llm_cfg.get("claude_model_light", "claude-opus-5-5"),
             task_route_heavy=task_routes.get("heavy", "openai"),
             task_route_light=task_routes.get("light", "openai"),
