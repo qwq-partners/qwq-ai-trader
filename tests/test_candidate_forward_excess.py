@@ -20,23 +20,23 @@ def bars(closes, opens=None, lows=None):
 
 def test_open_entry_sells_on_hth_close_including_entry_day():
     b = bars([100, 110, 121, 121, 121, 121, 121, 121, 121, 121], opens=[100] * 10, lows=[100] * 10)
-    (ret, clip, mae, _), why = m.forward(b, CAL, CAL[0], "open", 2)
+    (ret, clip, mae, _, _), why = m.forward(b, CAL, CAL[0], "open", 2)
     assert why is None and ret == pytest.approx(0.10) and clip == ret and mae == 0
 
 
 def test_close_entry_starts_next_day_and_ignores_entry_day_low():
     b = bars([100, 105, 110] + [110] * 7, lows=[50, 105, 110] + [110] * 7)
-    (ret, clip, mae, _), _ = m.forward(b, CAL, CAL[0], "close", 2)
+    (ret, clip, mae, _, _), _ = m.forward(b, CAL, CAL[0], "close", 2)
     assert ret == pytest.approx(0.10) and clip == ret and mae == 0
 
 
 def test_stop_clip_intraday_and_gap():
     b = bars([100, 99, 99] + [99] * 7, opens=[100, 100, 99] + [99] * 7, lows=[100, 94, 99] + [99] * 7)
-    (_, clip, mae, day), _ = m.forward(b, CAL, CAL[0], "close", 3)
-    assert clip == pytest.approx(-0.05) and day == CAL[1] and mae == pytest.approx(-0.06)
+    (_, clip, mae, day, gapped), _ = m.forward(b, CAL, CAL[0], "close", 3)
+    assert clip == pytest.approx(-0.05) and day == CAL[1] and mae == pytest.approx(-0.06) and not gapped
     g = bars([100, 92, 92] + [92] * 7, opens=[100, 93, 92] + [92] * 7, lows=[100, 91, 92] + [92] * 7)
-    (_, clip, _, _), _ = m.forward(g, CAL, CAL[0], "close", 3)
-    assert clip == pytest.approx(-0.07)   # 갭 하락은 시가로 종료
+    (_, clip, _, _, gapped), _ = m.forward(g, CAL, CAL[0], "close", 3)
+    assert clip == pytest.approx(-0.07) and gapped   # 갭 하락은 시가로 종료
 
 
 @pytest.mark.parametrize("day,h,patch,why", [
@@ -112,7 +112,7 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     sig.write_text("".join(json.dumps(r) + "\n" for r in [
         {"t": "2026-01-02T10:00:00", "symbol": "000001", "strategy": "gap_and_go", "score": 80.0, "type": "blocked", "gate": "G1_regime"},
         {"t": "2026-01-02T09:30:00", "symbol": "000001", "strategy": "gap_and_go", "score": 60.0, "type": "penalized", "gate": None},
-        {"t": "2026-01-02T11:00:00", "symbol": "000002", "strategy": "gap_and_go", "score": 85.0, "type": "passed", "gate": None},
+        {"t": "2026-01-02T11:00:00", "symbol": "000002", "strategy": "sepa_trend", "score": 85.0, "adj": 81.0, "type": "passed", "gate": None},
         {"t": "2026-01-02T09:10:00", "symbol": "000002", "strategy": "gap_and_go", "score": 75.0, "type": "blocked", "gate": "G2_cross"},
         {"t": "2026-01-02T09:10:00", "symbol": "000003", "strategy": "gap_and_go", "score": 95.0, "type": "blocked", "gate": "G1_regime"}]))
     (team / "deliberations_20260102.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
@@ -123,7 +123,10 @@ def test_build_obs_and_report_end_to_end(tmp_path):
     b = {(o["family"], o["symbol"]): o for o in obs}
     assert len(obs) == 8
     assert b[("B", "000001")]["group"] == "penalized" and b[("B", "000001")]["score"] == 60.0   # 그날 첫 이벤트
-    assert b[("B", "000002")]["group"] == "passed" and b[("B", "000002")]["score"] == 75.0      # 통과가 있으면 passed, 점수는 첫 이벤트
+    p2 = b[("B", "000002")]
+    assert p2["group"] == "passed" and p2["score"] == 75.0             # 주 판정 점수는 사전 등록대로 첫 이벤트
+    assert p2["strategy"] == "sepa_trend" and p2["rep_score"] == 81.0   # 참고 집계는 통과 이벤트의 전략·조정 점수
+    assert b[("B", "000001")]["rep_score"] == 60.0                     # 조정 점수가 없으면 원점수
     assert b[("C", "000001")]["group"] == "buy_approved" and b[("C", "000002")]["group"] == "not_approved"
 
     days = [f"2026-01-{d:02d}" for d in range(1, 31)]
@@ -155,3 +158,21 @@ def test_spread_uses_only_days_with_both_groups():
     low = [("d1", {"net5": 0.01}), ("d2", {"net5": 0.01})]
     out = m.spread_stat(high, low, "net5", 0)
     assert out["days"] == 2 and out["mean"] == pytest.approx(0.03)
+
+
+def test_c4_removes_by_contribution_to_date_weighted_mean():
+    # d1 은 관측 1건(기여 큼), d2 는 10건. 값이 가장 큰 관측은 d2 에 있지만 기여는 d1 의 단독 관측이 더 크다.
+    days = [f"d{i:02d}" for i in range(3, 33)]
+    top = [("d01", {"net5": 0.20})] + [("d02", {"net5": 0.30})] * 10 + [(d, {"net5": -0.001}) for d in days]
+    j = m.judge({"high": top, "mid": [], "low": []}, 5)
+    # 기여 상위 3건 = d01 단독 관측 + d02 의 2건 → d01 날짜가 사라지고 d02 평균(0.30)은 유지
+    assert j["ex_top3"] == pytest.approx((0.30 + 30 * -0.001) / 31)
+
+
+def test_load_bars_drops_nonfinite_or_nonpositive_rows_and_rejects_duplicates(tmp_path):
+    p = tmp_path / "x.csv"
+    p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-02,nan,1,1,1\n2026-01-03,0,0,0,5\n2026-01-04,inf,1,1,1\n")
+    assert list(m.load_bars(p)) == ["2026-01-01"]
+    p.write_text("date,open,high,low,close\n2026-01-01,1,1,1,1\n2026-01-01,2,2,2,2\n")
+    with pytest.raises(SystemExit):
+        m.load_bars(p)

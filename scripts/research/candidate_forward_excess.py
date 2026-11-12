@@ -4,7 +4,7 @@
 질문·수익 정의·판정 기준: docs/research/v01-candidate-forward-excess-2026-11-13.md (가격 조회 전 사전 등록).
 KIS 무접촉. 입력은 운영 서버에 이미 있는 기록(읽기만), 가격은 공개 일봉(FinanceDataReader 수정주가).
 
-  signals: Postgres signal_events → JSONL(읽기 전용, DATABASE_URL 환경변수). 행 = {t(KST ISO), symbol, strategy, score, type, gate}
+  signals: Postgres signal_events → JSONL(읽기 전용, DATABASE_URL 환경변수). 행 = {t(KST ISO), symbol, strategy, score, adj, type, gate}
   obs    : pit_universe / signals JSONL / team_ledger → 관측(obs.jsonl)
   prices : 관측 종목 + 069500 일봉을 CSV 캐시로 내려받는다(연속 실패 5회면 중단)
   report : obs + 가격 → summary.json (판정 포함)
@@ -34,7 +34,7 @@ MIN_DAYS_FOR_T = 20
 # ---------- 순수 계산 ----------
 
 def forward(bars, cal, day, entry, h):
-    """(수익, 손절클립 수익, 최대역행, 종료일) 또는 (None, 제외사유).
+    """(수익, 손절클립 수익, 최대역행, 종료일, 갭 종료 여부) 또는 (None, 제외사유).
 
     bars: {date: (o, h, l, c)}, cal: 거래일 오름차순 목록(벤치마크 기준).
     entry='open' → D 시가 매수·D 포함 h번째 종가 매도 / 'close' → D 종가 매수·D 다음 h번째 종가 매도.
@@ -54,15 +54,15 @@ def forward(bars, cal, day, entry, h):
             return None, "data_error"
     ret = bars[cal[last]][3] / px - 1
     stop_px, clip, clip_day = px * (1 - STOP), ret, cal[last]
-    mae, stopped = 0.0, False
+    mae, stopped, gapped = 0.0, False, False
     for d in cal[first:last + 1]:
         o, _h, low, _c = bars[d]
         mae = min(mae, low / px - 1)
         if not stopped and low <= stop_px:
             # 시가 매수 당일의 시가는 매수가 자체라 갭 종료가 아니다
-            gap = o <= stop_px and not (entry == "open" and d == day)
-            clip, clip_day, stopped = (o / px - 1 if gap else -STOP), d, True
-    return (ret, clip, mae, clip_day), None
+            gapped = o <= stop_px and not (entry == "open" and d == day)
+            clip, clip_day, stopped = (o / px - 1 if gapped else -STOP), d, True
+    return (ret, clip, mae, clip_day, gapped), None
 
 
 def nw_t(xs, lag):
@@ -120,7 +120,12 @@ def judge(rows_by_tercile, h):
     days = sorted({d for d, v in top if v.get(key) is not None})
     mid_day = days[len(days) // 2]
     halves = [daily_stat([r for r in top if (r[0] < mid_day) == first], key, h - 1)["mean"] for first in (True, False)]
-    kept = sorted((r for r in top if r[1].get(key) is not None), key=lambda r: r[1][key])[:-3]
+    valid = [r for r in top if r[1].get(key) is not None]
+    per_day = defaultdict(int)
+    for d, _v in valid:
+        per_day[d] += 1
+    # 날짜별 평균의 평균에서 관측 하나의 기여는 값 ÷ 그날 관측 수에 비례한다
+    kept = sorted(valid, key=lambda r: r[1][key] / per_day[r[0]])[:-3]
     ex3 = daily_stat(kept, key, h - 1)["mean"]
     enough = hi["days"] >= MIN_DAYS_FOR_T and hi["t"] is not None
     means = [st[k]["mean"] for k in ("high", "mid", "low")]
@@ -152,18 +157,21 @@ def build_obs(pit_dir, signals, team_dir):
         for c in j["candidates"]:
             obs.append({"family": "A", "date": j["date"], "symbol": c["symbol"], "group": c.get("strategy"),
                         "score": c.get("score"), "entry": "open"})
-    first, passed = {}, set()
+    first, passed = {}, {}
     for line in open(signals):
         r = json.loads(line)
         k = (r["symbol"], r["t"][:10])
-        if r["type"] == "passed":
-            passed.add(k)
+        if r["type"] == "passed" and (k not in passed or r["t"] < passed[k]["t"]):
+            passed[k] = r
         if k not in first or r["t"] < first[k]["t"]:
             first[k] = r
     for k, r in first.items():
+        # 주 판정의 점수는 사전 등록대로 그날 첫 이벤트. 게이트·전략 참고 집계는 대표 이벤트(첫 통과, 없으면 첫 이벤트)
+        rep = passed.get(k, r)
         gate = "passed" if k in passed else (r["gate"] if r["gate"] is not None else r["type"])
-        obs.append({"family": "B", "date": k[1], "symbol": k[0], "group": gate, "strategy": r["strategy"],
-                    "score": r["score"], "entry": "close"})
+        adj = rep.get("adj")
+        obs.append({"family": "B", "date": k[1], "symbol": k[0], "group": gate, "strategy": rep["strategy"],
+                    "score": r["score"], "rep_score": adj if adj is not None else rep["score"], "entry": "close"})
     first = {}
     for f in sorted(glob.glob(os.path.join(team_dir, "deliberations_*.jsonl"))):
         for line in open(f):
@@ -182,8 +190,18 @@ def build_obs(pit_dir, signals, team_dir):
 
 
 def load_bars(path):
+    """비유한·비양수 OHLC 행(거래정지 등)은 버려 결측 봉으로 만든다. 중복 날짜는 손상으로 보고 실패."""
+    bars = {}
     with open(path) as f:
-        return {r["date"]: tuple(float(r[k]) for k in ("open", "high", "low", "close")) for r in csv.DictReader(f)}
+        for r in csv.DictReader(f):
+            v = tuple(float(r[k]) for k in ("open", "high", "low", "close"))
+            if r["date"] in bars:
+                raise SystemExit(f"가격 캐시 중복 날짜: {path} {r['date']}")
+            if all(math.isfinite(x) and x > 0 for x in v):
+                bars[r["date"]] = v
+            else:
+                bars[r["date"]] = None
+    return {d: v for d, v in bars.items() if v is not None}
 
 
 def fetch_prices(symbols, out_dir, start, pause=0.4):
@@ -198,11 +216,12 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
             df = fdr.DataReader(s, start)
             if df is None or df.empty:
                 raise ValueError("empty")
-            with open(p, "w", newline="") as f:
+            with open(p + ".tmp", "w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["date", "open", "high", "low", "close"])
                 for d, r in df.iterrows():
                     w.writerow([d.strftime("%Y-%m-%d"), r["Open"], r["High"], r["Low"], r["Close"]])
+            os.replace(p + ".tmp", p)   # 중단된 부분 파일이 캐시로 남지 않게 한다
             fails = 0
         except Exception as e:  # 원천 오류는 종목 단위로 건너뛰고, 연속되면 멈춘다
             fails += 1
@@ -254,11 +273,12 @@ def report(obs, price_dir, bench_adjust):
             if res is None:
                 excluded[o["family"]][f"h{h}:{why}"] += 1
                 continue
-            ret, clip, mae, clip_day = res
+            ret, clip, mae, clip_day, gapped = res
             b, _ = forward(bench, cal, o["date"], o["entry"], h)
             base = bench[o["date"]][0] if o["entry"] == "open" else bench[o["date"]][3]
             v.update({f"ret{h}": ret, f"net{h}": ret - b[0] - COST, f"mae{h}": mae,
-                      f"clipnet{h}": clip - (bench[clip_day][3] / base - 1) - COST})
+                      # 갭 종료면 벤치마크도 그날 시가, 장중 손절·만기 종료는 그날 종가(일봉 근사)
+                      f"clipnet{h}": clip - (bench[clip_day][0 if gapped else 3] / base - 1) - COST})
         rows.append((o, v))
 
     def table(sel, keyfn):
@@ -297,6 +317,10 @@ def report(obs, price_dir, bench_adjust):
         "B_by_strategy": table(fam("B"), lambda o: o.get("strategy")),
         "B_by_month": table(fam("B"), lambda o: o["date"][:7]),
         "C_by_decision": table(fam("C"), lambda o: o["group"]),
+        "B_tercile_by_rep_score": (lambda q: table(
+            [r for r in fam("B") if r[0]["rep_score"] is not None],
+            lambda o: "low" if o["rep_score"] <= q[0] else "mid" if o["rep_score"] <= q[1] else "high"))(
+                terciles([r[0]["rep_score"] for r in fam("B") if r[0]["rep_score"] is not None])),
         "daily_top3": {**table(top_n_per_day([r for r in fam("A") if r[0]["group"] == "sepa_trend"]), lambda o: "A-sepa"),
                        **table(top_n_per_day(fam("B")), lambda o: "B-all")},
     }
@@ -314,7 +338,7 @@ def export_signals(out_path):
         try:
             await conn.execute("SET default_transaction_read_only = on")
             return await conn.fetch(
-                "select event_time at time zone 'Asia/Seoul' as t, symbol, strategy, score, event_type, block_gate "
+                "select event_time at time zone 'Asia/Seoul' as t, symbol, strategy, score, adjusted_score, event_type, block_gate "
                 "from signal_events where side = 'buy' order by id")
         finally:
             await conn.close()
@@ -323,7 +347,8 @@ def export_signals(out_path):
     with open(out_path, "w") as f:
         for r in rows:
             f.write(json.dumps({"t": r["t"].isoformat(), "symbol": r["symbol"], "strategy": r["strategy"],
-                                "score": r["score"], "type": r["event_type"], "gate": r["block_gate"]}) + "\n")
+                                "score": r["score"], "adj": r["adjusted_score"], "type": r["event_type"],
+                                "gate": r["block_gate"]}) + "\n")
     print(len(rows), "행")
 
 
