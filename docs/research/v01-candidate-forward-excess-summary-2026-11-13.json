@@ -1,5 +1,6 @@
 {
  "cost": 0.00227,
+ "through": "2026-11-12",
  "bench": {
   "adjusted_by": "kodex200_daily.csv",
   "sha256": "77662d037d8d0c923fd8fcb5a93d491d0cd3f2bc7601d5e636d50b43de3fee71",

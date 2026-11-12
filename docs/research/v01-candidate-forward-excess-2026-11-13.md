@@ -81,7 +81,7 @@
 
 가격 수집 뒤, 후보 수익을 계산하기 전에 2절의 벤치마크 대조를 먼저 했다. 공개 일봉의 069500 종가가 KIS 수정 종가와 최대 0.79% 다르고 일간 수익 차이가 최대 0.45%p였다(공개 일봉은 ETF 분배금 미반영). 분배락을 걸치는 구간에서 벤치마크 수익이 낮게 잡혀 초과수익이 부풀 수 있으므로, **벤치마크 OHLC를 KIS 수정 종가 비율로 맞춰** 쓴다(`--bench-adjust`). 엔진에 불리한 방향의 보정이다. 개별 종목의 현금 배당은 공개 일봉에 반영되지 않아 후보 수익이 소폭 낮게 잡힌다(역시 엔진에 불리, 보정하지 않음).
 
-## 7. 결과 (최종 실행 2026-11-13 07:48:51 KST, 코드 `9501aaa8`)
+## 7. 결과 (최종 실행 2026-11-13 07:55:42 KST, 코드 `0538adac`, 분석 종료일 2026-11-12 고정)
 
 커밋 순서: 사전 등록 `a3968ff5` → 스크립트·검사 `7d6f364e`(가격 조회 전) → 벤치마크 보정 `53afc7fd`(후보 수익 계산 전) → 결과. 판정 기준은 바꾸지 않았다. 집계 요약은 [v01-candidate-forward-excess-summary-2026-11-13.json](v01-candidate-forward-excess-summary-2026-11-13.json), 실행 영수증(코드 SHA·명령·입력/출력 해시·검증)은 [v01-candidate-forward-excess-receipt-2026-11-13.json](v01-candidate-forward-excess-receipt-2026-11-13.json)에 있다. 7.1·7.2의 판정과 수치는 검사(`test_doc_table_matches_committed_summary`)가 요약 파일과 대조한다. 종목이 드러나는 원자료(관측·신호·일봉)는 비공개 `~/.local/state/qwq-task-audit/20261113/v01/`에 둔다.
 
@@ -113,7 +113,7 @@
 - **C3(기간 안정성)**: 두 계열 모두 전반 음수·후반 양수다. A-sepa 5일 전반 −2.19%·후반 +2.03%, 20일 −3.90%·+7.95%. B-all 5일 −2.93%·+1.60%, 20일 −10.80%·+4.02%.
 - **C4**: 빼면 날짜 가중 평균이 가장 많이 내려가는 관측을 하나씩 3건 빼면 A-sepa 5일은 −0.45%로 더 내려가고 20일은 +1.74%로 양수를 유지한다. B-all은 −1.14%, −4.26%다.
 
-### 7.3 초과수익이 지수 방향을 재고 있다
+### 7.3 초과수익이 지수 방향에 좌우된다
 
 B 계열 월별(순초과, 괄호는 그 달 KODEX200 등락):
 
@@ -192,14 +192,16 @@ B 계열 월별(순초과, 괄호는 그 달 KODEX200 등락):
 
 ```bash
 # 1) 신호 이벤트 내보내기(읽기 전용). 행 = {t: KST ISO 시각, symbol, strategy, score, type: event_type, gate: block_gate}
-DATABASE_URL=... python scripts/research/candidate_forward_excess.py signals --out signals.jsonl
+DATABASE_URL=... python scripts/research/candidate_forward_excess.py signals --out signals.jsonl --through 2026-11-12
 # 2) 관측 구성: A=pit_universe 후보(종목·전략·점수), B=종목-일의 첫 이벤트(그날 passed 가 하나라도 있으면 passed), C=종목-일의 첫 심의
-python scripts/research/candidate_forward_excess.py obs --pit-dir ~/.cache/ai_trader/pit_universe --signals signals.jsonl --team-dir ~/.cache/ai_trader/team_ledger --out obs.jsonl
+python scripts/research/candidate_forward_excess.py obs --pit-dir ~/.cache/ai_trader/pit_universe --signals signals.jsonl --team-dir ~/.cache/ai_trader/team_ledger --out obs.jsonl --through 2026-11-12
 # 3) 공개 일봉 수집(종목당 0.4초 간격, 연속 실패 5회면 중단)
-python scripts/research/candidate_forward_excess.py prices --obs obs.jsonl --out-dir prices
+python scripts/research/candidate_forward_excess.py prices --obs obs.jsonl --out-dir prices --through 2026-11-12
 # 4) 판독. 벤치마크 보정 자료는 필수이며 보정 기간 안에서 두 원천의 거래일이 다르면 실패한다
-python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --price-dir prices --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --out summary.json
+python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --price-dir prices --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --out summary.json --through 2026-11-12
 ```
+
+모든 단계가 같은 종료일(`--through`, KST 포함)을 필수로 받는다. 종료일 뒤의 후보·신호·심의·일봉은 쓰지 않으므로 나중에 다시 돌려도 같은 표본이 나온다.
 
 - 최종 실행: 관측 4,450건, 종목 327개(마지막 봉이 벤치마크 끝날보다 이른 종목 0), 벤치마크 185거래일(2026-02-09~11-12). 관측·가격·보정 자료·출력의 전체 SHA-256은 영수증 파일에 있다.
 - `prices`는 미수집 종목이 있으면 비정상 종료하고 `report`는 가격 파일이 없는 종목이 있으면 실패한다.
@@ -258,7 +260,16 @@ python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --pri
 | P2 팀 심의 원장의 중복 제거 계약 우회 | **반영** — `deliberation_id`별 마지막 행을 정본으로 쓴 뒤 종목-일 첫 판정을 고른다. HOLD 290 → 289건으로 1건 이동, 7.4 수치 갱신 |
 | P2 원장 절 제목이 현재 상태와 다름 | **반영** |
 
-여섯 차례 반영 뒤에도 주 판정(두 계열 미입증)과 순초과수익 평균은 바뀌지 않았다. t값은 5차의 거래일 간격 보정으로 소폭 바뀌었다.
+**7차(같은 모델·effort, 병합 불가) 처분:**
+
+| 지적 | 처분 |
+|---|---|
+| P1 분석 기간이 코드에 고정되지 않음 | **반영** — 모든 단계에 필수 `--through`. SQL은 KST 날짜 경계로 제한, 후보·심의·일봉·보정 자료도 종료일까지만 사용, 종료일 뒤 관측이 섞이면 `report` 실패. 종료일 2026-11-12로 전체 절차를 다시 실행해 관측 해시와 모든 수치가 동일함을 확인 |
+| P1 WSL 전체 검증 근거 없음 | **미해소(환경 제약)** — 이 세션에서는 WSL 작업용 sshd의 임시 키가 등록돼 있지 않아 WSL 직렬 verify를 실행할 수 없다. 대신 GitHub 필수 검사 `verify`(같은 `scripts/dev/verify.sh` 직렬 전체)를 최종 검증으로 삼고 영수증에 미실행 사실을 적었다. 제품 코드 변경이 없는 연구 스크립트라 조정자가 낮춘 보증 수준으로 진행하며 사용자에게 보고한다 |
+| P2 `approved`를 truthiness로 판정 | **반영** — 정확히 `True`/`False`만 인정하고 그 밖의 값은 `invalid` 집단으로 분리. 이번 자료에 `invalid`는 0건 |
+| P2 "지수 방향을 따라간다"는 표현이 수치와 반대 | **반영** — "지수 방향에 좌우된다(급등 시 열위, 급락 시 우위)"로 통일 |
+
+일곱 차례 반영 뒤에도 주 판정(두 계열 미입증)과 순초과수익 평균은 바뀌지 않았다. t값은 5차의 거래일 간격 보정으로 소폭 바뀌었다.
 
 ### 7.10 이 결과의 한계
 
