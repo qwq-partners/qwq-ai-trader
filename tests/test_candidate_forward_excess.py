@@ -13,8 +13,8 @@ CAL = [f"2026-01-{d:02d}" for d in range(1, 11)]
 
 
 def bars(closes, opens=None, lows=None):
-    opens = opens or closes
-    lows = lows or [min(o, c) for o, c in zip(opens, closes)]
+    opens = closes if opens is None else opens
+    lows = [min(o, c) for o, c in zip(opens, closes)] if lows is None else lows
     return {d: (o, max(o, c), low, c) for d, o, low, c in zip(CAL, opens, lows, closes)}
 
 
@@ -79,11 +79,75 @@ def test_terciles_split_into_thirds():
     assert (q1, q2) == (3, 6)
 
 
-def test_bench_adjust_scales_ohlc_to_adjusted_close(tmp_path):
+def test_bench_adjust_scales_ohlc_and_drops_only_days_outside_adjust_range(tmp_path):
     p = tmp_path / "adj.csv"
-    p.write_text("date,close\n2026-01-01,110\n")
-    out = m.adjust_bench({"2026-01-01": (90.0, 105.0, 80.0, 100.0), "2026-01-02": (1.0, 1.0, 1.0, 1.0)}, p)
-    assert out == {"2026-01-01": pytest.approx((99.0, 115.5, 88.0, 110.0))}
+    p.write_text("date,close\n2026-01-02,110\n")
+    raw = {"2026-01-01": (1.0, 1.0, 1.0, 1.0), "2026-01-02": (90.0, 105.0, 80.0, 100.0), "2026-01-03": (1.0, 1.0, 1.0, 1.0)}
+    assert m.adjust_bench(raw, p) == {"2026-01-02": pytest.approx((99.0, 115.5, 88.0, 110.0))}
+
+
+@pytest.mark.parametrize("adj,raw_days", [
+    ("date,close\n2026-01-01,100\n2026-01-03,100\n", ["2026-01-01", "2026-01-02", "2026-01-03"]),   # 공개 일봉에만 있는 거래일
+    ("date,close\n2026-01-01,100\n2026-01-02,100\n2026-01-03,100\n", ["2026-01-01", "2026-01-03"]),  # 보정 자료에만 있는 날
+    ("date,close\n2026-01-01,0\n", ["2026-01-01"]),                                                    # 비양수
+    ("date,close\n2026-01-01,100\n2026-01-01,101\n", ["2026-01-01"]),                                # 중복
+])
+def test_bench_adjust_fails_closed_on_calendar_mismatch_or_bad_values(tmp_path, adj, raw_days):
+    p = tmp_path / "adj.csv"
+    p.write_text(adj)
+    with pytest.raises(SystemExit):
+        m.adjust_bench({d: (100.0, 100.0, 100.0, 100.0) for d in raw_days}, p)
+
+
+def test_build_obs_and_report_end_to_end(tmp_path):
+    import json
+    pit, team, prices = tmp_path / "pit", tmp_path / "team", tmp_path / "prices"
+    for d in (pit, team, prices):
+        d.mkdir()
+    (pit / "2026-01-02.json").write_text(json.dumps({"date": "2026-01-02", "candidates": [
+        {"symbol": "000001", "strategy": "sepa_trend", "score": 90.0},
+        {"symbol": "000002", "strategy": "sepa_trend", "score": 70.0},
+        {"symbol": "000003", "strategy": "sepa_trend", "score": 50.0}]}))
+    sig = tmp_path / "signals.jsonl"
+    sig.write_text("".join(json.dumps(r) + "\n" for r in [
+        {"t": "2026-01-02T10:00:00", "symbol": "000001", "strategy": "gap_and_go", "score": 80.0, "type": "blocked", "gate": "G1_regime"},
+        {"t": "2026-01-02T09:30:00", "symbol": "000001", "strategy": "gap_and_go", "score": 60.0, "type": "penalized", "gate": None},
+        {"t": "2026-01-02T11:00:00", "symbol": "000002", "strategy": "gap_and_go", "score": 85.0, "type": "passed", "gate": None},
+        {"t": "2026-01-02T09:10:00", "symbol": "000002", "strategy": "gap_and_go", "score": 75.0, "type": "blocked", "gate": "G2_cross"},
+        {"t": "2026-01-02T09:10:00", "symbol": "000003", "strategy": "gap_and_go", "score": 95.0, "type": "blocked", "gate": "G1_regime"}]))
+    (team / "deliberations_20260102.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+        {"symbol": "000001", "decided_at": "2026-01-02T10:30:00", "decision": {"stance": "buy", "approved": True}},
+        {"symbol": "000001", "decided_at": "2026-01-02T11:30:00", "decision": {"stance": "hold", "approved": True}},
+        {"symbol": "000002", "decided_at": None, "recorded_at": "2026-01-02T10:31:00", "decision": None}]))
+    obs = m.build_obs(str(pit), str(sig), str(team))
+    b = {(o["family"], o["symbol"]): o for o in obs}
+    assert len(obs) == 8
+    assert b[("B", "000001")]["group"] == "penalized" and b[("B", "000001")]["score"] == 60.0   # 그날 첫 이벤트
+    assert b[("B", "000002")]["group"] == "passed" and b[("B", "000002")]["score"] == 75.0      # 통과가 있으면 passed, 점수는 첫 이벤트
+    assert b[("C", "000001")]["group"] == "buy_approved" and b[("C", "000002")]["group"] == "not_approved"
+
+    days = [f"2026-01-{d:02d}" for d in range(1, 31)]
+    def write(sym, daily):
+        px, lines = 100.0, ["date,open,high,low,close"]
+        for d in days:
+            nxt = px * (1 + daily)
+            lines.append(f"{d},{px},{max(px, nxt)},{min(px, nxt)},{nxt}")
+            px = nxt
+        (prices / f"{sym}.csv").write_text("\n".join(lines) + "\n")
+    write(m.BENCH, 0.0)
+    write("000001", 0.01)
+    write("000002", 0.0)
+    write("000003", -0.01)
+    adj = tmp_path / "adj.csv"
+    adj.write_text("date,close\n" + "".join(f"{d},100.0\n" for d in days))
+    out = m.report(obs, str(prices), str(adj))
+    a = out["primary"]["A-sepa"]
+    assert a["n"] == 3 and a["verdict"] == "미입증"                     # 날짜 1일 → 판정 불가
+    assert a["tercile"]["high"]["h5"]["mean"] == pytest.approx(1.01 ** 5 - 1 - m.COST)
+    assert a["tercile"]["low"]["h5"]["mean"] == pytest.approx(0.99 ** 5 - 1 - m.COST)
+    assert out["tables"]["B_by_gate"]["passed"]["h5"]["n"] == 1
+    assert out["tables"]["daily_top3"]["A-sepa"]["h5"]["n"] == 3
+    assert out["bench"]["rows"] == 30 and len(out["bench"]["sha256"]) == 64
 
 
 def test_spread_uses_only_days_with_both_groups():

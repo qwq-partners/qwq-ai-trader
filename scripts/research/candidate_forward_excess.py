@@ -4,7 +4,8 @@
 질문·수익 정의·판정 기준: docs/research/v01-candidate-forward-excess-2026-11-13.md (가격 조회 전 사전 등록).
 KIS 무접촉. 입력은 운영 서버에 이미 있는 기록(읽기만), 가격은 공개 일봉(FinanceDataReader 수정주가).
 
-  obs    : pit_universe / signal_events 내보내기 / team_ledger → 관측(obs.jsonl)
+  signals: Postgres signal_events → JSONL(읽기 전용, DATABASE_URL 환경변수). 행 = {t(KST ISO), symbol, strategy, score, type, gate}
+  obs    : pit_universe / signals JSONL / team_ledger → 관측(obs.jsonl)
   prices : 관측 종목 + 069500 일봉을 CSV 캐시로 내려받는다(연속 실패 5회면 중단)
   report : obs + 가격 → summary.json (판정 포함)
 
@@ -14,6 +15,7 @@ ponytail: 날짜별 평균 + Newey-West 만 쓴다. 종목 군집·부트스트�
 import argparse
 import csv
 import glob
+import hashlib
 import json
 import math
 import os
@@ -159,17 +161,17 @@ def build_obs(pit_dir, signals, team_dir):
         if k not in first or r["t"] < first[k]["t"]:
             first[k] = r
     for k, r in first.items():
-        gate = "passed" if k in passed else (r["gate"] or r["type"])
+        gate = "passed" if k in passed else (r["gate"] if r["gate"] is not None else r["type"])
         obs.append({"family": "B", "date": k[1], "symbol": k[0], "group": gate, "strategy": r["strategy"],
                     "score": r["score"], "entry": "close"})
     first = {}
     for f in sorted(glob.glob(os.path.join(team_dir, "deliberations_*.jsonl"))):
         for line in open(f):
             r = json.loads(line)
-            t = r.get("decided_at") or r.get("recorded_at")
+            t = r["decided_at"] if r.get("decided_at") is not None else r["recorded_at"]
             k = (r["symbol"], t[:10])
             if k not in first or t < first[k][0]:
-                d = r.get("decision") or {}
+                d = r["decision"] if r.get("decision") is not None else {}
                 label = ("buy_approved" if d.get("stance") == "buy" and d.get("approved")
                          else "hold" if d.get("stance") == "hold" and d.get("approved")
                          else "sell" if d.get("stance") == "sell" else "not_approved")
@@ -211,16 +213,34 @@ def fetch_prices(symbols, out_dir, start, pause=0.4):
 
 
 def adjust_bench(bench, adj_csv):
-    """공개 일봉의 069500 은 분배금 미반영이다 — 초과수익 원장의 KIS 수정 종가 비율로 OHLC 를 맞춘다."""
+    """공개 일봉의 069500 은 분배금 미반영이다 — 초과수익 원장의 KIS 수정 종가 비율로 OHLC 를 맞춘다.
+
+    보정 자료의 기간 [첫날, 끝날] 안에서 두 원천의 거래일이 다르면 달력이 조용히 줄어 보유 기간이 밀린다 → 실패시킨다.
+    보정 기간 밖(앞·뒤)의 공개 일봉은 버린다.
+    """
     with open(adj_csv) as f:
-        adj = {r["date"]: float(r["close"]) for r in csv.DictReader(f)}
-    return {d: tuple(x * adj[d] / b[3] for x in b) for d, b in bench.items() if d in adj}
+        rows = [(r["date"], float(r["close"])) for r in csv.DictReader(f)]
+    adj = dict(rows)
+    if len(adj) != len(rows) or any(not (math.isfinite(c) and c > 0) for c in adj.values()):
+        raise SystemExit("벤치마크 보정 자료에 중복 날짜 또는 비양수·비유한 종가가 있다")
+    lo, hi = min(adj), max(adj)
+    inside = {d for d in bench if lo <= d <= hi}
+    if inside != set(adj):
+        raise SystemExit(f"벤치마크 거래일 불일치: 공개 일봉만 {sorted(inside - set(adj))[:5]}, 보정 자료만 {sorted(set(adj) - inside)[:5]}")
+    return {d: tuple(x * adj[d] / bench[d][3] for x in bench[d]) for d in adj}
 
 
-def report(obs, price_dir, bench_adjust=None):
-    bench = load_bars(os.path.join(price_dir, f"{BENCH}.csv"))
-    if bench_adjust:
-        bench = adjust_bench(bench, bench_adjust)
+def top_n_per_day(rows, n=3):
+    """날짜별 점수 상위 n (동점은 종목코드 순) — 사전 등록 참고 집계."""
+    by = defaultdict(list)
+    for o, v in rows:
+        if o["score"] is not None:
+            by[o["date"]].append((o, v))
+    return [r for rs in by.values() for r in sorted(rs, key=lambda r: (-r[0]["score"], r[0]["symbol"]))[:n]]
+
+
+def report(obs, price_dir, bench_adjust):
+    bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust)
     cal = sorted(bench)
     cache, excluded, rows = {}, defaultdict(lambda: defaultdict(int)), []
     for o in obs:
@@ -250,7 +270,11 @@ def report(obs, price_dir, bench_adjust=None):
                                    "clip": daily_stat(rs, f"clipnet{h}", h - 1)["mean"]} for h in HORIZONS}
                 for g, rs in sorted(groups.items(), key=lambda kv: str(kv[0]))}
 
-    out = {"cost": COST, "excluded": {k: dict(v) for k, v in excluded.items()}, "primary": {}, "tables": {}}
+    with open(bench_adjust, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    out = {"cost": COST, "bench": {"adjusted_by": os.path.basename(bench_adjust), "sha256": digest, "rows": len(cal),
+                                   "first": cal[0], "last": cal[-1]},
+           "excluded": {k: dict(v) for k, v in excluded.items()}, "primary": {}, "tables": {}}
     for name, sel in (("A-sepa", [r for r in rows if r[0]["family"] == "A" and r[0]["group"] == "sepa_trend"]),
                       ("B-all", [r for r in rows if r[0]["family"] == "B"])):
         scored = [r for r in sel if r[0]["score"] is not None]
@@ -273,13 +297,40 @@ def report(obs, price_dir, bench_adjust=None):
         "B_by_strategy": table(fam("B"), lambda o: o.get("strategy")),
         "B_by_month": table(fam("B"), lambda o: o["date"][:7]),
         "C_by_decision": table(fam("C"), lambda o: o["group"]),
+        "daily_top3": {**table(top_n_per_day([r for r in fam("A") if r[0]["group"] == "sepa_trend"]), lambda o: "A-sepa"),
+                       **table(top_n_per_day(fam("B")), lambda o: "B-all")},
     }
     return out
+
+
+def export_signals(out_path):
+    """signal_events 전체를 읽기 전용으로 내보낸다. 날짜는 KST 기준."""
+    import asyncio
+
+    import asyncpg  # 지연 임포트: 계산·검사는 DB 라이브러리 없이 돈다
+
+    async def run():
+        conn = await asyncpg.connect(os.environ["DATABASE_URL"], timeout=15)
+        try:
+            await conn.execute("SET default_transaction_read_only = on")
+            return await conn.fetch(
+                "select event_time at time zone 'Asia/Seoul' as t, symbol, strategy, score, event_type, block_gate "
+                "from signal_events where side = 'buy' order by id")
+        finally:
+            await conn.close()
+
+    rows = asyncio.run(run())
+    with open(out_path, "w") as f:
+        for r in rows:
+            f.write(json.dumps({"t": r["t"].isoformat(), "symbol": r["symbol"], "strategy": r["strategy"],
+                                "score": r["score"], "type": r["event_type"], "gate": r["block_gate"]}) + "\n")
+    print(len(rows), "행")
 
 
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("signals").add_argument("--out", required=True)
     a = sub.add_parser("obs")
     a.add_argument("--pit-dir", required=True)
     a.add_argument("--signals", required=True)
@@ -293,8 +344,11 @@ def main():
     c.add_argument("--obs", required=True)
     c.add_argument("--price-dir", required=True)
     c.add_argument("--out", required=True)
-    c.add_argument("--bench-adjust", help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정")
+    c.add_argument("--bench-adjust", required=True, help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정(필수)")
     args = ap.parse_args()
+    if args.cmd == "signals":
+        export_signals(args.out)
+        return
     if args.cmd == "obs":
         obs = build_obs(args.pit_dir, args.signals, args.team_dir)
         with open(args.out, "w") as f:
