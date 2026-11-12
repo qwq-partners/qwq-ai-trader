@@ -1,0 +1,48 @@
+{
+ "task": "V01 candidate forward excess",
+ "code_sha": "85ec8c90edb4dbf4fe5dd2a7e88aac334383223b",
+ "through": "2026-11-12",
+ "run_at_kst": "2026-11-13 08:14:14 KST",
+ "host": "ops host (AWS Lightsail), dev worktree, venv python — read-only inputs",
+ "commands": [
+  "python scripts/research/candidate_forward_excess.py signals --out signals.jsonl --through 2026-11-12",
+  "python scripts/research/candidate_forward_excess.py obs --pit-dir ~/.cache/ai_trader/pit_universe --signals signals.jsonl --team-dir ~/.cache/ai_trader/team_ledger --out obs.jsonl --through 2026-11-12",
+  "python scripts/research/candidate_forward_excess.py prices --obs obs.jsonl --out-dir prices --through 2026-11-12",
+  "python scripts/research/candidate_forward_excess.py report --obs obs.jsonl --price-dir prices --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --out summary.json --through 2026-11-12"
+ ],
+ "inputs": {
+  "obs_n": 4450,
+  "obs_sha256": "e40ee8cc89ec0b3ed954b23832e7a76557bd3fea09d0277fc72a3df22e63ed77",
+  "obs_file_sha256": "7c3644c450804dd1c309bb6d90891ccd9c503ed82b47d498ce505be5025db7cf",
+  "signals_file_sha256": "b7e008aa34ec406a8b49a6f8b393ec035906ca3a41199be75a1ed499cd7efe8d",
+  "prices_symbols": 327,
+  "prices_sha256": "185ed85e28584df8eb6daac8df93072c9d12ca81eccb2fa97fb83a948ebb924e",
+  "prices_note": "cache fetched 2026-11-13 07:0x KST before --through existed; report now fails unless every file covers first observation date..bench end (partial_coverage=0 here)",
+  "bench_adjust_sha256": "77662d037d8d0c923fd8fcb5a93d491d0cd3f2bc7601d5e636d50b43de3fee71",
+  "bench_rows": 185,
+  "bench_first": "2026-02-09",
+  "bench_last": "2026-11-12",
+  "prices_partial_coverage": 0
+ },
+ "output": {
+  "file": "v01-candidate-forward-excess-summary-2026-11-13.json",
+  "sha256": "e42e04b14a465f81aeeec5a797d70f9f6e44cb428b77aa8f18d295a569f35617"
+ },
+ "verification": {
+  "targeted_tests": {
+   "command": "venv/bin/python -m pytest -q -p no:cacheprovider tests/test_candidate_forward_excess.py",
+   "where": "ops host dev worktree",
+   "result": "41 passed",
+   "rc": 0
+  },
+  "full_verify": "GitHub required check `verify` (serial full scripts/dev/verify.sh) on the PR #368 head is the merge condition; its run id, conclusion and pass counts for the final head are recorded as a PR #368 comment (a receipt committed here would change the head it describes)",
+  "last_full_ci_before_this_commit": {
+   "head": "3c43da3b",
+   "run_id": 43322392542,
+   "conclusion": "success"
+  },
+  "wsl_verify": "NOT RUN — the WSL task sshd temporary key is not registered in this session, so the AGENTS.md WSL pre-push verify could not be executed; reduced assurance accepted by the coordinator for research-only code (no src/ change) and reported to the user",
+  "status": "analysis complete; WSL canonical verify handed off (not run) — see wsl_verify"
+ },
+ "raw_inputs_location": "private (not committed): ~/.local/state/qwq-task-audit/20261113/v01/ — obs/signals/prices contain symbols"
+}

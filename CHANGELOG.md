@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — V01 기존 후보의 사후 초과수익 판독: 두 주 판정 계열 모두 "미입증" ([사전 등록·결과](docs/research/v01-candidate-forward-excess-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 추가: `scripts/research/candidate_forward_excess.py`(signals/obs/prices/report, KIS 무접촉), `tests/test_candidate_forward_excess.py` 41건. 제품 코드·설정·운영 변경 0.
+- 수정 파일: 위 2개 + `docs/research/v01-candidate-forward-excess-2026-11-13.md`·`…-summary-2026-11-13.json`·`…-receipt-2026-11-13.json`(신규), `docs/operations/execution-roadmap.md`, `docs/README.md`, `CHANGELOG.md`, `CLAUDE.md`. 커밋: `a3968ff5`(사전 등록) → `7d6f364e`(방법) → `53afc7fd`(벤치마크 보정) → `7f8cdb2e`(결과) → `9f74387b`·`ae08bb74`·`d543bc95`·`da5423a8`·`3c43da3b`·`9501aaa8`·`6b6372b2`·`0538adac`·`04234c94`·`d80e19ee`·`ed997bfe`·이후(독립 리뷰 9회 반영). WSL 정본 verify는 임시 키 미등록으로 미실행(인계) — 병합 조건은 GitHub `verify`(직렬 전체), PR #368.
+- 절차: 판정 기준 사전 등록 커밋 → 방법 커밋 → 가격 수집 → 벤치마크 분배금 보정 커밋 → 결과. 기준 변경 없음.
+- 결과: 배치 SEPA 후보 1,408건·장중 신호 종목-일 2,078건 모두 순초과수익 점추정치가 음수이나(5일 −0.4~−0.6%, 20일 −0.66%·−4.00%) t −0.94~−0.21로 0과 구분되지 않고, 전반 음수·후반 양수로 기간 안정성 미충족. 후보군이 지수보다 덜 움직여(벤치마크 수익에 대한 기울기 0.25~0.47) 지수 급등 시 열위·급락 시 우위가 되고, 초과수익이 지수 방향에 좌우돼 이런 장세에서는 포지션당 KODEX200 초과만으로 선정 능력을 가리기 어렵다.
+- 발견: 후보의 50~58%가 5일 안에 −5%에 닿고, 20일 뒤 오른 후보도 28~34%가 먼저 닿는다(내린 후보 56~72%) — 고정 손절 조기 발동은 가설로만 남긴다. 탐색(사후): 배치 SEPA 점수 상−하 20일 +5.92pp(t 3.47, 소수 종목 집중·기준 아래 구간 포함이라 재확인 대상).
+- 다음: V02 후보 전수 기록(같은 날 후보 간 비교·구성요소·신호 시점 가격) — 사전 등록 분기. V04는 V02 뒤이며 앞당김은 사용자 결정.
+
 ## 2026-11-13 — 엔진 종합 평가와 우선순위 과제 V01~V12 (문서만) + 일 상한 12 운영 인수 영수증 ([평가](docs/reviews/engine-evaluation-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 평가(읽기 전용, 새 호출 0): 실거래 253건 KODEX200 대비 −1.62%/포지션(t −3.89), 양수인 전략·진입 월 없음. 손실은 보유 0~1일 131건(−1.57%)·손절 단독 92건(−4.25%)에 몰림. 현금 0.5%·매수 중지·G1 차단으로 10/7 이후 신규 표본 0, 재개 기준 부재(순환 대기). LLM 하루 8~9달러 중 약 80%가 보고서·테마 탐지.
