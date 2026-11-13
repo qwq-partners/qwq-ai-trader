@@ -4338,6 +4338,10 @@ JSON:
                                     if not _change_ok:
                                         continue
                                     candidates.append(s)
+                                # V02: 후보 필터(점수 하한·제외·쿨다운·일일 횟수·등락 상한)를 모두 통과한 종목과 그 스캔의 기준값
+                                candidate_ledger.record_gate(
+                                    _ledger_scan_id, gate="entry_filter", min_score=_min_score,
+                                    max_change=_max_rt_change, eligible=[c.symbol for c in candidates])
 
                                 # 장중 전략 사전 체크
                                 # momentum_breakout/theme_chasing/gap_and_go 우선,

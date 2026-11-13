@@ -185,7 +185,9 @@ def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledge
         return False
     try:
         at = now if now is not None else datetime.now()
-        clean = {k: (v if isinstance(v, (bool, str)) or v is None else _num(v)) for k, v in fields.items()}
+        clean = {k: (v if isinstance(v, (bool, str)) or v is None
+                     else [str(x) for x in v] if isinstance(v, (list, tuple))   # 종목 코드 목록(예: 필터 통과 후보)
+                     else _num(v)) for k, v in fields.items()}
         return _submit({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
     except Exception as e:
         _note_error("gate", e, ledger_dir)

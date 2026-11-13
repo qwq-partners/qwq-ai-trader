@@ -223,7 +223,8 @@ def test_real_screening_loop_records_before_gates_without_changing_flow(monkeypa
     assert "capture_selection" not in kwargs0 and kwargs1.get("capture_selection") is True   # 점수 구성 기록만 켠다
     same = lambda t: [(m, a[:1] if m == "signal" else a, kw) for m, a, kw in t.calls]   # noqa: E731 — 신호 ID 는 매번 새로 생긴다
     assert len(events1) == len(events0) == 1 and same(trace1) == same(trace0)
-    first, regime, cash = _ledger_rows(tmp_path)
+    first, regime, cash, flt = _ledger_rows(tmp_path)
+    assert (flt["gate"], flt["scan_id"], flt["min_score"], flt["eligible"]) == ("entry_filter", first["scan_id"], 75, ["S"])
     assert first["kind"] == "scan" and [c["symbol"] for c in first["candidates"]] == ["S"] and first["candidates"][0]["score"] == 90
     assert regime["scan_id"] == cash["scan_id"] == first["scan_id"]
     assert (regime["gate"], regime["ok"], regime["observed"], regime["kospi_chg"]) == ("regime", True, True, 0)
@@ -239,6 +240,18 @@ def test_real_screening_loop_records_candidates_when_regime_blocks_or_cash_is_ze
     assert rows[1]["gate"] == "regime" and rows[1]["ok"] is False and rows[1]["kospi_chg"] == rows[1]["kosdaq_chg"] == -3
     assert rows[4]["gate"] == "cash" and rows[4]["ok"] is False
     assert all(len(r["candidates"]) == 1 for r in rows if r["kind"] == "scan")
+
+
+def test_real_screening_loop_records_which_candidates_passed_the_entry_filter(monkeypatch, tmp_path):
+    """점수 미달·쿨다운·등락 상한으로 걸러진 후보는 통과 목록에서 빠지고, 스캔 행에는 전부 남는다."""
+    from datetime import datetime as dt
+    from tests.test_entry_gate_scheduler import run_cycle, stock
+    stocks = [stock("OK"), stock("LOW", score=60), stock("COOL"), stock("HOT", change_pct=30)]
+    run_cycle(monkeypatch, ledger=cl, stocks=stocks, cooldown={"COOL": dt(2026, 10, 2, 10, 29)})
+    rows = _ledger_rows(tmp_path)
+    flt = next(r for r in rows if r.get("gate") == "entry_filter")
+    assert [c["symbol"] for c in rows[0]["candidates"]] == ["OK", "LOW", "COOL", "HOT"]
+    assert flt["eligible"] == ["OK"] and flt["min_score"] == 75 and flt["max_change"] == 7.0
 
 
 def test_real_screening_loop_regime_quote_failure_is_null_not_zero(monkeypatch, tmp_path):
@@ -277,4 +290,4 @@ def test_real_screening_loop_is_unaffected_by_a_stalled_writer(monkeypatch, tmp_
         release.set()
     same = lambda t: [(m, a[:1] if m == "signal" else a, kw) for m, a, kw in t.calls]   # noqa: E731
     assert len(events1) == len(events0) == 1 and same(trace1) == same(trace0) and elapsed < 2.0
-    assert [r["kind"] for r in _ledger_rows(tmp_path)] == ["scan", "gate", "gate"]   # 풀린 뒤 순서대로 남는다
+    assert [r["kind"] for r in _ledger_rows(tmp_path)] == ["scan", "gate", "gate", "gate"]   # 풀린 뒤 순서대로 남는다
