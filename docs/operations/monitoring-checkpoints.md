@@ -2,7 +2,7 @@
 
 ## 11월13일 V02 후보 전수 원장 — 배포 뒤 확인
 
-[설계·판독 기준](../research/v02-candidate-ledger-2026-11-13.md) · [원장](execution-roadmap.md#engine-evaluation-20261113).
+[설계·판독 기준](../research/v02-candidate-ledger-2026-11-13.md) · [원장](execution-roadmap.md#engine-evaluation-20261113). 운영 인수 11/13 21:11:55 KST(`010e3044`, 장외) — 아래 항목은 첫 거래일 11/16 장중부터 확인한다.
 
 - [ ] 배포 뒤 첫 정규장 스캔에서 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`이 0600으로 생기고 `scan` 행이 스캔마다 1줄씩 늘어난다.
 - [ ] `scan` 행의 `basis_n`이 `candidates` 수와 같다(후보마다 `basis.terms` — 원천별 가중 점수). 다르면 `[후보원장] 점수 구성 누락` 경고가 스캔마다 남는다(점수 구성만 빠지고 선정은 그대로여야 한다).
