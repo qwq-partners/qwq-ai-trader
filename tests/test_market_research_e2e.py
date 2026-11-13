@@ -94,14 +94,14 @@ async def test_public_events_reach_real_role_and_full_text_transport(tmp_path, m
         assert factory.await_count == 1
         assert len(session.calls) == 2
         payload = session.calls[0][1]['json']
-        assert payload['model'] == FABLE and payload['max_tokens'] == 4096
+        assert payload['model'] == FABLE and payload['max_tokens'] == 6144
         assert payload['output_config'] == {'effort': 'medium'} and 'thinking' not in payload
         assert 'response_format' not in payload and 'JSON' in payload['system']
         prompt = json.dumps(payload, ensure_ascii=False)
         assert '가온반도체' in prompt and '설비 투자 비용' in prompt
         assert all(secret not in prompt for secret in ('PRIVATE_ACCOUNT_CANARY', 'PRIVATE_SOURCE_CANARY', 'PRIVATE_BOT_CANARY'))
         web_payload = session.calls[1][1]['json']
-        assert web_payload['model'] == FABLE and web_payload['max_tokens'] == 12288 and 'JSON' in web_payload['system']
+        assert web_payload['model'] == FABLE and web_payload['max_tokens'] == 16384 and 'JSON' in web_payload['system']
         assert '애널리스트' in json.dumps(web_payload, ensure_ascii=False) and 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(web_payload)
         web_row = store.analysis_receipt('web', 'morning', DAY)
         assert web_row['status'] == 'ready' and web_row['result']['analysis']['stance'] == '중립'

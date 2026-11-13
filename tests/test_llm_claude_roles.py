@@ -10,7 +10,8 @@ from src.utils.llm_roles import LLMRole, ROLE_POLICY_VERSION, ROLE_PROFILES
 from tests.test_claude_transport import Session as ClaudeSession, api_body
 from tests.test_llm_transport_contract import Session as OpenAISession, openai_reply
 
-OPUS, FABLE = 'claude-opus-5-5', 'claude-fable-5-1'
+OPUS, FABLE = 'claude-opus-5-5', 'claude-fable-5-2'
+HEAVY = 'claude-fable-5-1'   # heavy task 슬롯은 V07 에서 5.1 유지(작은 출력 상한 소비자 점검 전) — 고정 보고 역할만 5.2
 JSON_HINT = 'JSON'
 
 
@@ -60,12 +61,12 @@ def claude_request(m, index=0):
     return m.anthropic._session.calls[index][1]['json']
 
 
-def test_role_table_v7_moves_report_roles_to_anthropic_api_and_morning_brief_to_terra():
-    assert ROLE_POLICY_VERSION == 'engine-roles-v7-terra'
+def test_role_table_v8_report_roles_on_fable_52_and_morning_brief_on_terra():
+    assert ROLE_POLICY_VERSION == 'engine-roles-v8-fable52'
     expect = {LLMRole.REPORT_ONE_LINE: ('anthropic', OPUS, 512, 20.0, 'low', None),
-              LLMRole.MARKET_BRIEF: ('anthropic', FABLE, 4096, 90.0, 'medium', 'json_object'),
-              LLMRole.POST_EXIT_RESEARCH: ('anthropic', FABLE, 4096, 90.0, 'medium', None),
-              LLMRole.WEB_REPORT: ('anthropic', FABLE, 12288, 180.0, 'medium', 'json_object'),
+              LLMRole.MARKET_BRIEF: ('anthropic', FABLE, 6144, 90.0, 'medium', 'json_object'),
+              LLMRole.POST_EXIT_RESEARCH: ('anthropic', FABLE, 6144, 90.0, 'medium', None),
+              LLMRole.WEB_REPORT: ('anthropic', FABLE, 16384, 180.0, 'medium', 'json_object'),
               LLMRole.MORNING_BRIEF: ('openai', 'gpt-5.6-terra', 1600, 45.0, 'none', None)}
     for role, (provider, model, cap, timeout, effort, fmt) in expect.items():
         p = ROLE_PROFILES[role]
@@ -77,9 +78,9 @@ def test_role_table_v7_moves_report_roles_to_anthropic_api_and_morning_brief_to_
 @pytest.mark.asyncio
 @pytest.mark.parametrize('role,model,cap,effort,json_mode,priority', [
     ('report_one_line', OPUS, 512, 'low', False, 'standard'),
-    ('market_brief', FABLE, 4096, 'medium', True, 'standard'),
-    ('post_exit_research', FABLE, 4096, 'medium', False, 'research'),
-    ('web_report', FABLE, 12288, 'medium', True, 'standard'),
+    ('market_brief', FABLE, 6144, 'medium', True, 'standard'),
+    ('post_exit_research', FABLE, 6144, 'medium', False, 'research'),
+    ('web_report', FABLE, 16384, 'medium', True, 'standard'),
 ])
 async def test_anthropic_role_exact_payload_and_durable_attribution(tmp_path, role, model, cap, effort, json_mode, priority):
     m = manager(tmp_path, claude_body(model))
@@ -149,8 +150,8 @@ async def test_default_task_routes_stay_openai(tmp_path):
     (LLMTask.THEME_DETECTION, OPUS, 'low', 'light'), (LLMTask.QUICK_CLASSIFY, OPUS, 'low', 'light'),
     (LLMTask.WIKI_INGEST, OPUS, 'low', 'light'), (LLMTask.NEWS_SUMMARY, OPUS, 'low', 'light'),
     (LLMTask.QUICK_ANALYSIS, OPUS, 'low', 'light'),
-    (LLMTask.TRADE_REVIEW, FABLE, 'medium', 'heavy'), (LLMTask.STRATEGY_ANALYSIS, FABLE, 'medium', 'heavy'),
-    (LLMTask.MARKET_ANALYSIS, FABLE, 'medium', 'heavy'),
+    (LLMTask.TRADE_REVIEW, HEAVY, 'medium', 'heavy'), (LLMTask.STRATEGY_ANALYSIS, HEAVY, 'medium', 'heavy'),
+    (LLMTask.MARKET_ANALYSIS, HEAVY, 'medium', 'heavy'),
 ])
 async def test_configured_task_routes_use_anthropic_api_with_slot_models(tmp_path, task, model, effort, weight):
     m = manager(tmp_path, claude_body(model, '{"themes": []}'), routes={'heavy': 'anthropic', 'light': 'anthropic'})
@@ -184,7 +185,7 @@ async def test_heavy_anthropic_failure_falls_back_to_openai_light_but_refusal_do
     assert m.openai._session.payloads[0]['model'] == 'gpt-5.6-terra' and m.stats['fallback_count'] == 1
     assert [a['role'] for a in response.attempt_trail] == ['primary', 'fallback']
 
-    m2 = manager(tmp_path / 'b', claude_body(FABLE, None, 'refusal', stop_details={'type': 'refusal'}), routes={'heavy': 'anthropic'})
+    m2 = manager(tmp_path / 'b', claude_body(HEAVY, None, 'refusal', stop_details={'type': 'refusal'}), routes={'heavy': 'anthropic'})
     refused = await m2.complete('p', task=LLMTask.TRADE_REVIEW)
     assert not refused.success and refused.refusal_detected and m2.openai._session.payloads == []
 
@@ -199,12 +200,12 @@ async def test_light_anthropic_failure_has_no_fallback(tmp_path):
 
 def test_config_parses_task_routes_and_slot_models_and_rejects_unknown():
     cfg = LLMConfig.from_config({'llm': {'task_routes': {'heavy': 'anthropic', 'light': 'anthropic'},
-                                         'claude_model_heavy': FABLE, 'claude_model_light': OPUS}})
+                                         'claude_model_heavy': HEAVY, 'claude_model_light': OPUS}})
     assert (cfg.task_route_heavy, cfg.task_route_light) == ('anthropic', 'anthropic')
-    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
+    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (HEAVY, OPUS, OPUS)
     default = LLMConfig.from_config({})
     assert (default.task_route_heavy, default.task_route_light) == ('openai', 'openai')
-    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-2'},
+    for bad in ({'task_routes': {'heavy': 'gemini'}}, {'task_routes': {'light': ''}}, {'claude_model_heavy': 'claude-fable-5-2'}, {'claude_model_light': 'claude-fable-5-2'}, {'claude_model_heavy': 'claude-fable-5-3'},
                 {'claude_model_light': 'claude-sonnet-5-5'},
                 # 독립 리뷰 1차 P2: 명시된 falsy 값은 기본값으로 치환하지 않고 거부한다.
                 {'claude_model_heavy': ''}, {'claude_model_light': 0}, {'claude_model_heavy': False},
@@ -218,7 +219,7 @@ def test_production_default_yml_routes_heavy_and_light_to_anthropic():
     llm = yaml.safe_load(open('config/default.yml'))['llm']
     cfg = LLMConfig.from_config(llm)
     assert (cfg.task_route_heavy, cfg.task_route_light) == ('anthropic', 'anthropic')
-    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (FABLE, OPUS, OPUS)
+    assert (cfg.claude_model_heavy, cfg.claude_model_light, cfg.claude_model) == (HEAVY, OPUS, OPUS)   # 출하 설정: heavy 는 5.1 유지
 
 
 @pytest.mark.asyncio
@@ -241,7 +242,7 @@ async def test_heavy_openai_fallback_only_on_availability_failure(tmp_path, stat
 @pytest.mark.asyncio
 @pytest.mark.parametrize('fault', ['identity', 'incomplete', 'tool_use'])
 async def test_heavy_non_availability_failures_never_reach_openai(tmp_path, fault):
-    body = claude_body(FABLE, 'partial')
+    body = claude_body(HEAVY, 'partial')
     if fault == 'identity': body['model'] = OPUS
     elif fault == 'incomplete': body['stop_reason'] = 'max_tokens'
     elif fault == 'tool_use': body['content'] = [{'type': 'tool_use'}]

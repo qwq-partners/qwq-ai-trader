@@ -34,13 +34,16 @@ def test_claude_api_quote_covers_cache_write_ceiling():
     assert rate_quote('claude-opus-unknown', 1000, 400) is None
 
 
-FABLE = 'claude-fable-5-1'
+FABLE = 'claude-fable-5-1'   # 설정 슬롯이 받는 Fable 은 5.1 뿐(5.2 는 고정 보고 역할 전용, V07)
 
 
 def test_claude_config_accepts_only_opus_and_fable_identities():
-    # L01 Task 3: 허용 집합 {opus-5-5, fable-5-1}. 다른 Fable/Mythos 세대·Sonnet·별칭은 거부(기존 규칙).
+    # 설정 슬롯 허용 집합 {opus-5-5, fable-5-1}. 5.2 는 고정 보고 역할 전용이라 슬롯에서는 거부(V07). 다른 세대·Sonnet·별칭도 거부.
     assert LLMConfig(claude_model=FABLE).claude_model == FABLE
-    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus', [], None):
+    for slot in ('claude_model', 'claude_model_heavy', 'claude_model_light'):
+        with pytest.raises(ValueError, match='Claude model identity'):
+            LLMConfig(**{slot: 'claude-fable-5-2'})
+    for model in ('claude-fable-5-2', 'claude-fable-5', 'claude-mythos-5-2', 'claude-mythos-5-1', 'claude-sonnet-5-5', 'opus', [], None):
         with pytest.raises(ValueError, match='Claude model identity'):
             LLMConfig(claude_model=model)
 

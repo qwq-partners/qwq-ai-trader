@@ -52,7 +52,7 @@ async def test_role_result_is_composed_archived_and_sent_once(tmp_path, invalid)
         assert len(session.calls) == 1
         payload = session.calls[0][1]['json']
         assert 'response_format' not in payload and 'JSON' in payload['system']
-        assert payload['model'] == FABLE and payload['max_tokens'] == 4096
+        assert payload['model'] == FABLE and payload['max_tokens'] == 6144
         assert 'PRIVATE_ACCOUNT_CANARY' not in json.dumps(payload)
         assert llm.monthly_budget.status()['settled_count'] == 1
         assert store.archived_photo('market', 'morning', DAY) is None

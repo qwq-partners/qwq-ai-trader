@@ -68,7 +68,10 @@ class LLMTask(str, Enum):
 
 
 # L01 Task 3(2026-11-10): Fable 5.1은 API 전용(구독 CLI는 Opus만). 다른 세대·Sonnet/Haiku는 미검증이라 거부.
-CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1"})
+CLAUDE_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2"})   # 전송·고정 역할이 받을 수 있는 모델
+# 설정 슬롯(Bear `claude_model`·heavy·light)은 5.2 를 받지 않는다(V07): 출력 상한 100~150토큰 소비자가 있어
+# thinking 이 본문 전에 상한을 다 쓸 수 있다. 5.2 는 출력 상한을 올린 고정 보고 역할(llm_roles.py)에서만 쓴다.
+CLAUDE_SLOT_MODELS = frozenset({"claude-opus-5-5", "claude-fable-5-1"})
 
 
 @dataclass
@@ -80,6 +83,8 @@ class LLMConfig:
     anthropic_api_key_file: str = ""
     claude_model: str = "claude-opus-5-5"          # Bear(독립 검토) — API 1차·CLI 대체
     # L01 Task 4: task 슬롯 모델. 코드 기본 라우팅은 OpenAI 그대로이고 default.yml task_routes가 Anthropic으로 돌린다.
+    # heavy task 는 5.1 유지(V07 리뷰 P1): 크로스검증 100·레짐 150 토큰처럼 작은 출력 상한을 쓰는 소비자가 있고,
+    # 5.2 는 medium 에서 thinking 을 줄이지 않아 본문 전에 상한에 닿을 수 있다. 상한 전수 점검 뒤 별도 전환.
     claude_model_heavy: str = "claude-fable-5-1"  # trade_review/strategy_analysis/market_analysis
     claude_model_light: str = "claude-opus-5-5"   # theme_detection/quick_*/wiki_ingest/news_summary
     task_route_heavy: str = "openai"                # openai | anthropic
@@ -130,7 +135,7 @@ class LLMConfig:
         if not isinstance(self.claude_cli_enabled, bool):
             raise ValueError("claude_cli_enabled must be boolean")
         for model in (self.claude_model, self.claude_model_heavy, self.claude_model_light):
-            if not isinstance(model, str) or model not in CLAUDE_MODELS:
+            if not isinstance(model, str) or model not in CLAUDE_SLOT_MODELS:
                 raise ValueError("Unsupported Claude model identity")
         for route in (self.task_route_heavy, self.task_route_light):
             if route not in ("openai", "anthropic"):
@@ -341,7 +346,7 @@ _OPENAI_EFFORTS = {
 }
 # Validated 2026-11-10: https://platform.claude.com/docs/en/api/messages (effort low|medium|high|xhigh|max).
 # 계획 D3/D4 범위(경량 low·heavy medium)만 허용한다. high 이상은 비용 결정이 별도라 지금 열지 않는다.
-_CLAUDE_EFFORTS = {model: {"low", "medium"} for model in ("claude-opus-5-5", "claude-fable-5-1")}
+_CLAUDE_EFFORTS = {model: {"low", "medium"} for model in ("claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2")}
 # Validated 2026-10-12: https://ai.google.dev/gemini-api/docs/generate-content/gemini-3
 # Gemini 3.8: https://ai.google.dev/gemini-api/docs/generate-content/latest-model
 _GEMINI_LEVELS = {
