@@ -1,0 +1,128 @@
+"""V05 재판정 연구 스크립트 — 입력 구성·응답 해석·같은 날 비교 통계·비용 상한 정지."""
+import asyncio
+import json
+from types import SimpleNamespace
+
+from scripts.research import team_rejudge as t
+
+
+def _row(symbol, at, stance="hold", approved=True, did="d1", reports=None):
+    return {"deliberation_id": did, "symbol": symbol, "name": "가나", "decided_at": at, "recorded_at": at,
+            "decision": {"stance": stance, "approved": approved},
+            "reports": reports if reports is not None else [{"kind": "news", "symbol": symbol, "score": 3, "summary": "s",
+                                                             "findings": [], "error": None, "ref_id": None}]}
+
+
+def test_items_first_deliberation_and_dedup(tmp_path):
+    f = tmp_path / "deliberations_20260916.jsonl"
+    rows = [_row("000001", "2026-09-16T11:30:00", "buy", did="b"), _row("000001", "2026-09-16T10:30:00", "hold", did="a"),
+            _row("000001", "2026-09-16T10:30:00", "buy", did="a"),   # 같은 id 는 마지막 행이 정본
+            _row("000002", "2026-09-16T10:30:00", "buy", approved="yes", did="c")]
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    items = {i["id"]: i for i in t.build_items(str(tmp_path), "2026-09-16")}
+    assert items["2026-09-16:000001"]["prod"] == "buy_approved" and items["2026-09-16:000002"]["prod"] == "invalid"
+    assert items["2026-09-16:000001"]["reports"] == [{"kind": "news", "score": 3, "summary": "s"}]   # None·빈 값·내부 필드 제거
+    assert t.build_items(str(tmp_path), "2026-09-15") == []
+
+
+def test_compact_keeps_false_and_zero_marks_error():
+    assert t.compact({"a": 0, "b": False, "c": None, "d": [], "error": "Traceback…", "m": {"x": None}}) == \
+        {"a": 0, "b": False, "error": "자료 오류"}
+
+
+def test_parse_judgment_strict():
+    assert t.parse_judgment('```json\n{"decision":"buy","score":70,"reason":"r"}\n```') == ("buy", 70)
+    for bad in ('{"decision":"hold","score":70}', '{"decision":"buy","score":70.5}', '{"decision":"buy","score":true}',
+                '{"decision":"buy","score":101}', "없음", None, '["buy"]'):
+        assert t.parse_judgment(bad) is None
+
+
+def test_within_day_cancels_market_and_weights():
+    rows = [("d1", True, {"net20": 0.10}), ("d1", False, {"net20": 0.06}), ("d1", False, {"net20": 0.08}),
+            ("d2", True, {"net20": -0.20}), ("d2", False, {"net20": -0.22}),
+            ("d3", True, {"net20": 0.5})]   # 한쪽만 있는 날은 빠진다
+    parts = t.within_day(rows, "net20")
+    assert [p[0] for p in parts] == ["d1", "d2"]
+    assert abs(parts[0][1] - 0.03) < 1e-12 and abs(parts[1][1] - 0.02) < 1e-12
+    assert abs(t.wmean(parts) - (0.03 * (2 / 3) + 0.02 * 0.5) / (2 / 3 + 0.5)) < 1e-12
+
+
+def test_bootstrap_deterministic_and_verdict():
+    parts = [(f"d{i:02d}", 0.03 + 0.001 * (i % 3), 1.0) for i in range(12)]
+    lo, hi = t.block_bootstrap(parts, resamples=500)
+    assert (lo, hi) == t.block_bootstrap(parts, resamples=500) and 0.03 <= lo <= hi <= 0.032
+    assert t.verdict(0.031, lo, hi, 40, 60, 12) == "선별력 있음"
+    assert t.verdict(0.031, lo, hi, 29, 60, 12) == "판정 불가(표본 부족)"
+    assert t.verdict(0.010, 0.001, 0.02, 40, 60, 12) == "미입증"       # 기준 미달
+    assert t.verdict(0.030, -0.001, 0.06, 40, 60, 12) == "미입증"      # 하한이 0 아래
+    assert t.verdict(-0.030, -0.05, -0.01, 40, 60, 12) == "음의 선별"
+
+
+def test_split_by_day_median_excludes_ties():
+    rows = [({"date": "d", "s": s}, {"net20": s}) for s in (1, 2, 2, 3)]
+    assert sorted(g for _d, g, _v in t.split_by_day_median(rows, lambda i: i["s"])) == [False, True]
+
+
+class _Client:
+    def __init__(self, replies):
+        self.replies, self.calls = list(replies), 0
+
+    async def complete(self, prompt, system, **kw):
+        self.calls += 1
+        content, refusal = self.replies.pop(0)
+        return SimpleNamespace(content=content, success=content is not None, refusal_detected=refusal, usage_known=True,
+                               input_tokens=1000, output_tokens=100, request_sent=True, resolved_model=kw["model"],
+                               model_identity_status="verified", finish_reason="end_turn", http_status=200,
+                               transport_error_kind=None)
+
+
+def _items(n):
+    return [{"id": f"i{k}", "date": "2026-09-16", "symbol": f"{k:06d}", "name": "n", "decided_at": "2026-09-16T10:30:00",
+             "reports": []} for k in range(n)]
+
+
+def test_judge_retry_refusal_resume_and_budget(tmp_path):
+    out = tmp_path / "j.jsonl"
+    quote = lambda i, o: 0.01   # noqa: E731
+    client = _Client([("잡음", False), ('{"decision":"pass","score":40,"reason":""}', False),   # 1번: 형식 오류 뒤 재시도 성공
+                      (None, True)])                                                            # 2번: 거절은 재시도 없음
+    r = asyncio.run(t.judge(_items(2), "claude-opus-5-5", str(out), 1.0, concurrency=1, client=client, quote=quote))
+    recs = {x["id"]: x for x in map(json.loads, out.read_text().splitlines())}
+    assert client.calls == 3 and recs["i0"]["status"] == "ok" and recs["i0"]["attempts"] == 2 and recs["i0"]["decision"] == "pass"
+    assert recs["i1"]["status"] == "refusal" and recs["i1"]["attempts"] == 1 and not r["budget_stopped"]
+    # 이어 하기: 이미 있는 항목은 다시 보내지 않고, 남은 예산이 재시도 포함 최악값(0.02)보다 작으면 전송하지 않는다
+    client2 = _Client([])
+    r2 = asyncio.run(t.judge(_items(3), "claude-opus-5-5", str(out), 0.04, concurrency=1, client=client2, quote=quote))
+    assert client2.calls == 0 and r2["budget_stopped"] and len(out.read_text().splitlines()) == 2
+
+
+def test_report_end_to_end(tmp_path):
+    import csv
+    days = [f"2026-09-{d:02d}" for d in range(1, 31)]
+    prices = tmp_path / "p"
+    prices.mkdir()
+
+    def write(sym, closes):
+        with open(prices / f"{sym}.csv", "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["date", "open", "high", "low", "close"])
+            for d, c in zip(days, closes):
+                w.writerow([d, c, c, c, c])
+    write(t.BENCH, [100] * 30)
+    with open(tmp_path / "adj.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["date", "close"])
+        w.writerows([d, 100] for d in days)
+    items, js = [], []
+    for k in range(4):   # 짝수 종목은 20일 뒤 +10%, 홀수는 -10%. 모델은 짝수만 buy
+        sym, up = f"{k:06d}", k % 2 == 0
+        write(sym, [100] * 5 + [110 if up else 90] * 25)
+        for d in days[:3]:
+            items.append({"id": f"{d}:{sym}", "date": d, "symbol": sym, "prod": "hold", "analyst_sum": k})
+            js.append({"id": f"{d}:{sym}", "status": "ok", "decision": "buy" if up else "pass", "score": 80 if up else 20,
+                       "in": 10, "out": 5, "est_usd": 0.001})
+    out = t.report(items, {"claude-opus-5-5": js}, str(prices), str(tmp_path / "adj.csv"), days[-1])
+    h20 = out["models"]["claude-opus-5-5"]["decision"]["h20"]
+    assert abs(h20["diff"] - 0.2) < 1e-9 and h20["days_both"] == 3 and h20["verdict"] == "판정 불가(표본 부족)"
+    assert abs(out["models"]["claude-opus-5-5"]["score_high"]["h20"]["diff"] - 0.2) < 1e-9
+    assert out["models"]["claude-opus-5-5"]["buy_share"] == 0.5 and out["with_net"]["h20"] == 12
