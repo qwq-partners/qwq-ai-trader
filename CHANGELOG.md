@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-13 — V02 장중 스캔 후보 전수 원장 (기록 소스 DONE·판독 스크립트 후속·운영 미배포) ([설계·판독 사전 등록](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+## 2026-11-13 — V02 장중 스캔 후보 전수 원장 (기록 소스 DONE·운영 인수 11/13 21:11·판독 스크립트 후속) ([설계·판독 사전 등록](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 추가: `src/analytics/candidate_ledger.py` — `record_scan`(스캔 반환 후보 전체: 점수·가격·등락·거래량비·RSI·ATR·PER/PBR·수급 표시·사유·점수 구성), `record_regime`(약세장 필터 결과와 관측된 지수 등락률 — 조회 실패는 null), `record_gate`(현금 게이트 통과 여부, 후보 필터의 기준값·통과 종목 목록)를 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`(0600)에 덧붙인다. 결측은 null, 예외 없음(실패 시 경고), `CANDIDATE_LEDGER=0`으로 끈다. 매매 경로는 행을 크기 제한 대기열(96행)에 넣기만 하고 전용 스레드 하나가 순서대로 쓴다 — 디스크가 멈춰도 스캔·신호 발행은 기다리지 않고, 대기열이 차면 그 뒤 행을 버린다. 매매 경로에서는 로그도 쓰지 않는다(버린 수는 기록 스레드가 회복 뒤 요약 경고, 매매 경로 쪽 행 구성 오류는 `error` 행, 기록 스레드의 파일 I/O 오류는 경고). 쓰다가 실패하면 쓰기 전 위치로 되돌려 다음 행이 깨지지 않는다.
 - 변경: `src/schedulers/kr_scheduler.py` `run_screening` 4곳 — 스캔 직후 `record_scan`, 약세장 필터 판정 뒤 `record_regime`, 가용현금 검사 뒤 `record_gate`(통과 여부만), 후보 필터 뒤 `record_gate`(entry_filter: 점수 하한·등락 상한·통과 종목 목록 — 탈락 사유별 기록과 필터 뒤 단계는 범위 밖). 지수 시세 변수를 조회 전에 None으로 초기화(조회 전 예외에도 같은 '미관측'). 원장이 켜져 있으면 스크리너에 `capture_selection=True`를 넘겨 후보에 점수 구성을 붙인다(점수·순위·게이트·주문 불변 — 종전에는 명시 관측 때만).
@@ -9,6 +9,7 @@
 - 판독 기준을 자료 축적 전에 고정: 종목-일 첫 스캔, 같은 날 점수 상위−하위 3분위의 5·20일 수익 차이(+1.0pp·+2.0pp 초과이고 95% 하한 > 0), 최소 15거래일·300종목-일, 그 전에는 건수·결측률만 본다.
 - 왜: 현금 0.5%·매수 중지에서 장중 후보가 엔진 게이트 전에 버려져 10/7 이후 선정 근거가 쌓이지 않았다. V01(미입증)의 사전 등록 분기가 정한 다음 단계다.
 - 롤백: `.env`에 `CANDIDATE_LEDGER=0` + 재시작.
+- **운영 인수(11/13 21:11:55 KST, 사용자 "ㄱㄱ"):** `local_deploy.sh 010e3044` 서버 10,832 passed(869초)·롤백 0, PID 1519651. 20:30 저녁 작업 뒤 20:57에 시작해 21:00 개인 요약 발송(21:00:09 수락) 뒤에 재시작했다. 기동 165초 사후 점검: NRestarts 0·pending 0·recovery ready·ERROR/Traceback 0·기동 KIS 한도 거절 0·보호 48파일 변동 0·cron/`KILL_SWITCH_KR`/월 200/`log_and_continue` 보존. 원장 파일은 첫 장중 스캔(11/16)에서 생긴다.
 
 ## 2026-11-13 — V05 LLM 판단 가치 시험: 저장된 팀 심의 입력의 오프라인 재판정 (DONE·주 판정 불가) ([정본](docs/research/v05-team-rejudge-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
@@ -29,7 +30,7 @@
 - 롤백: 역할표 3줄을 5.1로 되돌리고 재시작(5.1은 허용 모델로 유지).
 - 신원 실호출 1회(사용자 승인 11/13): `resolved_model=claude-fable-5-2` verified·HTTP 200·`end_turn`·거절 0·1.2초·추정 USD 0.0025(원장 밖 단발).
 - 단가 float(기존 구조)는 L02 부채 목록의 Decimal 전환 과제로 남긴다(이 PR 범위 밖).
-- **운영 인수(11/13 13:30:52 KST, 사용자 "지금 배포해도 돼" — 장중 명시 승인):** `local_deploy.sh 0781bc53` 서버 10,804 passed(901초)·롤백 0, PID 1483849. 13:00 팀 심의·13:10 보고 슬롯 뒤에 시작해 14:00 슬롯 전에 재시작했다. 기동 169초 사후 점검: NRestarts 0·pending 0·recovery ready·ERROR/Traceback 0, 보호 48파일 중 `config/default.yml` 주석만 변동(YAML 동일)·cron/`KILL_SWITCH_KR`/월 200/`log_and_continue` 보존. 기동 직후 KIS 한도 거절 로그(EGW00201 8줄·EGW00215 2줄, 13:30~13:33)는 재시작 때의 반복 현상으로 기록(completed_with_findings). 첫 자연 호출은 16:40 장후 보고 WAIT.
+- **운영 인수(11/13 13:30:52 KST, 사용자 "지금 배포해도 돼" — 장중 명시 승인):** `local_deploy.sh 0781bc53` 서버 10,804 passed(901초)·롤백 0, PID 1483849. 13:00 팀 심의·13:10 보고 슬롯 뒤에 시작해 14:00 슬롯 전에 재시작했다. 기동 169초 사후 점검: NRestarts 0·pending 0·recovery ready·ERROR/Traceback 0, 보호 48파일 중 `config/default.yml` 주석만 변동(YAML 동일)·cron/`KILL_SWITCH_KR`/월 200/`log_and_continue` 보존. 기동 직후 KIS 한도 거절 로그(EGW00201 8줄·EGW00215 2줄, 13:30~13:33)는 재시작 때의 반복 현상으로 기록(completed_with_findings). **자연 인수 DONE(11/13 16:40):** 시장·웹 장후 보고 둘 다 `claude-fable-5-2` 요청·응답 일치·`end_turn`·거절 0·검증 통과(ready), 출력 1,943/4,648토큰(상한 6,144/16,384), 16:41:06 발송 수락. 같은 날 5.1 아침·점심 4건은 검증 거절(`unsupported_numeric` 2·`too_long` 2) — 하루 표본이라 모델 우위 근거가 아니다. `POST_EXIT_RESEARCH` 토요일 자연 호출 WAIT.
 
 ## 2026-11-13 — V01 기존 후보의 사후 초과수익 판독: 두 주 판정 계열 모두 "미입증" ([사전 등록·결과](docs/research/v01-candidate-forward-excess-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
