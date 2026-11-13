@@ -5,10 +5,12 @@
 선정 능력을 잴 수 있다(판독은 오프라인 — scripts/research/candidate_forward_excess.py 계열).
 
 - 경로: ~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl (0600)
-- 행: {"kind":"scan", scan_id, at, session, n, basis_n, candidates:[…]} 와 {"kind":"gate", scan_id, at, …}
+- 행: {"kind":"scan", scan_id, at, session, n, basis_n, candidates:[…]}, {"kind":"gate", scan_id, at, …}, {"kind":"error", at, where, error}
 - 매매 경로(스케줄러)는 행을 만들어 크기 제한 대기열에 **넣기만** 한다(파일 I/O·대기 없음). 전용 스레드 하나가
   순서대로 파일에 쓴다. 디스크가 멈추면 대기열이 차고, 그 뒤 행은 버려진다(경고) — 스캔·신호 발행은 기다리지 않는다.
-- 실패는 warning 뿐이다. 반환값·예외로 선정·주문 흐름을 바꾸지 않는다. 프로세스 종료 시 대기열에 남은 행은 사라질 수 있다.
+- 매매 경로에서는 로그도 쓰지 않는다(운영 로그 sink 는 동기 파일 I/O 다). 버린 행 수는 세어 두었다가 기록 스레드가
+  회복했을 때 한 줄로 경고하고, 기록 중 오류는 {"kind":"error"} 행으로 원장에 남긴다.
+- 반환값·예외로 선정·주문 흐름을 바꾸지 않는다. 프로세스 종료 시 대기열에 남은 행은 사라질 수 있다.
 - 끄기: CANDIDATE_LEDGER=0 (재시작 필요)
 """
 
@@ -38,6 +40,7 @@ _BASIS_FIELDS = (("merge_score_sum", "merge"), ("post_merge_adjustment", "adj"),
 _queue: "queue.Queue[tuple]" = queue.Queue(maxsize=QUEUE_SIZE)
 _writer: Optional[threading.Thread] = None
 _writer_lock = threading.Lock()
+_dropped = 0   # 대기열이 가득 차 버린 행 수 — 기록 스레드가 회복하면 요약 경고 뒤 0 으로
 
 
 def enabled() -> bool:
@@ -87,10 +90,20 @@ def _append(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
 
 
 def _run_writer() -> None:
+    """경고는 전부 이 스레드에서 남긴다 — 매매 경로는 로그 I/O 도 하지 않는다."""
+    global _dropped
     while True:
         record, now, ledger_dir = _queue.get()
         try:
             _append(record, now, ledger_dir)
+            kind = record.get("kind")
+            if kind == "scan" and record["basis_n"] < len(record["candidates"]):   # 점수 구성은 V02 의 핵심 자료다
+                logger.warning(f"[후보원장] 점수 구성 누락: {len(record['candidates']) - record['basis_n']}/{len(record['candidates'])} 후보")
+            elif kind == "error":
+                logger.warning(f"[후보원장] 기록 실패(선정 흐름 유지): {record.get('where')} {record.get('error')}")
+            if _dropped:
+                n, _dropped = _dropped, 0
+                logger.warning(f"[후보원장] 기록 대기열이 가득 차 {n}행을 버렸다")
         except Exception as e:   # 기록은 부가 기능 — 다음 행을 계속 쓴다
             logger.warning(f"[후보원장] 쓰기 실패({record.get('kind')}): {type(e).__name__}")
         finally:
@@ -98,8 +111,8 @@ def _run_writer() -> None:
 
 
 def _submit(record: dict, now: datetime, ledger_dir: Optional[Path]) -> bool:
-    """행을 대기열에 넣기만 한다(대기·파일 I/O 없음). 가득 차 있으면 버리고 False."""
-    global _writer
+    """행을 대기열에 넣기만 한다(대기·파일/로그 I/O 없음). 가득 차 있으면 세기만 하고 버린 뒤 False."""
+    global _writer, _dropped
     if _writer is None or not _writer.is_alive():
         with _writer_lock:
             if _writer is None or not _writer.is_alive():
@@ -109,8 +122,18 @@ def _submit(record: dict, now: datetime, ledger_dir: Optional[Path]) -> bool:
         _queue.put_nowait((record, now, ledger_dir))
         return True
     except queue.Full:
-        logger.warning(f"[후보원장] 기록 대기열 가득 참 — 행 버림({record.get('kind')})")
+        _dropped += 1
         return False
+
+
+def _note_error(where: str, error: Exception, ledger_dir: Optional[Path]) -> None:
+    """매매 경로의 기록 오류를 원장 행으로 넘긴다(경고는 기록 스레드가 남긴다). 여기서도 예외를 올리지 않는다."""
+    try:
+        at = datetime.now()
+        _submit({"kind": "error", "at": at.isoformat(timespec="seconds"), "where": where,
+                 "error": type(error).__name__}, at, ledger_dir)
+    except Exception:
+        pass
 
 
 def drain(timeout: float = 5.0) -> bool:
@@ -129,15 +152,13 @@ def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
         at = now if now is not None else datetime.now()
         items = list(stocks)
         rows = [_candidate(s) for s in items[:MAX_CANDIDATES]]
-        basis_n = sum("basis" in r for r in rows)
-        if rows and basis_n < len(rows):   # 점수 구성은 V02 의 핵심 자료다 — 조용히 빠지지 않게 스캔당 한 줄
-            logger.warning(f"[후보원장] 점수 구성 누락: {len(rows) - basis_n}/{len(rows)} 후보")
+        basis_n = sum("basis" in r for r in rows)   # 누락은 행에 남기고, 경고는 기록 스레드가 스캔당 한 줄
         scan_id = uuid4().hex[:16]
         ok = _submit({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
                       "session": str(session), "n": len(items), "basis_n": basis_n, "candidates": rows}, at, ledger_dir)
         return scan_id if ok else None
     except Exception as e:   # 기록은 부가 기능 — 선정·주문 흐름을 막지 않는다
-        logger.warning(f"[후보원장] 스캔 기록 실패(선정 흐름 유지): {type(e).__name__}")
+        _note_error("scan", e, ledger_dir)
         return None
 
 
@@ -151,7 +172,7 @@ def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledge
         clean = {k: (v if isinstance(v, (bool, str)) or v is None else _num(v)) for k, v in fields.items()}
         return _submit({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
     except Exception as e:
-        logger.warning(f"[후보원장] 게이트 기록 실패(선정 흐름 유지): {type(e).__name__}")
+        _note_error("gate", e, ledger_dir)
         return False
 
 

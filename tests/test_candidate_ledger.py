@@ -42,6 +42,10 @@ def gate(*a, **kw):
     return result
 
 
+def _rows_today(tmp_path):
+    return [json.loads(x) for f in tmp_path.glob("candidates_*.jsonl") for x in f.read_text().splitlines()]
+
+
 def _rows(tmp_path):
     return [json.loads(x) for x in (tmp_path / "candidates_20261113.jsonl").read_text().splitlines()]
 
@@ -102,9 +106,13 @@ def test_stalled_disk_never_delays_caller_and_drops_after_queue_fills(tmp_path, 
     """디스크가 멈춰도 호출은 즉시 돌아온다(파일 I/O·대기 없음). 대기열이 차면 그 뒤 행은 버리고 None/False."""
     release, real = threading.Event(), cl._append
     monkeypatch.setattr(cl, "_append", lambda *a: (release.wait(10), real(*a)))
+    warnings = []
+    # 운영 로그 sink 는 동기 파일 I/O 다 — 로그까지 멈춘 조건에서도 매매 경로의 호출은 즉시 돌아와야 한다
+    monkeypatch.setattr(cl, "logger", SimpleNamespace(warning=lambda m: (release.wait(10), warnings.append(m))))
     try:
         started = time.monotonic()
         results = [cl.record_scan([_stock()], "regular", now=NOW, ledger_dir=tmp_path) for _ in range(cl.QUEUE_SIZE + 5)]
+        assert cl.record_scan([object()], "regular", now=NOW, ledger_dir=tmp_path) is None   # 오류 경로도 기다리지 않는다
         late_gate = cl.record_gate("s", now=NOW, ledger_dir=tmp_path, gate="cash", ok=True)
         assert time.monotonic() - started < 1.0                     # 멈춘 기록 스레드를 기다리지 않는다
         accepted = [r for r in results if r is not None]
@@ -114,6 +122,9 @@ def test_stalled_disk_never_delays_caller_and_drops_after_queue_fills(tmp_path, 
         release.set()
     assert cl.drain(10)
     assert [r["scan_id"] for r in _rows(tmp_path)] == accepted       # 풀리면 받은 순서대로 남는다
+    dropped = len(results) - len(accepted) + 2                       # 스캔 초과분 + 오류 행 + 게이트 행
+    assert any(f"{dropped}행을 버렸다" in m for m in warnings)        # 버린 수는 기록 스레드가 회복한 뒤 한 줄로 알린다
+    assert all("점수 구성 누락: 1/1" in m or "버렸다" in m for m in warnings)
 
 
 def test_failure_and_switch_never_raise(tmp_path, monkeypatch):
@@ -121,11 +132,11 @@ def test_failure_and_switch_never_raise(tmp_path, monkeypatch):
     blocker.write_text("x")
     assert scan([_stock()], "regular", now=NOW, ledger_dir=blocker) is not None   # 디렉터리 생성 실패는 기록 스레드의 경고뿐
     assert gate("s", now=NOW, ledger_dir=blocker, gate="cash", ok=True) is True
-    assert scan([object()], "regular", now=NOW, ledger_dir=tmp_path) is None      # 후보 속성 없음
-    assert not list(tmp_path.glob("candidates_*.jsonl"))
+    assert scan([object()], "regular", now=NOW, ledger_dir=tmp_path) is None      # 후보 속성 없음 → 오류 행으로 남는다
+    assert [(r["kind"], r["where"], r["error"]) for r in _rows_today(tmp_path)] == [("error", "scan", "AttributeError")]
     monkeypatch.setenv("CANDIDATE_LEDGER", "0")
     assert scan([_stock()], "regular", now=NOW, ledger_dir=tmp_path) is None
-    assert not (tmp_path / "candidates_20261113.jsonl").exists()
+    assert len(_rows_today(tmp_path)) == 1   # 꺼진 뒤에는 행이 늘지 않는다(앞의 오류 행 1개뿐)
 
 
 def test_truncates_but_reports_original_count(tmp_path):
