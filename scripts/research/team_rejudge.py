@@ -11,6 +11,7 @@ import asyncio
 import glob
 import hashlib
 import json
+import math
 import os
 import random
 import sys
@@ -19,7 +20,7 @@ from decimal import Decimal
 from statistics import mean, median
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from scripts.research.candidate_forward_excess import BENCH, COST, adjust_bench, forward, load_bars, nw_t  # noqa: E402
+from scripts.research.candidate_forward_excess import BENCH, COST, adjust_bench, forward, load_bars  # noqa: E402
 
 HORIZONS = (5, 10, 20)
 THRESHOLD = 0.015                 # 승인−비승인 20일 순초과 차이 기준(평가 문서 V05)
@@ -210,6 +211,21 @@ def wmean(parts):
     return sum(p[1] * p[2] for p in parts) / w if w > 0 else None
 
 
+def weighted_nw_t(parts, lag, pos=None):
+    """가중 평균(wmean)과 **같은 통계**의 Newey-West t. parts=[(date, diff, weight)], pos={date: 거래일 위치}.
+
+    x_i = w_i·(d_i − m) 의 HAC 분산을 (Σw)² 로 나눈다. 가중치가 모두 같으면 단순 평균의 NW t 와 같다.
+    """
+    m = wmean(parts)
+    if m is None or len(parts) < 2:
+        return None
+    at = {(pos[d] if pos is not None else i): w * (x - m) for i, (d, x, w) in enumerate(parts)}
+    var = sum(v * v for v in at.values())
+    for k in range(1, lag + 1):
+        var += 2 * (1 - k / (lag + 1)) * sum(e * at[i - k] for i, e in at.items() if i - k in at)
+    return m * sum(p[2] for p in parts) / math.sqrt(var) if var > 0 else None
+
+
 def block_bootstrap(parts, block=BLOCK, resamples=RESAMPLES, seed=SEED):
     """날짜 순서의 원형 블록 부트스트랩(겹치는 보유 기간의 자기상관 대응) → 가중 평균의 95% 구간."""
     n = len(parts)
@@ -245,7 +261,7 @@ def compare(rows, key, pos=None):
     outs = [v[key] for _d, g, v in rows if not g and v.get(key) is not None]
     lag = int(key[3:]) - 1 if key.startswith("net") else 0
     return {"n_in": len(ins), "n_out": len(outs), "days_both": len(parts), "diff": point, "ci95": [lo, hi],
-            "t_nw": nw_t([p[1] for p in parts], lag, [pos[p[0]] for p in parts] if pos is not None else None) if len(parts) >= 2 else None,
+            "t_nw": weighted_nw_t(parts, lag, pos),
             "pooled_in": mean(ins) if ins else None, "pooled_out": mean(outs) if outs else None,
             "verdict": verdict(point, lo, hi, len(ins), len(outs), len(parts))}
 
@@ -286,14 +302,17 @@ def outcomes(items, price_dir, bench_adjust, through):
 
 
 def check_judgments(items, model, js):
-    """판정 파일이 그 모델·프롬프트의 기대 표본 전체를 정확히 한 번씩 담는지 본다. 어긋나면 집계하지 않는다."""
+    """판정 파일이 그 모델·프롬프트의 기대 표본 안에서 항목마다 한 번씩만 담는지 본다. 어긋나면 집계하지 않는다.
+
+    비용 상한으로 멈춘 부분 표본(기대 표본의 부분집합)은 허용한다 — 사전 등록이 그 경우의 보고를 정했다.
+    """
     ids = [j.get("id") for j in js]
     want = {i["id"] for i in items}
     problems = []
     if len(ids) != len(set(ids)):
         problems.append("중복 id")
-    if set(ids) != want:
-        problems.append(f"누락 {len(want - set(ids))}·추가 {len(set(ids) - want)}")
+    if set(ids) - want:
+        problems.append(f"표본 밖 id {len(set(ids) - want)}")
     if any(j.get("model") != model or j.get("prompt_version") != PROMPT_VERSION for j in js):
         problems.append("모델 또는 프롬프트 버전 불일치")
     if any(j.get("status") == "ok" and (j.get("identity") != "verified" or j.get("resolved") != model
@@ -316,7 +335,8 @@ def report(items, judgments, price_dir, bench_adjust, through):
     for model, js in judgments.items():
         ok = {j["id"]: j for j in js if j["status"] == "ok"}
         sel = [(i, v) for i, v in rows if i["id"] in ok]
-        m = {"judged": len(js), "ok": len(ok),
+        m = {"judged": len(js), "ok": len(ok), "complete": len(js) == len(items),   # False = 비용 상한 등으로 멈춘 부분 표본
+             "judged_ids_sha256": hashlib.sha256("\n".join(sorted(j["id"] for j in js)).encode()).hexdigest(),
              "buy_share": mean(ok[i["id"]]["decision"] == "buy" for i, _v in sel) if sel else None,
              "tokens_in": sum(j["in"] for j in js), "tokens_out": sum(j["out"] for j in js),
              "est_usd_conservative": str(sum((Decimal(str(j["est_usd"])) for j in js), Decimal(0)).quantize(Decimal("0.0001"))),

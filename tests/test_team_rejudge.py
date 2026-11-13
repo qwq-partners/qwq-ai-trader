@@ -60,6 +60,16 @@ def test_bootstrap_deterministic_and_verdict():
     assert t.verdict(-0.030, -0.05, -0.01, 40, 60, 12) == "음의 선별"
 
 
+def test_weighted_t_matches_weighted_point_estimate():
+    from scripts.research.candidate_forward_excess import nw_t
+    # 가중치가 큰 날이 음수면 가중 평균은 음수다 — t 도 같은 부호여야 한다(단순 평균은 양수)
+    parts = [("d1", -0.02, 10.0), ("d2", 0.03, 1.0), ("d3", 0.03, 1.0), ("d4", -0.025, 9.0)]
+    assert t.wmean(parts) < 0 < sum(p[1] for p in parts) / 4 and t.weighted_nw_t(parts, 1) < 0
+    equal = [(f"d{i}", x, 2.0) for i, x in enumerate((0.01, 0.03, -0.01, 0.02, 0.04))]
+    assert abs(t.weighted_nw_t(equal, 2) - nw_t([p[1] for p in equal], 2)) < 1e-9   # 같은 가중치면 단순 평균의 NW t
+    assert t.weighted_nw_t(equal[:1], 2) is None
+
+
 def test_split_by_day_median_excludes_ties():
     rows = [({"date": "d", "s": s}, {"net20": s}) for s in (1, 2, 2, 3)]
     assert sorted(g for _d, g, _v in t.split_by_day_median(rows, lambda i: i["s"])) == [False, True]
@@ -146,8 +156,13 @@ def test_report_end_to_end(tmp_path):
     assert abs(out["models"]["claude-opus-5-5"]["score_high"]["h20"]["diff"] - 0.2) < 1e-9
     assert out["models"]["claude-opus-5-5"]["buy_share"] == 0.5 and out["with_net"]["h20"] == 12
     assert out["models"]["claude-opus-5-5"]["est_usd_conservative"] == "0.0120"
-    # 판정 파일이 기대 표본과 다르면(누락·중복·다른 모델·미검증 신원) 집계를 거부한다
-    for bad in (js[:-1], js + js[:1], [{**j, "model": "claude-fable-5-2"} for j in js],
+    assert out["models"]["claude-opus-5-5"]["complete"] is True
+    # 비용 상한으로 멈춘 부분 표본은 그 항목만으로 보고한다(사전 등록 5절)
+    part = t.report(items, {"claude-opus-5-5": js[:8]}, str(prices), str(tmp_path / "adj.csv"), days[-1])["models"]["claude-opus-5-5"]
+    assert (part["complete"], part["judged"], part["decision"]["h20"]["n_in"] + part["decision"]["h20"]["n_out"]) == (False, 8, 8)
+    assert part["judged_ids_sha256"] != out["models"]["claude-opus-5-5"]["judged_ids_sha256"]
+    # 판정 파일이 기대 표본과 다르면(표본 밖 id·중복·다른 모델·미검증 신원) 집계를 거부한다
+    for bad in (js + [{**js[0], "id": "2026-09-01:999999"}], js + js[:1], [{**j, "model": "claude-fable-5-2"} for j in js],
                 [{**j, "identity": "unverified"} for j in js], [{**j, "prompt_version": "x"} for j in js]):
         with pytest.raises(SystemExit):
             t.report(items, {"claude-opus-5-5": bad}, str(prices), str(tmp_path / "adj.csv"), days[-1])
