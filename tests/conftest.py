@@ -35,6 +35,12 @@ def isolated_routine_report_store(monkeypatch, tmp_path):
     from src.analytics import report_delivery
     monkeypatch.setattr(report_delivery, "default_store_path", lambda: tmp_path / "routine-reports" / "reports.sqlite3")
 
+@pytest.fixture(autouse=True)
+def candidate_ledger_off(monkeypatch):
+    """V02 후보 전수 원장은 운영 기본 켜짐이다 — 테스트에서는 끄고, 원장 검사만 임시 경로와 함께 명시적으로 켠다."""
+    monkeypatch.setenv("CANDIDATE_LEDGER", "0")
+
+
 # ── 차단 대상 (import 시점에 실제 HOME 으로 계산 — 이후 monkeypatch 무관) ──────────
 _HOME = Path.home()
 _PROD_ROOT = Path(os.environ.get("QWQ_PROD_ROOT", "/home/ubuntu/projects/qwq-ai-trader"))

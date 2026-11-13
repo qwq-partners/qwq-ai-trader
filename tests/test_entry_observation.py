@@ -192,6 +192,10 @@ def test_observed_emit_preserves_event_and_original_success_or_failure(fail):
     assert b.export()["records"][-1]["emitted"] is (not fail)
 
 
+def _ledger_off(*args, **kwargs):
+    return None
+
+
 @pytest.mark.parametrize("subscription_failure", [False, True])
 @pytest.mark.parametrize("selection_enabled", [None, 'selection-basis-v1', 'selection-basis-v2'])
 def test_real_screen_loop_records_before_strategy_gate(monkeypatch, subscription_failure, selection_enabled):
@@ -223,7 +227,10 @@ def test_real_screen_loop_records_before_strategy_gate(monkeypatch, subscription
            "safe_trace_call":__import__("src.analytics.entry_gate_trace", fromlist=["safe_trace_call"]).safe_trace_call,
            "observe_screen_candidates":__import__("src.data.feeds.quote_subscription", fromlist=["observe_screen_candidates"]).observe_screen_candidates,
            "_hb":SimpleNamespace(**{k:lambda *a,**kw:None for k in ("record_attempt","record_idle","record_success","record_failure")}),
-           "trading_logger":SimpleNamespace(log_screening=lambda **kwargs:None)}
+           "trading_logger":SimpleNamespace(log_screening=lambda **kwargs:None),
+           # V02 후보 원장은 꺼진 대역 — 이 검사는 관측기만의 capture_selection 계약을 본다
+           "candidate_ledger":SimpleNamespace(enabled=lambda:False,record_scan=_ledger_off,
+                                              record_gate=_ledger_off,record_regime=_ledger_off)}
     tree=ast.parse((ROOT/'src/schedulers/kr_scheduler.py').read_text())
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='KRScheduler')
     method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='run_screening')

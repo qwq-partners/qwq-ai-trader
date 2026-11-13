@@ -48,6 +48,7 @@ from ..utils.fee_calculator import get_fee_calculator
 from ..utils.entry_risk import confirm_initial_risk, merge_confirmed_risk
 from ..analytics.entry_observation import capture_scan, capture_rest_quote, emit_with_observation
 from ..analytics.entry_gate_trace import begin_gate_trace, safe_trace_call
+from ..analytics import candidate_ledger
 from ..data.feeds.quote_subscription import observe_screen_candidates
 
 
@@ -3965,6 +3966,7 @@ JSON:
                 screened = []
                 _entry_observer = getattr(bot, "_entry_price_observer", None)
                 _entry_scan_id = None
+                _ledger_scan_id = None   # V02 후보 전수 원장(기록 전용)
                 _overnight_sentiment = None
                 _overnight_volatility = None
                 try:
@@ -4043,8 +4045,10 @@ JSON:
                         theme_detector=bot.theme_detector,
                         overnight_sentiment=_overnight_sentiment,
                         overnight_volatility=_overnight_volatility,
+                        # V02: 후보 원장이 켜져 있으면 점수 구성(원천별 가중 점수)을 후보에 붙인다 — 점수·순위는 그대로다
                         **({'capture_selection': True}
-                           if getattr(_entry_observer, 'selection_capture_enabled', False) is True else {}),
+                           if getattr(_entry_observer, 'selection_capture_enabled', False) is True
+                           or candidate_ledger.enabled() else {}),
                         **({'capture_selection_sources': True}
                            if getattr(_entry_observer, 'selection_sources_capture_enabled', False) is True else {}),
                         **({'capture_selection_modifiers': True}
@@ -4054,6 +4058,8 @@ JSON:
                     )
                     # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
                     _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
+                    # V02: 반환 후보 전체를 현금·레짐·점수 게이트 전에 원장 대기열에 넣는다(파일 I/O·대기 없음, 실패해도 흐름 유지)
+                    _ledger_scan_id = candidate_ledger.record_scan(screened, current_session.value)
                     _gate_trace = begin_gate_trace(_entry_observer, _entry_scan_id, screened)
                     observe_screen_candidates(getattr(bot, "ws_feed", None), _entry_observer,
                                               _entry_scan_id, screened)
@@ -4150,6 +4156,7 @@ JSON:
                         _kosdaq_chg = 0.0
                         _weighted_chg = 0.0
                         _regime_block_reason = ""
+                        _kospi_q = _kosdaq_q = None   # 조회 전 예외에도 아래 근거 검사·원장 기록이 같은 '미관측'을 본다
                         try:
                             # KODEX200/KOSDAQ150 시세로 판정 (병렬). 2026-09-28: 예전 'RiskManager 캐시 우선' 분기는 캐시가
                             # 없는 engine.risk_manager 를 읽어 한 번도 동작하지 않았다. 그 캐시(bot.risk_manager)는 한쪽
@@ -4209,6 +4216,8 @@ JSON:
                         else:
                             safe_trace_call(_gate_trace, "note", "regime", "unknown",
                                             value=_regime_value, reason="quote_error_fallback")
+                        # 원장에는 관측된 등락률만 남긴다 — 조회 실패 시 정책이 쓰는 0.0 대체값은 적지 않는다(null)
+                        candidate_ledger.record_regime(_ledger_scan_id, _market_regime_ok, _kospi_q, _kosdaq_q)
                         if not _market_regime_ok:
                             # G1_regime: 약세장 차단 → 상위 후보 기록
                             _top_cands = sorted(
@@ -4268,6 +4277,7 @@ JSON:
                             )
 
                             _cash_ok = available_cash >= min_pos_value
+                            candidate_ledger.record_gate(_ledger_scan_id, gate="cash", ok=_cash_ok)   # 금액은 남기지 않는다
                             safe_trace_call(_gate_trace, "check", "cash", _cash_ok,
                                             value=available_cash, threshold=min_pos_value)
                             if _cash_ok:
@@ -4328,6 +4338,10 @@ JSON:
                                     if not _change_ok:
                                         continue
                                     candidates.append(s)
+                                # V02: 후보 필터(점수 하한·제외·쿨다운·일일 횟수·등락 상한)를 모두 통과한 종목과 그 스캔의 기준값
+                                candidate_ledger.record_gate(
+                                    _ledger_scan_id, gate="entry_filter", min_score=_min_score,
+                                    max_change=_max_rt_change, eligible=[c.symbol for c in candidates])
 
                                 # 장중 전략 사전 체크
                                 # momentum_breakout/theme_chasing/gap_and_go 우선,

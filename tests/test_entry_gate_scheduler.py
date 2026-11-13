@@ -48,12 +48,16 @@ def stock(symbol="S", **kwargs):
                      change_pct=2, reasons=[], atr_pct=4, volume_ratio=3) | kwargs))
 
 
+def _ledger_off(*args, **kwargs):
+    return None
+
+
 def run_cycle(monkeypatch, *, stocks=None, trace=None, enabled=None, quote=None,
               cash=1000000, positions=None, cooldown=None, daily=None,
               sector=None, validator=None, emit_error=False, cancel_quote=False,
               regime=0, hour=10, minute=30, session=MarketSession.REGULAR,
               engine_present=True, broker_present=True, safe=None, observer=None,
-              actual_trace=False, before_emit=None, momentum_start="09:15", overnight=None):
+              actual_trace=False, before_emit=None, momentum_start="09:15", overnight=None, ledger=None):
     stocks = stocks if stocks is not None else [stock()]
     trace = trace if trace is not None else RecordingTrace()
     calls, events = [], []
@@ -118,7 +122,10 @@ def run_cycle(monkeypatch, *, stocks=None, trace=None, enabled=None, quote=None,
                observe_screen_candidates=lambda *a:None,begin_gate_trace=begin_gate_trace if actual_trace else lambda *a:trace,
                safe_trace_call=safe or safe_trace_call,
                _hb=NS(**{k:lambda *a,**kw:None for k in ("record_attempt","record_idle","record_success","record_failure")}),
-               trading_logger=NS(log_screening=lambda **kw:None),_SigLog=NS(get=lambda:NS(log=siglog)))
+               trading_logger=NS(log_screening=lambda **kw:None),_SigLog=NS(get=lambda:NS(log=siglog)),
+               # V02 후보 원장: 기본은 꺼진 대역(기존 검사의 계약 그대로), ledger 를 주면 실제 모듈
+               candidate_ledger=ledger if ledger is not None else NS(enabled=lambda:False,record_scan=_ledger_off,
+                                             record_gate=_ledger_off,record_regime=_ledger_off))
     tree=ast.parse((ROOT/"src/schedulers/kr_scheduler.py").read_text())
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=="KRScheduler")
     method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=="run_screening")

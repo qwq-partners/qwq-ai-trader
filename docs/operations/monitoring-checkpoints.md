@@ -1,5 +1,15 @@
 # 모니터링 체크포인트
 
+## 11월13일 V02 후보 전수 원장 — 배포 뒤 확인
+
+[설계·판독 기준](../research/v02-candidate-ledger-2026-11-13.md) · [원장](execution-roadmap.md#engine-evaluation-20261113).
+
+- [ ] 배포 뒤 첫 정규장 스캔에서 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`이 0600으로 생기고 `scan` 행이 스캔마다 1줄씩 늘어난다.
+- [ ] `scan` 행의 `basis_n`이 `candidates` 수와 같다(후보마다 `basis.terms` — 원천별 가중 점수). 다르면 `[후보원장] 점수 구성 누락` 경고가 스캔마다 남는다(점수 구성만 빠지고 선정은 그대로여야 한다).
+- [ ] 09:15~15:00 스캔에 `gate`(regime) 행이 따라붙고, 약세장 차단이 아닌 스캔에는 `gate`(cash) 행이 있다. 금액 필드는 없다. 현금 게이트를 통과한 스캔에는 `gate`(entry_filter) 행(`min_score`·`max_change`·`eligible`)이 있다 — 현금 0.5% 상태에서는 없는 것이 정상이다.
+- [ ] `[후보원장]` 경고 0건(`쓰기 실패`·`기록 대기열이 가득 차 N행을 버렸다`·`기록 실패`)이고 원장에 `error` 행이 없다, 스캔 주기·`[스크리닝] 완료` 로그·신호 발행이 배포 전과 같다.
+- [ ] 하루 파일 크기(예상 1~2MB)와 결측률(가격·점수 null)을 첫 주에 한 번 본다. 자동 삭제는 없다 — `candidate_ledger/`가 2GB를 넘거나 디스크 여유가 10GB 아래면 보존 기간을 정한다(월 1회 `du -sh`). 수익은 최소 표본(15거래일·300종목-일) 전에는 계산하지 않는다.
+
 > **10/29 21:50 현재:** [R02 증권 리포트형 브리프](execution-roadmap.md#r02-securities-brief-20261029) 구현·검증·운영 인수 DONE. 고정e5f781d3/PID3846093·전체9,737검사·166.3초/24항목PASS·보호48파일/기존cron 보존·복구ready/미체결0/NRestarts0. [최종 운영 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/300#issuecomment-6497157250). NEXT는 새 본문 자연 발송/실제 모바일 내용 수락·10/30 T04 만료·기존 O02 기한이다. 원인 미확정 대량 기록 검사1회 실패는 진단 이력으로 보존하며 최종 로컬/PR/main/운영 검증은 통과했다. 문서 마감용 재배포는 없다. 아래 상태는 당시 이력이다.
 
 > **10/29 20:20 현재:** [원장·피드백과 NEXT](execution-roadmap.md#r02-mobile-feedback-20261029). 17시 단발배포는17:16:15 완료:40714a19/PID3817842·운영9,715검사·22인수PASS·보호48개/기존cron 복원.07:40 수신은 사용자가 확인했으나 내용/가독성 미수락으로 R02-MOBILE-CONTENT를 열었다. 본문 개선 구현은 TODO.21시 개인 요약·10/30 16:06 만료·기존retention 기한 유지. 아래 과거 상태는 당시 이력이다.
