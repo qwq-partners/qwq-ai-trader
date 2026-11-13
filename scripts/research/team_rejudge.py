@@ -136,20 +136,26 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
     usd = lambda i, o: Decimal(str(quote(i, o)))   # noqa: E731 — 금액 누계는 Decimal
     worst = lambda x: usd(len(prompt_of(x).encode()) + len(SYSTEM.encode()), MAX_TOKENS[model])   # noqa: E731 — 바이트 ≥ 토큰
     state = {"spent": spent, "held": Decimal(0), "stopped": False, "attempted": 0, "recorded": 0}
-    sem, lock = asyncio.Semaphore(concurrency), asyncio.Lock()
+    sem, cond = asyncio.Semaphore(concurrency), asyncio.Condition()
     loop = asyncio.get_running_loop()
 
     async def one(item):
         async with sem:
             hold = worst(item) * 2   # 재시도 1회 포함
-            async with lock:
-                if state["stopped"] or state["spent"] + state["held"] + hold > budget_usd:
-                    state["stopped"] = True
-                    return
+            async with cond:
+                while True:
+                    # 영구 정지는 '이미 쓴 금액 + 이 요청의 최악값'이 상한을 넘을 때뿐이다.
+                    if state["stopped"] or state["spent"] + hold > budget_usd:
+                        state["stopped"] = True
+                        cond.notify_all()
+                        return
+                    if state["spent"] + state["held"] + hold <= budget_usd:
+                        break
+                    await cond.wait()   # 다른 요청의 보류분 때문에 잠시 모자란 것 — 반환되면 다시 본다
                 state["held"] += hold
                 state["attempted"] += 1
             rec = {"id": item["id"], "model": model, "prompt_version": PROMPT_VERSION, "attempts": 0,
-                   "in": 0, "out": 0, "est_usd": 0.0, "decision": None, "score": None, "status": "failed"}
+                   "in": 0, "out": 0, "est_usd": "0", "decision": None, "score": None, "status": "failed"}
             est = Decimal(0)
             for _ in range(2):
                 r = await client.complete(prompt_of(item), SYSTEM, model=model, max_tokens=MAX_TOKENS[model],
@@ -172,13 +178,14 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
                 if parsed is not None and r.model_identity_status == "verified":
                     rec.update(decision=parsed[0], score=parsed[1], status="ok")
                     break
-            rec["est_usd"] = float(est)   # 기록은 JSON 수, 누계는 Decimal
-            async with lock:
+            rec["est_usd"] = str(est)   # 금액은 Decimal 문자열로 남긴다
+            async with cond:
                 state["held"] -= hold
                 state["spent"] += est
                 state["recorded"] += 1
                 with open(out_path, "a") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                cond.notify_all()
 
     await asyncio.gather(*(one(x) for x in todo))
     if hasattr(client, "close"):

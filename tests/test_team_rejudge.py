@@ -66,11 +66,13 @@ def test_split_by_day_median_excludes_ties():
 
 
 class _Client:
-    def __init__(self, replies):
-        self.replies, self.calls = list(replies), 0
+    def __init__(self, replies, yields=False):
+        self.replies, self.calls, self.yields = list(replies), 0, yields
 
     async def complete(self, prompt, system, **kw):
         self.calls += 1
+        if self.yields:
+            await asyncio.sleep(0)   # 동시 요청이 실제로 겹치게 한다
         content, refusal = self.replies.pop(0)
         return SimpleNamespace(content=content, success=content is not None, refusal_detected=refusal, usage_known=True,
                                input_tokens=1000, output_tokens=100, request_sent=True, resolved_model=kw["model"],
@@ -98,6 +100,18 @@ def test_judge_retry_refusal_resume_and_budget(tmp_path):
     r2 = asyncio.run(t.judge(_items(3), "claude-opus-5-5", str(out), 0.04, concurrency=1, client=client2, quote=quote))
     assert client2.calls == 0 and r2["budget_stopped"] and len(out.read_text().splitlines()) == 2
     assert (r2["attempted_now"], r2["recorded_now"], r2["remaining"]) == (0, 0, 1)   # 보내지 않은 것은 보낸 것으로 세지 않는다
+
+
+def test_judge_waits_for_temporary_hold_instead_of_stopping(tmp_path):
+    """동시 요청의 보류분 때문에 잠시 모자란 것은 정지가 아니다 — 반환되면 이어서 보낸다."""
+    out = tmp_path / "j.jsonl"
+    ok = ('{"decision":"pass","score":40,"reason":""}', False)
+    client = _Client([ok, ok, ok], yields=True)
+    # 요청당 실제 0.01·보류 0.02. 상한 0.045 는 셋을 동시에 보류하지 못하지만(0.06) 앞 요청이 끝나면 셋 모두 가능(실제 0.03).
+    r = asyncio.run(t.judge(_items(3), "claude-opus-5-5", str(out), "0.045", concurrency=3, client=client,
+                            quote=lambda i, o: 0.01))
+    assert (r["attempted_now"], r["recorded_now"], r["remaining"], r["budget_stopped"]) == (3, 3, 0, False)
+    assert [json.loads(x)["est_usd"] for x in out.read_text().splitlines()] == ["0.01"] * 3   # 금액은 문자열로 남는다
 
 
 def test_report_end_to_end(tmp_path):
