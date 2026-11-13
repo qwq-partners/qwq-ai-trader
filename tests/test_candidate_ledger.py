@@ -92,6 +92,20 @@ def test_regime_row_records_only_observed_changes(tmp_path):
     assert all("weighted_chg" not in r for r in _rows(tmp_path))
 
 
+def test_regime_never_raises_on_hostile_quotes(tmp_path):
+    """지나치게 큰 정수·get 이 예외를 내는 시세에서도 예외 없이 끝난다(자동진입 흐름 보호)."""
+    class Bad(dict):
+        def get(self, *a):
+            raise RuntimeError("깨진 시세")
+    assert cl._num(10 ** 10000) is None
+    assert cl.record_regime("s", True, {"change_pct": 10 ** 10000}, {"change_pct": 1.0}, now=NOW, ledger_dir=tmp_path) is True
+    assert cl.record_regime("s", True, Bad(), {"change_pct": 1.0}, now=NOW, ledger_dir=tmp_path) is False
+    assert cl.drain()
+    rows = _rows_today(tmp_path)
+    assert (rows[0]["observed"], rows[0]["kospi_chg"], rows[0]["kosdaq_chg"]) == (False, None, 1.0)
+    assert (rows[1]["kind"], rows[1]["where"], rows[1]["error"]) == ("error", "regime", "RuntimeError")
+
+
 def test_short_write_continues_and_stalled_write_fails(tmp_path, monkeypatch):
     real = os.write
     monkeypatch.setattr(cl.os, "write", lambda fd, data: real(fd, bytes(data[:7])))   # 7바이트씩만 써진다
@@ -235,6 +249,18 @@ def test_real_screening_loop_regime_quote_failure_is_null_not_zero(monkeypatch, 
     regime = next(r for r in _ledger_rows(tmp_path) if r.get("gate") == "regime")
     assert len(events) == len(events0)   # 정책 동작은 원장 유무와 무관
     assert (regime["ok"], regime["observed"], regime["kospi_chg"], regime["kosdaq_chg"]) == (True, False, None, None)
+
+
+def test_real_screening_loop_survives_overflowing_index_quote(monkeypatch, tmp_path):
+    """지수 등락률이 float 로 못 바꾸는 큰 정수여도 원장 유무와 무관하게 자동진입 흐름이 같다."""
+    from tests.test_entry_gate_scheduler import run_cycle
+    huge = {"change_pct": 10 ** 10000}
+    trace0, _c, events0, _ = run_cycle(monkeypatch, regime=huge)
+    trace1, _c, events1, _ = run_cycle(monkeypatch, ledger=cl, regime=huge)
+    same = lambda t: [(m, a[:1] if m == "signal" else a, kw) for m, a, kw in t.calls]   # noqa: E731
+    assert len(events1) == len(events0) and same(trace1) == same(trace0)
+    regime = next(r for r in _ledger_rows(tmp_path) if r.get("gate") == "regime")
+    assert (regime["observed"], regime["kospi_chg"]) == (False, None)
 
 
 def test_real_screening_loop_is_unaffected_by_a_stalled_writer(monkeypatch, tmp_path):

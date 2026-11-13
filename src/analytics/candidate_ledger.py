@@ -49,10 +49,13 @@ def enabled() -> bool:
 
 
 def _num(value: Any) -> Optional[float]:
-    """유한한 수만 남긴다. bool·NaN·문자열은 None(미관측) — 0 으로 바꾸지 않는다."""
-    if type(value) not in (int, float) or not math.isfinite(value):
+    """유한한 수만 남긴다. bool·NaN·문자열·지나치게 큰 정수는 None(미관측) — 0 으로 바꾸지 않는다. 예외를 올리지 않는다."""
+    try:
+        if type(value) not in (int, float) or not math.isfinite(value):
+            return None
+        return value
+    except (OverflowError, TypeError, ValueError):   # 예: float 로 못 바꾸는 큰 정수
         return None
-    return value
 
 
 def _candidate(stock: Any) -> dict:
@@ -195,7 +198,11 @@ def _change(quote: Any) -> Optional[float]:
 
 def record_regime(scan_id: Optional[str], ok: Any, kospi_quote: Any, kosdaq_quote: Any, **kw: Any) -> bool:
     """약세장 필터 결과와 **관측된** 지수 등락률을 남긴다. 조회 실패는 null 이다 — 정책이 쓰는 0.0 대체값을 적지 않는다."""
-    kospi, kosdaq = _change(kospi_quote), _change(kosdaq_quote)
-    return record_gate(scan_id, gate="regime", ok=ok if isinstance(ok, bool) else None,
-                       observed=kospi is not None and kosdaq is not None,
-                       kospi_chg=kospi, kosdaq_chg=kosdaq, **kw)
+    try:
+        kospi, kosdaq = _change(kospi_quote), _change(kosdaq_quote)
+        return record_gate(scan_id, gate="regime", ok=ok if isinstance(ok, bool) else None,
+                           observed=kospi is not None and kosdaq is not None,
+                           kospi_chg=kospi, kosdaq_chg=kosdaq, **kw)
+    except Exception as e:   # 시세 객체가 이상해도(예: get 이 예외) 자동진입 흐름으로 예외를 올리지 않는다
+        _note_error("regime", e, kw.get("ledger_dir"))
+        return False
