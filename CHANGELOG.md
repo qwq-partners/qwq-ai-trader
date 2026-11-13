@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — V02 장중 스캔 후보 전수 원장 (기록 전용, 소스 DONE·운영 미배포) ([설계·판독 사전 등록](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 추가: `src/analytics/candidate_ledger.py` — `record_scan`(스캔 반환 후보 전체: 점수·가격·등락·거래량비·RSI·ATR·PER/PBR·수급 표시·사유·점수 구성)과 `record_gate`(스캔 단위 레짐·현금 게이트 결과)를 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`(0600)에 덧붙인다. 결측은 null, 예외 없음(실패 시 경고), `CANDIDATE_LEDGER=0`으로 끈다.
+- 변경: `src/schedulers/kr_scheduler.py` `run_screening` 3곳 — 스캔 직후 `record_scan`, 약세장 필터 판정 뒤·가용현금 검사 뒤 `record_gate`(현금은 통과 여부만). 원장이 켜져 있으면 스크리너에 `capture_selection=True`를 넘겨 후보에 점수 구성을 붙인다(점수·순위·게이트·주문 불변 — 종전에는 명시 관측 때만).
+- 검사: `tests/test_candidate_ledger.py` 6건(행 구조·결측 보존·실패 무예외·스위치·상한, 실제 `run_screening`에서 원장을 켜도 신호·게이트 추적 동일, 약세장 차단·현금 0에서도 후보 기록). 기존 루프 하네스 2곳은 꺼진 원장 대역을 주입해 종전 계약을 그대로 본다. `conftest`가 원장 경로를 테스트별 임시 디렉터리로 돌린다.
+- 판독 기준을 자료 축적 전에 고정: 종목-일 첫 스캔, 같은 날 점수 상위−하위 3분위의 5·20일 수익 차이(+1.0pp·+2.0pp 초과이고 95% 하한 > 0), 최소 15거래일·300종목-일, 그 전에는 건수·결측률만 본다.
+- 왜: 현금 0.5%·매수 중지에서 장중 후보가 엔진 게이트 전에 버려져 10/7 이후 선정 근거가 쌓이지 않았다. V01(미입증)의 사전 등록 분기가 정한 다음 단계다.
+- 롤백: `.env`에 `CANDIDATE_LEDGER=0` + 재시작.
+
 ## 2026-11-13 — V05 LLM 판단 가치 시험: 저장된 팀 심의 입력의 오프라인 재판정 (DONE·주 판정 불가) ([정본](docs/research/v05-team-rejudge-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 추가: `scripts/research/team_rejudge.py`(items·judge·report — 종목-일 첫 심의의 분석가 보고를 축약해 모델 1개로 재판정, 보수 추정 비용 상한에서 전송 중지·이어 하기, 같은 날 승인−비승인 차이·원형 블록 부트스트랩·판정), `tests/test_team_rejudge.py`(11건), 집계 `docs/research/v05-team-rejudge-summary-2026-11-13.json`. 운영 코드·설정 변경 0.
