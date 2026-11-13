@@ -361,6 +361,7 @@
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)
+- [V05 LLM 판단 가치 시험 — 팀 심의 입력 재판정(2026-11-13)](research/v05-team-rejudge-2026-11-13.md) — 사전 등록·결과(Fable 5.2·Opus 5.5 모두 매수 승인 0~1건으로 주 판정 불가, 점수 분할도 양의 선별 없음), 심의 입력 결손, 재현 절차. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)
 - [V01 기존 후보의 사후 초과수익 판독(2026-11-13)](research/v01-candidate-forward-excess-2026-11-13.md) — 사전 등록 기준·결과(배치 SEPA 후보·장중 신호 모두 미입증), 지수 방향 영향, 손절폭 도달률, 재현 절차, 독립 리뷰 처분. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)
 - [현재 엔진 평가 기준과 증거](research/current-engine-evaluation-2026-09-30.md) — 버전별 표본·체결 품질 의미 정정·가격/총수익 구분·5구간 반도체 제외/시장 폭 진단·다중 소스/실시간 경로별 기록 공백·최근9건 동일진입 청산 대조와 수익개선 우선순위, 09-30 후속 승인 정본
 - [current-engine-selection-entry-protocol-2026-09-30.md](research/current-engine-selection-entry-protocol-2026-09-30.md) — 선정·진입 측정 초안, 가격 계산기·기본 비활성 관측·수신 기준 진단·사전 고정 보유시간의 bid 평가 사용법(운영 미설치)
