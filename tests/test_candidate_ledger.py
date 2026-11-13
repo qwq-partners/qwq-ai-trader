@@ -157,10 +157,40 @@ def test_failure_and_switch_never_raise(tmp_path, monkeypatch):
     assert len(_rows_today(tmp_path)) == 1   # 꺼진 뒤에는 행이 늘지 않는다(앞의 오류 행 1개뿐)
 
 
-def test_truncates_but_reports_original_count(tmp_path):
-    scan([_stock(f"{i:06d}") for i in range(cl.MAX_CANDIDATES + 5)], "regular", now=NOW, ledger_dir=tmp_path)
+def test_records_every_candidate_without_truncation(tmp_path):
+    """반환은 점수 내림차순이다 — 자르면 하위 후보만 빠져 같은 날 상−하 비교가 틀어진다. 전부 남긴다."""
+    stocks = [_stock(f"{i:06d}", score=1000 - i) for i in range(450)]
+    scan(stocks, "regular", now=NOW, ledger_dir=tmp_path)
     (row,) = _rows(tmp_path)
-    assert row["n"] == cl.MAX_CANDIDATES + 5 and len(row["candidates"]) == cl.MAX_CANDIDATES
+    assert row["n"] == len(row["candidates"]) == 450 and row["candidates"][-1]["score"] == 551
+
+
+def test_torn_tail_from_a_killed_process_does_not_corrupt_the_next_row(tmp_path):
+    """앞 프로세스가 쓰다 죽어 마지막 줄이 잘려 있어도 다음 행은 독립된 줄로 남는다(잘린 줄은 보존)."""
+    first = scan([_stock("000001")], "regular", now=NOW, ledger_dir=tmp_path)
+    path = tmp_path / "candidates_20261113.jsonl"
+    with open(path, "ab") as f:
+        f.write(b'{"kind":"scan","scan_id":"torn","cand')   # 개행 없이 끝난 부분 행
+    second = scan([_stock("000002")], "regular", now=NOW, ledger_dir=tmp_path)
+    lines = path.read_text().splitlines()
+    assert len(lines) == 3 and lines[1].startswith('{"kind":"scan","scan_id":"torn"')
+    assert [json.loads(x)["scan_id"] for x in (lines[0], lines[2])] == [first, second]
+
+
+def test_dropped_counter_is_exact_under_concurrent_producers(monkeypatch):
+    """버린 행 수는 잠금 아래에서 세고 비운다 — 여러 스레드가 동시에 올려도 합이 맞는다."""
+    monkeypatch.setattr(cl, "_queue", cl.queue.Queue(maxsize=1))
+    cl._queue.put_nowait(("block", NOW, None))   # 가득 찬 상태(기록 스레드는 이 대기열을 보지 않는다)
+    monkeypatch.setattr(cl, "_writer", SimpleNamespace(is_alive=lambda: True))
+    monkeypatch.setattr(cl, "_dropped", 0)
+    threads = [threading.Thread(target=lambda: [cl._submit({"kind": "gate"}, NOW, None) for _ in range(500)]) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert cl._dropped == 4000
+    cl._queue.get_nowait()   # 대역 대기열을 비워 정리 단계의 drain 이 끝나게 한다
+    cl._queue.task_done()
 
 
 def _ledger_rows(tmp_path):

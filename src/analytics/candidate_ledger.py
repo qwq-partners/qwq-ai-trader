@@ -31,7 +31,6 @@ from loguru import logger
 
 LEDGER_DIR = Path.home() / ".cache" / "ai_trader" / "candidate_ledger"
 SCHEMA = "candidate-ledger-v1"
-MAX_CANDIDATES = 300      # 스캔 1회 반환은 보통 100개 이하 — 넘으면 앞에서 자르고 n 에 원래 개수를 남긴다
 MAX_REASONS = 8
 QUEUE_SIZE = 64           # 스캔당 최대 3행 — 20스캔(약 100분) 분량이 밀리면 그 뒤는 버린다
 _NUM_FIELDS = ("score", "price", "change_pct", "volume", "volume_ratio", "rsi", "atr_pct", "per", "pbr")
@@ -41,7 +40,8 @@ _BASIS_FIELDS = (("merge_score_sum", "merge"), ("post_merge_adjustment", "adj"),
 _queue: "queue.Queue[tuple]" = queue.Queue(maxsize=QUEUE_SIZE)
 _writer: Optional[threading.Thread] = None
 _writer_lock = threading.Lock()
-_dropped = 0   # 대기열이 가득 차 버린 행 수 — 기록 스레드가 회복하면 요약 경고 뒤 0 으로
+_dropped = 0   # 대기열이 가득 차 버린 행 수 — 기록 스레드가 회복하면 요약 경고 뒤 0 으로(_dropped_lock 아래에서만 바꾼다)
+_dropped_lock = threading.Lock()
 
 
 def enabled() -> bool:
@@ -78,9 +78,14 @@ def _append(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
     base = Path(ledger_dir) if ledger_dir is not None else LEDGER_DIR
     base.mkdir(parents=True, exist_ok=True)
     line = (json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
-    fd = os.open(base / f"candidates_{now:%Y%m%d}.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    fd = os.open(base / f"candidates_{now:%Y%m%d}.jsonl", os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
     try:
         start = os.fstat(fd).st_size   # 쓰는 스레드는 하나다 — 실패하면 이 위치로 되돌려 잘린 줄이 다음 행에 붙지 않게 한다
+        if start > 0 and os.pread(fd, 1, start - 1) != b"\n":
+            # 앞 프로세스가 쓰다가 죽어 마지막 줄이 잘려 있다 — 개행으로 끊어 이번 행이 그 줄에 붙지 않게 한다.
+            # 잘린 줄은 지우지 않는다(판독은 JSON 이 아닌 줄을 건너뛴다).
+            line = b"\n" + line
+            logger.warning("[후보원장] 끝이 잘린 줄을 개행으로 끊고 이어 쓴다(앞 프로세스의 미완료 쓰기)")
         try:
             view = memoryview(line)
             while view:   # 짧은 쓰기는 이어 쓰고, 진전이 없으면 실패로 올린다(잘린 줄을 성공으로 치지 않는다)
@@ -107,8 +112,9 @@ def _run_writer() -> None:
                 logger.warning(f"[후보원장] 점수 구성 누락: {len(record['candidates']) - record['basis_n']}/{len(record['candidates'])} 후보")
             elif kind == "error":
                 logger.warning(f"[후보원장] 기록 실패(선정 흐름 유지): {record.get('where')} {record.get('error')}")
-            if _dropped:
+            with _dropped_lock:
                 n, _dropped = _dropped, 0
+            if n:
                 logger.warning(f"[후보원장] 기록 대기열이 가득 차 {n}행을 버렸다")
         except Exception as e:   # 기록은 부가 기능 — 다음 행을 계속 쓴다
             logger.warning(f"[후보원장] 쓰기 실패({record.get('kind')}): {type(e).__name__}")
@@ -128,7 +134,8 @@ def _submit(record: dict, now: datetime, ledger_dir: Optional[Path]) -> bool:
         _queue.put_nowait((record, now, ledger_dir))
         return True
     except queue.Full:
-        _dropped += 1
+        with _dropped_lock:   # 메모리 연산뿐 — 기록 스레드는 이 잠금을 쥔 채 I/O 를 하지 않는다
+            _dropped += 1
         return False
 
 
@@ -157,7 +164,7 @@ def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
     try:
         at = now if now is not None else datetime.now()
         items = list(stocks)
-        rows = [_candidate(s) for s in items[:MAX_CANDIDATES]]
+        rows = [_candidate(s) for s in items]   # 자르지 않는다 — 반환은 점수 내림차순이라 자르면 하위 후보만 빠진다
         basis_n = sum("basis" in r for r in rows)   # 누락은 행에 남기고, 경고는 기록 스레드가 스캔당 한 줄
         scan_id = uuid4().hex[:16]
         ok = _submit({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
