@@ -5,18 +5,20 @@
 선정 능력을 잴 수 있다(판독은 오프라인 — scripts/research/candidate_forward_excess.py 계열).
 
 - 경로: ~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl (0600)
-- 행: {"kind":"scan", scan_id, at, session, n, candidates:[…]} 와 {"kind":"gate", scan_id, at, …}
-- 실패는 warning 한 줄뿐이다. 반환값·예외로 선정·주문 흐름을 바꾸지 않는다.
-- 파일 쓰기는 이벤트 루프 밖 스레드에서 하고 2초 안에 끝나지 않으면 그 행을 포기한다(디스크 정체가 스캔을 붙잡지 않게).
+- 행: {"kind":"scan", scan_id, at, session, n, basis_n, candidates:[…]} 와 {"kind":"gate", scan_id, at, …}
+- 매매 경로(스케줄러)는 행을 만들어 크기 제한 대기열에 **넣기만** 한다(파일 I/O·대기 없음). 전용 스레드 하나가
+  순서대로 파일에 쓴다. 디스크가 멈추면 대기열이 차고, 그 뒤 행은 버려진다(경고) — 스캔·신호 발행은 기다리지 않는다.
+- 실패는 warning 뿐이다. 반환값·예외로 선정·주문 흐름을 바꾸지 않는다. 프로세스 종료 시 대기열에 남은 행은 사라질 수 있다.
 - 끄기: CANDIDATE_LEDGER=0 (재시작 필요)
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import os
+import queue
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -28,10 +30,14 @@ LEDGER_DIR = Path.home() / ".cache" / "ai_trader" / "candidate_ledger"
 SCHEMA = "candidate-ledger-v1"
 MAX_CANDIDATES = 300      # 스캔 1회 반환은 보통 100개 이하 — 넘으면 앞에서 자르고 n 에 원래 개수를 남긴다
 MAX_REASONS = 8
-WRITE_TIMEOUT_SEC = 2.0   # 넘으면 그 행은 포기 — 스캔 흐름이 디스크를 기다리지 않는다
+QUEUE_SIZE = 64           # 스캔당 최대 3행 — 20스캔(약 100분) 분량이 밀리면 그 뒤는 버린다
 _NUM_FIELDS = ("score", "price", "change_pct", "volume", "volume_ratio", "rsi", "atr_pct", "per", "pbr")
 _BASIS_FIELDS = (("merge_score_sum", "merge"), ("post_merge_adjustment", "adj"), ("occurrence_count", "occ"),
                  ("occurrence_bonus", "bonus"), ("pre_normalization_score", "pre"))
+
+_queue: "queue.Queue[tuple]" = queue.Queue(maxsize=QUEUE_SIZE)
+_writer: Optional[threading.Thread] = None
+_writer_lock = threading.Lock()
 
 
 def enabled() -> bool:
@@ -80,38 +86,70 @@ def _append(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
         os.close(fd)
 
 
-async def _write(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
-    await asyncio.wait_for(asyncio.to_thread(_append, record, now, ledger_dir), WRITE_TIMEOUT_SEC)
+def _run_writer() -> None:
+    while True:
+        record, now, ledger_dir = _queue.get()
+        try:
+            _append(record, now, ledger_dir)
+        except Exception as e:   # 기록은 부가 기능 — 다음 행을 계속 쓴다
+            logger.warning(f"[후보원장] 쓰기 실패({record.get('kind')}): {type(e).__name__}")
+        finally:
+            _queue.task_done()
 
 
-async def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
-                      ledger_dir: Optional[Path] = None) -> Optional[str]:
-    """스캔 1회의 반환 후보 전체를 덧붙이고 scan_id 를 돌려준다. 꺼져 있거나 실패하면 None(예외 없음)."""
+def _submit(record: dict, now: datetime, ledger_dir: Optional[Path]) -> bool:
+    """행을 대기열에 넣기만 한다(대기·파일 I/O 없음). 가득 차 있으면 버리고 False."""
+    global _writer
+    if _writer is None or not _writer.is_alive():
+        with _writer_lock:
+            if _writer is None or not _writer.is_alive():
+                _writer = threading.Thread(target=_run_writer, name="candidate-ledger-writer", daemon=True)
+                _writer.start()
+    try:
+        _queue.put_nowait((record, now, ledger_dir))
+        return True
+    except queue.Full:
+        logger.warning(f"[후보원장] 기록 대기열 가득 참 — 행 버림({record.get('kind')})")
+        return False
+
+
+def drain(timeout: float = 5.0) -> bool:
+    """대기열이 비고 쓰기가 끝날 때까지 기다린다(검사·종료용). 시한 안에 끝나면 True."""
+    done = threading.Event()
+    threading.Thread(target=lambda: (_queue.join(), done.set()), daemon=True).start()
+    return done.wait(timeout)
+
+
+def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
+                ledger_dir: Optional[Path] = None) -> Optional[str]:
+    """스캔 1회의 반환 후보 전체를 기록 대기열에 넣고 scan_id 를 돌려준다. 꺼져 있거나 실패하면 None(예외 없음)."""
     if not enabled():
         return None
     try:
         at = now if now is not None else datetime.now()
         items = list(stocks)
+        rows = [_candidate(s) for s in items[:MAX_CANDIDATES]]
+        basis_n = sum("basis" in r for r in rows)
+        if rows and basis_n < len(rows):   # 점수 구성은 V02 의 핵심 자료다 — 조용히 빠지지 않게 스캔당 한 줄
+            logger.warning(f"[후보원장] 점수 구성 누락: {len(rows) - basis_n}/{len(rows)} 후보")
         scan_id = uuid4().hex[:16]
-        await _write({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
-                      "session": str(session), "n": len(items),
-                      "candidates": [_candidate(s) for s in items[:MAX_CANDIDATES]]}, at, ledger_dir)
-        return scan_id
+        ok = _submit({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
+                      "session": str(session), "n": len(items), "basis_n": basis_n, "candidates": rows}, at, ledger_dir)
+        return scan_id if ok else None
     except Exception as e:   # 기록은 부가 기능 — 선정·주문 흐름을 막지 않는다
         logger.warning(f"[후보원장] 스캔 기록 실패(선정 흐름 유지): {type(e).__name__}")
         return None
 
 
-async def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledger_dir: Optional[Path] = None,
-                      **fields: Any) -> bool:
-    """그 스캔에 적용된 스캔 단위 게이트 결과(레짐·현금 등)를 덧붙인다. scan_id 가 없으면 아무것도 하지 않는다."""
+def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledger_dir: Optional[Path] = None,
+                **fields: Any) -> bool:
+    """그 스캔에 적용된 스캔 단위 게이트 결과(레짐·현금 등)를 기록 대기열에 넣는다. scan_id 가 없으면 아무것도 하지 않는다."""
     if scan_id is None or not enabled():
         return False
     try:
         at = now if now is not None else datetime.now()
         clean = {k: (v if isinstance(v, (bool, str)) or v is None else _num(v)) for k, v in fields.items()}
-        await _write({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
-        return True
+        return _submit({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
     except Exception as e:
         logger.warning(f"[후보원장] 게이트 기록 실패(선정 흐름 유지): {type(e).__name__}")
         return False
@@ -121,9 +159,9 @@ def _change(quote: Any) -> Optional[float]:
     return _num(quote.get("change_pct")) if isinstance(quote, dict) else None
 
 
-async def record_regime(scan_id: Optional[str], ok: Any, kospi_quote: Any, kosdaq_quote: Any, **kw: Any) -> bool:
+def record_regime(scan_id: Optional[str], ok: Any, kospi_quote: Any, kosdaq_quote: Any, **kw: Any) -> bool:
     """약세장 필터 결과와 **관측된** 지수 등락률을 남긴다. 조회 실패는 null 이다 — 정책이 쓰는 0.0 대체값을 적지 않는다."""
     kospi, kosdaq = _change(kospi_quote), _change(kosdaq_quote)
-    return await record_gate(scan_id, gate="regime", ok=ok if isinstance(ok, bool) else None,
-                             observed=kospi is not None and kosdaq is not None,
-                             kospi_chg=kospi, kosdaq_chg=kosdaq, **kw)
+    return record_gate(scan_id, gate="regime", ok=ok if isinstance(ok, bool) else None,
+                       observed=kospi is not None and kosdaq is not None,
+                       kospi_chg=kospi, kosdaq_chg=kosdaq, **kw)

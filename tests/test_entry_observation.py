@@ -192,7 +192,7 @@ def test_observed_emit_preserves_event_and_original_success_or_failure(fail):
     assert b.export()["records"][-1]["emitted"] is (not fail)
 
 
-async def _ledger_off(*args, **kwargs):
+def _ledger_off(*args, **kwargs):
     return None
 
 

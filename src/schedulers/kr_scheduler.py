@@ -4058,8 +4058,8 @@ JSON:
                     )
                     # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
                     _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
-                    # V02: 반환 후보 전체를 현금·레짐·점수 게이트 전에 원장에 남긴다(실패해도 흐름 유지)
-                    _ledger_scan_id = await candidate_ledger.record_scan(screened, current_session.value)
+                    # V02: 반환 후보 전체를 현금·레짐·점수 게이트 전에 원장 대기열에 넣는다(파일 I/O·대기 없음, 실패해도 흐름 유지)
+                    _ledger_scan_id = candidate_ledger.record_scan(screened, current_session.value)
                     _gate_trace = begin_gate_trace(_entry_observer, _entry_scan_id, screened)
                     observe_screen_candidates(getattr(bot, "ws_feed", None), _entry_observer,
                                               _entry_scan_id, screened)
@@ -4217,7 +4217,7 @@ JSON:
                             safe_trace_call(_gate_trace, "note", "regime", "unknown",
                                             value=_regime_value, reason="quote_error_fallback")
                         # 원장에는 관측된 등락률만 남긴다 — 조회 실패 시 정책이 쓰는 0.0 대체값은 적지 않는다(null)
-                        await candidate_ledger.record_regime(_ledger_scan_id, _market_regime_ok, _kospi_q, _kosdaq_q)
+                        candidate_ledger.record_regime(_ledger_scan_id, _market_regime_ok, _kospi_q, _kosdaq_q)
                         if not _market_regime_ok:
                             # G1_regime: 약세장 차단 → 상위 후보 기록
                             _top_cands = sorted(
@@ -4277,7 +4277,7 @@ JSON:
                             )
 
                             _cash_ok = available_cash >= min_pos_value
-                            await candidate_ledger.record_gate(_ledger_scan_id, gate="cash", ok=_cash_ok)   # 금액은 남기지 않는다
+                            candidate_ledger.record_gate(_ledger_scan_id, gate="cash", ok=_cash_ok)   # 금액은 남기지 않는다
                             safe_trace_call(_gate_trace, "check", "cash", _cash_ok,
                                             value=available_cash, threshold=min_pos_value)
                             if _cash_ok:

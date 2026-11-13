@@ -48,7 +48,7 @@ def stock(symbol="S", **kwargs):
                      change_pct=2, reasons=[], atr_pct=4, volume_ratio=3) | kwargs))
 
 
-async def _ledger_off(*args, **kwargs):
+def _ledger_off(*args, **kwargs):
     return None
 
 
