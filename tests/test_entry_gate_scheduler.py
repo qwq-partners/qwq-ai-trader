@@ -48,6 +48,10 @@ def stock(symbol="S", **kwargs):
                      change_pct=2, reasons=[], atr_pct=4, volume_ratio=3) | kwargs))
 
 
+async def _ledger_off(*args, **kwargs):
+    return None
+
+
 def run_cycle(monkeypatch, *, stocks=None, trace=None, enabled=None, quote=None,
               cash=1000000, positions=None, cooldown=None, daily=None,
               sector=None, validator=None, emit_error=False, cancel_quote=False,
@@ -120,8 +124,8 @@ def run_cycle(monkeypatch, *, stocks=None, trace=None, enabled=None, quote=None,
                _hb=NS(**{k:lambda *a,**kw:None for k in ("record_attempt","record_idle","record_success","record_failure")}),
                trading_logger=NS(log_screening=lambda **kw:None),_SigLog=NS(get=lambda:NS(log=siglog)),
                # V02 후보 원장: 기본은 꺼진 대역(기존 검사의 계약 그대로), ledger 를 주면 실제 모듈
-               candidate_ledger=ledger or NS(enabled=lambda:False,record_scan=lambda *a,**kw:None,
-                                             record_gate=lambda *a,**kw:False))
+               candidate_ledger=ledger or NS(enabled=lambda:False,record_scan=_ledger_off,
+                                             record_gate=_ledger_off,record_regime=_ledger_off))
     tree=ast.parse((ROOT/"src/schedulers/kr_scheduler.py").read_text())
     cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=="KRScheduler")
     method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=="run_screening")

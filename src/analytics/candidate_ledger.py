@@ -7,11 +7,13 @@
 - 경로: ~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl (0600)
 - 행: {"kind":"scan", scan_id, at, session, n, candidates:[…]} 와 {"kind":"gate", scan_id, at, …}
 - 실패는 warning 한 줄뿐이다. 반환값·예외로 선정·주문 흐름을 바꾸지 않는다.
+- 파일 쓰기는 이벤트 루프 밖 스레드에서 하고 2초 안에 끝나지 않으면 그 행을 포기한다(디스크 정체가 스캔을 붙잡지 않게).
 - 끄기: CANDIDATE_LEDGER=0 (재시작 필요)
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -26,6 +28,7 @@ LEDGER_DIR = Path.home() / ".cache" / "ai_trader" / "candidate_ledger"
 SCHEMA = "candidate-ledger-v1"
 MAX_CANDIDATES = 300      # 스캔 1회 반환은 보통 100개 이하 — 넘으면 앞에서 자르고 n 에 원래 개수를 남긴다
 MAX_REASONS = 8
+WRITE_TIMEOUT_SEC = 2.0   # 넘으면 그 행은 포기 — 스캔 흐름이 디스크를 기다리지 않는다
 _NUM_FIELDS = ("score", "price", "change_pct", "volume", "volume_ratio", "rsi", "atr_pct", "per", "pbr")
 _BASIS_FIELDS = (("merge_score_sum", "merge"), ("post_merge_adjustment", "adj"), ("occurrence_count", "occ"),
                  ("occurrence_bonus", "bonus"), ("pre_normalization_score", "pre"))
@@ -67,13 +70,22 @@ def _append(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
     line = (json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     fd = os.open(base / f"candidates_{now:%Y%m%d}.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        os.write(fd, line)   # 한 줄을 한 번에 쓴다(O_APPEND) — 줄 중간이 섞이지 않는다
+        view = memoryview(line)
+        while view:   # 짧은 쓰기는 이어 쓰고, 진전이 없으면 실패로 올린다(잘린 줄을 성공으로 치지 않는다)
+            n = os.write(fd, view)
+            if n <= 0:
+                raise OSError("후보 원장 쓰기 진전 없음")
+            view = view[n:]
     finally:
         os.close(fd)
 
 
-def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
-                ledger_dir: Optional[Path] = None) -> Optional[str]:
+async def _write(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
+    await asyncio.wait_for(asyncio.to_thread(_append, record, now, ledger_dir), WRITE_TIMEOUT_SEC)
+
+
+async def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
+                      ledger_dir: Optional[Path] = None) -> Optional[str]:
     """스캔 1회의 반환 후보 전체를 덧붙이고 scan_id 를 돌려준다. 꺼져 있거나 실패하면 None(예외 없음)."""
     if not enabled():
         return None
@@ -81,25 +93,37 @@ def record_scan(stocks: Any, session: str, *, now: Optional[datetime] = None,
         at = now if now is not None else datetime.now()
         items = list(stocks)
         scan_id = uuid4().hex[:16]
-        _append({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
-                 "session": str(session), "n": len(items),
-                 "candidates": [_candidate(s) for s in items[:MAX_CANDIDATES]]}, at, ledger_dir)
+        await _write({"kind": "scan", "schema": SCHEMA, "scan_id": scan_id, "at": at.isoformat(timespec="seconds"),
+                      "session": str(session), "n": len(items),
+                      "candidates": [_candidate(s) for s in items[:MAX_CANDIDATES]]}, at, ledger_dir)
         return scan_id
     except Exception as e:   # 기록은 부가 기능 — 선정·주문 흐름을 막지 않는다
         logger.warning(f"[후보원장] 스캔 기록 실패(선정 흐름 유지): {type(e).__name__}")
         return None
 
 
-def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledger_dir: Optional[Path] = None,
-                **fields: Any) -> bool:
+async def record_gate(scan_id: Optional[str], *, now: Optional[datetime] = None, ledger_dir: Optional[Path] = None,
+                      **fields: Any) -> bool:
     """그 스캔에 적용된 스캔 단위 게이트 결과(레짐·현금 등)를 덧붙인다. scan_id 가 없으면 아무것도 하지 않는다."""
     if scan_id is None or not enabled():
         return False
     try:
         at = now if now is not None else datetime.now()
         clean = {k: (v if isinstance(v, (bool, str)) or v is None else _num(v)) for k, v in fields.items()}
-        _append({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
+        await _write({"kind": "gate", "scan_id": scan_id, "at": at.isoformat(timespec="seconds"), **clean}, at, ledger_dir)
         return True
     except Exception as e:
         logger.warning(f"[후보원장] 게이트 기록 실패(선정 흐름 유지): {type(e).__name__}")
         return False
+
+
+def _change(quote: Any) -> Optional[float]:
+    return _num(quote.get("change_pct")) if isinstance(quote, dict) else None
+
+
+async def record_regime(scan_id: Optional[str], ok: Any, kospi_quote: Any, kosdaq_quote: Any, **kw: Any) -> bool:
+    """약세장 필터 결과와 **관측된** 지수 등락률을 남긴다. 조회 실패는 null 이다 — 정책이 쓰는 0.0 대체값을 적지 않는다."""
+    kospi, kosdaq = _change(kospi_quote), _change(kosdaq_quote)
+    return await record_gate(scan_id, gate="regime", ok=ok if isinstance(ok, bool) else None,
+                             observed=kospi is not None and kosdaq is not None,
+                             kospi_chg=kospi, kosdaq_chg=kosdaq, **kw)

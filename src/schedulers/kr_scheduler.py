@@ -4059,7 +4059,7 @@ JSON:
                     # 반환 후보 전체를 포트폴리오/진입 게이트 전에 복사한다. 기본 관측기는 없다.
                     _entry_scan_id = capture_scan(_entry_observer, screened, current_session.value)
                     # V02: 반환 후보 전체를 현금·레짐·점수 게이트 전에 원장에 남긴다(실패해도 흐름 유지)
-                    _ledger_scan_id = candidate_ledger.record_scan(screened, current_session.value)
+                    _ledger_scan_id = await candidate_ledger.record_scan(screened, current_session.value)
                     _gate_trace = begin_gate_trace(_entry_observer, _entry_scan_id, screened)
                     observe_screen_candidates(getattr(bot, "ws_feed", None), _entry_observer,
                                               _entry_scan_id, screened)
@@ -4156,6 +4156,7 @@ JSON:
                         _kosdaq_chg = 0.0
                         _weighted_chg = 0.0
                         _regime_block_reason = ""
+                        _kospi_q = _kosdaq_q = None   # 조회 전 예외에도 아래 근거 검사·원장 기록이 같은 '미관측'을 본다
                         try:
                             # KODEX200/KOSDAQ150 시세로 판정 (병렬). 2026-09-28: 예전 'RiskManager 캐시 우선' 분기는 캐시가
                             # 없는 engine.risk_manager 를 읽어 한 번도 동작하지 않았다. 그 캐시(bot.risk_manager)는 한쪽
@@ -4215,9 +4216,8 @@ JSON:
                         else:
                             safe_trace_call(_gate_trace, "note", "regime", "unknown",
                                             value=_regime_value, reason="quote_error_fallback")
-                        candidate_ledger.record_gate(
-                            _ledger_scan_id, gate="regime", ok=_market_regime_ok, observed=_regime_observed,
-                            kospi_chg=_kospi_chg, kosdaq_chg=_kosdaq_chg, weighted_chg=_weighted_chg)
+                        # 원장에는 관측된 등락률만 남긴다 — 조회 실패 시 정책이 쓰는 0.0 대체값은 적지 않는다(null)
+                        await candidate_ledger.record_regime(_ledger_scan_id, _market_regime_ok, _kospi_q, _kosdaq_q)
                         if not _market_regime_ok:
                             # G1_regime: 약세장 차단 → 상위 후보 기록
                             _top_cands = sorted(
@@ -4277,7 +4277,7 @@ JSON:
                             )
 
                             _cash_ok = available_cash >= min_pos_value
-                            candidate_ledger.record_gate(_ledger_scan_id, gate="cash", ok=_cash_ok)   # 금액은 남기지 않는다
+                            await candidate_ledger.record_gate(_ledger_scan_id, gate="cash", ok=_cash_ok)   # 금액은 남기지 않는다
                             safe_trace_call(_gate_trace, "check", "cash", _cash_ok,
                                             value=available_cash, threshold=min_pos_value)
                             if _cash_ok:
