@@ -15,8 +15,8 @@
    "buy_share": 0,
    "tokens_in": 411794,
    "tokens_out": 19066,
-   "est_usd_conservative": 7.3513,
-   "list_usd": 4.057,
+   "est_usd_conservative": "7.3513",
+   "list_usd": "4.0570",
    "status": {
     "ok": 218
    },
@@ -117,8 +117,8 @@
    "buy_share": 0.0045871559633027525,
    "tokens_in": 411794,
    "tokens_out": 28209,
-   "est_usd_conservative": 3.8585,
-   "list_usd": 2.2114,
+   "est_usd_conservative": "3.8585",
+   "list_usd": "2.2114",
    "status": {
     "ok": 218
    },
@@ -308,5 +308,14 @@
   "n": 218,
   "same": 0.9954128440366973
  },
- "max_date": "2026-10-15"
+ "max_date": "2026-10-15",
+ "inputs": {
+  "items_sha256": "985ae09340b22a6fe1c57f5b4934b5944960e62b563d7d096e2d2d5f18abf763",
+  "judgments_sha256": {
+   "claude-fable-5-2": "be64bf1958dc7e28a85673c8655cc7af5c6e4bf2cc9455eb45ca082ee74df476",
+   "claude-opus-5-5": "4af32b171af5ff047a707c780bcb4e86a4a4887af059cffbc8159f569c4ef29c"
+  },
+  "prices_sha256": "9e0795dd1b0c127bbcb1fbbcce98f143d48836119ce43f0e371ee7eeee2ca5a9",
+  "bench_adjust_sha256": "77662d037d8d0c923fd8fcb5a93d491d0cd3f2bc7601d5e636d50b43de3fee71"
+ }
 }

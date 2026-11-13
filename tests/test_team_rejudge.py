@@ -3,6 +3,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.research import team_rejudge as t
 
 
@@ -90,10 +92,12 @@ def test_judge_retry_refusal_resume_and_budget(tmp_path):
     recs = {x["id"]: x for x in map(json.loads, out.read_text().splitlines())}
     assert client.calls == 3 and recs["i0"]["status"] == "ok" and recs["i0"]["attempts"] == 2 and recs["i0"]["decision"] == "pass"
     assert recs["i1"]["status"] == "refusal" and recs["i1"]["attempts"] == 1 and not r["budget_stopped"]
+    assert (r["attempted_now"], r["recorded_now"], r["remaining"], r["spent_est_usd"]) == (2, 2, 0, "0.0300")
     # 이어 하기: 이미 있는 항목은 다시 보내지 않고, 남은 예산이 재시도 포함 최악값(0.02)보다 작으면 전송하지 않는다
     client2 = _Client([])
     r2 = asyncio.run(t.judge(_items(3), "claude-opus-5-5", str(out), 0.04, concurrency=1, client=client2, quote=quote))
     assert client2.calls == 0 and r2["budget_stopped"] and len(out.read_text().splitlines()) == 2
+    assert (r2["attempted_now"], r2["recorded_now"], r2["remaining"]) == (0, 0, 1)   # 보내지 않은 것은 보낸 것으로 세지 않는다
 
 
 def test_report_end_to_end(tmp_path):
@@ -120,12 +124,19 @@ def test_report_end_to_end(tmp_path):
         for d in days[:3]:
             items.append({"id": f"{d}:{sym}", "date": d, "symbol": sym, "prod": "hold", "analyst_sum": k})
             js.append({"id": f"{d}:{sym}", "status": "ok", "decision": "buy" if up else "pass", "score": 80 if up else 20,
-                       "in": 10, "out": 5, "est_usd": 0.001})
+                       "in": 10, "out": 5, "est_usd": 0.001, "model": "claude-opus-5-5", "prompt_version": t.PROMPT_VERSION,
+                       "identity": "verified", "resolved": "claude-opus-5-5"})
     out = t.report(items, {"claude-opus-5-5": js}, str(prices), str(tmp_path / "adj.csv"), days[-1])
     h20 = out["models"]["claude-opus-5-5"]["decision"]["h20"]
     assert abs(h20["diff"] - 0.2) < 1e-9 and h20["days_both"] == 3 and h20["verdict"] == "판정 불가(표본 부족)"
     assert abs(out["models"]["claude-opus-5-5"]["score_high"]["h20"]["diff"] - 0.2) < 1e-9
     assert out["models"]["claude-opus-5-5"]["buy_share"] == 0.5 and out["with_net"]["h20"] == 12
+    assert out["models"]["claude-opus-5-5"]["est_usd_conservative"] == "0.0120"
+    # 판정 파일이 기대 표본과 다르면(누락·중복·다른 모델·미검증 신원) 집계를 거부한다
+    for bad in (js[:-1], js + js[:1], [{**j, "model": "claude-fable-5-2"} for j in js],
+                [{**j, "identity": "unverified"} for j in js], [{**j, "prompt_version": "x"} for j in js]):
+        with pytest.raises(SystemExit):
+            t.report(items, {"claude-opus-5-5": bad}, str(prices), str(tmp_path / "adj.csv"), days[-1])
 
 
 def test_doc_table_matches_committed_summary():
@@ -136,3 +147,4 @@ def test_doc_table_matches_committed_summary():
     rows = t.doc_rows(summary)
     assert len(rows) == 18 and all(r in doc for r in rows)
     assert all(v["primary"] == "판정 불가(표본 부족)" for v in summary["models"].values())
+    assert set(summary["inputs"]) == {"items_sha256", "judgments_sha256", "prices_sha256", "bench_adjust_sha256"}

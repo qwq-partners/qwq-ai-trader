@@ -15,6 +15,7 @@ import os
 import random
 import sys
 from collections import defaultdict
+from decimal import Decimal
 from statistics import mean, median
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -84,7 +85,8 @@ def build_items(team_dir, through):
                  else "sell" if d.get("stance") == "sell" else "not_approved")
         reports = compact(r.get("reports") if r.get("reports") is not None else [])
         scores = [x["score"] for x in reports if isinstance(x.get("score"), (int, float)) and not isinstance(x.get("score"), bool)]
-        items.append({"id": f"{day}:{symbol}", "date": day, "symbol": symbol, "name": r.get("name") or "", "decided_at": t,
+        items.append({"id": f"{day}:{symbol}", "date": day, "symbol": symbol,
+                      "name": r["name"] if r.get("name") is not None else "", "decided_at": t,
                       "prod": label, "analyst_sum": sum(scores) if len(scores) == len(reports) and reports else None,
                       "order": hashlib.sha256(f"v05|{day}|{symbol}".encode()).hexdigest(), "reports": reports})
     return sorted(items, key=lambda x: x["order"])
@@ -121,7 +123,8 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
         for line in open(out_path):
             r = json.loads(line)
             done[r["id"]] = r
-    spent = sum(r.get("est_usd") or 0 for r in done.values())
+    budget_usd = Decimal(str(budget_usd))
+    spent = sum((Decimal(str(r["est_usd"])) for r in done.values() if r.get("est_usd") is not None), Decimal(0))
     todo = [x for x in items if x["id"] not in done][:limit]
     if client is None:   # 운영 전송 코드를 그대로 쓴다(키 파일 검사·신원 확인 포함)
         from src.utils.claude_transport import AnthropicAPIClient
@@ -130,8 +133,9 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
         client = AnthropicAPIClient(LLMConfig(claude_model="claude-opus-5-5",
                                               anthropic_api_key_file="~/.config/qwq-ai-trader/anthropic-api-key"))
         quote = lambda i, o: rate_quote(model, i, o).cost_usd   # noqa: E731 — 보수 추정(입력 2배 상한)
-    worst = lambda x: quote(len(prompt_of(x).encode()) + len(SYSTEM.encode()), MAX_TOKENS[model])   # noqa: E731 — 바이트 ≥ 토큰
-    state = {"spent": spent, "held": 0.0, "stopped": False}
+    usd = lambda i, o: Decimal(str(quote(i, o)))   # noqa: E731 — 금액 누계는 Decimal
+    worst = lambda x: usd(len(prompt_of(x).encode()) + len(SYSTEM.encode()), MAX_TOKENS[model])   # noqa: E731 — 바이트 ≥ 토큰
+    state = {"spent": spent, "held": Decimal(0), "stopped": False, "attempted": 0, "recorded": 0}
     sem, lock = asyncio.Semaphore(concurrency), asyncio.Lock()
     loop = asyncio.get_running_loop()
 
@@ -143,18 +147,22 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
                     state["stopped"] = True
                     return
                 state["held"] += hold
+                state["attempted"] += 1
             rec = {"id": item["id"], "model": model, "prompt_version": PROMPT_VERSION, "attempts": 0,
                    "in": 0, "out": 0, "est_usd": 0.0, "decision": None, "score": None, "status": "failed"}
+            est = Decimal(0)
             for _ in range(2):
                 r = await client.complete(prompt_of(item), SYSTEM, model=model, max_tokens=MAX_TOKENS[model],
                                           reasoning_effort=EFFORT[model], deadline=loop.time() + 120)
                 rec["attempts"] += 1
                 if r.usage_known:
-                    rec["in"] += r.input_tokens or 0
-                    rec["out"] += r.output_tokens or 0
-                    rec["est_usd"] += quote(r.input_tokens or 0, r.output_tokens or 0)
+                    tin = r.input_tokens if r.input_tokens is not None else 0
+                    tout = r.output_tokens if r.output_tokens is not None else 0
+                    rec["in"] += tin
+                    rec["out"] += tout
+                    est += usd(tin, tout)
                 elif r.request_sent:
-                    rec["est_usd"] += worst(item)   # 사용량 미확인 전송은 최악값으로 잡는다
+                    est += worst(item)   # 사용량 미확인 전송은 최악값으로 잡는다
                 rec.update(resolved=r.resolved_model, identity=r.model_identity_status, finish=r.finish_reason,
                            http=r.http_status, error_kind=r.transport_error_kind)
                 if r.refusal_detected:
@@ -164,16 +172,20 @@ async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, c
                 if parsed is not None and r.model_identity_status == "verified":
                     rec.update(decision=parsed[0], score=parsed[1], status="ok")
                     break
+            rec["est_usd"] = float(est)   # 기록은 JSON 수, 누계는 Decimal
             async with lock:
                 state["held"] -= hold
-                state["spent"] += rec["est_usd"]
+                state["spent"] += est
+                state["recorded"] += 1
                 with open(out_path, "a") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
     await asyncio.gather(*(one(x) for x in todo))
     if hasattr(client, "close"):
         await client.close()
-    return {"model": model, "sent_now": len(todo), "spent_est_usd": round(state["spent"], 4), "budget_stopped": state["stopped"]}
+    return {"model": model, "attempted_now": state["attempted"], "recorded_now": state["recorded"],
+            "remaining": len(todo) - state["recorded"], "spent_est_usd": str(state["spent"].quantize(Decimal("0.0001"))),
+            "budget_stopped": state["stopped"]}
 
 
 def within_day(rows, key):
@@ -266,7 +278,28 @@ def outcomes(items, price_dir, bench_adjust, through):
     return rows, {d: i for i, d in enumerate(cal)}
 
 
+def check_judgments(items, model, js):
+    """판정 파일이 그 모델·프롬프트의 기대 표본 전체를 정확히 한 번씩 담는지 본다. 어긋나면 집계하지 않는다."""
+    ids = [j.get("id") for j in js]
+    want = {i["id"] for i in items}
+    problems = []
+    if len(ids) != len(set(ids)):
+        problems.append("중복 id")
+    if set(ids) != want:
+        problems.append(f"누락 {len(want - set(ids))}·추가 {len(set(ids) - want)}")
+    if any(j.get("model") != model or j.get("prompt_version") != PROMPT_VERSION for j in js):
+        problems.append("모델 또는 프롬프트 버전 불일치")
+    if any(j.get("status") == "ok" and (j.get("identity") != "verified" or j.get("resolved") != model
+                                        or parse_judgment(json.dumps({"decision": j.get("decision"), "score": j.get("score")})) is None)
+           for j in js):
+        problems.append("성공 행의 응답 신원·판정 값 불일치")
+    if problems:
+        raise SystemExit(f"판정 파일 검증 실패({model}): {', '.join(problems)}")
+
+
 def report(items, judgments, price_dir, bench_adjust, through):
+    for model, js in judgments.items():
+        check_judgments(items, model, js)
     rows, pos = outcomes(items, price_dir, bench_adjust, through)
     out = {"prompt_version": PROMPT_VERSION, "through": through, "threshold": THRESHOLD, "items": len(items),
            "with_net": {f"h{h}": sum(f"net{h}" in v for _i, v in rows) for h in HORIZONS}, "models": {}, "reference": {}}
@@ -279,8 +312,9 @@ def report(items, judgments, price_dir, bench_adjust, through):
         m = {"judged": len(js), "ok": len(ok),
              "buy_share": mean(ok[i["id"]]["decision"] == "buy" for i, _v in sel) if sel else None,
              "tokens_in": sum(j["in"] for j in js), "tokens_out": sum(j["out"] for j in js),
-             "est_usd_conservative": round(sum(j["est_usd"] for j in js), 4),
-             "list_usd": round(sum(j["in"] * LIST_PRICE[model][0] + j["out"] * LIST_PRICE[model][1] for j in js) / 1e6, 4)}
+             "est_usd_conservative": str(sum((Decimal(str(j["est_usd"])) for j in js), Decimal(0)).quantize(Decimal("0.0001"))),
+             "list_usd": str((sum((j["in"] * Decimal(str(LIST_PRICE[model][0])) + j["out"] * Decimal(str(LIST_PRICE[model][1]))
+                                   for j in js), Decimal(0)) / 1000000).quantize(Decimal("0.0001")))}
         status = defaultdict(int)
         for j in js:
             status[j["status"]] += 1
@@ -322,6 +356,20 @@ def doc_rows(summary):
     return rows
 
 
+def _sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def input_hashes(items_path, judgment_paths, price_dir, bench_adjust, symbols):
+    """집계가 어떤 입력에서 나왔는지 — 비공개 파일은 내용 대신 해시만 커밋한다."""
+    prices = hashlib.sha256()
+    for s in [BENCH, *sorted(symbols)]:
+        prices.update(s.encode() + bytes.fromhex(_sha(os.path.join(price_dir, f"{s}.csv"))))
+    return {"items_sha256": _sha(items_path), "judgments_sha256": {m: _sha(p) for m, p in judgment_paths.items()},
+            "prices_sha256": prices.hexdigest(), "bench_adjust_sha256": _sha(bench_adjust)}
+
+
 def _load(path):
     return [json.loads(line) for line in open(path)]
 
@@ -337,7 +385,7 @@ def main():
     a.add_argument("--items", required=True)
     a.add_argument("--model", required=True, choices=sorted(MAX_TOKENS))
     a.add_argument("--out", required=True)
-    a.add_argument("--budget-usd", required=True, type=float)
+    a.add_argument("--budget-usd", required=True, type=Decimal)
     a.add_argument("--max-date", help="이 날짜 이하 항목만(20일 결과가 있는 주 표본)")
     a.add_argument("--limit", type=int)
     a.add_argument("--concurrency", type=int, default=4)
@@ -362,10 +410,12 @@ def main():
         items = [i for i in _load(args.items) if args.max_date is None or i["date"] <= args.max_date]
         print(json.dumps(asyncio.run(judge(items, args.model, args.out, args.budget_usd, concurrency=args.concurrency, limit=args.limit)), ensure_ascii=False))
     else:
-        judgments = {m: _load(path) for m, path in (x.split("=", 1) for x in args.judgments)}
+        paths = dict(x.split("=", 1) for x in args.judgments)
+        judgments = {m: _load(path) for m, path in paths.items()}
         items = [i for i in _load(args.items) if args.max_date is None or i["date"] <= args.max_date]
         out = report(items, judgments, args.price_dir, args.bench_adjust, args.through)
         out["max_date"] = args.max_date
+        out["inputs"] = input_hashes(args.items, paths, args.price_dir, args.bench_adjust, {i["symbol"] for i in items})
         with open(args.out, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
             f.write("\n")

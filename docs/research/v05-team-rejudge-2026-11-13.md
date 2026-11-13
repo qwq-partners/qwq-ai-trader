@@ -153,3 +153,14 @@ python scripts/research/team_rejudge.py report --items $A/items.jsonl --judgment
 ```
 
 집계 정본: [v05-team-rejudge-summary-2026-11-13.json](v05-team-rejudge-summary-2026-11-13.json). 판정을 다시 호출하면 응답이 달라질 수 있으므로 통계 재현은 보존한 판정 기록으로 한다(비공개 `~/.local/state/qwq-task-audit/20261113/v05/`).
+
+### 7.8 독립 리뷰 처분
+
+교차 공급자 리뷰(Codex, 요청 gpt-5.6-sol/high) 1차 — 병합 불가(P0 0·P1 1·P2 2):
+
+| 지적 | 처분 |
+|---|---|
+| P1 `report`가 판정 파일의 모델·프롬프트 버전·응답 신원·표본 완전성을 대조하지 않고, 집계에 입력 해시가 없음 | **반영** — 모델별 판정 파일이 기대 표본(218건)을 정확히 한 번씩 담는지, 각 행의 모델·프롬프트 버전, 성공 행의 `verified` 신원·응답 모델·판정 값을 검사하고 어긋나면 집계를 거부한다. 집계에 항목·판정·가격·벤치마크 보정 입력의 SHA-256을 기록(`inputs`). 보존한 판정 파일은 검사를 통과했고 수치는 그대로다 |
+| P2 금액을 float로 누계, `or` 기본값 사용 | **반영** — 상한·보류·누계를 Decimal로, 기본값은 `is None` 비교로 교체. 표의 비용 수치 불변 |
+| P2 `sent_now`가 상한 정지로 보내지 않은 항목까지 셈 | **반영** — `attempted_now`·`recorded_now`·`remaining`으로 나눠 보고하고 검사에 고정 |
+
