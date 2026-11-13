@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-13 — V05 LLM 판단 가치 시험: 저장된 팀 심의 입력의 오프라인 재판정 (DONE·주 판정 불가) ([정본](docs/research/v05-team-rejudge-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 추가: `scripts/research/team_rejudge.py`(items·judge·report — 종목-일 첫 심의의 분석가 보고를 축약해 모델 1개로 재판정, 보수 추정 비용 상한에서 전송 중지·이어 하기, 같은 날 승인−비승인 차이·원형 블록 부트스트랩·판정), `tests/test_team_rejudge.py`(9건), 집계 `docs/research/v05-team-rejudge-summary-2026-11-13.json`. 운영 코드·설정 변경 0.
+- 사전 등록을 호출 전에 커밋(`f6b58e25`): 주 지표 = 같은 날 `buy`−`pass`의 20일 순초과 차이(+1.5pp 초과·95% 하한 > 0이면 선별력 있음), 표본 218건(18거래일), 상한 15달러.
+- 실호출 436회(사용자 승인 11/13): Fable 5.2 medium·Opus 5.5 low, 전부 성공·신원 verified·재시도/거절 0, 정가 약 6.27달러(보수 추정 11.21). `LLMManager` 밖 호출이라 월 예산 원장에 기록되지 않는다.
+- **결과: 두 모델 모두 판정 불가(표본 부족)** — `buy`가 Fable 0건·Opus 1건. 점수는 거의 전부 50 아래(Fable 22~46, Opus 25~57). 같은 날 점수 상−하(보조)는 20일에서 Fable −3.47pp(구간이 0 포함), Opus −8.62pp(구간 −14.38~−4.25)로 양의 선별이 없다. 운영 승인 BUY·분석가 점수 합 기준선도 20일에서 음수 방향(0과 구분 안 됨).
+- 드러난 결함: 팀 심의 입력의 재무 분석가 보고가 966행 전부 `insufficient`, 기술 보고 22% `error`. 원인 진단은 유지보수 과제로 원장 NEXT에 올렸다(이 PR에서 고치지 않음).
+- 결정 연결: shadow 후보 모델 없음, 장중 심의 확대 없음, Bull/Bear의 Fable 5.2 전환 보류 유지. V04(실거래 손절 해부)는 사용자 결정(11/13 "최근 거래가 없어 거래 분석은 불필요")으로 앞당기지 않는다.
+
 ## 2026-11-13 — V07 고정 보고 역할 3개 Fable 5.1 → 5.2 (역할표 v8, 소스·신원 실호출 DONE / 운영 배포 대기) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 변경(소스 4·설정 주석 1): `src/utils/llm_roles.py`(`MARKET_BRIEF`·`POST_EXIT_RESEARCH`·`WEB_REPORT` → `claude-fable-5-2`, 출력 상한 4096→6144·4096→6144·12288→16384, `engine-roles-v8-fable52`), `src/utils/llm.py`(전송 허용 모델·effort에 5.2 추가, 설정 슬롯 허용 집합 분리), `src/utils/claude_transport.py`(API 허용 모델·상한 주석), `src/utils/llm_pricing.py`(5.2 단가 입력 8/출력 40, 1h 캐시 쓰기 상한 2배), `config/default.yml`(주석만 — `claude_model_heavy`는 5.1 그대로).
