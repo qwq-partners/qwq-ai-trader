@@ -102,6 +102,24 @@ def test_short_write_continues_and_stalled_write_fails(tmp_path, monkeypatch):
     assert len(_rows(tmp_path)) == 1
 
 
+def test_partial_write_then_error_rolls_back_so_next_row_stays_parseable(tmp_path, monkeypatch):
+    """일부만 쓰고 실패하면 쓰기 전 위치로 되돌린다 — 잘린 줄이 다음 행에 붙어 두 행이 함께 깨지지 않는다."""
+    real, calls = os.write, []
+
+    def flaky(fd, data):
+        calls.append(len(data))
+        if len(calls) == 1:
+            return real(fd, bytes(data[:9]))   # 첫 호출은 9바이트만
+        if len(calls) == 2:
+            raise OSError("디스크 오류")        # 이어 쓰다 실패
+        return real(fd, data)
+    first = scan([_stock("000001")], "regular", now=NOW, ledger_dir=tmp_path)     # 정상 행
+    monkeypatch.setattr(cl.os, "write", flaky)
+    scan([_stock("000002")], "regular", now=NOW, ledger_dir=tmp_path)             # 부분 쓰기 뒤 실패 → 되돌림
+    third = scan([_stock("000003")], "regular", now=NOW, ledger_dir=tmp_path)     # 회복 뒤 정상 행
+    assert [r["scan_id"] for r in _rows(tmp_path)] == [first, third]              # 모든 줄이 독립적으로 파싱된다
+
+
 def test_stalled_disk_never_delays_caller_and_drops_after_queue_fills(tmp_path, monkeypatch):
     """디스크가 멈춰도 호출은 즉시 돌아온다(파일 I/O·대기 없음). 대기열이 차면 그 뒤 행은 버리고 None/False."""
     release, real = threading.Event(), cl._append

@@ -9,7 +9,8 @@
 - 매매 경로(스케줄러)는 행을 만들어 크기 제한 대기열에 **넣기만** 한다(파일 I/O·대기 없음). 전용 스레드 하나가
   순서대로 파일에 쓴다. 디스크가 멈추면 대기열이 차고, 그 뒤 행은 버려진다(경고) — 스캔·신호 발행은 기다리지 않는다.
 - 매매 경로에서는 로그도 쓰지 않는다(운영 로그 sink 는 동기 파일 I/O 다). 버린 행 수는 세어 두었다가 기록 스레드가
-  회복했을 때 한 줄로 경고하고, 기록 중 오류는 {"kind":"error"} 행으로 원장에 남긴다.
+  회복했을 때 한 줄로 경고한다. 매매 경로 쪽 행 구성 오류는 {"kind":"error"} 행으로 원장에 남기고, 기록 스레드의
+  파일 I/O 오류(디렉터리·열기·쓰기)는 경고만 남긴다.
 - 반환값·예외로 선정·주문 흐름을 바꾸지 않는다. 프로세스 종료 시 대기열에 남은 행은 사라질 수 있다.
 - 끄기: CANDIDATE_LEDGER=0 (재시작 필요)
 """
@@ -79,12 +80,17 @@ def _append(record: dict, now: datetime, ledger_dir: Optional[Path]) -> None:
     line = (json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
     fd = os.open(base / f"candidates_{now:%Y%m%d}.jsonl", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
-        view = memoryview(line)
-        while view:   # 짧은 쓰기는 이어 쓰고, 진전이 없으면 실패로 올린다(잘린 줄을 성공으로 치지 않는다)
-            n = os.write(fd, view)
-            if n <= 0:
-                raise OSError("후보 원장 쓰기 진전 없음")
-            view = view[n:]
+        start = os.fstat(fd).st_size   # 쓰는 스레드는 하나다 — 실패하면 이 위치로 되돌려 잘린 줄이 다음 행에 붙지 않게 한다
+        try:
+            view = memoryview(line)
+            while view:   # 짧은 쓰기는 이어 쓰고, 진전이 없으면 실패로 올린다(잘린 줄을 성공으로 치지 않는다)
+                n = os.write(fd, view)
+                if n <= 0:
+                    raise OSError("후보 원장 쓰기 진전 없음")
+                view = view[n:]
+        except BaseException:
+            os.ftruncate(fd, start)
+            raise
     finally:
         os.close(fd)
 
