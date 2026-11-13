@@ -110,6 +110,14 @@ def test_judge_retry_refusal_resume_and_budget(tmp_path):
     r2 = asyncio.run(t.judge(_items(3), "claude-opus-5-5", str(out), 0.04, concurrency=1, client=client2, quote=quote))
     assert client2.calls == 0 and r2["budget_stopped"] and len(out.read_text().splitlines()) == 2
     assert (r2["attempted_now"], r2["recorded_now"], r2["remaining"]) == (0, 0, 1)   # 보내지 않은 것은 보낸 것으로 세지 않는다
+    # 다른 모델의 파일·중복 행에는 덧붙이지 않는다(호출 전에 중단)
+    for model, lines in (("claude-fable-5-2", out.read_text()), ("claude-opus-5-5", out.read_text() * 2)):
+        bad = tmp_path / f"bad-{model}.jsonl"
+        bad.write_text(lines)
+        client3 = _Client([])
+        with pytest.raises(SystemExit):
+            asyncio.run(t.judge(_items(3), model, str(bad), 1.0, concurrency=1, client=client3, quote=quote))
+        assert client3.calls == 0
 
 
 def test_judge_waits_for_temporary_hold_instead_of_stopping(tmp_path):

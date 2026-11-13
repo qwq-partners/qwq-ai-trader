@@ -120,9 +120,13 @@ def parse_judgment(text):
 async def judge(items, model, out_path, budget_usd, concurrency=4, limit=None, client=None, quote=None):
     """항목을 순서대로 판정해 out_path(JSONL)에 덧붙인다. 이미 있는 id 는 건너뛴다(이어 하기)."""
     done = {}
-    if os.path.exists(out_path):
+    if os.path.exists(out_path):   # 이어 하기 파일은 유료 호출 전에 검증한다 — 다른 모델·프롬프트·표본의 파일에 덧붙이지 않는다
+        want = {x["id"] for x in items}
         for line in open(out_path):
             r = json.loads(line)
+            if (r.get("id") in done or r.get("id") not in want or r.get("model") != model
+                    or r.get("prompt_version") != PROMPT_VERSION or Decimal(str(r.get("est_usd"))) < 0):
+                raise SystemExit(f"이어 하기 파일 검증 실패: {out_path} ({r.get('id')})")
             done[r["id"]] = r
     budget_usd = Decimal(str(budget_usd))
     spent = sum((Decimal(str(r["est_usd"])) for r in done.values() if r.get("est_usd") is not None), Decimal(0))
