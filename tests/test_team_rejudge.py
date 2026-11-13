@@ -126,3 +126,13 @@ def test_report_end_to_end(tmp_path):
     assert abs(h20["diff"] - 0.2) < 1e-9 and h20["days_both"] == 3 and h20["verdict"] == "판정 불가(표본 부족)"
     assert abs(out["models"]["claude-opus-5-5"]["score_high"]["h20"]["diff"] - 0.2) < 1e-9
     assert out["models"]["claude-opus-5-5"]["buy_share"] == 0.5 and out["with_net"]["h20"] == 12
+
+
+def test_doc_table_matches_committed_summary():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "docs/research"
+    summary = json.loads((root / "v05-team-rejudge-summary-2026-11-13.json").read_text())
+    doc = (root / "v05-team-rejudge-2026-11-13.md").read_text()
+    rows = t.doc_rows(summary)
+    assert len(rows) == 18 and all(r in doc for r in rows)
+    assert all(v["primary"] == "판정 불가(표본 부족)" for v in summary["models"].values())

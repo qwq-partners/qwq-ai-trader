@@ -302,6 +302,26 @@ def report(items, judgments, price_dir, bench_adjust, through):
     return out
 
 
+def _pct(x):
+    return "—" if x is None else f"{x * 100:+.2f}"
+
+
+def doc_rows(summary):
+    """커밋된 집계 → 결과 문서의 표 행(문서와 집계가 어긋나지 않게 검사에서 대조한다)."""
+    rows = []
+    groups = [(f"{m} `buy`−`pass`", v["decision"]) for m, v in summary["models"].items()]
+    groups += [(f"{m} 점수 상−하(보조)", v["score_high"]) for m, v in summary["models"].items()]
+    groups += [("운영 승인 BUY−나머지(기준선)", summary["reference"]["prod_buy_approved"]),
+               ("분석가 점수 합 상−하(기준선)", summary["reference"]["analyst_sum_high"])]
+    for name, by_h in groups:
+        for h in HORIZONS:
+            c = by_h[f"h{h}"]
+            rows.append(f"| {name} | {h}일 | {c['n_in']} / {c['n_out']} | {c['days_both']} | {_pct(c['diff'])} | "
+                        f"{_pct(c['ci95'][0])} ~ {_pct(c['ci95'][1])} | {'—' if c['t_nw'] is None else format(c['t_nw'], '+.2f')} | "
+                        f"{_pct(c['pooled_in'])} / {_pct(c['pooled_out'])} | {c['verdict']} |")
+    return rows
+
+
 def _load(path):
     return [json.loads(line) for line in open(path)]
 
@@ -320,12 +340,14 @@ def main():
     a.add_argument("--budget-usd", required=True, type=float)
     a.add_argument("--max-date", help="이 날짜 이하 항목만(20일 결과가 있는 주 표본)")
     a.add_argument("--limit", type=int)
+    a.add_argument("--concurrency", type=int, default=4)
     a = sub.add_parser("report")
     a.add_argument("--items", required=True)
     a.add_argument("--judgments", required=True, nargs="+", help="model=path")
     a.add_argument("--price-dir", required=True)
     a.add_argument("--bench-adjust", required=True)
     a.add_argument("--through", required=True)
+    a.add_argument("--max-date", help="이 날짜 이하 항목만(주 표본) — 기준선도 같은 표본으로 계산한다")
     a.add_argument("--out", required=True)
     args = p.parse_args()
     if args.cmd == "items":
@@ -338,15 +360,16 @@ def main():
                           "sha256": hashlib.sha256(open(args.out, "rb").read()).hexdigest()}))
     elif args.cmd == "judge":
         items = [i for i in _load(args.items) if args.max_date is None or i["date"] <= args.max_date]
-        print(json.dumps(asyncio.run(judge(items, args.model, args.out, args.budget_usd, limit=args.limit)), ensure_ascii=False))
+        print(json.dumps(asyncio.run(judge(items, args.model, args.out, args.budget_usd, concurrency=args.concurrency, limit=args.limit)), ensure_ascii=False))
     else:
         judgments = {m: _load(path) for m, path in (x.split("=", 1) for x in args.judgments)}
-        out = report(_load(args.items), judgments, args.price_dir, args.bench_adjust, args.through)
+        items = [i for i in _load(args.items) if args.max_date is None or i["date"] <= args.max_date]
+        out = report(items, judgments, args.price_dir, args.bench_adjust, args.through)
+        out["max_date"] = args.max_date
         with open(args.out, "w") as f:
             json.dump(out, f, ensure_ascii=False, indent=1)
             f.write("\n")
-        for m, v in out["models"].items():
-            print(m, v["primary"], v["decision"]["h20"])
+        print("\n".join(doc_rows(out)))
 
 
 if __name__ == "__main__":
