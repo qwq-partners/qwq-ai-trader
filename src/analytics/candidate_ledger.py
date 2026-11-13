@@ -32,7 +32,7 @@ from loguru import logger
 LEDGER_DIR = Path.home() / ".cache" / "ai_trader" / "candidate_ledger"
 SCHEMA = "candidate-ledger-v1"
 MAX_REASONS = 8
-QUEUE_SIZE = 64           # 스캔당 최대 3행 — 20스캔(약 100분) 분량이 밀리면 그 뒤는 버린다
+QUEUE_SIZE = 96           # 스캔당 최대 4행(scan·regime·cash·entry_filter) — 24스캔(5분 주기 약 2시간) 분량이 밀리면 그 뒤는 버린다
 _NUM_FIELDS = ("score", "price", "change_pct", "volume", "volume_ratio", "rsi", "atr_pct", "per", "pbr")
 _BASIS_FIELDS = (("merge_score_sum", "merge"), ("post_merge_adjustment", "adj"), ("occurrence_count", "occ"),
                  ("occurrence_bonus", "bonus"), ("pre_normalization_score", "pre"))
