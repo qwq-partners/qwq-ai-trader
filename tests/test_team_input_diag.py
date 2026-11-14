@@ -11,7 +11,7 @@ def _row(did, symbol, slot, tech_error=None, calls=2):
             "reports": [{"kind": "fundamental", "data_status": "insufficient", "score": 10, "confidence": 0.7,
                          "summary": "비밀요약", "limitations": ["캐시 시각 미제공", "비밀한계"],
                          "metrics": {"foreign_net_buying": False}, "evidence": [{}]},
-                        {"kind": "technical", "data_status": "error" if tech_error else "full", "score": 0,
+                        {"kind": "technical", "data_status": "error" if tech_error is not None else "full", "score": 0,
                          "error": tech_error, "evidence": []}]}
 
 
@@ -51,3 +51,19 @@ def test_output_is_private_even_when_the_file_already_exists(tmp_path):
     out.chmod(0o644)
     t.write_private(str(out), {"a": 1})
     assert stat.S_IMODE(out.stat().st_mode) == 0o600 and json.loads(out.read_text()) == {"a": 1}
+
+
+def test_no_ledger_value_reaches_the_output(tmp_path):
+    """허용 목록 밖의 값은 어느 필드에 있어도 결과에 실리지 않는다(비정상 행·빈 문자열 오류 포함)."""
+    bad = _row("x", "비밀종목", "비밀슬롯", "")   # 빈 문자열 오류도 오류다
+    bad["assessment"] = {"data_sufficiency": "비밀충분성"}
+    bad["decision"] = {"stance": "비밀판정", "approved": "비밀승인"}
+    bad["reports"][0].update(score="비밀점수", confidence="비밀신뢰", data_status="비밀상태", metrics={"비밀지표": False})
+    bad["reports"].append({"kind": "비밀종류", "data_status": "full", "score": float("inf")})
+    bad["reports"].append("비밀보고")
+    (tmp_path / "deliberations_20261112.jsonl").write_text(json.dumps(bad, ensure_ascii=False) + "\n")
+    s = t.summarize(t.load(str(tmp_path), "2026-11-12")[0])
+    assert "비밀" not in json.dumps(s, ensure_ascii=False)
+    assert s["kinds"]["fundamental"]["score_conf"] == {"비정상": 1} and s["kinds"]["other"]["score_sign"] == {"비정상": 1}
+    assert s["decision"] == {"기술 오류": {"other|other": 1}} and s["data_sufficiency"] == {"other": 1}
+    assert s["tech_error"]["by_slot_top_symbol"] == {"other": 1} and s["kinds"]["technical"]["error"] == {"other": 1}
