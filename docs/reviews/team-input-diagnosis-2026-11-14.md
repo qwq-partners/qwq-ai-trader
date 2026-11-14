@@ -1,6 +1,6 @@
 # 팀 심의 입력 진단 (2026-11-14)
 
-> 상태: **진단 DONE(11/14) → 사용자 결정 "A ㄱㄱ"(11/14) → A안 소스 DONE(8절, 운영 미배포)**. B(실제 자료 연결)는 V02 판독 뒤.
+> 상태: **진단 DONE(11/14) → 사용자 결정 "A ㄱㄱ"(11/14) → A안 소스 DONE(8절) → 운영 인수 DONE(11/15 00:08:13 KST, `dc49dd83`·PID 1596089)**. B(실제 자료 연결)는 V02 판독 뒤.
 > 원장: [ENGINE-EVAL-20261113](../operations/execution-roadmap.md#engine-evaluation-20261113) · 선행 [V05 결과](../research/v05-team-rejudge-2026-11-13.md)(재무 보고 전부 `insufficient`·기술 보고 22% `error`를 처음 관찰)
 
 ## 1. 무엇을 봤나
@@ -125,7 +125,7 @@ python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_le
 행별로는 321행이 오르고 468행이 내리고 33행이 같다. 상수 +10이 평균 쪽으로 끌어당기던 것이 빠져 분포가 넓어진다. 실제 판정 분포가 어떻게 바뀌는지는 배포 뒤 `analyst_version`으로 전후를 갈라 봐야 한다(토론 모델이 받는 문장도 달라진다).
 
 - 영수증(비공개): `~/.local/state/qwq-task-audit/20261114/team-input-diag/summary-a.json`(SHA-256 `e2dd06f3e356119b0c96e0a248f583a76c7692f68248ae58f3a975d571ceddf1`, 입력 지문은 6절과 같다).
-- 배포는 사용자 승인 뒤. 배포 뒤 확인 항목은 [모니터링 체크포인트](../operations/monitoring-checkpoints.md).
+- **운영 인수(11/15 00:08:13 KST, 사용자 "병합 뒤 바로 배포 ㄱㄱ"):** PR #375 병합 `dc49dd83`(CI 10,856 passed, 독립 리뷰 3차 승인) → 23:52 사전 스냅샷 → 서버 `local_deploy.sh` 10,856 passed(876초)·롤백 0 → 재시작 PID 1596089. 배포 전 `.env`·실행 프로세스의 `TEAM_CONVICTION=0` 확인(새 규칙 적용 조건). 기동 171초 사후 점검: NRestarts 0·pending 0·브로커 연결·복구 ready·기동 로그 ERROR/Traceback 0·EGW00201/EGW00215/HTTP 500 0, 배포 직전 대비 보호 48파일 변동 0(11/13 기준선 대비 KIS 토큰 캐시 1건은 11/14 20:33 일일 갱신)·cron 동일·`KILL_SWITCH_KR`·월 200·`log_and_continue` 보존. 기동 로그에 `자동매도 금지 종목 복원`·`에이전트 팀 초기화 완료`. 첫 심의는 다음 거래일 11/16 10:30 — 확인 항목은 [모니터링 체크포인트](../operations/monitoring-checkpoints.md).
 
 ## 9. A안 독립 리뷰 처분
 

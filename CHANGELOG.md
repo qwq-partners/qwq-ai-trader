@@ -1,6 +1,6 @@
 # QWQ AI Trader - Changelog
 
-## 2026-11-14 — 팀 심의 입력 정직화 A안 (shadow 경로·운영 미배포) ([진단 8절](docs/reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](docs/agents/trading-team.md))
+## 2026-11-14 — 팀 심의 입력 정직화 A안 (shadow 경로·운영 인수 11/15 00:08) ([진단 8절](docs/reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](docs/agents/trading-team.md))
 
 - 변경: `src/agents/analysts.py` — 검증기가 실제로 검증하지 못한 결과(`validated=False`)에는 통과 가산 +10·신뢰도 0.7을 주지 않는다(점수 0·신뢰도 0 → 집계·유효 근거 수에서 제외), 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결", 수급 지표는 `None`. 공시 위험이 있으면 −30·0.8(종전 −20). 실제로 검증된 결과의 산식은 그대로. `ANALYST_INPUT_VERSION` 추가.
 - 변경: `src/schedulers/kr_scheduler.py` `_run_team_deliberation_once` — 자동매도 금지 보유 종목은 재평가하지 않는다. `src/agents/team.py` — 새 규칙이 적용된 판정의 심의 원장 행에 `analyst_version`.
@@ -10,6 +10,7 @@
 - 영향(의도된 결과): 종합 점수 분포가 넓어지고, 기술·뉴스 보고가 실패한 종목은 유효 근거 1개로 신규 매수 판정이 보류된다. 과거 원장 근사(감쇠·토론 가감 미반영): 종합 ≥ +20인 행 183 → 236, 유효 근거 부족 0 → 62(822행 중).
 - 왜: 진단에서 재무 보고 978행 전부가 자료 부족인데 87%가 +10·0.7로 집계·토론에 들어가고 미획득 수급이 `False`로 기록되는 것을 확인했다. 사용자 결정 "A ㄱㄱ"(11/14).
 - 롤백: 이 커밋 되돌리기 + 재배포(설정 스위치 없음). 원장의 `analyst_version`으로 전후 표본을 가른다.
+- **운영 인수(11/15 00:08:13 KST, 사용자 "병합 뒤 바로 배포 ㄱㄱ"):** `local_deploy.sh dc49dd83` 서버 10,856 passed(876초)·롤백 0, PID 1596089. 배포 전 `TEAM_CONVICTION=0`(.env·실행 프로세스) 확인. 기동 171초 사후 점검: NRestarts 0·pending 0·ERROR/Traceback 0·EGW00201/EGW00215/HTTP 500 0·배포 직전 대비 보호 48파일 변동 0·cron/`KILL_SWITCH_KR`/월 200 보존. 첫 심의는 11/16 10:30.
 
 ## 2026-11-14 — 팀 심의 입력 진단 (제품 매매 코드·운영 무변경, 오프라인 집계 스크립트·검사 추가) ([진단](docs/reviews/team-input-diagnosis-2026-11-14.md))
 
