@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-14 — 팀 심의 입력 정직화 A안 (shadow 경로·운영 미배포) ([진단 8절](docs/reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](docs/agents/trading-team.md))
+
+- 변경: `src/agents/analysts.py` — 검증기가 실제로 검증하지 못한 결과(`validated=False`)에는 통과 가산 +10·신뢰도 0.7을 주지 않는다(점수 0·신뢰도 0 → 집계·유효 근거 수에서 제외), 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결", 수급 지표는 `None`. 공시 위험이 있으면 −30·0.8(종전 −20). 실제로 검증된 결과의 산식은 그대로. `ANALYST_INPUT_VERSION` 추가.
+- 변경: `src/schedulers/kr_scheduler.py` `_run_team_deliberation_once` — 자동매도 금지 보유 종목은 재평가하지 않는다. `src/agents/team.py` — 새 규칙이 적용된 판정의 심의 원장 행에 `analyst_version`.
+- 리뷰 1차 반영: DART 조회 실패는 "공시 자료 미획득"·`dart_risk_items=None`(위험 0건으로 적지 않음), 영향 재생은 저장된 가산분만 뺀다.
+- 검사: `tests/test_team_input_honesty.py` 8건, `tests/test_t11_judgment.py` 단정 1줄, `tests/test_team_input_diag.py`(영향 근사 `honesty_replay`).
+- 사이징 격리(리뷰 2차 반영): 새 규칙은 사이징 부스트가 꺼져 있을 때만 적용한다(`analysts.input_honesty_active()` = `TEAM_CONVICTION=0`) — 부스트가 켜진 환경(코드 기본값 포함)에서는 분석가가 종전 규칙 그대로라 달라진 판정이 신규 매수 사이징에 닿지 않는다. 부스트 스위치의 기본값은 바꾸지 않았다. 운영은 `.env`에 `TEAM_CONVICTION=0`이 있어 새 규칙이 적용된다.
+- 영향(의도된 결과): 종합 점수 분포가 넓어지고, 기술·뉴스 보고가 실패한 종목은 유효 근거 1개로 신규 매수 판정이 보류된다. 과거 원장 근사(감쇠·토론 가감 미반영): 종합 ≥ +20인 행 183 → 236, 유효 근거 부족 0 → 62(822행 중).
+- 왜: 진단에서 재무 보고 978행 전부가 자료 부족인데 87%가 +10·0.7로 집계·토론에 들어가고 미획득 수급이 `False`로 기록되는 것을 확인했다. 사용자 결정 "A ㄱㄱ"(11/14).
+- 롤백: 이 커밋 되돌리기 + 재배포(설정 스위치 없음). 원장의 `analyst_version`으로 전후 표본을 가른다.
+
 ## 2026-11-14 — 팀 심의 입력 진단 (제품 매매 코드·운영 무변경, 오프라인 집계 스크립트·검사 추가) ([진단](docs/reviews/team-input-diagnosis-2026-11-14.md))
 
 - 심의 원장 39거래일 978행 집계 + 코드 판독. 재무 보고는 전부 `insufficient`인데 87.3%가 점수 +10·신뢰도 0.7(요약은 코드 고정 문구 "특이사항 없음")로 집계·토론 프롬프트에 들어간다(`validated`를 보지 않는 기존 가산, 프롬프트에 자료 상태 없음). 미획득 수급은 `metrics`에 `False`로 기록된다 — 운영 프롬프트에는 없지만 V05 재판정 입력에는 들어갔다.

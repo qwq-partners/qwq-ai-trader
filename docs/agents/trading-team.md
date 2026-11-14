@@ -46,7 +46,7 @@ TeamVerdict → ~/.cache/ai_trader/team_verdicts/ → 대시보드
 | 파일 | 역할 |
 |---|---|
 | `types.py` | AnalystReport / DebateResult / TradeProposal / PMDecision / TeamVerdict |
-| `analysts.py` | Fundamental(dart+validator) / Technical(indicators) / News(news_curator) |
+| `analysts.py` | Fundamental(dart+validator — 9/15 이후 실질은 공시 위험 점검, 2026-11-14 입력 정직화 절 참조) / Technical(indicators) / News(news_curator) |
 | `researchers.py` | Bull(OpenAI) vs Bear(Gemini) 2라운드 토론 |
 | `trader.py` | 종합 점수 → BUY/HOLD/SELL + 사이징 배수 |
 | `portfolio_manager.py` | 종목별 최종 승인/거부 |
@@ -344,6 +344,16 @@ python scripts/shadow_report.py --telegram   # 텔레그램 전송
 - timing의 `CHECKER_ERROR`는 일반 미체결·기회비용과 분리한다. 원 `candidates_selected`·상관 표본 제외 수 외에 `timing_candidates`(dedup 후), `checker_errors`/`checker_error_reasons`, `evaluated_candidates`(오류 제외 분모)를 함께 출력한다. 모두 검사 오류이면 `fill_rate=None`이며, 오류 제외로 분모가 줄어든 비율을 단독 성능 근거로 쓰지 않는다. 일봉 날짜 자정 판정·데이터 없음의 기존 처리 및 사전 등록 기준은 유지한다.
 - 사전 등록(manifest): 주평가 = 포지션당 비용 차감 R 중앙값·평균, MDE +0.10R, 표본 ≥30/정책, 시간순 홀드아웃(마지막 1/3) 부호 유지, 종목-주 클러스터·겹치는 보유기간 dedup, 판단 시각 이전 필드만. 벤치마크 KODEX200(캐시 없으면 null).
 - **실데이터 없음 → 합성 fixture 로 도구만 검증(`validation_status=synthetic_only`)**. 성능·확률 보정·승격 판정은 미검증/보류. 과거 LLM 재평가는 사후 지식 가능성을 한계로 명시.
+
+## 입력 정직화 (2026-11-14, `ANALYST_INPUT_VERSION = "analyst-input-2026-11-14"`)
+
+[진단](../reviews/team-input-diagnosis-2026-11-14.md)의 A안. **새 규칙은 사이징 부스트가 꺼져 있을 때만 적용된다**(`analysts.input_honesty_active()` = `TEAM_CONVICTION=0`). 팀 판정(BUY 승인·conviction)은 `TEAM_CONVICTION`이 켜져 있으면 신규 매수 사이징 부스트(×1.10/×1.20)로 이어지고 그 스위치의 코드 기본값은 켜짐이다 — 그런 환경에서는 분석가가 종전 규칙(통과 가산 +10·신뢰도 0.7·수급 기본값 기록)을 그대로 써서, 새 규칙으로 달라진 판정이 사이징에 닿지 않는다. 운영은 `.env`에 `TEAM_CONVICTION=0`이 있어 새 규칙이 적용된다. 부스트를 다시 켜려면 새 규칙의 표본으로 재평가한 뒤 이 조건을 함께 고친다.
+
+- **재무 보고**: 검증기가 실제로 검증하지 못한 결과(`validated=False` — 9/15 이후 위험 공시 차단이 아닌 모든 경우)에는 통과 가산 +10과 신뢰도 0.7을 주지 않는다. 그런 보고는 점수 0·신뢰도 0으로 집계(`aggregate_score`)와 유효 근거 수(`evidence_quality`)에서 빠지고, 요약에 "공시 위험 신호 없음 — 수급·재무 자료 미연결"이라고 적혀 토론 프롬프트로 간다. DART 조회 자체가 실패했으면(`fetched`가 참이 아님) "공시 자료 미획득 — 수급·재무 자료 미연결"이고 `dart_risk_items`는 `None`이다(0건으로 적지 않는다). 공시 위험이 있으면 종전대로 −30·신뢰도 0.8(가산이 빠져 종전 −20 → −30). 실제로 검증한 결과(`validated=True`)의 산식은 그대로다.
+- **수급 지표**: 미검증 결과의 `foreign_net_buying`·`institutional_net_buying`은 `None`(미관측)으로 남긴다. 검증된 결과의 `False`는 관측값으로 보존한다. 한계: 위험 공시 차단 결과(`validated=True`·`partial`)의 수급 기본값은 가르지 못한다 — 그 행은 차단이다.
+- **보유 재평가**: 자동매도 금지(`exit_exempt`) 종목은 보유 재평가에서 뺀다(`[팀심의] 자동매도 금지 보유 N종목은 재평가하지 않는다`). 심의 결과가 실행될 수 없고 지표 경로도 없었다. 그 종목이 스크리닝 상위 5 후보에 들면 매수 후보로는 심의된다(원장 행에 후보·보유 구분은 없다).
+- **원장**: 새 규칙이 적용된 판정의 심의 원장 행에 `analyst_version`이 붙는다(종전 규칙으로 계산된 행은 `None`). 이 표시가 없는 행은 종전 규칙이다 — 반사실·재판정 표본을 전후로 가를 때 쓴다.
+- **달라지는 것(의도된 결과)**: 종합 점수에서 상수 +10이 빠져 분포가 넓어지고, 기술 보고나 뉴스 보고가 실패한 종목은 유효 근거가 1개가 돼 신규 매수 판정이 "근거 부족"으로 보류된다. 과거 원장 근사는 진단 문서 8절.
 
 ## 남은 작업
 
