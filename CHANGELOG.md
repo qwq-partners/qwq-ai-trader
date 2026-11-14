@@ -6,6 +6,7 @@
 - 기술 보고 오류 211건(`지표 없음`) 중 155건은 스크리너 지표 캐시에 없는 자동매도 금지 보유 1종목이다(`TradingTeam`에 `price_provider` 미배선, 모델 호출의 15.9%). 나머지 56건은 원인 미확정.
 - 뉴스 보고의 `partial`은 제목 기반이라는 설계 표시다(타임아웃 2.1%).
 - 고치는 방향(A 정직화만 / B 실제 자료 연결 / C 유지)은 사용자 결정 대기 — 권장 A, B는 V02 판독 뒤.
+- 추가: `scripts/research/team_input_diag.py`(집계 재현 — 본문·종목 코드 미출력, 고정 종료일, 입력 지문)·`tests/test_team_input_diag.py`. V05 결과 문서의 "재무 보고가 전부 비어 있고"를 "상수 +10과 미획득 `False`가 들어간 입력"으로 정정하고 그 영향을 측정하지 못했음을 적었다(독립 리뷰 1차 P1 2건 반영).
 
 ## 2026-11-14 — V02-R 후보 원장 판독 스크립트 (오프라인·운영 무변경) ([사전 등록 7절](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
