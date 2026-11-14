@@ -126,8 +126,31 @@ def test_report_end_to_end_with_synthetic_prices(tmp_path):
     assert src["n_in"] == 16 * 10 and src["n_out"] == 16 * 11 and src["days_both"] == 16
     assert out["exploratory"]["h5"]["수급 표시"]["diff"] is None   # 표시를 모르는 후보는 비교에 넣지 않는다
 
+    assert r.used_symbols(obs) == [f"{i:06d}" for i in range(21)]   # 장 마감 뒤 후보는 가격 수집 대상도 아니다
+    later = (date(2026, 11, 16) + timedelta(days=25)).isoformat()   # 종료일 뒤에 붙은 가격 행은 결과·입력 지문을 바꾸지 않는다
+    for name, row in ((f"{r.BENCH}.csv", f"{later},31000,31000,31000,31000\n"), ("adj.csv", f"{later},31000\n"),
+                      ("000020.csv", f"{later},9,9,9,9\n")):
+        with open(tmp_path / name, "a") as f:
+            f.write(row)
+    assert r.report(obs, str(tmp_path), str(tmp_path / "adj.csv"), cal[-1]) == out
+    assert r.report(obs[:-1], str(tmp_path), str(tmp_path / "adj.csv"), cal[-1])["inputs"] != out["inputs"]
+
     for name in (f"{r.BENCH}.csv", "adj.csv"):   # 벤치마크가 평탄하면 β 를 못 구한다 — '비용을 못 넘음'으로 적지 않는다
         (tmp_path / name).write_text((tmp_path / name).read_text().replace("30100", "30000").replace("30200", "30000")
                                      .replace("30300", "30000").replace("30400", "30000").replace("30500", "30000"))
     flat = r.report(obs, str(tmp_path), str(tmp_path / "adj.csv"), cal[-1])
     assert flat["tradability"]["h5"] is None and flat["primary"]["h5"]["note"] == "거래 가능성 판정 불가(β 추정 불가)"
+
+
+def test_prices_cli_skips_after_close_only_symbols(tmp_path, monkeypatch):
+    import json
+    import sys
+    obs = tmp_path / "obs.jsonl"
+    obs.write_text("".join(json.dumps({"symbol": s, "after_close": a}) + "\n"
+                           for s, a in (("000002", False), ("000001", False), ("000001", True), ("999999", True))))
+    got = []
+    monkeypatch.setattr(r, "fetch_prices", lambda *a: got.append(a))
+    monkeypatch.setattr(sys, "argv", ["x", "prices", "--obs", str(obs), "--out-dir", str(tmp_path / "p"),
+                                      "--start", "2026-10-01", "--through", "2026-11-17"])
+    r.main()
+    assert got == [([r.BENCH, "000001", "000002"], str(tmp_path / "p"), "2026-10-01", "2026-11-17")]

@@ -4,13 +4,14 @@
 사전 등록: docs/research/v02-candidate-ledger-2026-11-13.md 4절·7절. KIS 무접촉, 운영 잡이 아니다.
   obs    : candidate_ledger/candidates_YYYYMMDD.jsonl[.gz] → 종목-일 관측(obs.jsonl, 그날 처음 반환된 스캔)
            + 건수·결측률·원천 분포(표준 출력 — 수익은 계산하지 않는다)
-  prices : candidate_forward_excess.py prices 를 그대로 쓴다(obs.jsonl 의 symbol 을 읽는다)
+  prices : 판독에 쓰는 종목(장 마감 뒤 첫 등장만 있는 종목 제외) + 069500 의 공개 일봉을 CSV 캐시로(V01 fetch_prices)
   report : obs + 공개 일봉 → summary.json. 최소 표본(두 집단이 모두 있는 날 15일·300종목-일)에 못 미친
            보유 기간은 '판정 불가'만 적고 수익 통계를 계산하지 않는다(중간 엿보기 금지)
 """
 import argparse
 import glob
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -20,8 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from scripts.research.candidate_forward_excess import (  # noqa: E402
-    BENCH, COST, adjust_bench, daily_stat, forward, load_bars, slope)
-from scripts.research.team_rejudge import block_bootstrap, input_hashes, weighted_nw_t, within_day, wmean  # noqa: E402
+    BENCH, COST, adjust_bench, daily_stat, fetch_prices, forward, load_bars, slope)
+from scripts.research.team_rejudge import block_bootstrap, weighted_nw_t, within_day, wmean  # noqa: E402
 from src.analytics.candidate_ledger import SCHEMA  # noqa: E402
 
 HORIZONS = (5, 20)
@@ -125,15 +126,25 @@ def build_obs(ledger_dir, through):
                  "gates": {k: dict(sorted(v.items())) for k, v in gate_n.items()}, "per_day": per_day}
 
 
+def used_symbols(obs):
+    """판독에 쓰는 종목 — 장 마감 뒤 첫 등장뿐인 종목은 가격도 받지 않는다(그 종목의 수집 실패가 판독을 막지 않게)."""
+    return sorted({o["symbol"] for o in obs if not o["after_close"]})
+
+
+def _digest(obj):
+    return hashlib.sha256(json.dumps(obj, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+
 def outcomes(obs, price_dir, bench_adjust, through, allow_partial=False):
-    """D 종가 진입·h거래일 뒤 종가(V01 산식·가격 원천). 반환 [(obs, {ret5, bench5, ret20, bench20})], 거래일 위치, 제외 사유."""
+    """D 종가 진입·h거래일 뒤 종가(V01 산식·가격 원천). 반환 [(obs, {ret5, bench5, ret20, bench20})], 거래일 위치, 제외 사유,
+    짧은 캐시 종목 수, 가격 지문(종료일까지의 보정 벤치마크·종목 봉 — 종료일 뒤에 붙은 행은 지문을 바꾸지 않는다)."""
     late = sorted({o["date"] for o in obs if o["date"] > through})
     if late:
         raise SystemExit(f"고정 종료일 {through} 이후 관측이 있다: {late[:5]}")
     bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust, through)
     cal = sorted(bench)
     use = [o for o in obs if not o["after_close"]]
-    symbols = sorted({o["symbol"] for o in use})
+    symbols = used_symbols(obs)
     missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
     if missing:
         raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
@@ -156,7 +167,8 @@ def outcomes(obs, price_dir, bench_adjust, through, allow_partial=False):
             b, _ = forward(bench, cal, o["date"], "close", h)
             v[f"ret{h}"], v[f"bench{h}"] = float(res[0]), float(b[0])
         rows.append((o, v))
-    return rows, {d: i for i, d in enumerate(cal)}, dict(sorted(excluded.items())), len(partial)
+    return (rows, {d: i for i, d in enumerate(cal)}, dict(sorted(excluded.items())), len(partial),
+            _digest({BENCH: sorted(bench.items()), **{s: sorted(cache[s].items()) for s in symbols}}))
 
 
 def day_terciles(rows):
@@ -224,8 +236,9 @@ def combine(verdicts):
 
 
 def report(obs, price_dir, bench_adjust, through, allow_partial=False):
-    rows, pos, excluded, partial = outcomes(obs, price_dir, bench_adjust, through, allow_partial)
-    out = {"schema": "v02r-1", "through": through, "symbol_days": len(obs), "after_close_excluded": len(obs) - len(rows),
+    rows, pos, excluded, partial, prices = outcomes(obs, price_dir, bench_adjust, through, allow_partial)
+    out = {"schema": "v02r-1", "through": through, "inputs": {"obs_sha256": _digest(obs), "prices_sha256": prices},
+           "symbol_days": len(obs), "after_close_excluded": len(obs) - len(rows),
            "unscored": sum(o["score"] is None for o, _v in rows), "partial_price_symbols": partial, "excluded": excluded,
            "primary": {}, "tradability": {}, "exploratory": {}}
     for h in HORIZONS:
@@ -246,12 +259,17 @@ def main():
     a = sub.add_parser("obs")
     a.add_argument("--ledger-dir", required=True)
     b = sub.add_parser("report")
-    b.add_argument("--obs", required=True)
+    c = sub.add_parser("prices")
+    c.add_argument("--out-dir", required=True)
+    c.add_argument("--start", required=True, help="가격 시작일 YYYY-MM-DD — 첫 관측일 이전")
+    for x in (b, c):
+        x.add_argument("--obs", required=True)
     b.add_argument("--price-dir", required=True)
     b.add_argument("--bench-adjust", required=True, help="KIS 수정 종가 CSV(date, close) — 벤치마크 분배금 보정")
     b.add_argument("--allow-partial-prices", action="store_true")
-    for x in (a, b):
+    for x in (a, b, c):
         x.add_argument("--through", required=True, help="분석 종료일 YYYY-MM-DD(KST, 포함)")
+    for x in (a, b):
         x.add_argument("--out", required=True)
     args = p.parse_args()
     if args.cmd == "obs":
@@ -261,10 +279,10 @@ def main():
         print(json.dumps(stats, ensure_ascii=False, indent=1))
         return
     obs = [json.loads(line) for line in open(args.obs)]
+    if args.cmd == "prices":
+        fetch_prices([BENCH, *used_symbols(obs)], args.out_dir, args.start, args.through)
+        return
     out = report(obs, args.price_dir, args.bench_adjust, args.through, args.allow_partial_prices)
-    hashes = input_hashes(args.obs, {}, args.price_dir, args.bench_adjust, {o["symbol"] for o in obs if not o["after_close"]})
-    out["inputs"] = {"obs_sha256": hashes["items_sha256"], "prices_sha256": hashes["prices_sha256"],
-                     "bench_adjust_sha256": hashes["bench_adjust_sha256"]}
     with open(args.out, "w") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(out["verdict"], {k: {x: v[x] for x in ("symbol_days", "days_both", "verdict")} for k, v in out["primary"].items()})

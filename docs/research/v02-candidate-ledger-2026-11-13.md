@@ -152,11 +152,19 @@
 ```bash
 A=~/.local/state/qwq-task-audit/<날짜>/v02r   # 비공개
 python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <종료일> --out $A/obs.jsonl
-python scripts/research/candidate_forward_excess.py prices --obs $A/obs.jsonl --out-dir $A/prices --through <종료일>
+python scripts/research/candidate_ledger_readout.py prices --obs $A/obs.jsonl --out-dir $A/prices --start <첫 관측일 이전> --through <종료일>
 python scripts/research/candidate_ledger_readout.py report --obs $A/obs.jsonl --price-dir $A/prices \
   --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --through <종료일> --out $A/summary.json
 ```
 
 - `obs`는 수익을 계산하지 않는다 — 건수·스캔 수·필드별 결측률·원천 분포·게이트 분포·버린 행 수를 표준 출력에 낸다. **최소 표본 전의 점검(첫 거래일 행 구조·결측률 포함)은 이 명령만 쓴다.**
-- `report`는 최소 표본이 찬 시점에 **고정 종료일로 한 번** 돌린다(5일 판독은 배포 뒤 약 4주, 20일 판독은 약 7주). 같은 종료일로 다시 돌리면 같은 결과가 나온다(부트스트랩 시드 고정, 입력 해시를 `inputs`에 남긴다).
-- 검사: `tests/test_candidate_ledger_readout.py` 10건 — 실제 기록 모듈이 쓴 파일(잘린 줄·짝 없는 게이트·gzip 포함) 읽기와 첫 스캔 규칙, 3분위의 동점·소수 후보 처리, 판정 임계와 구간 조건, 최소 표본 전 수익 통계 미계산, 종합 판정, 합성 가격으로 obs → report 종단(20일은 `판정 불가`로 남고 장 마감 뒤 후보는 가격 없이도 제외).
+- `prices`는 판독에 쓰는 종목만 받는다(장 마감 뒤 첫 등장뿐인 종목은 판독에서 빠지므로 받지 않는다 — 그 종목의 수집 실패가 전체를 막지 않게). 수집 자체는 V01 `fetch_prices` 그대로다.
+- `report`는 최소 표본이 찬 시점에 **고정 종료일로 한 번** 돌린다(5일 판독은 배포 뒤 약 4주, 20일 판독은 약 7주). 같은 종료일로 다시 돌리면 같은 결과가 나온다 — 부트스트랩 시드 고정, `inputs`의 지문은 관측 목록과 **종료일까지의** 보정 벤치마크·종목 봉으로 계산해 종료일 뒤에 가격 행이 더 붙어도 바뀌지 않는다.
+- 검사: `tests/test_candidate_ledger_readout.py` 11건 — 실제 기록 모듈이 쓴 파일(잘린 줄·짝 없는 게이트·gzip 포함) 읽기와 첫 스캔 규칙, 3분위의 동점·소수 후보 처리, 판정 임계와 구간 조건, 최소 표본 전 수익 통계 미계산, 종합 판정, 합성 가격으로 obs → report 종단(20일은 `판정 불가`로 남고 장 마감 뒤 후보는 가격 없이도 제외, 종료일 뒤 가격 행을 붙여도 요약 전체가 같음), `prices`가 장 마감 뒤 후보뿐인 종목을 받지 않음.
+
+**독립 리뷰 처분**(교차 공급자 Codex, 요청 gpt-5.6-sol/high — 리뷰어는 읽기 전용 환경이라 검사를 직접 돌리지 못했다):
+
+| 회차 | 지적 | 처분 |
+|---|---|---|
+| 1차(병합 불가) | P1 문서의 V01 `prices`는 판독에서 빼는 장 마감 뒤 후보까지 받아, 그 종목 하나의 수집 실패가 전체를 멈춘다 | **반영** — 전용 `prices` 서브커맨드가 판독 대상 종목만 넘긴다. 회귀 검사 추가 |
+| 1차 | P2 입력 해시가 CSV 전체를 해시해 종료일 뒤에 붙은 행이 지문을 바꾼다(재현성 설명과 불일치) | **반영** — 지문을 종료일까지의 실제 사용 자료로 계산. 종료일 뒤 행 추가 전후 요약 전체가 같은지 검사 |
