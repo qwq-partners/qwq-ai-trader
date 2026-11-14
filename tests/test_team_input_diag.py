@@ -29,10 +29,15 @@ def test_summary(tmp_path):
     assert s["kinds"]["technical"]["error"] == {"no_indicators": 2, "other": 1}
     dumped = json.dumps(s, ensure_ascii=False)   # 원장의 문자열·종목 코드는 결과에 실리지 않는다
     assert not any(x in dumped for x in ("비밀", "000001", "000002", "000003"))
-    assert s["tech_error"] == {"total": 3, "symbols": 2, "top_symbol": {"errors": 2, "rows": 2, "debate_turns": 5},
+    assert s["tech_error"] == {"total": 3, "symbols": 2, "focus": "오류 최다 종목", "focus_is_top_error_symbol": True,
+                               "top_symbol": {"errors": 2, "rows": 2, "debate_turns": 5},
                                "by_slot_top_symbol": {"10:30": 1, "11:30": 1}, "by_slot_others": {"10:30": 1, "11:30": 0},
                                "by_day_others": {"2026-11-12": 1}}
     assert s["decision"] == {"기술 오류": {"hold|False": 3}, "기술 정상": {"hold|True": 1}}
+    named = t.summarize(rows, "000002")["tech_error"]   # 지정 종목은 오류 최다 종목이 아니어도 따로 센다
+    assert (named["focus"], named["focus_is_top_error_symbol"], named["top_symbol"]) == (
+        "지정 종목", False, {"errors": 1, "rows": 1, "debate_turns": 2})
+    assert named["by_slot_others"] == {"10:30": 1, "11:30": 1} and "000002" not in json.dumps(named)
     assert t.load(str(tmp_path), "2026-11-13")[1] != digest and len(t.load(str(tmp_path), "2026-11-13")[0]) == 5
 
 
@@ -61,9 +66,10 @@ def test_no_ledger_value_reaches_the_output(tmp_path):
     bad["reports"][0].update(score="비밀점수", confidence="비밀신뢰", data_status="비밀상태", metrics={"비밀지표": False})
     bad["reports"].append({"kind": "비밀종류", "data_status": "full", "score": float("inf")})
     bad["reports"].append("비밀보고")
-    (tmp_path / "deliberations_20261112.jsonl").write_text(json.dumps(bad, ensure_ascii=False) + "\n")
-    s = t.summarize(t.load(str(tmp_path), "2026-11-12")[0])
-    assert "비밀" not in json.dumps(s, ensure_ascii=False)
-    assert s["kinds"]["fundamental"]["score_conf"] == {"비정상": 1} and s["kinds"]["other"]["score_sign"] == {"비정상": 1}
-    assert s["decision"] == {"기술 오류": {"other|other": 1}} and s["data_sufficiency"] == {"other": 1}
-    assert s["tech_error"]["by_slot_top_symbol"] == {"other": 1} and s["kinds"]["technical"]["error"] == {"other": 1}
+    odd = [dict(_row("y", None, "10:30", "지표 없음"), symbol=["비밀"]), dict(_row("z", None, "10:30"), symbol={"비밀": 1})]
+    (tmp_path / "deliberations_20261112.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in [bad, *odd]))
+    s = t.summarize(t.load(str(tmp_path), "2026-11-12")[0])   # 배열·객체인 종목 값에도 집계가 멈추지 않는다
+    assert "비밀" not in json.dumps(s, ensure_ascii=False) and s["rows"] == 3 and s["symbols"] == 2
+    assert s["kinds"]["fundamental"]["score_conf"] == {"비정상": 1, "10|0.7": 2} and s["kinds"]["other"]["score_sign"] == {"비정상": 1}
+    assert s["decision"]["기술 오류"]["other|other"] == 1 and s["data_sufficiency"] == {"other": 1, "partial": 2}
+    assert s["tech_error"]["total"] == 2 and s["kinds"]["technical"]["error"] == {"other": 1, "no_indicators": 1}

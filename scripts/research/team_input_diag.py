@@ -5,7 +5,9 @@
 허용 목록 밖의 값(요약·근거·오류·한계 문구, 종목 코드, 모르는 종류·상태·판정·슬롯·지표 이름)은 'other'/'비정상'으로 센다.
 
 진단 문서: docs/reviews/team-input-diagnosis-2026-11-14.md
-  python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through 2026-11-13 --out summary.json
+  python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through 2026-11-13 \
+      --symbol <종목코드> --out summary.json
+--symbol 을 주면 그 종목의 기술 오류·토론 턴을 따로 집계하고, 그 종목이 오류 최다 종목과 같은지 표시한다(코드는 출력하지 않는다).
 같은 deliberation_id 는 마지막 행이 정본 — 키는 운영 로더(src/agents/team_ledger.load_day(dedup=True))와 같은 str(id) 라
 id 가 없는 행들도 하나로 묶인다. 날짜는 파일 이름(KST).
 """
@@ -67,14 +69,14 @@ def load(team_dir, through):
     return rows, digest.hexdigest()
 
 
-def summarize(rows):
+def summarize(rows, symbol=None):
     kinds = defaultdict(lambda: {"n": 0, "status": Counter(), "error": Counter(), "limits": Counter(), "evidence": [],
                                  "score_conf": Counter(), "score_sign": Counter(), "false_metrics": Counter()})
     slot_err, sym_rows, sym_err, calls = defaultdict(Counter), Counter(), Counter(), Counter()
     day_err = defaultdict(Counter)
     decision, suff = defaultdict(Counter), Counter()
     for day, r in rows:
-        sym = r.get("symbol")
+        sym = r.get("symbol") if isinstance(r.get("symbol"), str) else None   # 문자열이 아닌 종목 값은 한 묶음으로
         sym_rows[sym] += 1
         mc = r.get("model_calls")
         calls[sym] += len(mc) if isinstance(mc, list) else 0   # 토론 턴(요청 자리) 수 — 응답이 없던 턴도 들어 있어 실제 전송 수가 아니다
@@ -112,7 +114,8 @@ def summarize(rows):
         approved = d.get("approved")
         decision["기술 오류" if tech_error else "기술 정상"][
             f'{_label(d.get("stance"), STANCES)}|{approved if isinstance(approved, bool) else "other"}'] += 1
-    top = sym_err.most_common(1)[0][0] if sym_err else None   # 기술 오류가 가장 많은 종목(코드는 출력하지 않는다)
+    most = sym_err.most_common(1)[0][0] if sym_err else None   # 기술 오류가 가장 많은 종목(코드는 출력하지 않는다)
+    top = symbol if symbol is not None else most             # 지정 종목이 있으면 그 종목을 따로 센다
     return {"rows": len(rows), "days": len({d for d, _r in rows}), "symbols": len(sym_rows),
             "kinds": {name: {"n": k["n"], "status": dict(k["status"]), "error": dict(k["error"]), "limits": dict(k["limits"]),
                              "evidence_median": median(k["evidence"]) if k["evidence"] else None,
@@ -123,6 +126,8 @@ def summarize(rows):
             "data_sufficiency": dict(suff), "decision": {k: dict(v) for k, v in decision.items()},
             "debate_turns": sum(calls.values()),
             "tech_error": {"total": sum(sym_err.values()), "symbols": len(sym_err),
+                           "focus": "지정 종목" if symbol is not None else "오류 최다 종목",
+                           "focus_is_top_error_symbol": top is not None and top == most,
                            "top_symbol": ({"errors": sym_err[top], "rows": sym_rows[top], "debate_turns": calls[top]}
                                           if top is not None else None),
                            "by_slot_top_symbol": {s: c[top] for s, c in sorted(slot_err.items())},
@@ -143,9 +148,10 @@ def main():
     p.add_argument("--team-dir", required=True)
     p.add_argument("--through", required=True, help="종료일 YYYY-MM-DD(파일 이름 기준, 포함)")
     p.add_argument("--out", required=True)
+    p.add_argument("--symbol", help="따로 집계할 종목 코드(출력하지 않는다)")
     args = p.parse_args()
     rows, digest = load(args.team_dir, args.through)
-    out = {"through": args.through, "input_sha256": digest, **summarize(rows)}
+    out = {"through": args.through, "input_sha256": digest, **summarize(rows, args.symbol)}
     write_private(args.out, out)
     print(json.dumps(out, ensure_ascii=False, indent=1))
 
