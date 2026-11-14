@@ -1,5 +1,6 @@
 """팀 심의 입력 집계 — 중복 제거·종료일·자료 상태·기술 오류 최다 종목 분리, 원장 문자열·종목 코드 미출력."""
 import json
+import stat
 
 from scripts.research import team_input_diag as t
 
@@ -33,3 +34,20 @@ def test_summary(tmp_path):
                                "by_day_others": {"2026-11-12": 1}}
     assert s["decision"] == {"기술 오류": {"hold|False": 3}, "기술 정상": {"hold|True": 1}}
     assert t.load(str(tmp_path), "2026-11-13")[1] != digest and len(t.load(str(tmp_path), "2026-11-13")[0]) == 5
+
+
+def test_missing_id_rows_merge_like_the_production_loader_and_bad_scores_are_counted(tmp_path):
+    rows = [_row(None, "000001", "10:30"), _row(None, "000002", "10:30")]   # id 없는 행은 운영 로더처럼 하나로 묶인다
+    rows[1]["reports"][0]["score"] = None
+    rows[1]["reports"][1]["score"] = "높음"
+    (tmp_path / "deliberations_20261112.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows) + "[1, 2]\n")
+    s = t.summarize(t.load(str(tmp_path), "2026-11-12")[0])
+    assert s["rows"] == 1 and s["kinds"]["fundamental"]["score_sign"] == {"비정상": 1} == s["kinds"]["technical"]["score_sign"]
+
+
+def test_output_is_private_even_when_the_file_already_exists(tmp_path):
+    out = tmp_path / "summary.json"
+    out.write_text("old")
+    out.chmod(0o644)
+    t.write_private(str(out), {"a": 1})
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600 and json.loads(out.read_text()) == {"a": 1}

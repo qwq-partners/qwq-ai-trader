@@ -5,7 +5,8 @@
 
 진단 문서: docs/reviews/team-input-diagnosis-2026-11-14.md
   python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through 2026-11-13 --out summary.json
-같은 deliberation_id 는 마지막 행이 정본(src/agents/team_ledger.load_day(dedup=True) 와 같은 계약). 날짜는 파일 이름(KST).
+같은 deliberation_id 는 마지막 행이 정본 — 키는 운영 로더(src/agents/team_ledger.load_day(dedup=True))와 같은 str(id) 라
+id 가 없는 행들도 하나로 묶인다. 날짜는 파일 이름(KST).
 """
 import argparse
 import glob
@@ -37,12 +38,13 @@ def load(team_dir, through):
             raw = fh.read()
         digest.update(os.path.basename(f).encode() + hashlib.sha256(raw).digest())
         by = {}
-        for n, line in enumerate(raw.decode("utf-8", "replace").splitlines()):
+        for line in raw.decode("utf-8", "replace").splitlines():
             try:
                 r = json.loads(line)
             except ValueError:
                 continue
-            by[str(r["deliberation_id"]) if r.get("deliberation_id") is not None else f"row{n}"] = r
+            if isinstance(r, dict):
+                by[str(r.get("deliberation_id"))] = r
         rows += [(day, r) for r in by.values()]
     return rows, digest.hexdigest()
 
@@ -71,7 +73,8 @@ def summarize(rows):
             for x in rep["limitations"] if isinstance(rep.get("limitations"), list) else []:
                 k["limits"][LIMITS.get(str(x), "other")] += 1
             s = rep.get("score")
-            k["score_sign"]["양" if s > 0 else "음" if s < 0 else "0"] += isinstance(s, (int, float))
+            numeric = isinstance(s, (int, float)) and not isinstance(s, bool)   # 비교보다 먼저 — 비정상 점수는 따로 센다
+            k["score_sign"]["비정상" if not numeric else "양" if s > 0 else "음" if s < 0 else "0"] += 1
             for name, v in (rep["metrics"] if isinstance(rep.get("metrics"), dict) else {}).items():
                 k["false_metrics"][name] += v is False
             if rep.get("kind") == "fundamental":
@@ -101,6 +104,14 @@ def summarize(rows):
                            "by_day_others": {d: n for d, n in sorted((d, sum(c.values()) - c[top]) for d, c in day_err.items()) if n}}}
 
 
+def write_private(path, out):
+    """운영 원장 집계는 0600 으로 쓴다 — 이미 있던 파일의 권한도 쓰기 전에 좁힌다."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        os.fchmod(fd, 0o600)
+        json.dump(out, f, ensure_ascii=False, indent=1)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--team-dir", required=True)
@@ -109,8 +120,7 @@ def main():
     args = p.parse_args()
     rows, digest = load(args.team_dir, args.through)
     out = {"through": args.through, "input_sha256": digest, **summarize(rows)}
-    with open(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:   # 운영 원장 집계 — 비공개 권한
-        json.dump(out, f, ensure_ascii=False, indent=1)
+    write_private(args.out, out)
     print(json.dumps(out, ensure_ascii=False, indent=1))
 
 
