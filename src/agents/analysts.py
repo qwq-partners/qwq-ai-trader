@@ -25,6 +25,10 @@ from loguru import logger
 
 from .types import AnalystKind, AnalystReport, EvidenceItem
 
+# 분석가 보고의 점수·신뢰도 규칙이 바뀌면 올린다 — 심의 원장 행의 analyst_version 으로 남아 전후 표본을 가른다.
+# 2026-11-14: 미검증 재무 보고의 통과 가산(+10)·신뢰도 0.7·수급 기본값 기록 제거(이 표시가 없는 행은 그 이전 규칙).
+ANALYST_INPUT_VERSION = "analyst-input-2026-11-14"
+
 # 개별 분석가 타임아웃 (초) — 장중 경로이므로 짧게
 ANALYST_TIMEOUT = 15.0
 
@@ -129,7 +133,14 @@ class FundamentalAnalyst:
 
                 sd = getattr(result, "supply_demand_result", None)
                 foreign = inst = False
-                if sd is not None:
+                # 2026-11-14 입력 정직화: 검증을 수행하지 못한 결과(validated=False)의 수급 값은
+                # 검증기가 채운 기본값(False)이지 관측이 아니다 — 미관측(None)으로 남기고 점수에 쓰지 않는다.
+                # ponytail: 위험 공시 차단 결과(validated=True·partial)의 수급 기본값은 여기서 가르지 못한다 —
+                #           그 행은 어차피 차단이고, 가르려면 검증기가 수급 획득 여부를 따로 실어야 한다.
+                if sd is not None and not validated_ok:
+                    metrics["foreign_net_buying"] = None
+                    metrics["institutional_net_buying"] = None
+                elif sd is not None:
                     foreign = bool(getattr(sd, "foreign_net_buying", False))
                     inst = bool(getattr(sd, "institutional_net_buying", False))
                     metrics["foreign_net_buying"] = foreign
@@ -153,14 +164,17 @@ class FundamentalAnalyst:
                     score -= 15
                     findings.append("공매도 상위 50종목")
 
+                # 2026-11-14 입력 정직화: '통과' 가산(+10)과 신뢰도 0.7 은 실제로 검증을 수행했을 때만 준다.
+                # 종전에는 approved 만 보고 주어서, 확인한 것이 "위험 공시 없음"뿐인 종목 전부가
+                # 자료 부족(insufficient)인 채 +10·0.7 로 집계·토론에 들어갔다(심의 원장 978행 중 854행).
                 if passed is False:
                     score -= 25
                     findings.append(f"검증 실패: {reason[:60]}")
-                elif passed is True:
+                    confidence = 0.7
+                elif passed is True and validated_ok:
                     score += 10
                     validation_pass_bonus = 10
-
-                confidence = 0.7
+                    confidence = 0.7
 
                 # T11: '검증 통과'는 위험을 못 찾았다는 뜻(risk_clear)일 뿐이다.
                 # positive_basis(매수 매력의 긍정 근거)는 순매수 등 실제로 확인된
@@ -263,7 +277,14 @@ class FundamentalAnalyst:
             return _failed_report(AnalystKind.FUNDAMENTAL, symbol, str(e))
 
         score = max(-100, min(100, score))
-        summary = "; ".join(findings[:3]) if findings else "특이사항 없음"
+        if findings:
+            summary = "; ".join(findings[:3])
+        elif data_status in ("insufficient", "error", "unknown"):
+            # 토론 프롬프트에는 요약만 들어간다 — 자료가 없다는 사실을 요약에 적는다
+            summary = ("공시 위험 신호 없음 — 수급·재무 자료 미연결" if self._dart is not None
+                       else "수급·재무 자료 미연결")
+        else:
+            summary = "특이사항 없음"
         # stock_validator는 수급 30분 / 트렌드 2시간 캐시를 쓴다.
         # 캐시 히트 시각을 알 수 없으므로 보수적으로 TTL 절반만큼 지난 것으로 본다
         # (실제보다 신선하다고 가정해 과대평가하는 것보다 낫다).

@@ -36,7 +36,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from loguru import logger
 
 from . import team_ledger
-from .analysts import AnalystTeam
+from .analysts import ANALYST_INPUT_VERSION, AnalystTeam
 from .judgment import assess as _assess_team
 from .portfolio_manager import PortfolioManager
 from .researchers import PROMPT_VERSION as _DEBATE_PROMPT_VERSION
@@ -585,6 +585,7 @@ class TradingTeam:
             row["decided_at"] = datetime.now().isoformat(timespec="seconds")
             row["input_snapshot_hash"] = snap_hash
             row["prompt_version"] = _DEBATE_PROMPT_VERSION
+            row["analyst_version"] = ANALYST_INPUT_VERSION
             row["policy_version"] = (
                 verdict.assessment.policy_version if verdict.assessment
                 else ASSESSMENT_POLICY_VERSION

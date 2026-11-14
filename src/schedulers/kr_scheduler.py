@@ -6838,12 +6838,18 @@ JSON:
             })
         candidates = [c for c in candidates if c["symbol"]]
 
-        # ── 2) 보유 종목 전체 ──
+        # ── 2) 보유 종목 전체(자동매도 금지 종목 제외) ──
         holdings = []
+        _exempt_skipped = 0
         try:
             # bot에는 portfolio 속성이 없다 — engine.portfolio가 정본 (2026-08-04 P1)
             positions = bot.engine.portfolio.positions
             for sym, pos in list(positions.items()):
+                # 자동매도 금지 종목은 심의 결과가 실행될 수 없다 — 하루 4번 토론만 돌리게 된다(2026-11-14 입력 진단)
+                _em = getattr(bot, "exit_manager", None)
+                if _em is not None and _em.is_exit_exempt(sym) is True:
+                    _exempt_skipped += 1
+                    continue
                 pnl_pct = None
                 try:
                     if pos.avg_price and float(pos.avg_price) > 0 and pos.current_price:
@@ -6865,6 +6871,8 @@ JSON:
         except Exception as e:
             logger.warning(f"[팀심의] 보유 종목 수집 실패: {e}")
 
+        if _exempt_skipped:
+            logger.info(f"[팀심의] 자동매도 금지 보유 {_exempt_skipped}종목은 재평가하지 않는다")
         if not candidates and not holdings:
             logger.info("[팀심의] 심의 대상 없음")
             return

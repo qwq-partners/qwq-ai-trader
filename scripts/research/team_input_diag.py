@@ -18,8 +18,13 @@ import json
 import math
 import os
 import re
+import sys
 from collections import Counter, defaultdict
 from statistics import median
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from src.agents.analysts import MIN_VALID_SOURCES  # noqa: E402
+from src.agents.trader import BUY_THRESHOLD, SELL_THRESHOLD  # noqa: E402
 
 # 코드가 만드는 고정 문구만 분류한다. 그 밖의 문자열은 내용을 옮기지 않고 'other' 로 센다.
 ERRORS = {"지표 없음": "no_indicators"}
@@ -135,6 +140,45 @@ def summarize(rows, symbol=None):
                            "by_day_others": {d: n for d, n in sorted((d, sum(c.values()) - c[top]) for d, c in day_err.items()) if n != 0}}}
 
 
+def honesty_replay(rows, exclude=None):
+    """2026-11-14 입력 정직화의 영향 근사: 저장된 보고의 점수·신뢰도로 분석가 종합 점수를 종전/새 규칙으로 다시 계산한다.
+
+    새 규칙 = 미검증 재무 보고는 가중치 0, 공시 위험이 있으면 −30·0.8. analyst_version 이 없는(구 규칙) 행만 본다.
+    신선도 감쇠와 토론 가감은 반영하지 않는다 — 방향과 크기를 가늠하는 근사이지 판정 재현이 아니다.
+    """
+    def agg(parts):
+        w = sum(c for _s, c in parts)
+        return round(sum(s * c for s, c in parts) / w) if w > 0 else 0
+
+    old, new, thin_old, thin_new = [], [], 0, 0
+    for _day, r in rows:
+        if r.get("analyst_version") is not None or (exclude is not None and r.get("symbol") == exclude):
+            continue
+        o, n = [], []
+        for rep in r.get("reports") if isinstance(r.get("reports"), list) else []:
+            if not isinstance(rep, dict) or rep.get("error") is not None:
+                continue
+            s, c = rep.get("score"), rep.get("confidence")
+            if not (_number(s) and _number(c)):
+                continue
+            o.append((s, c))
+            if rep.get("kind") == "fundamental" and rep.get("data_status") != "full":
+                risk = (rep["metrics"] if isinstance(rep.get("metrics"), dict) else {}).get("dart_risk_items")
+                n.append((-30, 0.8) if _number(risk) and risk > 0 else (0, 0.0))
+            else:
+                n.append((s, c))
+        old.append(agg(o))
+        new.append(agg(n))
+        thin_old += sum(c > 0 for _s, c in o) < MIN_VALID_SOURCES
+        thin_new += sum(c > 0 for _s, c in n) < MIN_VALID_SOURCES
+    return {"rows": len(old), "buy_threshold": BUY_THRESHOLD, "sell_threshold": SELL_THRESHOLD,
+            "at_or_above_buy": {"old": sum(x >= BUY_THRESHOLD for x in old), "new": sum(x >= BUY_THRESHOLD for x in new)},
+            "at_or_below_sell": {"old": sum(x <= SELL_THRESHOLD for x in old), "new": sum(x <= SELL_THRESHOLD for x in new)},
+            "fewer_than_min_valid_sources": {"old": thin_old, "new": thin_new},
+            "changed": {"up": sum(b > a for a, b in zip(old, new)), "down": sum(b < a for a, b in zip(old, new)),
+                        "same": sum(b == a for a, b in zip(old, new))}}
+
+
 def write_private(path, out):
     """운영 원장 집계는 0600 으로 쓴다 — 이미 있던 파일의 권한도 쓰기 전에 좁힌다."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -151,7 +195,8 @@ def main():
     p.add_argument("--symbol", help="따로 집계할 종목 코드(출력하지 않는다)")
     args = p.parse_args()
     rows, digest = load(args.team_dir, args.through)
-    out = {"through": args.through, "input_sha256": digest, **summarize(rows, args.symbol)}
+    out = {"through": args.through, "input_sha256": digest, **summarize(rows, args.symbol),
+           "honesty_replay": honesty_replay(rows, args.symbol)}
     write_private(args.out, out)
     print(json.dumps(out, ensure_ascii=False, indent=1))
 

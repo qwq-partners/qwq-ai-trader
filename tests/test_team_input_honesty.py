@@ -1,0 +1,60 @@
+"""팀 심의 입력 정직화(2026-11-14) — 미검증 재무 보고의 가산·가중치·수급 기본값 제거, 자동매도 금지 보유 종목 제외."""
+import asyncio
+from datetime import datetime
+from types import SimpleNamespace
+
+from src.agents.analysts import AnalystTeam, FundamentalAnalyst
+from src.agents.researchers import ResearchTeam
+from src.agents.types import AnalystKind, AnalystReport
+from src.signals.fundamentals.stock_validator import ShortSellingResult, SupplyDemandResult, ValidationResult
+from test_t11_entry_plan import SYM, _collect_deliberations, _sched_bot
+
+
+def _fundamental(dart_items, **result):
+    """운영 검증기가 9/15 이후 실제로 돌려주는 모양(approved=True·validated=False·insufficient·수급 기본값)이 기본."""
+    base = dict(approved=True, validated=False, data_status="insufficient",
+                supply_demand_result=SupplyDemandResult(), short_selling_result=ShortSellingResult())
+
+    async def validate(_symbol, _name):
+        return ValidationResult(**{**base, **result})
+
+    async def check_disclosures(_symbol, days=7):
+        return SimpleNamespace(has_risk=bool(dart_items), risk_disclosures=list(dart_items))
+
+    return asyncio.run(FundamentalAnalyst(SimpleNamespace(validate=validate),
+                                          SimpleNamespace(check_disclosures=check_disclosures)).analyze("005930", "삼성전자"))
+
+
+def test_unvalidated_pass_gets_no_bonus_no_weight_and_supply_stays_unobserved():
+    r = _fundamental([])
+    assert (r.score, r.confidence, r.validation_pass_bonus, r.data_status) == (0, 0.0, 0, "insufficient")
+    assert r.metrics == {"foreign_net_buying": None, "institutional_net_buying": None, "dart_risk_items": 0}
+    assert r.summary == "공시 위험 신호 없음 — 수급·재무 자료 미연결" and r.positive_basis is None and r.risk_clear is None
+    tech = AnalystReport(kind=AnalystKind.TECHNICAL, symbol="005930", score=40, summary="지표", confidence=0.7,
+                         data_as_of=datetime.now())
+    assert AnalystTeam.aggregate_score([r, tech]) == 40          # 가중치 0 — 다른 관점을 희석하지 않는다
+    assert "[fundamental] 점수 +0" in ResearchTeam._context("005930", "삼성전자", [r, tech])
+    assert "수급·재무 자료 미연결" in ResearchTeam._context("005930", "삼성전자", [r, tech])
+
+
+def test_unvalidated_result_with_disclosure_risk_scores_only_the_risk():
+    r = _fundamental(["유상증자 결정"])
+    assert (r.score, r.confidence, r.validation_pass_bonus, r.risk_clear) == (-30, 0.8, 0, False)
+    assert r.summary == "공시 위험 신호 1건" and r.metrics["foreign_net_buying"] is None
+
+
+def test_validated_result_keeps_bonus_weight_and_observed_supply():
+    r = _fundamental([], validated=True, data_status="full",
+                     supply_demand_result=SupplyDemandResult(foreign_net_buying=True, institutional_net_buying=False))
+    assert (r.score, r.confidence, r.validation_pass_bonus) == (20, 0.7, 10)   # 외국인 +10, 검증 통과 +10
+    assert r.metrics["foreign_net_buying"] is True and r.metrics["institutional_net_buying"] is False   # 관측된 False 는 보존
+
+
+def test_exit_exempt_holding_is_not_deliberated(monkeypatch):
+    at = datetime(2026, 11, 13, 10, 25)
+    bot = _sched_bot(screened_at=at)
+    bot.exit_manager = SimpleNamespace(is_exit_exempt=lambda symbol: symbol == SYM)
+    calls = _collect_deliberations(monkeypatch, bot)
+    assert [c for c in calls if c["holding"]] == [] and [c for c in calls if not c["holding"]]   # 후보 심의는 그대로
+    bot.exit_manager = SimpleNamespace(is_exit_exempt=lambda symbol: False)
+    assert [c["items"][0]["symbol"] for c in _collect_deliberations(monkeypatch, bot) if c["holding"]] == [SYM]
