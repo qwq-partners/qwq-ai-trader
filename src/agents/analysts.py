@@ -23,11 +23,27 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ..utils import team_conviction as _team_conviction
 from .types import AnalystKind, AnalystReport, EvidenceItem
 
 # 분석가 보고의 점수·신뢰도 규칙이 바뀌면 올린다 — 심의 원장 행의 analyst_version 으로 남아 전후 표본을 가른다.
 # 2026-11-14: 미검증 재무 보고의 통과 가산(+10)·신뢰도 0.7·수급 기본값 기록 제거(이 표시가 없는 행은 그 이전 규칙).
 ANALYST_INPUT_VERSION = "analyst-input-2026-11-14"
+
+
+def input_honesty_active() -> bool:
+    """새 입력 규칙(2026-11-14)을 적용할지 — 팀 판정이 사이징 부스트로 이어지지 않을 때만(TEAM_CONVICTION=0).
+
+    새 규칙은 팀 판정 분포를 바꾼다. 부스트가 켜진 환경에서 그 판정이 신규 매수 사이징(×1.10/×1.20)에
+    닿지 않도록, 부스트가 켜져 있으면 종전 규칙(통과 가산 +10·신뢰도 0.7·수급 기본값 기록)을 그대로 쓴다.
+    부스트를 다시 켜려면 새 규칙의 표본으로 재평가한 뒤 이 조건을 함께 고친다.
+    """
+    return not _team_conviction._enabled()
+
+
+def analyst_input_version() -> Optional[str]:
+    """심의 원장 행의 analyst_version — 새 규칙이 적용된 판정에만 붙는다(종전 규칙이면 None)."""
+    return ANALYST_INPUT_VERSION if input_honesty_active() else None
 
 # 개별 분석가 타임아웃 (초) — 장중 경로이므로 짧게
 ANALYST_TIMEOUT = 15.0
@@ -101,6 +117,7 @@ class FundamentalAnalyst:
         risk_clear: Optional[bool] = None
         validation_pass_bonus = 0
         data_status = "full" if self._validator is not None else "partial"
+        honest = input_honesty_active()   # 부스트가 켜져 있으면 종전 규칙 — 새 규칙의 판정이 사이징에 닿지 않게
 
         if self._validator is None and self._dart is None:
             return AnalystReport(
@@ -137,7 +154,7 @@ class FundamentalAnalyst:
                 # 검증기가 채운 기본값(False)이지 관측이 아니다 — 미관측(None)으로 남기고 점수에 쓰지 않는다.
                 # ponytail: 위험 공시 차단 결과(validated=True·partial)의 수급 기본값은 여기서 가르지 못한다 —
                 #           그 행은 어차피 차단이고, 가르려면 검증기가 수급 획득 여부를 따로 실어야 한다.
-                if sd is not None and not validated_ok:
+                if sd is not None and not validated_ok and honest:
                     metrics["foreign_net_buying"] = None
                     metrics["institutional_net_buying"] = None
                 elif sd is not None:
@@ -171,10 +188,12 @@ class FundamentalAnalyst:
                     score -= 25
                     findings.append(f"검증 실패: {reason[:60]}")
                     confidence = 0.7
-                elif passed is True and validated_ok:
+                elif passed is True and (validated_ok or not honest):
                     score += 10
                     validation_pass_bonus = 10
                     confidence = 0.7
+                if not honest:
+                    confidence = 0.7   # 종전 규칙: 검증기 결과가 있으면 통과·차단과 무관하게 0.7
 
                 # T11: '검증 통과'는 위험을 못 찾았다는 뜻(risk_clear)일 뿐이다.
                 # positive_basis(매수 매력의 긍정 근거)는 순매수 등 실제로 확인된
@@ -242,7 +261,7 @@ class FundamentalAnalyst:
                 # 2026-11-14 입력 정직화: 조회에 실패한 기본값(fetched=False — 키 미설정·종목 미매핑·HTTP 실패)을
                 # '위험 0건'으로 적지 않는다. 필드가 없는 객체도 미획득으로 본다(결측은 보수값).
                 dart_fetched = getattr(dart, "fetched", None) is True
-                metrics["dart_risk_items"] = len(items) if dart_fetched or items else None
+                metrics["dart_risk_items"] = len(items) if dart_fetched or items or not honest else None
                 if risky:
                     score -= 30
                     confidence = max(confidence, 0.8)
@@ -283,7 +302,7 @@ class FundamentalAnalyst:
         score = max(-100, min(100, score))
         if findings:
             summary = "; ".join(findings[:3])
-        elif data_status in ("insufficient", "error", "unknown"):
+        elif honest and data_status in ("insufficient", "error", "unknown"):
             # 토론 프롬프트에는 요약만 들어간다 — 자료가 없다는 사실을 요약에 적는다
             summary = ("공시 위험 신호 없음 — 수급·재무 자료 미연결" if dart_fetched
                        else "공시 자료 미획득 — 수급·재무 자료 미연결")

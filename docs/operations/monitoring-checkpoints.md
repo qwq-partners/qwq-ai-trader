@@ -2,9 +2,9 @@
 
 ## 11월14일 팀 심의 입력 정직화 A안 — 배포 뒤 확인(운영 미배포)
 
-[진단·구현](../reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](../agents/trading-team.md). 팀 심의는 shadow — 운영 `TEAM_CONVICTION=0`인 동안 주문·사이징 무영향.
+[진단·구현](../reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](../agents/trading-team.md). 팀 심의는 shadow — 새 규칙은 `TEAM_CONVICTION=0`일 때만 적용돼 사이징 부스트 경로에 닿지 않는다.
 
-- [ ] 배포 전: 운영 `.env`와 실행 프로세스 환경에 `TEAM_CONVICTION=0`이 있다(없으면 팀 판정이 사이징 부스트에 닿는다 — 배포 드라이버가 확인하고 중단).
+- [ ] 배포 전·후: 운영 `.env`와 실행 프로세스 환경에 `TEAM_CONVICTION=0`이 있다. 없으면(부스트 켜짐) 분석가가 종전 규칙으로 돌아가 새 규칙이 적용되지 않는다 — 원장 행의 `analyst_version`이 `null`이면 그 상태다.
 - [ ] 배포 뒤 첫 거래일 심의 슬롯(10:30·11:30·13:00·14:00)마다 `[팀심의] 자동매도 금지 보유 1종목은 재평가하지 않는다`가 남는다. 그 종목의 원장 행은 스크리닝 상위 5 후보에 든 슬롯에만 생길 수 있다(종전에는 매 슬롯).
 - [ ] 그날 원장 행에 `analyst_version = "analyst-input-2026-11-14"`가 있고, 재무 보고는 공시 위험이 없으면 점수 0·신뢰도 0(`python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through <오늘> --out <비공개 경로>`의 `kinds.fundamental.score_conf`가 `0|0.0`), 수급 지표가 `always_false_metrics`에 없다.
 - [ ] 후보 심의 건수·토론 호출이 종전과 같고(슬롯당 후보 5종목), `[팀심의]` 오류·`[트레이더] … 매수 보류: 근거 부족` 빈도를 첫 주에 한 번 본다 — 기술·뉴스 보고가 실패한 종목은 유효 근거 1개라 보류되는 것이 정상이다.

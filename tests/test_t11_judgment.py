@@ -489,7 +489,7 @@ def test_deliberation_id_is_stable_for_same_input_and_ledger_row_has_execution_s
     assert row["deliberation_id"] == v.deliberation_id
     assert row["execution_state"] in team_ledger.EXECUTION_STATES
     assert row["prompt_version"] == "debate-v2-2026-09-15"
-    assert row["analyst_version"] == "analyst-input-2026-11-14"   # 분석가 입력 규칙 전후 표본을 가르는 표시
+    assert "analyst_version" in row   # 분석가 입력 규칙 전후 표본을 가르는 표시(값은 test_team_input_honesty)
     assert "model_calls" in row and isinstance(row["model_calls"], list)
 
 

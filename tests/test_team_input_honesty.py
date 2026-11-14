@@ -3,11 +3,20 @@ import asyncio
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
+from src.agents import analysts
 from src.agents.analysts import AnalystTeam, FundamentalAnalyst
 from src.agents.researchers import ResearchTeam
 from src.agents.types import AnalystKind, AnalystReport
 from src.signals.fundamentals.stock_validator import ShortSellingResult, SupplyDemandResult, ValidationResult
 from test_t11_entry_plan import SYM, _collect_deliberations, _sched_bot
+
+
+@pytest.fixture(autouse=True)
+def boost_off(monkeypatch):
+    """운영과 같은 조건 — 사이징 부스트가 꺼져 있어야 새 입력 규칙이 적용된다."""
+    monkeypatch.setenv("TEAM_CONVICTION", "0")
 
 
 def _fundamental(dart_items, dart_fetched=True, **result):
@@ -64,3 +73,23 @@ def test_exit_exempt_holding_is_not_deliberated(monkeypatch):
     assert [c for c in calls if c["holding"]] == [] and [c for c in calls if not c["holding"]]   # 후보 심의는 그대로
     bot.exit_manager = SimpleNamespace(is_exit_exempt=lambda symbol: False)
     assert [c["items"][0]["symbol"] for c in _collect_deliberations(monkeypatch, bot) if c["holding"]] == [SYM]
+
+
+@pytest.mark.parametrize("value", ["1", None])
+def test_legacy_rule_stays_when_the_sizing_boost_is_on(monkeypatch, value):
+    """부스트가 켜진 환경(기본값 포함)에서는 종전 규칙 — 새 규칙의 판정이 신규 매수 사이징에 닿지 않는다."""
+    if value is None:
+        monkeypatch.delenv("TEAM_CONVICTION")
+    else:
+        monkeypatch.setenv("TEAM_CONVICTION", value)
+    assert analysts.input_honesty_active() is False and analysts.analyst_input_version() is None
+    r = _fundamental([], dart_fetched=False)
+    assert (r.score, r.confidence, r.validation_pass_bonus, r.summary) == (10, 0.7, 10, "특이사항 없음")
+    assert r.metrics == {"foreign_net_buying": False, "institutional_net_buying": False, "dart_risk_items": 0}
+    risk = _fundamental(["유상증자 결정"])
+    assert (risk.score, risk.confidence, risk.validation_pass_bonus) == (-20, 0.8, 10)
+
+
+def test_new_rule_is_marked_in_the_ledger_only_when_active():
+    assert analysts.input_honesty_active() is True
+    assert analysts.analyst_input_version() == "analyst-input-2026-11-14"
