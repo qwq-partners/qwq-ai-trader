@@ -143,7 +143,8 @@ def summarize(rows, symbol=None):
 def honesty_replay(rows, exclude=None):
     """2026-11-14 입력 정직화의 영향 근사: 저장된 보고의 점수·신뢰도로 분석가 종합 점수를 종전/새 규칙으로 다시 계산한다.
 
-    새 규칙 = 미검증 재무 보고는 가중치 0, 공시 위험이 있으면 −30·0.8. analyst_version 이 없는(구 규칙) 행만 본다.
+    새 규칙 = 미검증 재무 보고에서 저장된 통과 가산분(validation_pass_bonus)만 빼고, 남은 근거(공시 위험·검증 차단)가
+    없으면 가중치 0. 위험·차단이 있는 행의 다른 감점과 신뢰도는 그대로 둔다. analyst_version 이 없는(구 규칙) 행만 본다.
     신선도 감쇠와 토론 가감은 반영하지 않는다 — 방향과 크기를 가늠하는 근사이지 판정 재현이 아니다.
     """
     def agg(parts):
@@ -164,7 +165,9 @@ def honesty_replay(rows, exclude=None):
             o.append((s, c))
             if rep.get("kind") == "fundamental" and rep.get("data_status") != "full":
                 risk = (rep["metrics"] if isinstance(rep.get("metrics"), dict) else {}).get("dart_risk_items")
-                n.append((-30, 0.8) if _number(risk) and risk > 0 else (0, 0.0))
+                bonus = rep.get("validation_pass_bonus")
+                has_basis = (_number(risk) and risk > 0) or rep.get("risk_clear") is False   # 공시 위험 또는 검증 차단
+                n.append((s - (bonus if _number(bonus) else 0), c if has_basis else 0.0))
             else:
                 n.append((s, c))
         old.append(agg(o))

@@ -234,11 +234,15 @@ class FundamentalAnalyst:
             #    (dart_checker.py:25-31)는 risk_disclosures를 낸다. risk_items는
             #    이 파일에만 있던 존재하지 않는 키라 getattr 기본값(빈 리스트)이
             #    조용히 삼켜 위험 건수가 항상 0으로 "사실" 처리됐다.
+            dart_fetched = False
             if self._dart is not None:
                 dart = await self._dart.check_disclosures(symbol, days=7)
                 risky = getattr(dart, "has_risk", None)
                 items = getattr(dart, "risk_disclosures", None) or []
-                metrics["dart_risk_items"] = len(items)
+                # 2026-11-14 입력 정직화: 조회에 실패한 기본값(fetched=False — 키 미설정·종목 미매핑·HTTP 실패)을
+                # '위험 0건'으로 적지 않는다. 필드가 없는 객체도 미획득으로 본다(결측은 보수값).
+                dart_fetched = getattr(dart, "fetched", None) is True
+                metrics["dart_risk_items"] = len(items) if dart_fetched or items else None
                 if risky:
                     score -= 30
                     confidence = max(confidence, 0.8)
@@ -281,8 +285,8 @@ class FundamentalAnalyst:
             summary = "; ".join(findings[:3])
         elif data_status in ("insufficient", "error", "unknown"):
             # 토론 프롬프트에는 요약만 들어간다 — 자료가 없다는 사실을 요약에 적는다
-            summary = ("공시 위험 신호 없음 — 수급·재무 자료 미연결" if self._dart is not None
-                       else "수급·재무 자료 미연결")
+            summary = ("공시 위험 신호 없음 — 수급·재무 자료 미연결" if dart_fetched
+                       else "공시 자료 미획득 — 수급·재무 자료 미연결")
         else:
             summary = "특이사항 없음"
         # stock_validator는 수급 30분 / 트렌드 2시간 캐시를 쓴다.

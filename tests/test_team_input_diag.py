@@ -78,8 +78,8 @@ def test_no_ledger_value_reaches_the_output(tmp_path):
 def test_honesty_replay_reweights_only_old_rule_rows():
     def row(tech, news, risk=0, version=None, symbol="000001"):
         return ("2026-11-12", {"symbol": symbol, "analyst_version": version, "reports": [
-            {"kind": "fundamental", "data_status": "insufficient", "score": -20 if risk else 10, "confidence": 0.8 if risk else 0.7,
-             "metrics": {"dart_risk_items": risk}},
+            {"kind": "fundamental", "data_status": "insufficient", "score": -20 if risk > 0 else 10,
+             "confidence": 0.8 if risk > 0 else 0.7, "validation_pass_bonus": 10, "metrics": {"dart_risk_items": risk}},
             {"kind": "technical", "score": tech, "confidence": 0.7, "error": None if tech is not None else "지표 없음"},
             {"kind": "news", "score": news, "confidence": 0.7}]})
     rows = [row(30, 20),                 # 종전 (10+30+20)/3 = 20 → 새 25
@@ -87,6 +87,9 @@ def test_honesty_replay_reweights_only_old_rule_rows():
             row(None, 40),               # 기술 오류: 종전 유효 근거 2개(25) → 새 1개(40)
             row(-30, -50, risk=2),       # 공시 위험: 종전 -33 → 새 (−30·0.8−30·0.7−50·0.7)/2.2 = -36
             row(30, 20, version="analyst-input-2026-11-14"), row(30, 20, symbol="999999")]   # 새 규칙 행·제외 종목은 뺀다
+    blocked = row(0, 0)                  # 검증 차단(−25)+공시 위험(−30): 가산분이 없으니 종전 점수·신뢰도 그대로
+    blocked[1]["reports"][0].update(score=-55, confidence=0.8, validation_pass_bonus=0, risk_clear=False, metrics={"dart_risk_items": 1})
+    assert t.honesty_replay([blocked])["changed"] == {"up": 0, "down": 0, "same": 1}
     r = t.honesty_replay(rows, exclude="999999")
     assert r["rows"] == 4 and r["at_or_above_buy"] == {"old": 2, "new": 2} and r["at_or_below_sell"] == {"old": 1, "new": 1}
     assert r["fewer_than_min_valid_sources"] == {"old": 0, "new": 1} and r["changed"] == {"up": 3, "down": 1, "same": 0}

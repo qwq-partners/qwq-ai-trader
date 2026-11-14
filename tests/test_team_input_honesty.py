@@ -10,7 +10,7 @@ from src.signals.fundamentals.stock_validator import ShortSellingResult, SupplyD
 from test_t11_entry_plan import SYM, _collect_deliberations, _sched_bot
 
 
-def _fundamental(dart_items, **result):
+def _fundamental(dart_items, dart_fetched=True, **result):
     """운영 검증기가 9/15 이후 실제로 돌려주는 모양(approved=True·validated=False·insufficient·수급 기본값)이 기본."""
     base = dict(approved=True, validated=False, data_status="insufficient",
                 supply_demand_result=SupplyDemandResult(), short_selling_result=ShortSellingResult())
@@ -19,7 +19,7 @@ def _fundamental(dart_items, **result):
         return ValidationResult(**{**base, **result})
 
     async def check_disclosures(_symbol, days=7):
-        return SimpleNamespace(has_risk=bool(dart_items), risk_disclosures=list(dart_items))
+        return SimpleNamespace(has_risk=len(dart_items) > 0, risk_disclosures=list(dart_items), fetched=dart_fetched)
 
     return asyncio.run(FundamentalAnalyst(SimpleNamespace(validate=validate),
                                           SimpleNamespace(check_disclosures=check_disclosures)).analyze("005930", "삼성전자"))
@@ -35,6 +35,12 @@ def test_unvalidated_pass_gets_no_bonus_no_weight_and_supply_stays_unobserved():
     assert AnalystTeam.aggregate_score([r, tech]) == 40          # 가중치 0 — 다른 관점을 희석하지 않는다
     assert "[fundamental] 점수 +0" in ResearchTeam._context("005930", "삼성전자", [r, tech])
     assert "수급·재무 자료 미연결" in ResearchTeam._context("005930", "삼성전자", [r, tech])
+
+
+def test_failed_disclosure_lookup_is_not_reported_as_no_risk():
+    r = _fundamental([], dart_fetched=False)   # 키 미설정·종목 미매핑·HTTP 실패의 기본값
+    assert r.metrics["dart_risk_items"] is None and r.summary == "공시 자료 미획득 — 수급·재무 자료 미연결"
+    assert (r.score, r.confidence) == (0, 0.0)
 
 
 def test_unvalidated_result_with_disclosure_risk_scores_only_the_risk():

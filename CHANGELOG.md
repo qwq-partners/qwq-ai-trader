@@ -4,8 +4,9 @@
 
 - 변경: `src/agents/analysts.py` — 검증기가 실제로 검증하지 못한 결과(`validated=False`)에는 통과 가산 +10·신뢰도 0.7을 주지 않는다(점수 0·신뢰도 0 → 집계·유효 근거 수에서 제외), 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결", 수급 지표는 `None`. 공시 위험이 있으면 −30·0.8(종전 −20). 실제로 검증된 결과의 산식은 그대로. `ANALYST_INPUT_VERSION` 추가.
 - 변경: `src/schedulers/kr_scheduler.py` `_run_team_deliberation_once` — 자동매도 금지 보유 종목은 재평가하지 않는다. `src/agents/team.py` — 심의 원장 행에 `analyst_version`.
-- 검사: `tests/test_team_input_honesty.py` 4건, `tests/test_t11_judgment.py` 단정 1줄, `tests/test_team_input_diag.py`(영향 근사 `honesty_replay`).
-- 영향(의도된 결과): 팀 심의는 shadow라 주문·사이징 무영향(운영 `TEAM_CONVICTION=0`). 종합 점수 분포가 넓어지고, 기술·뉴스 보고가 실패한 종목은 유효 근거 1개로 신규 매수 판정이 보류된다. 과거 원장 근사(감쇠·토론 가감 미반영): 종합 ≥ +20인 행 183 → 236, 유효 근거 부족 0 → 62(822행 중).
+- 리뷰 1차 반영: DART 조회 실패는 "공시 자료 미획득"·`dart_risk_items=None`(위험 0건으로 적지 않음), 영향 재생은 저장된 가산분만 뺀다.
+- 검사: `tests/test_team_input_honesty.py` 5건, `tests/test_t11_judgment.py` 단정 1줄, `tests/test_team_input_diag.py`(영향 근사 `honesty_replay`).
+- 영향(의도된 결과): 운영 `.env`의 `TEAM_CONVICTION=0`인 동안 주문·사이징 무영향(코드 기본값은 켜짐 — 배포 드라이버가 그 설정을 확인하고 없으면 중단). 종합 점수 분포가 넓어지고, 기술·뉴스 보고가 실패한 종목은 유효 근거 1개로 신규 매수 판정이 보류된다. 과거 원장 근사(감쇠·토론 가감 미반영): 종합 ≥ +20인 행 183 → 236, 유효 근거 부족 0 → 62(822행 중).
 - 왜: 진단에서 재무 보고 978행 전부가 자료 부족인데 87%가 +10·0.7로 집계·토론에 들어가고 미획득 수급이 `False`로 기록되는 것을 확인했다. 사용자 결정 "A ㄱㄱ"(11/14).
 - 롤백: 이 커밋 되돌리기 + 재배포(설정 스위치 없음). 원장의 `analyst_version`으로 전후 표본을 가른다.
 

@@ -103,16 +103,17 @@ python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_le
 
 | 변경 | 위치 |
 |---|---|
-| 미검증 재무 보고에 통과 가산 +10·신뢰도 0.7을 주지 않는다. 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결" | `src/agents/analysts.py` `FundamentalAnalyst.analyze` |
+| 미검증 재무 보고에 통과 가산 +10·신뢰도 0.7을 주지 않는다. 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결", DART 조회가 실패했으면 "공시 자료 미획득 — …"이고 `dart_risk_items`는 `None` | `src/agents/analysts.py` `FundamentalAnalyst.analyze` |
 | 미검증 결과의 수급 지표는 `None` | 같은 함수 |
-| 자동매도 금지 보유 종목은 심의 대상에서 뺀다 | `src/schedulers/kr_scheduler.py` `_run_team_deliberation_once` |
+| 자동매도 금지 보유 종목은 보유 재평가에서 뺀다(매수 후보로 스크리닝되면 후보 심의는 한다) | `src/schedulers/kr_scheduler.py` `_run_team_deliberation_once` |
 | 심의 원장 행에 `analyst_version` | `src/agents/analysts.py`(`ANALYST_INPUT_VERSION`), `src/agents/team.py` |
 
+- **사이징 격리의 전제:** 팀 판정은 `TEAM_CONVICTION`이 켜져 있으면 신규 매수 사이징 부스트로 이어지고, 그 스위치의 코드 기본값은 켜짐이다. 운영은 `.env`에 `TEAM_CONVICTION=0`이 있어 꺼져 있다(11/14 확인: `.env`와 실행 중 프로세스 환경 둘 다). 이 변경이 판정 분포를 바꾸므로 배포 드라이버가 두 곳을 확인하고 없으면 배포를 멈춘다. 코드 기본값은 바꾸지 않았다(사이징 설정은 이 작업 범위 밖).
 - 바꾸지 않은 것: 검증기(`StockValidator`)와 그 다른 소비자, 실제로 검증된 결과의 산식, 기술·뉴스 분석가, 토론 프롬프트 틀·모델·판정 규칙, Trader 임계값, 주문·사이징·청산. 분석가 종류 이름(`fundamental`)은 원장 호환을 위해 그대로 둔다(요약이 내용을 말한다).
 - 보유 종목에 일봉 대체 경로(`price_provider`)를 연결하지는 않았다 — 지금 보유는 그 자동매도 금지 1종목뿐이다. 다른 보유 종목이 생기고 스크리너 캐시에 없으면 `지표 없음`이 다시 난다.
-- 검사: `tests/test_team_input_honesty.py` 4건(미검증 통과 → 점수 0·가중치 0·수급 미관측·요약, 공시 위험만 점수, 검증된 결과는 종전 산식·관측된 `False` 보존, 자동매도 금지 보유 제외), `tests/test_t11_judgment.py`(원장 행의 `analyst_version`). 기존 팀 심의 기준선 검사는 모두 `validated=True` 입력이라 그대로 통과한다.
+- 검사: `tests/test_team_input_honesty.py` 5건(미검증 통과 → 점수 0·가중치 0·수급 미관측·요약, DART 조회 실패는 '위험 없음'이 아님, 공시 위험만 점수, 검증된 결과는 종전 산식·관측된 `False` 보존, 자동매도 금지 보유 제외), `tests/test_t11_judgment.py`(원장 행의 `analyst_version`). 기존 팀 심의 기준선 검사는 모두 `validated=True` 입력이라 그대로 통과한다.
 
-**영향 근사**(`team_input_diag.py`의 `honesty_replay` — 저장된 보고의 점수·신뢰도로 분석가 종합 점수를 종전/새 규칙으로 다시 계산, 그 보유 종목을 뺀 822행. 미검증 여부는 재무 보고의 `data_status`가 `full`이 아닌 것으로 잡았다. **신선도 감쇠·토론 가감 미반영 — 판정 재현이 아니라 방향·크기 가늠**):
+**영향 근사**(`team_input_diag.py`의 `honesty_replay` — 저장된 보고의 점수·신뢰도로 분석가 종합 점수를 종전/새 규칙으로 다시 계산, 그 보유 종목을 뺀 822행. 미검증 여부는 재무 보고의 `data_status`가 `full`이 아닌 것으로 잡고, 저장된 통과 가산분(`validation_pass_bonus`)만 뺀 뒤 남은 근거(공시 위험·검증 차단)가 없으면 가중치 0으로 본다 — 차단·위험 행의 다른 감점과 신뢰도는 그대로다. **신선도 감쇠·토론 가감 미반영 — 판정 재현이 아니라 방향·크기 가늠**):
 
 | | 종전 | 새 규칙 |
 |---|---|---|
@@ -124,3 +125,15 @@ python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_le
 
 - 영수증(비공개): `~/.local/state/qwq-task-audit/20261114/team-input-diag/summary-a.json`(SHA-256 `e2dd06f3e356119b0c96e0a248f583a76c7692f68248ae58f3a975d571ceddf1`, 입력 지문은 6절과 같다).
 - 배포는 사용자 승인 뒤. 배포 뒤 확인 항목은 [모니터링 체크포인트](../operations/monitoring-checkpoints.md).
+
+## 9. A안 독립 리뷰 처분
+
+교차 공급자 리뷰(Codex, 요청 gpt-5.6-sol/high — 리뷰어는 검사를 직접 돌리지 못했다).
+
+| 회차 | 지적 | 처분 |
+|---|---|---|
+| 1차(병합 불가) | P1 DART 조회 실패(`fetched=False`)도 "공시 위험 신호 없음"으로 전달 | **반영** — 조회 성공일 때만 그 문구·건수 0, 실패면 "공시 자료 미획득"·`None`. 회귀 검사 |
+| 1차 | P1 "shadow라 사이징 무영향"이 코드로 보장되지 않음(`TEAM_CONVICTION` 기본값이 켜짐) | **반영(부분)** — 문서를 "운영 설정에 달린 격리"로 고치고, 배포 드라이버가 `.env`·실행 프로세스 환경의 `TEAM_CONVICTION=0`을 확인해 없으면 중단. 코드 기본값은 바꾸지 않음(사이징 설정 변경은 범위 밖 — 여러 사이징 검사·재생 도구가 그 기본값에 기댄다) |
+| 1차 | P2 영향 재생이 검증 차단 행의 감점을 −30으로 덮어씀 | **반영** — 저장된 통과 가산분만 빼고 위험·차단 행의 점수·신뢰도는 보존. 회귀 검사. 실제 수치 불변(이 기간 원장에 차단 행 없음) |
+| 1차 | P2 체크포인트가 "그 종목 행이 없다"를 요구하지만 후보로는 심의될 수 있음 | **반영** — 문서·체크포인트를 "보유 재평가에서 제외"로 정정 |
+| 1차 | P2 `if _exempt_skipped:`·검사의 `if risk` | **반영** — `> 0` |

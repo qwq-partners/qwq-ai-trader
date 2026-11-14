@@ -6871,7 +6871,7 @@ JSON:
         except Exception as e:
             logger.warning(f"[팀심의] 보유 종목 수집 실패: {e}")
 
-        if _exempt_skipped:
+        if _exempt_skipped > 0:
             logger.info(f"[팀심의] 자동매도 금지 보유 {_exempt_skipped}종목은 재평가하지 않는다")
         if not candidates and not holdings:
             logger.info("[팀심의] 심의 대상 없음")
