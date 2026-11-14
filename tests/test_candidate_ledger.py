@@ -43,7 +43,8 @@ def gate(*a, **kw):
 
 
 def _rows_today(tmp_path):
-    return [json.loads(x) for f in tmp_path.glob("candidates_*.jsonl") for x in f.read_text().splitlines()]
+    # 오류 행은 주입한 시각이 아니라 실제 오늘 날짜 파일로 간다 — 파일이 둘이 되는 날에도 순서가 같도록 날짜순으로 읽는다
+    return [json.loads(x) for f in sorted(tmp_path.glob("candidates_*.jsonl")) for x in f.read_text().splitlines()]
 
 
 def _rows(tmp_path):

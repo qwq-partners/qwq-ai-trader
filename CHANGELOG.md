@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-14 — V02-R 후보 원장 판독 스크립트 (오프라인·운영 무변경) ([사전 등록 7절](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 추가: `scripts/research/candidate_ledger_readout.py` — `obs`(원장 `.jsonl`/`.jsonl.gz` → 종목-일 첫 스캔 관측 + 건수·결측률·원천/게이트 분포, 수익 미계산), `report`(같은 날 점수 상위−하위 3분위의 5·20일 수익 차이, 블록 부트스트랩 구간, 보조 판정(β 조정 비용 차감 순초과), 구성요소 탐색). `prices`(판독 대상 종목만 V01 `fetch_prices`로 수집). V01·V05의 산식·통계 함수를 불러 쓰고 새 산식은 날짜별 3분위 분할뿐이다. 입력 지문은 종료일까지의 자료로 계산한다(리뷰 1차 P1·P2 반영).
+- 사전 등록이 정하지 않은 세부 규칙(장 마감 뒤 첫 등장 제외, 3분위 동점 처리, 종목-일 수 정의, β 표본, 구성요소 표시)을 운영 원장에 행이 없는 시점에 문서 7절로 고정했다.
+- 중간 엿보기 금지를 코드로: 보유 기간별 최소 표본(15일·300종목-일) 전에는 `판정 불가`와 건수만 내고 차이·구간·보조·탐색을 계산하지 않는다.
+- 검사: `tests/test_candidate_ledger_readout.py` 11건(실제 기록 모듈 왕복 포함).
+- 수정(검사): `tests/test_candidate_ledger.py`의 오류 행 검사가 11/13 당일에만 통과하던 날짜 의존 결함 — 오류 행은 주입 시각이 아니라 실제 오늘 날짜 파일로 가는데 검사가 두 파일을 정렬 없이 읽었다. 파일을 날짜순으로 읽게 했다(제품 코드 무변경).
+- 운영: 무변경(배포 대상 아님). 운영 원장 디렉터리는 아직 없다(첫 기록 11/16 장중).
+
 ## 2026-11-13 — V02 장중 스캔 후보 전수 원장 (기록 소스 DONE·운영 인수 11/13 21:11·판독 스크립트 후속) ([설계·판독 사전 등록](docs/research/v02-candidate-ledger-2026-11-13.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 추가: `src/analytics/candidate_ledger.py` — `record_scan`(스캔 반환 후보 전체: 점수·가격·등락·거래량비·RSI·ATR·PER/PBR·수급 표시·사유·점수 구성), `record_regime`(약세장 필터 결과와 관측된 지수 등락률 — 조회 실패는 null), `record_gate`(현금 게이트 통과 여부, 후보 필터의 기준값·통과 종목 목록)를 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`(0600)에 덧붙인다. 결측은 null, 예외 없음(실패 시 경고), `CANDIDATE_LEDGER=0`으로 끈다. 매매 경로는 행을 크기 제한 대기열(96행)에 넣기만 하고 전용 스레드 하나가 순서대로 쓴다 — 디스크가 멈춰도 스캔·신호 발행은 기다리지 않고, 대기열이 차면 그 뒤 행을 버린다. 매매 경로에서는 로그도 쓰지 않는다(버린 수는 기록 스레드가 회복 뒤 요약 경고, 매매 경로 쪽 행 구성 오류는 `error` 행, 기록 스레드의 파일 I/O 오류는 경고). 쓰다가 실패하면 쓰기 전 위치로 되돌려 다음 행이 깨지지 않는다.
