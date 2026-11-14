@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""팀 심의 원장의 분석가 보고 자료 상태 집계(읽기 전용, 본문 미출력).
+"""팀 심의 원장의 분석가 보고 자료 상태 집계(읽기 전용).
+
+원장의 문자열(요약·근거·오류·한계 문구)과 종목 코드는 출력하지 않는다 — 수치와 아래 고정 분류 이름만 낸다.
 
 진단 문서: docs/reviews/team-input-diagnosis-2026-11-14.md
   python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through 2026-11-13 --out summary.json
@@ -13,6 +15,15 @@ import os
 import re
 from collections import Counter, defaultdict
 from statistics import median
+
+# 코드가 만드는 고정 문구만 분류한다. 그 밖의 문자열은 내용을 옮기지 않고 'other' 로 센다.
+ERRORS = {"지표 없음": "no_indicators"}
+LIMITS = {"헤드라인 기반": "headline_based", "캐시 시각 미제공": "cache_time_missing", "지표 시각 미상": "indicator_time_unknown"}
+
+
+def _error_class(text):
+    text = str(text)
+    return ERRORS.get(text, "timeout" if text.startswith("타임아웃") else "other")
 
 
 def load(team_dir, through):
@@ -38,7 +49,7 @@ def load(team_dir, through):
 
 def summarize(rows):
     kinds = defaultdict(lambda: {"n": 0, "status": Counter(), "error": Counter(), "limits": Counter(), "evidence": [],
-                                 "score_conf_summary": Counter(), "score_sign": Counter(), "false_metrics": Counter()})
+                                 "score_conf": Counter(), "score_sign": Counter(), "false_metrics": Counter()})
     slot_err, sym_rows, sym_err, calls = defaultdict(Counter), Counter(), Counter(), Counter()
     day_err = defaultdict(Counter)
     decision, suff = defaultdict(Counter), Counter()
@@ -46,7 +57,7 @@ def summarize(rows):
         sym = r.get("symbol")
         sym_rows[sym] += 1
         mc = r.get("model_calls")
-        calls[sym] += len(mc) if isinstance(mc, list) else 0
+        calls[sym] += len(mc) if isinstance(mc, list) else 0   # 토론 턴(요청 자리) 수 — 응답이 없던 턴도 들어 있어 실제 전송 수가 아니다
         a = r.get("assessment")
         suff[str(a.get("data_sufficiency")) if isinstance(a, dict) else "없음"] += 1
         tech_error = False
@@ -56,15 +67,15 @@ def summarize(rows):
             k["status"][str(rep.get("data_status"))] += 1
             k["evidence"].append(len(rep["evidence"]) if isinstance(rep.get("evidence"), list) else 0)
             if rep.get("error") is not None:
-                k["error"][str(rep["error"])[:40]] += 1
+                k["error"][_error_class(rep["error"])] += 1
             for x in rep["limitations"] if isinstance(rep.get("limitations"), list) else []:
-                k["limits"][str(x)[:40]] += 1
+                k["limits"][LIMITS.get(str(x), "other")] += 1
             s = rep.get("score")
             k["score_sign"]["양" if s > 0 else "음" if s < 0 else "0"] += isinstance(s, (int, float))
             for name, v in (rep["metrics"] if isinstance(rep.get("metrics"), dict) else {}).items():
                 k["false_metrics"][name] += v is False
             if rep.get("kind") == "fundamental":
-                k["score_conf_summary"][f'{s}|{rep.get("confidence")}|{str(rep.get("summary"))[:12]}'] += 1
+                k["score_conf"][f'{s}|{rep.get("confidence")}'] += 1
             if rep.get("kind") == "technical" and rep.get("error") is not None:
                 tech_error = True
                 sym_err[sym] += 1
@@ -78,12 +89,13 @@ def summarize(rows):
                              "evidence_median": median(k["evidence"]) if k["evidence"] else None,
                              "score_sign": dict(k["score_sign"]), "always_false_metrics": sorted(
                                  m for m, c in k["false_metrics"].items() if c == k["n"]),
-                             "score_conf_summary": dict(k["score_conf_summary"].most_common(6))}
+                             "score_conf": dict(k["score_conf"].most_common(6))}
                       for name, k in sorted(kinds.items())},
             "data_sufficiency": dict(suff), "decision": {k: dict(v) for k, v in decision.items()},
-            "model_calls": sum(calls.values()),
+            "debate_turns": sum(calls.values()),
             "tech_error": {"total": sum(sym_err.values()), "symbols": len(sym_err),
-                           "top_symbol": {"errors": sym_err[top], "rows": sym_rows[top], "model_calls": calls[top]} if top else None,
+                           "top_symbol": ({"errors": sym_err[top], "rows": sym_rows[top], "debate_turns": calls[top]}
+                                          if top is not None else None),
                            "by_slot_top_symbol": {s: c[top] for s, c in sorted(slot_err.items())},
                            "by_slot_others": {s: sum(c.values()) - c[top] for s, c in sorted(slot_err.items())},
                            "by_day_others": {d: n for d, n in sorted((d, sum(c.values()) - c[top]) for d, c in day_err.items()) if n}}}
@@ -97,7 +109,7 @@ def main():
     args = p.parse_args()
     rows, digest = load(args.team_dir, args.through)
     out = {"through": args.through, "input_sha256": digest, **summarize(rows)}
-    with open(args.out, "w") as f:
+    with open(os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:   # 운영 원장 집계 — 비공개 권한
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(json.dumps(out, ensure_ascii=False, indent=1))
 
