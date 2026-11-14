@@ -2,6 +2,7 @@
 
 - [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 11/16 WAIT. 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
 
+- [팀 심의 입력 진단 (2026-11-14)](reviews/team-input-diagnosis-2026-11-14.md): 재무 보고 전부 `insufficient`인데 87%가 상수 +10으로 토론에 들어가는 경로, 미획득 수급의 `False` 기록, 지표 경로가 없는 보유 종목 재평가. 수정 방향은 사용자 결정 대기.
 - [엔진 종합 평가와 우선순위 과제 V01~V12 (2026-11-13)](reviews/engine-evaluation-2026-11-13.md): 목적(선정·진입의 KODEX200 초과수익 검증) 기준 영역별 평가, 부족한 점 D1~D12, 과제·완료 기준·분기, Fable 5.2 활용. [원장](operations/execution-roadmap.md#engine-evaluation-20261113).
 
 - [R02-WEB-REJECTION-RECURRENCE 웹 리포트 거절 재발 원인 조사](operations/execution-roadmap.md#r02-web-rejection-recurrence-20261109): 11/9 3/3 거절은 계약상 올바른 종류(인용 범위 밖 숫자·표기 변형·입력에 없는 영문)이며 검증기 오거절 재현 0건. 프롬프트-계약 불일치 3가지 → 최소 수정(scope 진단·프롬프트 정합, 계약 불변) PR #353 병합·운영 `1f87b896` 11/10 00:22 인수 완료. 자연 수락 11/10: morning 거절(`recommendation_vocabulary`)·midday ready(11/3 이후 첫 수락)·after WAIT.
