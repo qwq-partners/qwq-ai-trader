@@ -151,10 +151,11 @@
 
 ```bash
 A=~/.local/state/qwq-task-audit/<날짜>/v02r   # 비공개
-# 1) 창이 찼는지 확인(수익 미계산) — 출력의 window.end 가 창의 마지막 날. 창 2부터는 --from <이전 창 end 다음 거래일>
-python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <오늘> --out $A/check.jsonl
+# 1) 창이 찼는지 확인(수익 미계산) — 출력의 window.end 가 창의 마지막 날.
+#    창 1은 --from 을 빼고, 창 2부터는 1)·2) 모두 --from <이전 창 end 다음 거래일> 을 붙인다
+python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <오늘> [--from <창 시작일>] --out $A/check.jsonl
 # 2) 판독용 관측 — 창 종료일(window.end)까지만
-python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <창 종료일> --out $A/obs.jsonl
+python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <창 종료일> [--from <창 시작일>] --out $A/obs.jsonl
 # 3) 5일 판독: <판독 기준일> = 창 종료일 + 5거래일 이후의 고정일. 20일 판독은 같은 obs 로 기준일만 + 20거래일 이후로 바꿔 따로 돌린다
 python scripts/research/candidate_ledger_readout.py prices --obs $A/obs.jsonl --out-dir $A/prices --start <첫 관측일 이전> --through <판독 기준일>
 python scripts/research/candidate_ledger_readout.py report --obs $A/obs.jsonl --price-dir $A/prices \
