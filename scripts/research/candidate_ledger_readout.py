@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """V02-R — 장중 스캔 후보 원장의 사후 수익 판독(측정 전용, 오프라인).
 
-사전 등록: docs/research/v02-candidate-ledger-2026-11-13.md 4절·7절. KIS 무접촉, 운영 잡이 아니다.
+사전 등록: docs/research/v02-candidate-ledger-2026-11-13.md 4절·7절, 판독 창·진입 점수 집계는
+docs/research/v03-resume-criteria-2026-11-15.md 3·5·8절. KIS 무접촉, 운영 잡이 아니다.
   obs    : candidate_ledger/candidates_YYYYMMDD.jsonl[.gz] → 종목-일 관측(obs.jsonl, 그날 처음 반환된 스캔)
-           + 건수·결측률·원천 분포(표준 출력 — 수익은 계산하지 않는다)
+           + 건수·결측률·원천 분포, 창 경계용 건수(표준 출력 — 수익은 계산하지 않는다). --from 으로 창 시작일을 끊는다
   prices : 판독에 쓰는 종목(장 마감 뒤 첫 등장만 있는 종목 제외) + 069500 의 공개 일봉을 CSV 캐시로(V01 fetch_prices)
   report : obs + 공개 일봉 → summary.json. 최소 표본(두 집단이 모두 있는 날 15일·300종목-일)에 못 미친
            보유 기간은 '판정 불가'만 적고 수익 통계를 계산하지 않는다(중간 엿보기 금지)
@@ -28,6 +29,8 @@ from src.analytics.candidate_ledger import SCHEMA  # noqa: E402
 HORIZONS = (5, 20)
 THRESHOLD = {5: 0.010, 20: 0.020}     # 같은 날 상위−하위 수익 차이 기준
 MIN_DAYS, MIN_SYMBOL_DAYS = 15, 300   # 미달이면 '판정 불가'
+ENTRY_SCORE = 75                      # V03 O3 — 엔진의 기본 진입 점수 기준(약세·변동성 상향 전)
+MIN_ENTRY_N, MIN_ENTRY_DAYS = 60, 10  # O3 최소 표본(종목-일, 서로 다른 날) — 미달이면 평균을 계산하지 않는다
 CLOSE = "15:30:00"                    # 이 시각 이후 처음 나온 후보는 D 종가 진입이 미래 참조라 판독에서 뺀다
 NOON = "12:00:00"
 FIELDS = ("score", "price", "change_pct", "volume", "volume_ratio", "rsi", "atr_pct", "per", "pbr", "foreign", "inst", "basis")
@@ -43,13 +46,14 @@ def _lines(path):
         yield from f
 
 
-def build_obs(ledger_dir, through):
-    """원장 → (종목-일 관측, 통계). 읽히지 않는 줄·모르는 스키마·짝 없는 게이트 행은 버리고 센다."""
+def build_obs(ledger_dir, through, start=None):
+    """원장 → (종목-일 관측, 통계). 읽히지 않는 줄·모르는 스키마·짝 없는 게이트 행은 버리고 센다.
+    start(포함)를 주면 그 전 날짜 파일은 읽지 않는다 — 겹치지 않는 판독 창(V03 5절)."""
     files = {}
     for p in sorted(glob.glob(os.path.join(ledger_dir, "candidates_*.jsonl*"))):
         m = _FILE.fullmatch(os.path.basename(p))
         day = "-".join(m.groups()[:3]) if m else None
-        if day is None or day > through:
+        if day is None or day > through or (start is not None and day < start):
             continue
         if day in files:
             raise SystemExit(f"같은 날짜 원장이 둘이다(.jsonl 과 .jsonl.gz): {day}")
@@ -117,7 +121,11 @@ def build_obs(ledger_dir, through):
                     sources[s] += 1
         per_day[day] = {"scans": len(scans), "symbol_days": len(seen)}
     n = len(obs)
-    return obs, {"through": through, "days": len(files), "symbol_days": n,
+    usable = [(o, {}) for o in obs if not o["after_close"] and o["score"] is not None]
+    window = {"usable_symbol_days": len(usable), "tercile_days": len({d for d, _g, _v in day_terciles(usable)})}
+    # 창 경계(V03 5절): 판독에 쓰이는 관측 수와 3분위가 서는 날 수 — 점수·시각만으로 세며 가격·수익과 무관하다
+    window["ready"] = window["usable_symbol_days"] >= MIN_SYMBOL_DAYS and window["tercile_days"] >= MIN_DAYS
+    return obs, {"from": start, "through": through, "window": window, "days": len(files), "symbol_days": n,
                  "after_close": sum(o["after_close"] for o in obs), **{k: c[k] for k in (
                      "scans", "candidate_rows", "basis_rows", "skipped_lines", "bad_scans", "orphan_gates",
                      "error_rows", "unknown_rows", "regime_unobserved")},
@@ -210,6 +218,19 @@ def tradability(rows, h, pos=None):
     return {"beta": beta, **st, "net_positive": st["mean"] is not None and st["mean"] > 0}
 
 
+def entry_score(rows, h, beta, pos=None):
+    """V03 O3: 첫 스캔 점수가 진입 기준 이상인 후보의 비용 차감 순초과. β 는 tradability 와 같은 값(창 전체 표본),
+    날짜별 평균의 평균(daily_stat). 실제 주문 집단이 아니라 그 앞 단계다(점수 상향·필터·엔진 게이트 이전)."""
+    r, b = f"ret{h}", f"bench{h}"
+    sel = [(o["date"], {"x": v[r] - beta * v[b] - float(COST)}) for o, v in rows
+           if o["score"] is not None and o["score"] >= ENTRY_SCORE and r in v]
+    n, days = len(sel), len({d for d, _v in sel})
+    if n < MIN_ENTRY_N or days < MIN_ENTRY_DAYS:
+        return {"n": n, "days": days, "verdict": "판정 불가"}
+    st = daily_stat(sel, "x", h - 1, pos)
+    return {**st, "net_positive": st["mean"] > 0}
+
+
 def explore(rows, h):
     """탐색(판정에 쓰지 않음): 표시가 있는 후보 − 없는 후보의 같은 날 차이. 표시를 모르는 후보는 뺀다."""
     def either(o):
@@ -237,10 +258,12 @@ def combine(verdicts):
 
 def report(obs, price_dir, bench_adjust, through, allow_partial=False):
     rows, pos, excluded, partial, prices = outcomes(obs, price_dir, bench_adjust, through, allow_partial)
-    out = {"schema": "v02r-1", "through": through, "inputs": {"obs_sha256": _digest(obs), "prices_sha256": prices},
+    dates = sorted({o["date"] for o in obs})
+    out = {"schema": "v02r-2", "window": {"first_obs": dates[0] if dates else None, "last_obs": dates[-1] if dates else None},
+           "through": through, "inputs": {"obs_sha256": _digest(obs), "prices_sha256": prices},
            "symbol_days": len(obs), "after_close_excluded": len(obs) - len(rows),
            "unscored": sum(o["score"] is None for o, _v in rows), "partial_price_symbols": partial, "excluded": excluded,
-           "primary": {}, "tradability": {}, "exploratory": {}}
+           "primary": {}, "tradability": {}, "entry_score": {}, "exploratory": {}}
     for h in HORIZONS:
         j = out["primary"][f"h{h}"] = judge(rows, h, pos)
         if j["verdict"] == "판정 불가":
@@ -248,6 +271,8 @@ def report(obs, price_dir, bench_adjust, through, allow_partial=False):
         t = out["tradability"][f"h{h}"] = tradability(rows, h, pos)
         if j["verdict"] == "선정 신호 있음" and (t is None or not t["net_positive"]):
             j["note"] = "거래 가능성 판정 불가(β 추정 불가)" if t is None else "선별은 되지만 비용을 못 넘음"
+        if t is not None:
+            out["entry_score"][f"h{h}"] = entry_score(rows, h, t["beta"], pos)
         out["exploratory"][f"h{h}"] = explore(rows, h)
     out["verdict"] = combine([out["primary"][f"h{h}"]["verdict"] for h in HORIZONS])
     return out
@@ -258,6 +283,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("obs")
     a.add_argument("--ledger-dir", required=True)
+    a.add_argument("--from", dest="start", help="창 시작일 YYYY-MM-DD(포함) — 이전 창과 겹치지 않게 끊는다")
     b = sub.add_parser("report")
     c = sub.add_parser("prices")
     c.add_argument("--out-dir", required=True)
@@ -273,7 +299,9 @@ def main():
         x.add_argument("--out", required=True)
     args = p.parse_args()
     if args.cmd == "obs":
-        obs, stats = build_obs(args.ledger_dir, args.through)
+        if args.start is not None and args.start > args.through:
+            raise SystemExit(f"--from {args.start} 이 --through {args.through} 보다 늦다")
+        obs, stats = build_obs(args.ledger_dir, args.through, args.start)
         with open(args.out, "w") as f:
             f.writelines(json.dumps(o, ensure_ascii=False) + "\n" for o in obs)
         print(json.dumps(stats, ensure_ascii=False, indent=1))

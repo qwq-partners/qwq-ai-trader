@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-15 — V02-R 판독 스크립트: 판독 창 분리·진입 점수 집계 (오프라인, V03 후속) ([V03 8절](docs/research/v03-resume-criteria-2026-11-15.md) · [V02 7절](docs/research/v02-candidate-ledger-2026-11-13.md))
+
+- 변경: `scripts/research/candidate_ledger_readout.py` — `obs --from`(창 시작일, 그 전 날짜 파일은 읽지 않음), `obs` 통계에 `window`(판독에 쓰이는 종목-일·3분위가 서는 날·최소 표본 도달 여부 — 수익 미계산), `report`에 `entry_score`(첫 스캔 75점 이상 후보의 β 조정·비용 차감 순초과, 60종목-일·10일 미달은 판정 불가)와 `window`. 요약 스키마 `v02r-2`.
+- 검사: `tests/test_candidate_ledger_readout.py` 13건(창이 겹치지 않는지, 창 경계 건수가 점수만으로 세어지는지, 진입 점수 집계의 최소 표본·기준 점수·β).
+- 왜: V03가 개방 조건 O3와 겹치지 않는 판독 창을 사전 등록했고, 수익을 계산하기 전에 스크립트에 넣어야 한다. 사용자 "병합되면 판독 스크립트 후속 ㄱㄱ"(11/15). 운영 원장은 아직 0행.
+- V02의 판정 기준(4절)·기존 출력은 그대로. 운영 소스·설정 변경 0, 배포 대상 아님.
+
 ## 2026-11-15 — V03 매수 재개 기준 사전 등록 (문서만) ([문서](docs/research/v03-resume-criteria-2026-11-15.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - 추가: `docs/research/v03-resume-criteria-2026-11-15.md` — canary 개방 조건(O1~O6, V02 판독·첫 스캔 75점 이상 후보의 순초과·V04 완료), canary 규모·단계·중단 규칙(S1~S5)·최종 판정, 선정 경로 종료 기준(T1~T3), 개방 전 준비 항목(P1~P6, 지금 구현 0), 사용자 결정 D1~D3.
