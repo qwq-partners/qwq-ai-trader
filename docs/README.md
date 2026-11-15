@@ -362,6 +362,7 @@
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)
+- [V03 매수 재개 기준 사전 등록 초안(2026-11-15)](research/v03-resume-criteria-2026-11-15.md) — canary 개방 조건·규모·중단 규칙·최종 판정, 선정 경로 종료 기준, 개방 전 준비 항목, 사용자 결정 D1~D3. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)
 - [V02 장중 스캔 후보 전수 원장·판독 사전 등록(2026-11-13)](research/v02-candidate-ledger-2026-11-13.md) — 무엇을 남기는지(후보 전체·점수 구성·스캔 단위 게이트), 엔진 영향, 같은 날 비교 판독 기준, 일정. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)
 - [V05 LLM 판단 가치 시험 — 팀 심의 입력 재판정(2026-11-13)](research/v05-team-rejudge-2026-11-13.md) — 사전 등록·결과(Fable 5.2·Opus 5.5 모두 매수 승인 0~1건으로 주 판정 불가, 점수 분할도 양의 선별 없음), 심의 입력 결손, 재현 절차. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)
 - [V01 기존 후보의 사후 초과수익 판독(2026-11-13)](research/v01-candidate-forward-excess-2026-11-13.md) — 사전 등록 기준·결과(배치 SEPA 후보·장중 신호 모두 미입증), 지수 방향 영향, 손절폭 도달률, 재현 절차, 독립 리뷰 처분. [원장](operations/execution-roadmap.md#engine-evaluation-20261113)

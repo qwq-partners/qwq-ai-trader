@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-15 — V03 매수 재개 기준 사전 등록 초안 (문서만) ([초안](docs/research/v03-resume-criteria-2026-11-15.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 추가: `docs/research/v03-resume-criteria-2026-11-15.md` — canary 개방 조건(O1~O6, V02 판독·엔진 진입 기준 통과 후보의 순초과·V04 완료), canary 규모·단계·중단 규칙(S1~S5)·최종 판정, 선정 경로 종료 기준(T1~T3), 개방 전 준비 항목(P1~P4, 지금 구현 0), 사용자 결정 D1~D3.
+- 확인한 코드 사실: 사이징 분모·예비현금 5%·일일 손실 한도가 수동 보유 포함 총자산 기준(`src/core/engine.py`) — 입금만으로는 소액 canary가 되지 않는다.
+- 왜: 평가 정본이 꼽은 '재개 기준 부재로 순환 대기'를 풀기 위해, V02 원장에 행이 생기기 전에 기준을 고정한다. 사용자 "V03 ㄱㄱ"(11/15).
+- 운영·설정·매수 중지·현금·배분 변경 0, 소스 변경 0, 새 호출 0. 배포 대상 아님. 상태는 초안(사용자 결정 대기).
+
 ## 2026-11-14 — 팀 심의 입력 정직화 A안 (shadow 경로·운영 인수 11/15 00:08) ([진단 8절](docs/reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](docs/agents/trading-team.md))
 
 - 변경: `src/agents/analysts.py` — 검증기가 실제로 검증하지 못한 결과(`validated=False`)에는 통과 가산 +10·신뢰도 0.7을 주지 않는다(점수 0·신뢰도 0 → 집계·유효 근거 수에서 제외), 요약은 "공시 위험 신호 없음 — 수급·재무 자료 미연결", 수급 지표는 `None`. 공시 위험이 있으면 −30·0.8(종전 −20). 실제로 검증된 결과의 산식은 그대로. `ANALYST_INPUT_VERSION` 추가.
