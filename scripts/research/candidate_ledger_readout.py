@@ -271,8 +271,11 @@ def combine(verdicts):
 
 
 def report(obs, price_dir, bench_adjust, through, allow_partial=False):
-    rows, pos, excluded, partial, prices = outcomes(obs, price_dir, bench_adjust, through, allow_partial)
     dates = sorted({o["date"] for o in obs})
+    end = window_counts(obs)["end"]
+    if end is not None and dates[-1] > end:   # 창이 찬 뒤의 관측이 섞이면 사전 등록한 창이 아니다 — 계산하지 않는다
+        raise SystemExit(f"판독 창은 {end} 에 찼는데 관측이 {dates[-1]} 까지 있다 — obs 를 --through {end} 로 다시 만든다")
+    rows, pos, excluded, partial, prices = outcomes(obs, price_dir, bench_adjust, through, allow_partial)
     out = {"schema": "v02r-2", "window": {"first_obs": dates[0] if dates else None, "last_obs": dates[-1] if dates else None},
            "through": through, "inputs": {"obs_sha256": _digest(obs), "prices_sha256": prices},
            "symbol_days": len(obs), "after_close_excluded": len(obs) - len(rows),

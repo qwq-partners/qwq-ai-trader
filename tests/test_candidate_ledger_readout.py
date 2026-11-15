@@ -144,8 +144,11 @@ def test_report_end_to_end_with_synthetic_prices(tmp_path):
         write(f"{i:06d}.csv", lambda t, i=i: round(1000 * (1 + 0.001 * i) ** t, 4))
     obs = [{"date": cal[d], "symbol": f"{i:06d}", "t": f"{cal[d]}T10:00:00", "after_close": False, "score": 50 + i,
             "sources": ["kis_volume_rank"] if i % 2 else [], "bonus": None, "foreign": None, "inst": None, "regime_ok": None}
-           for d in range(16) for i in range(21)]
+           for d in range(15) for i in range(21)]   # 15일·315종목-일 — 창이 15일째에 찬다
     obs.append({**obs[0], "symbol": "999999", "after_close": True})   # 장 마감 뒤 첫 등장 — 가격 파일이 없어도 된다
+    extra = [{**o, "date": cal[15], "t": f"{cal[15]}T10:00:00"} for o in obs[:21]]
+    with pytest.raises(SystemExit, match=cal[14]):   # 창이 찬 뒤의 관측이 섞인 입력은 판독하지 않는다
+        r.report(obs + extra, str(tmp_path), str(tmp_path / "adj.csv"), cal[-1])
 
     out = r.report(obs, str(tmp_path), str(tmp_path / "adj.csv"), cal[-1])
     h5, h20 = out["primary"]["h5"], out["primary"]["h20"]
@@ -155,11 +158,11 @@ def test_report_end_to_end_with_synthetic_prices(tmp_path):
     assert out["entry_score"] == {   # 점수 50~70 — 75점 이상 후보 없음. 두 보유 기간 모두 항목이 있다
         "h5": {"n": 0, "days": 0, "verdict": "판정 불가", "reason": "진입 점수 표본 미달"},
         "h20": {"n": 0, "days": 0, "verdict": "판정 불가", "reason": "주 판정 표본 미달"}}
-    assert out["schema"] == "v02r-2" and out["window"] == {"first_obs": cal[0], "last_obs": cal[15]}
+    assert out["schema"] == "v02r-2" and out["window"] == {"first_obs": cal[0], "last_obs": cal[14]}
     assert out["verdict"] == "선정 신호 있음(잠정 — 한 보유 기간만)" and out["after_close_excluded"] == 1
-    assert out["excluded"] == {"h20:horizon_not_reached": 11 * 21}
+    assert out["excluded"] == {"h20:horizon_not_reached": 10 * 21}
     src = out["exploratory"]["h5"]["원천 kis_volume_rank"]
-    assert src["n_in"] == 16 * 10 and src["n_out"] == 16 * 11 and src["days_both"] == 16
+    assert src["n_in"] == 15 * 10 and src["n_out"] == 15 * 11 and src["days_both"] == 15
     assert out["exploratory"]["h5"]["수급 표시"]["diff"] is None   # 표시를 모르는 후보는 비교에 넣지 않는다
 
     assert r.used_symbols(obs) == [f"{i:06d}" for i in range(21)]   # 장 마감 뒤 후보는 가격 수집 대상도 아니다

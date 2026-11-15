@@ -151,13 +151,17 @@
 
 ```bash
 A=~/.local/state/qwq-task-audit/<날짜>/v02r   # 비공개
-python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <종료일> --out $A/obs.jsonl
-python scripts/research/candidate_ledger_readout.py prices --obs $A/obs.jsonl --out-dir $A/prices --start <첫 관측일 이전> --through <종료일>
+# 1) 창이 찼는지 확인(수익 미계산) — 출력의 window.end 가 창의 마지막 날. 창 2부터는 --from <이전 창 end 다음 거래일>
+python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <오늘> --out $A/check.jsonl
+# 2) 판독용 관측 — 창 종료일(window.end)까지만
+python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <창 종료일> --out $A/obs.jsonl
+# 3) 5일 판독: <판독 기준일> = 창 종료일 + 5거래일 이후의 고정일. 20일 판독은 같은 obs 로 기준일만 + 20거래일 이후로 바꿔 따로 돌린다
+python scripts/research/candidate_ledger_readout.py prices --obs $A/obs.jsonl --out-dir $A/prices --start <첫 관측일 이전> --through <판독 기준일>
 python scripts/research/candidate_ledger_readout.py report --obs $A/obs.jsonl --price-dir $A/prices \
-  --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --through <종료일> --out $A/summary.json
+  --bench-adjust ~/.cache/ai_trader/excess_return/kodex200_daily.csv --through <판독 기준일> --out $A/summary.json
 ```
 
-- **판독 창(11/15 추가, [V03 5·8절](v03-resume-criteria-2026-11-15.md)):** `obs --from <창 시작일>`을 주면 그 전 날짜는 읽지 않는다(창 2에 창 1이 섞이지 않게). `obs` 출력의 `window`는 창 경계를 정하는 두 수(`usable_symbol_days` = 장 마감 뒤 첫 등장·점수 결측을 뺀 종목-일, `tercile_days` = 3분위가 서는 날)와 둘 다 최소 표본을 처음 넘긴 날(`end` — 그 창의 마지막 날, 아직이면 null)이다 — 점수와 시각만으로 세며 가격·수익과 무관하다. `end` 뒤 날짜까지 읽었으면 `--through <end>`로 obs를 다시 만든다(표준 오류에 안내가 나온다). `report --through`는 창의 마지막 날이 아니라 그로부터 5(또는 20)거래일 뒤의 고정 종료일이다.
+- **판독 창(11/15 추가, [V03 5·8절](v03-resume-criteria-2026-11-15.md)):** `obs --from <창 시작일>`을 주면 그 전 날짜는 읽지 않는다(창 2에 창 1이 섞이지 않게). `obs` 출력의 `window`는 창 경계를 정하는 두 수(`usable_symbol_days` = 장 마감 뒤 첫 등장·점수 결측을 뺀 종목-일, `tercile_days` = 3분위가 서는 날)와 둘 다 최소 표본을 처음 넘긴 날(`end` — 그 창의 마지막 날, 아직이면 null)이다 — 점수와 시각만으로 세며 가격·수익과 무관하다. `end` 뒤 날짜까지 읽었으면 `--through <end>`로 obs를 다시 만든다(표준 오류에 안내가 나오고, `report`는 창이 찬 뒤의 관측이 섞인 입력을 거부한다). `report --through`는 창의 마지막 날이 아니라 그로부터 5(또는 20)거래일 뒤의 고정 종료일이다.
 - **진입 점수 집계(11/15 추가, V03 O3):** `report`의 `entry_score`는 첫 스캔 점수 75점 이상 후보의 `수익 − β×벤치마크 − 0.227%`를 날짜별 평균의 평균으로 낸다(β는 보조 판정과 같은 값). 두 보유 기간 모두 항목을 남기며, 계산하지 않을 때는 `판정 불가`와 건수·사유(주 판정 표본 미달 / 진입 점수 표본 미달(60종목-일·서로 다른 10일) / β 추정 불가)를 적는다. V02의 판정(4절)에는 쓰지 않는다. 요약 스키마는 `v02r-2`(`window`·`entry_score` 추가).
 - `obs`는 수익을 계산하지 않는다 — 건수·스캔 수·필드별 결측률·원천 분포·게이트 분포·버린 행 수를 표준 출력에 낸다. **최소 표본 전의 점검(첫 거래일 행 구조·결측률 포함)은 이 명령만 쓴다.**
 - `prices`는 판독에 쓰는 종목만 받는다(장 마감 뒤 첫 등장뿐인 종목은 판독에서 빠지므로 받지 않는다 — 그 종목의 수집 실패가 전체를 막지 않게). 수집 자체는 V01 `fetch_prices` 그대로다.
