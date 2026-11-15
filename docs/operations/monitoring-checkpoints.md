@@ -12,6 +12,7 @@
 ## 11월13일 V02 후보 전수 원장 — 배포 뒤 확인
 
 - (V03 O5, 11/15 추가) 각 창의 5일·20일 판독 때 운영 `config/default.yml`·`config/evolved_overrides.yml`의 해시·수정 시각을 창 시작 영수증(`~/.local/state/qwq-task-audit/20261115/v03-policy-fingerprint/window1-start.txt`)과 대조한다. 수정 시각이 창 안이면 변경 내용을 확인하고, 선정 관련이면 그날부터 새 창. 창 2 시작 때도 같은 영수증을 남긴다.
+- (11/15 추가) `obs` 출력의 `window`(`usable_symbol_days`·`tercile_days`·`end`)로 창 1이 찼는지 본다. `end`가 창 1의 마지막 날이다(매일 돌리지 않아도 같은 날짜가 나온다). 판독용 obs는 `--through <end>`로 만들고, 창 2는 `obs --from <end 다음 거래일>`로 읽는다.
 
 [설계·판독 기준](../research/v02-candidate-ledger-2026-11-13.md) · [원장](execution-roadmap.md#engine-evaluation-20261113). 운영 인수 11/13 21:11:55 KST(`010e3044`, 장외) — 아래 항목은 첫 거래일 11/16 장중부터 확인한다. 행 구조·결측률·원천/게이트 분포·버린 행 수는 `python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <오늘> --out <비공개 경로>/obs.jsonl`로 본다(읽기 전용, 수익 미계산 — [사전 등록 7절](../research/v02-candidate-ledger-2026-11-13.md)).
 
