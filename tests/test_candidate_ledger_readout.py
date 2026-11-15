@@ -54,7 +54,7 @@ def test_reads_what_the_recorder_writes(tmp_path, ledger_on):
     w1, w2 = r.build_obs(str(tmp_path), "2026-11-16"), r.build_obs(str(tmp_path), "2026-11-17", "2026-11-17")
     assert {o["date"] for o in w1[0]}.isdisjoint({o["date"] for o in w2[0]}) and len(w2[0]) == 1   # 창 2에 창 1이 섞이지 않는다
     assert w2[1]["from"] == "2026-11-17" and w2[1]["days"] == 1 and stats["from"] is None
-    assert stats["window"] == {"usable_symbol_days": 3, "tercile_days": 0, "ready": False}       # 장 마감 뒤 1건 제외, 3분위 없음
+    assert stats["window"] == {"usable_symbol_days": 3, "tercile_days": 0, "end": None}          # 장 마감 뒤 1건 제외, 3분위 없음
     day2.write_text("")
     with pytest.raises(SystemExit):                                                         # 같은 날짜가 두 파일이면 멈춘다
         r.build_obs(str(tmp_path), "2026-11-17")
@@ -92,22 +92,32 @@ def test_no_return_statistics_before_minimum_sample(days, per_day):
         "symbol_days": days * per_day, "days_both": days, "verdict": "판정 불가"}   # 차이·구간을 계산하지 않는다
 
 
-def test_window_counts_use_scores_only():
-    obs = [{"date": f"d{d:02d}", "score": s, "after_close": False} for d in range(15) for s in range(21)]
-    usable = [(o, {}) for o in obs]
-    assert len({d for d, _g, _v in r.day_terciles(usable)}) == 15 and len(usable) == 315   # 가격 없이도 창이 찼는지 센다
+def test_window_end_is_first_day_minimum_sample_is_met():
+    def obs(days, per_day=21):
+        return [{"date": f"d{d:02d}", "score": s, "after_close": False} for d in range(days) for s in range(per_day)]
+    assert r.window_counts(obs(14)) == {"usable_symbol_days": 294, "tercile_days": 14, "end": None}
+    assert r.window_counts(obs(16)) == {"usable_symbol_days": 336, "tercile_days": 16, "end": "d14"}   # 16일을 한 번에 읽어도 15일째
+    assert r.window_counts(obs(20, 15))["end"] == "d19"                                              # 날은 찼어도 300건을 넘는 날까지
+    late = obs(16) + [{"date": "d00", "score": 99, "after_close": True}, {"date": "d00", "score": None, "after_close": False}]
+    assert r.window_counts(late)["usable_symbol_days"] == 336                                        # 장 마감 뒤·점수 결측은 세지 않는다
+    w1 = [o for o in obs(20) if o["date"] <= "d14"]
+    w2 = [o for o in obs(20) if o["date"] > "d14"]
+    assert r.window_counts(w1)["end"] == "d14" and r.window_counts(w2)["end"] is None and len(w1) + len(w2) == 420
 
 
 def test_entry_score_needs_minimum_sample_and_uses_given_beta():
     def rows(days, per_day, score=80):
         return [({"date": f"d{d:02d}", "score": score}, {"ret5": 0.03, "bench5": 0.01}) for d in range(days) for _ in range(per_day)]
-    assert r.entry_score(rows(9, 10), 5, 1.0) == {"n": 90, "days": 9, "verdict": "판정 불가"}      # 날 수 미달 — 평균을 계산하지 않는다
-    assert r.entry_score(rows(10, 5), 5, 1.0) == {"n": 50, "days": 10, "verdict": "판정 불가"}     # 종목-일 미달
-    assert r.entry_score(rows(10, 6, score=74), 5, 1.0)["n"] == 0                                # 기준 미만은 넣지 않는다
+    short = {"verdict": "판정 불가", "reason": "진입 점수 표본 미달"}
+    assert r.entry_score(rows(9, 10), 5, 1.0) == {"n": 90, "days": 9, **short}      # 날 수 미달 — 평균을 계산하지 않는다
+    assert r.entry_score(rows(10, 5), 5, 1.0) == {"n": 50, "days": 10, **short}     # 종목-일 미달
+    assert r.entry_score(rows(10, 6, score=74), 5, 1.0) == {"n": 0, "days": 0, **short}   # 기준 미만은 넣지 않는다
+    assert r.entry_score(rows(10, 6), 5, None) == {"n": 60, "days": 10, "verdict": "판정 불가", "reason": "β 추정 불가"}
+    assert r.entry_score(rows(10, 6), 5, 1.0, primary_ready=False)["reason"] == "주 판정 표본 미달"
     got = r.entry_score(rows(10, 6, score=75), 5, 1.0)
     assert got["n"] == 60 and got["days"] == 10 and got["net_positive"] is True
     assert got["mean"] == pytest.approx(0.03 - 0.01 - float(r.COST))
-    assert r.entry_score(rows(10, 6), 5, 3.0)["net_positive"] is False                           # β 가 크면 순초과가 음수
+    assert r.entry_score(rows(10, 6), 5, 3.0)["net_positive"] is False              # β 가 크면 순초과가 음수
 
 
 def test_combine():
@@ -142,7 +152,9 @@ def test_report_end_to_end_with_synthetic_prices(tmp_path):
     assert h5["verdict"] == "선정 신호 있음" and h5["diff"] > 0.05 and h5["ci95"][0] > 0 and "note" not in h5
     assert h20 == {"symbol_days": 5 * 21, "days_both": 5, "verdict": "판정 불가"}   # 20일은 아직 5일치뿐 — 수익 통계 없음
     assert set(out["tradability"]) == set(out["exploratory"]) == {"h5"} and out["tradability"]["h5"]["net_positive"] is True
-    assert out["entry_score"] == {"h5": {"n": 0, "days": 0, "verdict": "판정 불가"}}   # 점수 50~70 — 75점 이상 후보 없음
+    assert out["entry_score"] == {   # 점수 50~70 — 75점 이상 후보 없음. 두 보유 기간 모두 항목이 있다
+        "h5": {"n": 0, "days": 0, "verdict": "판정 불가", "reason": "진입 점수 표본 미달"},
+        "h20": {"n": 0, "days": 0, "verdict": "판정 불가", "reason": "주 판정 표본 미달"}}
     assert out["schema"] == "v02r-2" and out["window"] == {"first_obs": cal[0], "last_obs": cal[15]}
     assert out["verdict"] == "선정 신호 있음(잠정 — 한 보유 기간만)" and out["after_close_excluded"] == 1
     assert out["excluded"] == {"h20:horizon_not_reached": 11 * 21}

@@ -121,17 +121,29 @@ def build_obs(ledger_dir, through, start=None):
                     sources[s] += 1
         per_day[day] = {"scans": len(scans), "symbol_days": len(seen)}
     n = len(obs)
-    usable = [(o, {}) for o in obs if not o["after_close"] and o["score"] is not None]
-    window = {"usable_symbol_days": len(usable), "tercile_days": len({d for d, _g, _v in day_terciles(usable)})}
-    # 창 경계(V03 5절): 판독에 쓰이는 관측 수와 3분위가 서는 날 수 — 점수·시각만으로 세며 가격·수익과 무관하다
-    window["ready"] = window["usable_symbol_days"] >= MIN_SYMBOL_DAYS and window["tercile_days"] >= MIN_DAYS
-    return obs, {"from": start, "through": through, "window": window, "days": len(files), "symbol_days": n,
+    return obs, {"from": start, "through": through, "window": window_counts(obs), "days": len(files), "symbol_days": n,
                  "after_close": sum(o["after_close"] for o in obs), **{k: c[k] for k in (
                      "scans", "candidate_rows", "basis_rows", "skipped_lines", "bad_scans", "orphan_gates",
                      "error_rows", "unknown_rows", "regime_unobserved")},
                  "null_rate": {k: round(nulls[k] / n, 4) if n else None for k in FIELDS},
                  "sources": dict(sorted(sources.items())), "sessions": dict(sorted(sessions.items())),
                  "gates": {k: dict(sorted(v.items())) for k, v in gate_n.items()}, "per_day": per_day}
+
+
+def window_counts(obs):
+    """창 경계(V03 5절): 판독에 쓰이는 관측 수·3분위가 서는 날 수와, 둘 다 최소 표본을 처음 넘긴 날(end — 그 창의 마지막 날).
+    점수·시각만으로 세며 가격·수익과 무관하다. end 뒤 날짜가 obs 에 있으면 --through 를 end 로 다시 만든다."""
+    by = defaultdict(list)
+    for o in obs:
+        if not o["after_close"] and o["score"] is not None:
+            by[o["date"]].append((o, {}))
+    n = days = 0
+    end = None
+    for d in sorted(by):
+        n, days = n + len(by[d]), days + bool(day_terciles(by[d]))
+        if end is None and n >= MIN_SYMBOL_DAYS and days >= MIN_DAYS:
+            end = d
+    return {"usable_symbol_days": n, "tercile_days": days, "end": end}
 
 
 def used_symbols(obs):
@@ -218,16 +230,18 @@ def tradability(rows, h, pos=None):
     return {"beta": beta, **st, "net_positive": st["mean"] is not None and st["mean"] > 0}
 
 
-def entry_score(rows, h, beta, pos=None):
+def entry_score(rows, h, beta, pos=None, primary_ready=True):
     """V03 O3: 첫 스캔 점수가 진입 기준 이상인 후보의 비용 차감 순초과. β 는 tradability 와 같은 값(창 전체 표본),
-    날짜별 평균의 평균(daily_stat). 실제 주문 집단이 아니라 그 앞 단계다(점수 상향·필터·엔진 게이트 이전)."""
+    날짜별 평균의 평균(daily_stat). 실제 주문 집단이 아니라 그 앞 단계다(점수 상향·필터·엔진 게이트 이전).
+    계산하지 않는 경우에도 건수와 사유를 남긴다 — 빠진 항목과 판정 불가를 구분하기 위해서다."""
     r, b = f"ret{h}", f"bench{h}"
-    sel = [(o["date"], {"x": v[r] - beta * v[b] - float(COST)}) for o, v in rows
-           if o["score"] is not None and o["score"] >= ENTRY_SCORE and r in v]
-    n, days = len(sel), len({d for d, _v in sel})
-    if n < MIN_ENTRY_N or days < MIN_ENTRY_DAYS:
-        return {"n": n, "days": days, "verdict": "판정 불가"}
-    st = daily_stat(sel, "x", h - 1, pos)
+    sel = [(o, v) for o, v in rows if o["score"] is not None and o["score"] >= ENTRY_SCORE and r in v]
+    n, days = len(sel), len({o["date"] for o, _v in sel})
+    why = ("주 판정 표본 미달" if not primary_ready else "진입 점수 표본 미달" if n < MIN_ENTRY_N or days < MIN_ENTRY_DAYS
+           else "β 추정 불가" if beta is None else None)
+    if why is not None:
+        return {"n": n, "days": days, "verdict": "판정 불가", "reason": why}
+    st = daily_stat([(o["date"], {"x": v[r] - beta * v[b] - float(COST)}) for o, v in sel], "x", h - 1, pos)
     return {**st, "net_positive": st["mean"] > 0}
 
 
@@ -267,12 +281,12 @@ def report(obs, price_dir, bench_adjust, through, allow_partial=False):
     for h in HORIZONS:
         j = out["primary"][f"h{h}"] = judge(rows, h, pos)
         if j["verdict"] == "판정 불가":
+            out["entry_score"][f"h{h}"] = entry_score(rows, h, None, pos, primary_ready=False)
             continue
         t = out["tradability"][f"h{h}"] = tradability(rows, h, pos)
+        out["entry_score"][f"h{h}"] = entry_score(rows, h, None if t is None else t["beta"], pos)
         if j["verdict"] == "선정 신호 있음" and (t is None or not t["net_positive"]):
             j["note"] = "거래 가능성 판정 불가(β 추정 불가)" if t is None else "선별은 되지만 비용을 못 넘음"
-        if t is not None:
-            out["entry_score"][f"h{h}"] = entry_score(rows, h, t["beta"], pos)
         out["exploratory"][f"h{h}"] = explore(rows, h)
     out["verdict"] = combine([out["primary"][f"h{h}"]["verdict"] for h in HORIZONS])
     return out
@@ -305,6 +319,9 @@ def main():
         with open(args.out, "w") as f:
             f.writelines(json.dumps(o, ensure_ascii=False) + "\n" for o in obs)
         print(json.dumps(stats, ensure_ascii=False, indent=1))
+        end = stats["window"]["end"]
+        if end is not None and end < max(o["date"] for o in obs):
+            print(f"창이 {end} 에 찼다 — 판독용 obs 는 --through {end} 로 다시 만든다", file=sys.stderr)
         return
     obs = [json.loads(line) for line in open(args.obs)]
     if args.cmd == "prices":
