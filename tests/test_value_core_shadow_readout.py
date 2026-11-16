@@ -74,11 +74,35 @@ def test_history_loader_splits_final_and_llm_rejected_and_respects_through(tmp_p
         (tmp_path / f"{name}.json").write_text(json.dumps({
             "scan_date": scan_date, "scan_week": name, "final": final,
             "quant_passed": [{"symbol": s, "bucket": "value"} for s in ("A", "B", "C")],
-            "llm_verdicts": {"A": {"passed": True}, "B": {"passed": False}}}))
+            "llm_verdicts": {"A": {"total": 70, "passed": True, "one_line": "x"},
+                             "B": {"total": 40, "passed": False, "one_line": "x"},
+                             "C": {"total": 0.0, "passed": False, "one_line": ""}}}))   # C: 호출 실패 기록
     week("2026-W01", "2026-01-05", ["A"])
     week("2026-W02", "2026-01-12", [])
     week("2026-W03", "2026-01-19", ["A"])
     rows, weeks, empty = m.load_history(str(tmp_path), "2026-01-12")
     assert weeks == 2 and empty == ["2026-W02"]
     assert [(r["week"], r["symbol"], r["kind"]) for r in rows] == [
-        ("2026-W01", "A", "final"), ("2026-W01", "B", "llm_rejected"), ("2026-W02", "B", "llm_rejected")]
+        ("2026-W01", "A", "final"), ("2026-W01", "B", "llm_rejected"), ("2026-W01", "C", "llm_error"),
+        ("2026-W02", "B", "llm_rejected"), ("2026-W02", "C", "llm_error")]
+
+
+def test_week_index_keeps_real_gaps_including_year_boundary():
+    assert m.week_index("2026-W37") - m.week_index("2026-W35") == 2      # 사이 주에 픽이 없어도 2주 간격
+    assert m.week_index("2027-W01") - m.week_index("2026-W53") == 1
+
+
+def test_supplementary_t_uses_week_distance_not_position():
+    obs = [_obs(w, g) for w, g in (("2026-W01", "0.10"), ("2026-W02", "0.02"), ("2026-W03", "0.09"),
+                                   ("2026-W10", "0.01"), ("2026-W11", "0.08"), ("2026-W12", "0.03"))]
+    xs = [float(v) for v in m.weekly_excess(obs).values()]
+    got = m.supplementary(obs, [])["t_weekly_nw"]
+    assert got == pytest.approx(m.nw_t(xs, m.NW_LAG, [1, 2, 3, 10, 11, 12]))
+    assert got != pytest.approx(m.nw_t(xs, m.NW_LAG))                     # 연속 위치로 보면 다른 값이다
+
+
+def test_post_hoc_means_share_the_weekly_weighting_of_the_verdict():
+    obs = [_obs("2026-W01", "0.30", "0.10"), _obs("2026-W01", "0.10", "0.10"), _obs("2026-W02", "0.00", "-0.20")]
+    ph = m.post_hoc(obs, m.weekly_excess(obs))
+    assert ph["mean_weekly_gross"] == D("0.10") and ph["mean_weekly_bench"] == D("-0.05")
+    assert ph["mean_weekly_gross"] - m.COST - ph["mean_weekly_bench"] == m.judge(obs)["mean_weekly_excess"]

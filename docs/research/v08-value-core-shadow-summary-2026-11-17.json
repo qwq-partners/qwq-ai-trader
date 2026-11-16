@@ -18,6 +18,7 @@
   "llm_rejected:horizon_not_reached": 15,
   "llm_rejected:no_next_trading_day": 7
  },
+ "llm_errors": 0,
  "judgement": {
   "weeks": 7,
   "picks": 15,
@@ -133,9 +134,9 @@
     "mean_excess": 0.085447
    },
    "slope_excess_on_bench": -0.9420754833929124,
-   "mean_gross": -0.069425,
+   "mean_weekly_gross": -0.067648,
+   "mean_weekly_bench": -0.121259,
    "positive_gross_picks": 1,
-   "mean_bench": -0.121259,
    "without_most_repeated_symbol": {
     "picks_removed": 5,
     "weeks": 6,
