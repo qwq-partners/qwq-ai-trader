@@ -1,5 +1,12 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-16 — EXIT-CRASH-EFFECTIVE-TS: 장중 급락 중 ATR 연동 실효 트레일링 조임 누락 수정 (운영 미배포) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 재현(수정 전 3건 실패): 급락 중 신규 등록·급락 중 레짐 변경에서 실효 트레일링이 급락 TS(2.0%)가 아니라 6.0%로 남고, bear 레짐에서는 급락 해제 뒤에도 2.0%에 고정됐다. 급락 중 등록된 포지션은 고점 대비 −2.2%에서 매도 신호가 나오지 않았다.
+- 수정(`src/strategies/exit_manager.py`): 두 경로에서 실효값도 급락 TS 이하로 제한(레짐 재적용 쪽은 영속화 추가), 강제 재적용(급락 해제)이면 원시 TS가 같아도 실효값을 다시 계산.
+- 급락 단계 값·레짐 표·익절 목표·손절·코어 제외·판정 분기는 변경 없음. 시험 5건 추가(`tests/test_exit_manager_characterization.py`).
+- 매수 중지·전략 포지션 0이라 운영 영향 없음. 배포는 사용자 승인 뒤.
+
 ## 2026-11-16 — V09 문서·원장 정리, V06 운영 인수 기록 (문서만) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - `CLAUDE.md` 머리글(9/16~11/16 날짜별 문단 약 96,000자)을 현재 상태 요약으로 교체하고 원문은 `docs/operations/claude-md-header-history.md`로 옮겼다(내용 무수정, 216KB → 52KB). 앞으로 머리글에는 문단을 쌓지 않고 해당 줄을 고쳐 쓴다.

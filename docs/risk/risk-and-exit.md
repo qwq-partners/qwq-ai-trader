@@ -410,6 +410,14 @@ KIS 주문 POST(`retry=False`)가 서버에 닿은 뒤 응답을 잃으면 접�
 - **전달 경로**: 매수 체결 시 `_pending_signal_cache[symbol].metadata.atr_pct` → `register_position(atr_pct_hint=...)`
 - **로그**: 트레일링 발동 시 `ATR-linked trailing: 고점 대비 X% (한도=-Y%)` 형태로 출력
 - **상태 저장**: `PositionExitState.effective_trailing_stop_pct` 필드에 보관
+- **장중 급락과의 관계 (2026-11-16 `EXIT-CRASH-EFFECTIVE-TS`)**: 급락 단계가 켜져 있는 동안 실효값은 항상 급락 TS 이하다.
+  익절 전(본전보호 미발동) 트레일링 판정이 실효값을 먼저 쓰기 때문이다. 조이는 지점은 세 곳 —
+  ① `apply_intraday_crash_params`(급락 단계 최초 적용) ② 급락 중 `register_position`(신규 등록)
+  ③ 급락 중 `apply_regime_params`(레짐 기준으로 다시 계산한 직후). ②·③은 종전에 원시 `trailing_stop_pct`만 조여
+  실효값이 6%처럼 넓게 남았다(급락 TS 2%인데 고점 대비 −2.2%에서 매도 신호 없음 — 재현 시험으로 확인).
+- **급락 해제 시 복원**: `recover_from_intraday_crash` → `apply_regime_params(force=True)`가 실효값을
+  `min(max(레짐 TS, ATR×배수), 상한)`으로 다시 계산한다. 종전에는 원시 TS가 레짐 값과 달라질 때만 다시 계산해서,
+  레짐 TS가 급락 TS와 같은 경우(bear 2.0% + crash 2.0%) 조여진 실효값이 해제 뒤에도 남았다 — 강제 재적용이면 항상 다시 계산한다.
 - **백테스트 등록 임계값 동기화 (2026-08-02)**: `scripts/backtest_strategies.py`도 등록 시 공식을 사용한다.
   이전에는 백테스트만 고정 3%를 써서 실제보다 비관적인 결과가 나왔다
   (SEPA 3개월 -12.02% vs 실제 설정 -7.19%). 진화 백테스트 게이트가 올바른 판정을 내리려면
