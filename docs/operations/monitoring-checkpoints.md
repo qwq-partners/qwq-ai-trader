@@ -7,7 +7,7 @@
 [원장](execution-roadmap.md#engine-evaluation-20261113) · [리스크 문서](../risk/risk-and-exit.md). 급락 단계에서 ATR 연동 실효 트레일링도 급락 값 이하로 유지하고 해제 때 복원한다.
 
 - [ ] 배포 직후: 기동 로그 정상, 보호 파일 변동 0(이 변경은 설정을 건드리지 않는다).
-- [ ] 매수 재개 뒤 급락 단계가 켜진 날: 청산 단계 파일(`~/.cache/ai_trader/exit_stages_kr_YYYY-MM-DD.json`)에서 비코어 포지션의 `effective_trailing_stop_pct`가 급락 TS 이하다. 로그로는 급락 최초 적용과 급락 중 신규 등록만 `effTS=`가 찍히고(레짐 재적용 로그에는 SL·TS만 나온다), 해제 뒤에는 같은 파일에서 값이 레짐 기준으로 돌아온 것을 본다. 전략 포지션이 없으면 관측되지 않는다.
+- [ ] 매수 재개 뒤 급락 단계가 켜진 날: 청산 단계 파일(`~/.cache/ai_trader/exit_stages_YYYY-MM-DD.json` — KR은 접미사가 없다)에서 비코어 포지션의 `effective_trailing_stop_pct`가 급락 TS 이하다. 로그로는 급락 최초 적용과 급락 중 신규 등록만 `effTS=`가 찍히고(레짐 재적용 로그에는 SL·TS만 나온다), 해제 뒤에는 같은 파일에서 값이 레짐 기준으로 돌아온 것을 본다. 전략 포지션이 없으면 관측되지 않는다.
 
 ## 11월16일 V06 테마 탐지 주기 30분 — 배포 뒤 확인(운영 인수 11/16 22:19:06 KST `f8b3dcd5`)
 

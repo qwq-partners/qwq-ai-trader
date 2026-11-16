@@ -554,6 +554,9 @@ def test_crash_cap_on_effective_trailing_survives_regime_change(home):
     st = em.get_state(SYM)
     assert st.trailing_stop_pct == pytest.approx(2.0)
     assert st.effective_trailing_stop_pct == pytest.approx(2.0)
+    # 조인 값이 파일에도 남아야 재시작 뒤 넓은 값으로 복원되지 않는다
+    saved = json.loads(em._stage_file.read_text())[SYM]
+    assert saved["effective_trailing_stop_pct"] == pytest.approx(2.0)
 
 
 @pytest.mark.parametrize("regime,regime_ts", [("ranging", 2.5), ("trending_bear", 2.0)])
