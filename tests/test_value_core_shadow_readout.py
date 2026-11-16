@@ -81,7 +81,7 @@ def test_history_loader_splits_final_and_llm_rejected_and_respects_through(tmp_p
     week("2026-W02", "2026-01-12", [])
     week("2026-W03", "2026-01-19", ["A"])
     rows, weeks, empty = m.load_history(str(tmp_path), "2026-01-12")
-    assert weeks == 2 and empty == ["2026-W02"]
+    assert weeks == [("2026-W01", "2026-01-05"), ("2026-W02", "2026-01-12")] and empty == ["2026-W02"]
     assert [(r["week"], r["symbol"], r["kind"]) for r in rows] == [
         ("2026-W01", "A", "final"), ("2026-W01", "B", "llm_rejected"), ("2026-W01", "C", "llm_unknown"),
         ("2026-W02", "B", "llm_rejected"), ("2026-W02", "C", "llm_unknown")]
@@ -156,15 +156,37 @@ def test_report_accepts_full_price_cache(tmp_path):
 def test_report_stops_when_bench_adjust_is_older_than_the_price_data(tmp_path):
     """보정 자료만 오래되면 달력이 조용히 줄어 만기가 지난 픽이 '미도래'로 빠진다 — 판정 전에 멈춘다."""
     hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days, adj_days=lambda days: days[:-2])
-    with pytest.raises(SystemExit, match="벤치마크 보정 자료가 .* 까지 덮지 못한다"):
+    with pytest.raises(SystemExit, match="달력의 마지막 거래일.*종료일.*다르다"):
         m.report(hist, prices, adj, through)
 
 
-def test_report_stops_when_bench_bars_end_before_symbol_bars(tmp_path):
-    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days, adj_days=lambda days: days[:-2],
-                                                      bench_days=lambda days: days[:-2])
-    with pytest.raises(SystemExit, match="벤치마크 일봉이 종목 일봉보다 일찍 끝난다"):
+def test_report_stops_when_every_input_is_equally_stale(tmp_path):
+    """종목·벤치마크·보정 자료가 모두 같은 날에서 끝나도, 그날이 종료일이 아니면 멈춘다."""
+    stale = lambda days: days[:-2]  # noqa: E731
+    hist, prices, adj, through = _write_report_inputs(tmp_path, stale, adj_days=stale, bench_days=stale)
+    with pytest.raises(SystemExit, match="달력의 마지막 거래일.*종료일.*다르다"):
         m.report(hist, prices, adj, through)
+
+
+def test_report_stops_when_calendar_starts_after_the_first_scan(tmp_path):
+    """보정 자료가 스캔일보다 늦게 시작하면 진입일이 뒤로 밀린다 — 판정 전에 멈춘다."""
+    late = lambda days: days[3:]  # noqa: E731
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days, adj_days=late, bench_days=late)
+    with pytest.raises(SystemExit, match="달력 시작.*가장 이른 스캔일.*늦다"):
+        m.report(hist, prices, adj, through)
+
+
+def test_history_loader_rejects_duplicate_week_or_duplicate_pick(tmp_path):
+    def week(fname, scan_week, final):
+        (tmp_path / fname).write_text(json.dumps({"scan_date": "2026-01-05", "scan_week": scan_week, "final": final,
+                                                  "quant_passed": [], "llm_verdicts": {}}))
+    week("a.json", "2026-W02", ["A", "A"])
+    with pytest.raises(SystemExit, match="주간 이력 중복"):
+        m.load_history(str(tmp_path), "2026-12-31")
+    week("a.json", "2026-W02", ["A"])
+    week("b.json", "2026-W02", ["B"])
+    with pytest.raises(SystemExit, match="주간 이력 중복"):
+        m.load_history(str(tmp_path), "2026-12-31")
 
 
 def test_summary_records_input_fingerprints_that_follow_the_inputs(tmp_path):
@@ -177,3 +199,10 @@ def test_summary_records_input_fingerprints_that_follow_the_inputs(tmp_path):
     wk = Path(hist) / "2026-W02.json"
     wk.write_text(wk.read_text().replace('"value"', '"growth"'))                        # 이력 변경
     assert m.report(hist, prices, adj, through)["inputs"]["history_sha256"] != a["history_sha256"]
+    empty = Path(hist) / "2026-W03.json"                                               # 픽·심사 기록이 없는 주차 추가
+    empty.write_text(json.dumps({"scan_date": through, "scan_week": "2026-W03", "final": [], "quant_passed": [], "llm_verdicts": {}}))
+    before = m.report(hist, prices, adj, through)
+    empty.unlink()
+    after = m.report(hist, prices, adj, through)
+    assert before["weeks_total"] == after["weeks_total"] + 1
+    assert before["inputs"]["history_sha256"] != after["inputs"]["history_sha256"]

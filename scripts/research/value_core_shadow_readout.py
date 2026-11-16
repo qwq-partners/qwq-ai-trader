@@ -31,18 +31,20 @@ NW_LAG = 3                   # 주간 관측·20거래일 구간 → 앞뒤 3주
 
 
 def load_history(history_dir, through):
-    """(관측 행, 전체 주차 수, 최종 픽이 없는 주차).
+    """(관측 행, 전체 주차 [(주차, 스캔일)], 최종 픽이 없는 주차).
 
     kind: final | llm_rejected(정량 통과·LLM 심사 탈락) | llm_unknown(탈락인지 심사 실패인지 기록만으로 알 수 없음).
     """
-    rows, weeks, empty = [], 0, []
+    rows, weeks, empty = [], [], []
     for path in sorted(glob.glob(os.path.join(history_dir, "*.json"))):
         with open(path) as f:
             x = json.load(f)
         if x["scan_date"] > through:
             continue
-        weeks += 1
         final = list(x.get("final", []))
+        if x["scan_week"] in {w for w, _d in weeks} or len(set(final)) != len(final):
+            raise SystemExit(f"주간 이력 중복: {path} (같은 주차가 두 번 있거나 최종 픽에 같은 종목이 두 번 있다)")
+        weeks.append((x["scan_week"], x["scan_date"]))
         if not final:
             empty.append(x["scan_week"])
         bucket = {q["symbol"]: q.get("bucket") for q in x.get("quant_passed", [])}
@@ -196,18 +198,22 @@ def _plain(x):
 
 def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=False):
     rows, weeks_total, empty = load_history(history_dir, through)
-    raw_bench = {d: v for d, v in load_bars(os.path.join(price_dir, f"{BENCH}.csv")).items() if d <= through}
-    bench = adjust_bench(raw_bench, bench_adjust, through)
+    bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust, through)
     cal = sorted(bench)
     symbols = sorted({r["symbol"] for r in rows})
     missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
     if missing:
         raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
-    # adjust_bench 는 보정 자료의 마지막 날에서 달력을 자른다. 보정 자료가 오래됐으면 만기가 지난 픽이
-    # '미도래'로 빠진 채 판정이 나온다 → 달력이 공개 일봉의 마지막 거래일까지 닿는지 먼저 확인한다.
-    if not raw_bench or cal[-1] != max(raw_bench):
-        raise SystemExit(f"벤치마크 보정 자료가 {max(raw_bench) if raw_bench else through} 까지 덮지 못한다"
-                         f"(달력 끝 {cal[-1]}) — 최신 kodex200_daily.csv 를 쓴다")
+    # adjust_bench 는 보정 자료의 [첫날, 끝날] 밖을 버린다. 달력이 줄면 진입일이 뒤로 밀리거나(앞이 없을 때)
+    # 만기가 지난 픽이 '미도래'로 빠진다(뒤가 없을 때) → 달력이 [가장 이른 스캔일, 종료일] 을 덮는지 먼저 본다.
+    # 종료일은 달력의 마지막 거래일이어야 한다 — 가격·보정 자료가 모두 함께 오래된 경우도 여기서 걸린다.
+    if cal[-1] != through:
+        raise SystemExit(f"달력의 마지막 거래일({cal[-1]})이 종료일({through})과 다르다 — 종료일은 마지막 거래일로 지정하고, "
+                         "벤치마크 일봉·보정 자료(kodex200_daily.csv)가 그날까지 있는지 확인한다")
+    first_scan_all = min((r["scan_date"] for r in rows), default=None)
+    if first_scan_all is not None and cal[0] > first_scan_all:
+        raise SystemExit(f"달력 시작({cal[0]})이 가장 이른 스캔일({first_scan_all})보다 늦다 — 진입일이 뒤로 밀린다. "
+                         "벤치마크 일봉·보정 자료의 시작일을 확인한다")
     fingerprint = hashlib.sha256()
     for s in [BENCH] + symbols:
         with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
@@ -218,9 +224,6 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
     first_scan = {}
     for r in rows:
         first_scan[r["symbol"]] = min(first_scan.get(r["symbol"], r["scan_date"]), r["scan_date"])
-    ahead = sorted(s for s in symbols if bars[s] and max(bars[s]) > cal[-1])
-    if ahead:   # 종목 일봉이 벤치마크보다 뒤까지 있으면 벤치마크 캐시가 오래된 것이다
-        raise SystemExit(f"벤치마크 일봉이 종목 일봉보다 일찍 끝난다(달력 끝 {cal[-1]}, 예: {ahead[:5]}) — prices 를 새 디렉터리로 다시 받는다")
     partial = sorted(s for s in symbols if not bars[s] or max(bars[s]) < cal[-1] or min(bars[s]) > first_scan[s])
     if partial and not allow_partial_prices:
         raise SystemExit(f"가격 캐시가 분석 기간을 덮지 못하는 종목 {len(partial)}개: {partial[:10]} — "
@@ -232,14 +235,16 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
     with open(bench_adjust) as f:   # 보정 자료는 날마다 행·조회 시각이 늘어난다 → 종료일까지의 (날짜, 종가)만 지문에 넣는다
         adj_rows = sorted((r["date"], r["close"]) for r in csv.DictReader(f) if r["date"] <= through)
     digest = lambda x: hashlib.sha256(json.dumps(x, sort_keys=True, ensure_ascii=False).encode()).hexdigest()  # noqa: E731
-    inputs = {"history_sha256": digest(sorted(rows, key=lambda r: (r["scan_date"], r["kind"], r["symbol"]))),
+    # 픽·심사 기록이 없는 주차도 관측 기간의 일부다 → 모든 주차를 지문에 넣는다
+    inputs = {"history_sha256": digest({"weeks": weeks_total,
+                                        "rows": sorted(rows, key=lambda r: (r["scan_date"], r["kind"], r["symbol"]))}),
               "bench_adjust_sha256": digest(adj_rows)}
     wk = weekly_excess(final_obs)
     table = [{"week": w, "scan_date": next(o["scan_date"] for o in final_obs if o["week"] == w),
               "entry_day": next(o["entry_day"] for o in final_obs if o["week"] == w),
               "picks": sum(1 for o in final_obs if o["week"] == w),
               "bench": next(o[f"bench{H}"] for o in final_obs if o["week"] == w), "excess": v} for w, v in wk.items()]
-    return _plain({"through": through, "calendar": [cal[0], cal[-1], len(cal)], "weeks_total": weeks_total,
+    return _plain({"through": through, "calendar": [cal[0], cal[-1], len(cal)], "weeks_total": len(weeks_total),
                    "weeks_without_picks": empty, "final_picks_total": sum(1 for r in rows if r["kind"] == "final"),
                    "excluded": excluded, "llm_unknown": llm_unknown, "inputs": inputs,
                    "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "partial_coverage": len(partial),
@@ -257,7 +262,7 @@ def main():
         p = sub.add_parser(name)
         p.add_argument("--history-dir", required=True)
         p.add_argument("--price-dir", required=True)
-        p.add_argument("--through", required=True, help="고정 종료일 YYYY-MM-DD")
+        p.add_argument("--through", required=True, help="고정 종료일 YYYY-MM-DD — 마지막 거래일로 지정한다")
     sub.choices["prices"].add_argument("--start", default="2026-02-01", help="벤치마크 보정 자료의 시작일(2026-02-09)보다 앞이어야 한다")
     sub.choices["report"].add_argument("--bench-adjust", required=True, help="초과수익 원장의 kodex200_daily.csv")
     sub.choices["report"].add_argument("--out", required=True)
