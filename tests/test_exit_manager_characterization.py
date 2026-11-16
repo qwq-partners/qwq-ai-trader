@@ -509,8 +509,9 @@ def test_apply_regime_stage_gating_and_core_exempt(home):
 
 # ── EXIT-CRASH-EFFECTIVE-TS (2026-11-16) ─────────────────────────────────
 # 장중 급락 단계에서는 ATR 연동 실효 트레일링(effective_trailing_stop_pct)도 급락 TS 이하여야 한다.
-# 익절 전(본전보호 미발동) 트레일링 판정은 실효값을 먼저 쓰기 때문이다. 해제되면 레짐 기준으로 복원된다.
-# 기준 포지션: ATR 6% → 동적 손절 8%(본전보호 임계), 실효 TS = min(max(TS, 6×1.2), 6) = 6%.
+# 비코어 포지션은 1차 익절 전(stage NONE)에는 본전보호가 걸리지 않아, 수익이 트레일링 활성(+5%) 이상이면
+# 실효값으로 트레일링을 판정하기 때문이다(동적 손절 유무와 무관). 해제되면 레짐 기준으로 복원된다.
+# 기준 포지션: ATR 6% → 실효 TS = min(max(TS, 6×1.2), 6) = 6%.
 
 
 def test_crash_caps_effective_trailing_for_position_registered_during_crash(home):
@@ -521,11 +522,25 @@ def test_crash_caps_effective_trailing_for_position_registered_during_crash(home
     assert st.trailing_stop_pct == pytest.approx(2.0)
     assert st.effective_trailing_stop_pct == pytest.approx(2.0)
 
-    # 판정: 고점 10,780(net ≈ +7.6% — 본전보호 임계 8% 미만) → 고점 대비 −2.2%(net ≈ +5.2%, 트레일링 활성)
+    # 판정: 고점 10,780(net ≈ +7.6%, 1차 익절 전) → 고점 대비 −2.2%(net ≈ +5.2%, 트레일링 활성)
     assert em.update_price(SYM, D(10780)) is None
     sig = em.update_price(SYM, D(10543))
     assert sig is not None and sig[0] == "sell_all" and sig[1] == 100
     assert "고점 대비 -2.20%" in sig[2] and "한도=-2.0%" in sig[2]
+
+
+def test_crash_caps_effective_trailing_for_hint_only_position(home):
+    """ATR 힌트만 받은 포지션(동적 손절 없음, ATR 2% → 실효 2.4%)도 급락 TS 2.0% 로 판정된다."""
+    em = ExitManager()
+    em.apply_intraday_crash_params("crash")
+    em.register_position(_pos(), atr_pct_hint=2.0)
+    st = em.get_state(SYM)
+    assert st.dynamic_stop_pct is None
+    assert st.effective_trailing_stop_pct == pytest.approx(2.0)
+
+    assert em.update_price(SYM, D(10780)) is None
+    sig = em.update_price(SYM, D(10543))                         # 고점 대비 −2.2% — 실효 2.4% 였다면 무신호
+    assert sig is not None and sig[0] == "sell_all" and "한도=-2.0%" in sig[2]
 
 
 def test_crash_cap_on_effective_trailing_survives_regime_change(home):
