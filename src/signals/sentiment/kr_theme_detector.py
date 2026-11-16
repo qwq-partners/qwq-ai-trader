@@ -1277,7 +1277,7 @@ themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세
             return None
         # 1시간 이상 경과 시 무효
         elapsed = (datetime.now() - data["updated_at"]).total_seconds()
-        if elapsed > 3600:
+        if elapsed > THEME_STALE_TTL.total_seconds():
             return None
         return data
 
@@ -1287,7 +1287,7 @@ themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세
         return {
             symbol: data
             for symbol, data in self._stock_sentiments.items()
-            if (now - data["updated_at"]).total_seconds() <= 3600
+            if (now - data["updated_at"]).total_seconds() <= THEME_STALE_TTL.total_seconds()
         }
 
     async def _resolve_stock_symbol(self, symbol: str, name: str) -> str:

@@ -186,3 +186,20 @@ async def test_configured_interval_drives_loop_sleep_and_stays_inside_ttl(monkey
     await scheduler.run_theme_detection()
     assert detect_calls == [True]
     assert sleeps == [1800]
+
+
+def test_sentiment_accessors_expire_at_the_same_ttl():
+    """접근자 두 곳과 정리(_prune_stale)가 같은 만료(THEME_STALE_TTL)를 쓴다 — 경계 전은 유효, 후는 결손."""
+    from src.signals.sentiment import kr_theme_detector as kd
+    detector = kd.ThemeDetector(llm_manager=SimpleNamespace())
+    now = datetime.now()
+    detector._stock_sentiments = {
+        "fresh": {"impact": 5, "updated_at": now - kd.THEME_STALE_TTL + timedelta(minutes=1)},
+        "stale": {"impact": 5, "updated_at": now - kd.THEME_STALE_TTL - timedelta(minutes=1)},
+    }
+    assert set(detector.get_all_stock_sentiments()) == {"fresh"}
+    assert detector.get_stock_sentiment("fresh") is not None
+    assert detector.get_stock_sentiment("stale") is None
+    detector._prune_stale()
+    assert set(detector._stock_sentiments) == {"fresh"}
+
