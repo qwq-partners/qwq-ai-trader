@@ -361,7 +361,7 @@
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
 - [lightsail-deployment.md](operations/lightsail-deployment.md) — 수동 승인 배포, 상태 확인, 자동 롤백 절차
 - [runbook.md](operations/runbook.md) — 봇 관리, 코드 변경 프로토콜, 트러블슈팅, 캐시/로그 위치
-- [monitoring-checkpoints.md](operations/monitoring-checkpoints.md) — 변경 적용 후 검증 체크포인트 (시점·전략별)
+- [monitoring-checkpoints.md](operations/monitoring-checkpoints.md) — 지금 확인할 검증 체크포인트 · [보관(2026-11-16까지)](operations/monitoring-checkpoints-archive-2026-11.md)
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)

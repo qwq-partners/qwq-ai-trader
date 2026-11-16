@@ -64,7 +64,7 @@
 
 ## 26차 당시 계획: 수집 확인 뒤 가격 비교
 
-[최신 체크리스트](monitoring-checkpoints.md)의 실행/봉인/모집단/출처 검사를 먼저 한다. 활성화 결과는 root 전용 `/var/lib/qwq-entry-capture/status.json`·`activation.receipt`에 남으며 예약 자체는 성공 증거가 아니다. 같은 승인/파일로 두 번째 시도를 하거나, 자료가 적다고 임의로 매수 중지를 해제하지 않는다.
+[최신 체크리스트](monitoring-checkpoints-archive-2026-11.md#10월-2일-첫-관측--최신26차)의 실행/봉인/모집단/출처 검사를 먼저 한다. 활성화 결과는 root 전용 `/var/lib/qwq-entry-capture/status.json`·`activation.receipt`에 남으며 예약 자체는 성공 증거가 아니다. 같은 승인/파일로 두 번째 시도를 하거나, 자료가 적다고 임의로 매수 중지를 해제하지 않는다.
 
 첫 scan 전체를 분모로 유지하고, 미관측 부분집합·자료 결측·자본 한도 실패는 cash/0원으로 바꾸지 않는다. A는 전송 전 order_ready 진입 대리치, B는 같은 후보·수량의 비용 후 가격 게이트다. B가 allow면 같은 가격·수량이므로 차이0, B가 cash일 때 A의 손실은 피한 손실이고 A의 이익은 놓친 이익이다. baseline_cash는 가격 게이트의 개선으로 세지 않는다. 게이트 불명 비율과 900초 손익 미짝 비율을 따로 보고하고, 미짝이 남으면 complete_delta_net_pnl은 null이다.
 

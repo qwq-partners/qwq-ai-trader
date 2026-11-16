@@ -162,12 +162,13 @@ V01~V05가 끝날 때까지 보고서·라우팅·인프라의 새 작업은 하
 | 어닝스 리버설 | `us/earnings_reversal.py` | 발표 전 낙폭과대 반등 (⛔ 검증 기각 2026-08-03 — 활성화 금지) |
 
 ### 청산 관리 (ExitManager)
+값이 정해지는 순서: ① 병합 설정 `exit_manager`(`default.yml` ← `evolved_overrides.yml`) → ② 전략별 등록값(`scripts/run_trader.py` `_strategy_exit_params`, 값이 있으면 ①을 덮는다) → ③ 비코어 포지션은 레짐 동기화가 익절 목표·트레일링·손절을 `REGIME_EXIT_PARAMS`로 바꾼다 → ④ 장중 급락 단계·ATR 연동. 아래 숫자에는 어느 단계의 값인지 적었다.
 - **1차 익절**: +10% → 10% 매도 (2026-08-02 백테스트 검증으로 +5%/20%에서 조정)
   - 기존값은 평균 1.9일에 발동해 추세 초입을 절단 (익절 +5.2% < 손절 -6.2%)
   - ⚠️ 변경 시 4곳 동시 수정: `default.yml` / `evolved_overrides.yml` / `ExitConfig` / **`REGIME_EXIT_PARAMS`**
-- **2차 익절**: +15% → 잔여의 40% 매도 (유효 설정 — `default.yml`의 50%를 `evolved_overrides`가 덮는다)
-- **3차 익절**: +25% → 잔여의 35% 매도 (유효 설정 — `default.yml`은 50%, 레짐별 REGIME_EXIT_PARAMS로 조정)
-- **트레일링**: 고점 대비 4.5% 하락(유효 설정 — `default.yml`의 3%를 `evolved_overrides`가 덮는다), 수익 +5% 이상 시 활성화
+- **2차 익절**: 목표 +15% → 잔여의 40% 매도 (①병합 설정 — `default.yml`의 50%를 `evolved_overrides`가 덮는다)
+- **3차 익절**: 목표 +25% → 잔여의 35% 매도 (①병합 설정 — `default.yml`은 50%). 레짐이 바꾸는 것은 익절 **목표 수익률**(예: neutral 10/15/25%, ranging 8/8/14%, bear 5/8/14%)이고 매도 비율은 아니다
+- **트레일링**: 수익 +5% 이상에서 활성화. 폭은 ②전략별 등록값이 먼저다 — sepa 3.0% · vcp 2.5% · gap 2.0% · core 12%. 비코어는 ③레짐 동기화 뒤 2.0~4.0%(bull 4 / neutral·turning_point 3 / ranging 2.5 / bear 2). ①병합 설정의 4.5%는 등록값이 없는 포지션의 초기값일 뿐 실제 손실 허용폭이 아니다
 - **ATR 동적 손절**: 기본 5%, ATR×2, 범위 4~8% (evolved_overrides, min_stop 4.0)
 - **포지션 상태**: `PositionExitState` — NONE/FIRST/SECOND/THIRD/TRAILING 단계 추적
 
@@ -176,7 +177,7 @@ V01~V05가 끝날 때까지 보고서·라우팅·인프라의 새 작업은 하
 - **점수 (100점)**: 추세 20 + 펀더 20 + 수급 20 + 모멘텀 30 + RS등급 10
   + **저변동성 감점** 0~-10 (일수익률 60일 σ 기준, 2026-08-03~, 급등락형 배제)
   + **자산 확장 감점** 0~-5 (DART 총자산 증가율 ≥30/50%, 2026-08-03~, 퀄리티 팩터)
-- **청산**: stop_loss 10%, trailing 12% (느슨), 분할익절 OFF, max_holding 무제한 — ⚠️ `default.yml`의 `core_holding`에는 stop 15%·trailing 8%(+10%부터)로 적혀 있어 이 줄과 다르다. 코어 배분 0%라 지금은 쓰이지 않으며, 재가동 전에 코드 기준으로 확인한다(2026-11-16 V09에서 발견, 미해결)
+- **청산**: stop_loss 10%, trailing 12% (느슨), 분할익절 OFF, max_holding 무제한 — 런타임 값은 `run_trader.py` `_strategy_exit_params["core_holding"]`의 고정값이다. `default.yml` `core_holding`의 stop 15%·trailing 8%는 ExitManager 등록에 쓰이지 않는 옛 값이다(2026-11-16 V09 확인, 코어 배분 0%)
 - **stale**: Tier1 20영업일±3%, Tier2 30영업일±3% OR 20영업일±2%+거래량50%
 - **리밸런싱**: 격주 (rebalance_interval_weeks=2)
 
