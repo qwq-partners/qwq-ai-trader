@@ -4,10 +4,10 @@
 
 [진단·구현](../reviews/team-input-diagnosis-2026-11-14.md) · [팀 심의 문서](../agents/trading-team.md). 팀 심의는 shadow — 새 규칙은 `TEAM_CONVICTION=0`일 때만 적용돼 사이징 부스트 경로에 닿지 않는다.
 
-- [ ] 배포 전·후: 운영 `.env`와 실행 프로세스 환경에 `TEAM_CONVICTION=0`이 있다. 없으면(부스트 켜짐) 분석가가 종전 규칙으로 돌아가 새 규칙이 적용되지 않는다 — 원장 행의 `analyst_version`이 `null`이면 그 상태다.
-- [ ] 배포 뒤 첫 거래일 심의 슬롯(10:30·11:30·13:00·14:00)마다 `[팀심의] 자동매도 금지 보유 1종목은 재평가하지 않는다`가 남는다. 그 종목의 원장 행은 스크리닝 상위 5 후보에 든 슬롯에만 생길 수 있다(종전에는 매 슬롯).
-- [ ] 그날 원장 행에 `analyst_version = "analyst-input-2026-11-14"`가 있고, 재무 보고는 공시 위험이 없으면 점수 0·신뢰도 0(`python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through <오늘> --out <비공개 경로>`의 `kinds.fundamental.score_conf`가 `0|0.0`), 수급 지표가 `always_false_metrics`에 없다.
-- [ ] 후보 심의 건수·토론 호출이 종전과 같고(슬롯당 후보 5종목), `[팀심의]` 오류·`[트레이더] … 매수 보류: 근거 부족` 빈도를 첫 주에 한 번 본다 — 기술·뉴스 보고가 실패한 종목은 유효 근거 1개라 보류되는 것이 정상이다.
+- [x] 배포 전·후: 운영 `.env`와 실행 프로세스 환경에 `TEAM_CONVICTION=0`이 있다. 없으면(부스트 켜짐) 분석가가 종전 규칙으로 돌아가 새 규칙이 적용되지 않는다 — 원장 행의 `analyst_version`이 `null`이면 그 상태다. — 11/16 실행 프로세스 환경에서 확인.
+- [x] 배포 뒤 첫 거래일 심의 슬롯(10:30·11:30·13:00·14:00)마다 `[팀심의] 자동매도 금지 보유 1종목은 재평가하지 않는다`가 남는다. 그 종목의 원장 행은 스크리닝 상위 5 후보에 든 슬롯에만 생길 수 있다(종전에는 매 슬롯). — 11/16 10:30·11:30 2/2 확인(13:00·14:00은 판독 시각 이후).
+- [x] 그날 원장 행에 `analyst_version = "analyst-input-2026-11-14"`가 있고, 재무 보고는 공시 위험이 없으면 점수 0·신뢰도 0(`python scripts/research/team_input_diag.py --team-dir ~/.cache/ai_trader/team_ledger --through <오늘> --out <비공개 경로>`의 `kinds.fundamental.score_conf`가 `0|0.0`), 수급 지표가 `always_false_metrics`에 없다. — 11/16 10행 전부, 재무 `0|0.0` 10/10, 항상 False 지표 0.
+- [ ] 후보 심의 건수·토론 호출이 종전과 같고(슬롯당 후보 5종목), `[팀심의]` 오류·`[트레이더] … 매수 보류: 근거 부족` 빈도를 첫 주에 한 번 본다 — 기술·뉴스 보고가 실패한 종목은 유효 근거 1개라 보류되는 것이 정상이다. — 11/16 두 슬롯: 후보 5종목·오류 0·보류 0, Bear 호출은 슬롯당 12 → 10(보유 종목 제외분). 첫 주 재확인은 남는다.
 
 ## 11월13일 V02 후보 전수 원장 — 배포 뒤 확인
 
@@ -16,11 +16,11 @@
 
 [설계·판독 기준](../research/v02-candidate-ledger-2026-11-13.md) · [원장](execution-roadmap.md#engine-evaluation-20261113). 운영 인수 11/13 21:11:55 KST(`010e3044`, 장외) — 아래 항목은 첫 거래일 11/16 장중부터 확인한다. 행 구조·결측률·원천/게이트 분포·버린 행 수는 `python scripts/research/candidate_ledger_readout.py obs --ledger-dir ~/.cache/ai_trader/candidate_ledger --through <오늘> --out <비공개 경로>/obs.jsonl`로 본다(읽기 전용, 수익 미계산 — [사전 등록 7절](../research/v02-candidate-ledger-2026-11-13.md)).
 
-- [ ] 배포 뒤 첫 정규장 스캔에서 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`이 0600으로 생기고 `scan` 행이 스캔마다 1줄씩 늘어난다.
-- [ ] `scan` 행의 `basis_n`이 `candidates` 수와 같다(후보마다 `basis.terms` — 원천별 가중 점수). 다르면 `[후보원장] 점수 구성 누락` 경고가 스캔마다 남는다(점수 구성만 빠지고 선정은 그대로여야 한다).
-- [ ] 09:15~15:00 스캔에 `gate`(regime) 행이 따라붙고, 약세장 차단이 아닌 스캔에는 `gate`(cash) 행이 있다. 금액 필드는 없다. 현금 게이트를 통과한 스캔에는 `gate`(entry_filter) 행(`min_score`·`max_change`·`eligible`)이 있다 — 현금 0.5% 상태에서는 없는 것이 정상이다.
-- [ ] `[후보원장]` 경고 0건(`쓰기 실패`·`기록 대기열이 가득 차 N행을 버렸다`·`기록 실패`)이고 원장에 `error` 행이 없다, 스캔 주기·`[스크리닝] 완료` 로그·신호 발행이 배포 전과 같다.
-- [ ] 하루 파일 크기(예상 1~2MB)와 결측률(가격·점수 null)을 첫 주에 한 번 본다. 자동 삭제는 없다 — `candidate_ledger/`가 2GB를 넘거나 디스크 여유가 10GB 아래면 보존 기간을 정한다(월 1회 `du -sh`). 수익은 최소 표본(15거래일·300종목-일) 전에는 계산하지 않는다.
+- [x] 배포 뒤 첫 정규장 스캔에서 `~/.cache/ai_trader/candidate_ledger/candidates_YYYYMMDD.jsonl`이 0600으로 생기고 `scan` 행이 스캔마다 1줄씩 늘어난다. — 11/16 0600, 스캔 51행 = 로그 51건.
+- [x] `scan` 행의 `basis_n`이 `candidates` 수와 같다(후보마다 `basis.terms` — 원천별 가중 점수). 다르면 `[후보원장] 점수 구성 누락` 경고가 스캔마다 남는다(점수 구성만 빠지고 선정은 그대로여야 한다). — 11/16 불일치 0.
+- [x] 09:15~15:00 스캔에 `gate`(regime) 행이 따라붙고, 약세장 차단이 아닌 스캔에는 `gate`(cash) 행이 있다. 금액 필드는 없다. 현금 게이트를 통과한 스캔에는 `gate`(entry_filter) 행(`min_score`·`max_change`·`eligible`)이 있다 — 현금 0.5% 상태에서는 없는 것이 정상이다. — 11/16 regime 37(차단 31·통과 6)·cash 6 차단·entry_filter 0. 후보 0건 스캔 2건에는 regime 행이 없다.
+- [x] `[후보원장]` 경고 0건(`쓰기 실패`·`기록 대기열이 가득 차 N행을 버렸다`·`기록 실패`)이고 원장에 `error` 행이 없다, 스캔 주기·`[스크리닝] 완료` 로그·신호 발행이 배포 전과 같다. — 11/16 12:42까지 0건.
+- [ ] 하루 파일 크기(예상 1~2MB)와 결측률(가격·점수 null)을 첫 주에 한 번 본다. 자동 삭제는 없다 — `candidate_ledger/`가 2GB를 넘거나 디스크 여유가 10GB 아래면 보존 기간을 정한다(월 1회 `du -sh`). 수익은 최소 표본(15거래일·300종목-일) 전에는 계산하지 않는다. — 11/16 12:39 기준 0.58MB, 점수·가격 결측 0(RSI·ATR 73%, PER·PBR 63%).
 
 > **10/29 21:50 현재:** [R02 증권 리포트형 브리프](execution-roadmap.md#r02-securities-brief-20261029) 구현·검증·운영 인수 DONE. 고정e5f781d3/PID3846093·전체9,737검사·166.3초/24항목PASS·보호48파일/기존cron 보존·복구ready/미체결0/NRestarts0. [최종 운영 영수증](https://github.com/qwq-partners/qwq-ai-trader/pull/300#issuecomment-6497157250). NEXT는 새 본문 자연 발송/실제 모바일 내용 수락·10/30 T04 만료·기존 O02 기한이다. 원인 미확정 대량 기록 검사1회 실패는 진단 이력으로 보존하며 최종 로컬/PR/main/운영 검증은 통과했다. 문서 마감용 재배포는 없다. 아래 상태는 당시 이력이다.
 

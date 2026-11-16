@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-16 — 첫 거래일 판독: V02 후보 원장·심의 입력 A안·L01 Task 6 비용 7일 실측 (문서, 읽기 전용) ([비용 판독](docs/reviews/llm-cost-7day-readout-2026-11-16.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- V02 후보 원장 첫날(12:42 KST): 스캔 51행·후보 1,138행 전부 점수 구성 부착, 점수·가격 결측 0, 경고·오류 0, 창 1은 종목-일 64·3분위 일수 1로 미충족.
+- 심의 입력 A안 첫 심의(10:30·11:30): 자동매도 금지 보유 제외 로그 2/2, 원장 10행 전부 새 `analyst_version`, 재무 보고 `0|0.0`, 오류 0.
+- L01 Task 6: 전 7일 10.67 → 후 7일 19.12 USD(추정), OpenAI는 Bull만 남아 거래일당 약 0.10, 테마 탐지는 건수는 줄고 Opus 이전으로 하루 3.46. 11월 전망 약 115(58%). Fable 시장 보고 `ready` 1/6.
+- 사용자 확인: 콘솔 크레딧·OpenAI 청구 대조, Fable 시장 보고 유지 여부.
+- 소스·설정·운영 변경 0, 새 모델·시세 호출 0, 배포 대상 아님.
+
 ## 2026-11-15 — V02-R 판독 스크립트: 판독 창 분리·진입 점수 집계 (오프라인, V03 후속) ([V03 8절](docs/research/v03-resume-criteria-2026-11-15.md) · [V02 7절](docs/research/v02-candidate-ledger-2026-11-13.md))
 
 - 변경: `scripts/research/candidate_ledger_readout.py` — `obs --from`(창 시작일, 그 전 날짜 파일은 읽지 않음), `obs` 통계에 `window`(판독에 쓰이는 종목-일·3분위가 서는 날·최소 표본을 처음 넘긴 날 `end` — 수익 미계산), `report`에 `entry_score`(첫 스캔 75점 이상 후보의 β 조정·비용 차감 순초과, 60종목-일·10일 미달은 판정 불가)와 `window`. 요약 스키마 `v02r-2`.
