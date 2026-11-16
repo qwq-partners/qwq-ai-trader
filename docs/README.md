@@ -2,7 +2,7 @@
 
 - **V09 문서 정리(2026-11-16):** 현재 상태는 저장소 루트 `CLAUDE.md` 머리글 한 곳에 둔다. 날짜별 이력은 [CLAUDE.md 머리글 이력 보관](operations/claude-md-header-history.md), 닫힌 체크포인트는 [체크포인트 보관](operations/monitoring-checkpoints-archive-2026-11.md), 지금 확인할 항목은 [모니터링 체크포인트](operations/monitoring-checkpoints.md)에 있다.
 
-- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 11/16 WAIT. 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
+- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 DONE(11/16 — [판독](reviews/llm-cost-7day-readout-2026-11-16.md), Anthropic·OpenAI 콘솔 대조 완료, Fable 시장 보고는 당분간 유지). 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
 
 - [LLM 비용 7일 실측 (2026-11-16)](reviews/llm-cost-7day-readout-2026-11-16.md): L01 Task 6 — 전후 7일 비용·테마 탐지·Bear/Bull·보고 `ready` 비율·월 전망. 콘솔 대조와 Fable 시장 보고 유지 여부는 사용자 확인.
 - [팀 심의 입력 진단 (2026-11-14)](reviews/team-input-diagnosis-2026-11-14.md): 재무 보고 전부 `insufficient`인데 87%가 상수 +10으로 토론에 들어가는 경로, 미획득 수급의 `False` 기록, 지표 경로가 없는 보유 종목 재평가. A안(정직화) 소스 DONE 11/14·운영 인수 11/15 00:08, 실제 자료 연결은 V02 판독 뒤.

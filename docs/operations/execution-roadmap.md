@@ -56,7 +56,7 @@
 
 <a id="test-panel-deadline-loop-clock-20261109"></a>
 <a id="l02-gpt5mini-successor-20261111"></a>
-### L02-GPT5MINI-SUCCESSOR — `gpt-5-mini` 2026-12-11 API 제거 대비 후속 모델 교체 (소스 PR #362 병합 `22f8be07`·리뷰 3회·terra 실호출 신원 verified DONE / **운영 `3caaeaa9` 11/11 22:38 인수 DONE** / **자연 Bull 인수 11/12 36/36 exact DONE** / 비용 실측 11/16 WAIT)
+### L02-GPT5MINI-SUCCESSOR — `gpt-5-mini` 2026-12-11 API 제거 대비 후속 모델 교체 (소스 PR #362 병합 `22f8be07`·리뷰 3회·terra 실호출 신원 verified DONE / **운영 `3caaeaa9` 11/11 22:38 인수 DONE** / **자연 Bull 인수 11/12 36/36 exact DONE** / 비용 실측 DONE(11/16, L01 Task 6 판독 — 아래 본문의 WAIT·NEXT는 당시 이력))
 
 **Plan(11/11, 사용자 "이내용도 참고해줘" → "니가 결정해서 진행해"):** OpenAI 공식 폐기 공지 [2026-06-11 GPT-5 and o3 model deprecations](https://developers.openai.com/api/docs/deprecations#2026-06-11-gpt-5-and-o3-model-deprecations) — API 제거 **2026-12-11**: `gpt-5`→`gpt-5.6-sol`, `gpt-5-mini`/`gpt-5-mini-2025-08-07`→**`gpt-5.6-terra`**, `gpt-5-nano`→`gpt-5.6-luna`, `gpt-5-pro`/`o3`/`o3-pro`→`gpt-5.6-sol`. 내부 CHANGELOG의 "12-10"은 11일로 정정. 영향 없음: gpt-5.6-sol·gpt-6-astra·gpt-6.1-sol·전역 라우팅 정책 모델. `f29a250a` 운영에 남은 `gpt-5-mini` 경로: Bull(`model_comparison_contract.DOCUMENTED_SNAPSHOTS`/BULL minimal 400, D8 "Bull gpt-5-mini 유지"), `MORNING_BRIEF`(결정론 조립의 역할표 항목), heavy→GPT light 폴백·`REPORT_SUMMARY` 절약 light·`STOCK_MAPPING`·`openai_model_light` 기본값(`llm.py`·`default.yml`), `_OPENAI_EFFORTS`(terra 항목 없음), `llm_pricing._RATES`(terra 단가 없음), `report_premarket_check.RECOGNIZED_OPENAI_MODELS`, 프로브 스크립트 3종, 테스트 34파일. **결정:** L01과 독립이고 기한까지 30일 여유가 있어 L01 Task 6(11/16) 뒤 별도 과제로 착수한다 — 단가·effort 표·snapshot 실호출 재검증·테스트를 건드리므로 11/11 배포에 섞지 않았다. 첫 하위 단계는 **D8 재결정**: 기본안 공급자 분리 유지 → Bull `gpt-5.6-terra`(공식 권장 대체); Opus 전환은 Bull/Bear 동일 공급자가 되어 교차 독립 검토 계약을 깨므로 사용자 명시 승인 없이는 택하지 않는다.
 
