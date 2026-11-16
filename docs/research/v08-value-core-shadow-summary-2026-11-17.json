@@ -18,7 +18,13 @@
   "llm_rejected:horizon_not_reached": 15,
   "llm_rejected:no_next_trading_day": 7
  },
- "llm_errors": 0,
+ "llm_unknown": 0,
+ "prices": {
+  "symbols": 26,
+  "sha256": "c3ca71e19ff4af176d3774c52343839a067c6d8353d0d5429dfaaaff1cc10f09",
+  "partial_coverage": 0,
+  "allow_partial_prices": false
+ },
  "judgement": {
   "weeks": 7,
   "picks": 15,

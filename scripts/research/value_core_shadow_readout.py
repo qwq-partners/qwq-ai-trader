@@ -13,6 +13,7 @@ ponytail: 계산은 V01 의 forward/load_bars/adjust_bench/fetch_prices/nw_t 를
 import argparse
 import datetime
 import glob
+import hashlib
 import json
 import math
 import os
@@ -31,8 +32,7 @@ NW_LAG = 3                   # 주간 관측·20거래일 구간 → 앞뒤 3주
 def load_history(history_dir, through):
     """(관측 행, 전체 주차 수, 최종 픽이 없는 주차).
 
-    kind: final | llm_rejected(정량 통과·LLM 심사 탈락) | llm_error(심사 호출·응답 실패 — 생산자는 이것도
-    passed=False 로 남기되 total 0·한 줄 근거 없음으로 적는다. 탈락군에 넣지 않고 건수만 센다).
+    kind: final | llm_rejected(정량 통과·LLM 심사 탈락) | llm_unknown(탈락인지 심사 실패인지 기록만으로 알 수 없음).
     """
     rows, weeks, empty = [], 0, []
     for path in sorted(glob.glob(os.path.join(history_dir, "*.json"))):
@@ -47,10 +47,18 @@ def load_history(history_dir, through):
         bucket = {q["symbol"]: q.get("bucket") for q in x.get("quant_passed", [])}
         base = {"week": x["scan_week"], "scan_date": x["scan_date"]}
         rows += [{**base, "symbol": s, "bucket": bucket.get(s), "kind": "final"} for s in final]
-        rows += [{**base, "symbol": s, "bucket": bucket.get(s),
-                  "kind": "llm_error" if not v.get("total") and not v.get("one_line") else "llm_rejected"}
+        rows += [{**base, "symbol": s, "bucket": bucket.get(s), "kind": not_passed_kind(v)}
                  for s, v in x.get("llm_verdicts", {}).items() if s not in final and v.get("passed") is False]
     return rows, weeks, empty
+
+
+def not_passed_kind(verdict):
+    """이력에는 오류 표식이 없다. 생산자는 호출·응답 실패를 점수 0·근거 빈 문자열로 남기는데, 정상 심사의 0점도
+    같은 모양일 수 있어 '불명'으로 둔다(필드가 빠진 기록도 불명). 불명은 탈락군에 넣지 않고 건수만 센다."""
+    total, line = verdict.get("total"), verdict.get("one_line")
+    if total is None or line is None or (total == 0 and line == ""):
+        return "llm_unknown"
+    return "llm_rejected"
 
 
 def observe(rows, bars_by_symbol, bench, cal, horizons=(H,) + EXTRA_H, main=H):
@@ -185,16 +193,32 @@ def _plain(x):
     return x
 
 
-def report(history_dir, price_dir, bench_adjust, through):
+def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=False):
     rows, weeks_total, empty = load_history(history_dir, through)
     bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust, through)
     cal = sorted(bench)
     symbols = sorted({r["symbol"] for r in rows})
+    missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
+    if missing:
+        raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
+    fingerprint = hashlib.sha256()
+    for s in [BENCH] + symbols:
+        with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
+            fingerprint.update(s.encode() + f.read())
     bars = {s: {d: v for d, v in load_bars(os.path.join(price_dir, f"{s}.csv")).items() if d <= through} for s in symbols}
+    # V01 과 같은 검사: 캐시가 [그 종목의 첫 스캔일, 마지막 거래일]을 덮지 못하면 missing_bar 로 조용히 빠져
+    # 남은 픽만으로 판정이 나온다 → 기본은 거부, 거래정지·상장폐지가 확인된 경우만 명시적으로 허용한다.
+    first_scan = {}
+    for r in rows:
+        first_scan[r["symbol"]] = min(first_scan.get(r["symbol"], r["scan_date"]), r["scan_date"])
+    partial = sorted(s for s in symbols if not bars[s] or max(bars[s]) < cal[-1] or min(bars[s]) > first_scan[s])
+    if partial and not allow_partial_prices:
+        raise SystemExit(f"가격 캐시가 분석 기간을 덮지 못하는 종목 {len(partial)}개: {partial[:10]} — "
+                         "prices 를 새 디렉터리로 다시 받거나, 거래정지·상장폐지가 맞으면 --allow-partial-prices 로 명시한다")
     obs, excluded = observe(rows, bars, bench, cal)
     final_obs = [o for o in obs if o["kind"] == "final"]
     rejected_obs = [o for o in obs if o["kind"] == "llm_rejected"]
-    llm_errors = sum(1 for r in rows if r["kind"] == "llm_error")
+    llm_unknown = sum(1 for r in rows if r["kind"] == "llm_unknown")
     wk = weekly_excess(final_obs)
     table = [{"week": w, "scan_date": next(o["scan_date"] for o in final_obs if o["week"] == w),
               "entry_day": next(o["entry_day"] for o in final_obs if o["week"] == w),
@@ -202,7 +226,10 @@ def report(history_dir, price_dir, bench_adjust, through):
               "bench": next(o[f"bench{H}"] for o in final_obs if o["week"] == w), "excess": v} for w, v in wk.items()]
     return _plain({"through": through, "calendar": [cal[0], cal[-1], len(cal)], "weeks_total": weeks_total,
                    "weeks_without_picks": empty, "final_picks_total": sum(1 for r in rows if r["kind"] == "final"),
-                   "excluded": excluded, "llm_errors": llm_errors, "judgement": judge(final_obs), "weekly": table,
+                   "excluded": excluded, "llm_unknown": llm_unknown,
+                   "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "partial_coverage": len(partial),
+                              "allow_partial_prices": allow_partial_prices},
+                   "judgement": judge(final_obs), "weekly": table,
                    "supplementary": supplementary(final_obs, rejected_obs),
                    "picks": [{k: o[k] for k in ("week", "symbol", "bucket", "entry_day", f"gross{H}", f"bench{H}", f"excess{H}", f"mae{H}")}
                              for o in final_obs]})
@@ -219,15 +246,17 @@ def main():
     sub.choices["prices"].add_argument("--start", default="2026-02-01", help="벤치마크 보정 자료의 시작일(2026-02-09)보다 앞이어야 한다")
     sub.choices["report"].add_argument("--bench-adjust", required=True, help="초과수익 원장의 kodex200_daily.csv")
     sub.choices["report"].add_argument("--out", required=True)
+    sub.choices["report"].add_argument("--allow-partial-prices", action="store_true",
+                                       help="분석 기간을 덮지 못하는 가격 캐시를 허용(거래정지·상장폐지 확인 시에만)")
     a = ap.parse_args()
     if a.cmd == "prices":
         rows, _, _ = load_history(a.history_dir, a.through)
         fetch_prices(sorted({r["symbol"] for r in rows} | {BENCH}), a.price_dir, a.start, a.through)
         return
-    summary = report(a.history_dir, a.price_dir, a.bench_adjust, a.through)
+    summary = report(a.history_dir, a.price_dir, a.bench_adjust, a.through, a.allow_partial_prices)
     with open(a.out, "w") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
-    print(json.dumps({k: summary[k] for k in ("through", "weeks_total", "excluded", "judgement")}, ensure_ascii=False))
+    print(json.dumps({k: summary[k] for k in ("through", "weeks_total", "excluded", "llm_unknown", "prices", "judgement")}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

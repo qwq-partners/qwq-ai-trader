@@ -76,15 +76,15 @@ def test_history_loader_splits_final_and_llm_rejected_and_respects_through(tmp_p
             "quant_passed": [{"symbol": s, "bucket": "value"} for s in ("A", "B", "C")],
             "llm_verdicts": {"A": {"total": 70, "passed": True, "one_line": "x"},
                              "B": {"total": 40, "passed": False, "one_line": "x"},
-                             "C": {"total": 0.0, "passed": False, "one_line": ""}}}))   # C: 호출 실패 기록
+                             "C": {"total": 0.0, "passed": False, "one_line": ""}}}))   # C: 실패인지 0점 탈락인지 불명
     week("2026-W01", "2026-01-05", ["A"])
     week("2026-W02", "2026-01-12", [])
     week("2026-W03", "2026-01-19", ["A"])
     rows, weeks, empty = m.load_history(str(tmp_path), "2026-01-12")
     assert weeks == 2 and empty == ["2026-W02"]
     assert [(r["week"], r["symbol"], r["kind"]) for r in rows] == [
-        ("2026-W01", "A", "final"), ("2026-W01", "B", "llm_rejected"), ("2026-W01", "C", "llm_error"),
-        ("2026-W02", "B", "llm_rejected"), ("2026-W02", "C", "llm_error")]
+        ("2026-W01", "A", "final"), ("2026-W01", "B", "llm_rejected"), ("2026-W01", "C", "llm_unknown"),
+        ("2026-W02", "B", "llm_rejected"), ("2026-W02", "C", "llm_unknown")]
 
 
 def test_week_index_keeps_real_gaps_including_year_boundary():
@@ -106,3 +106,48 @@ def test_post_hoc_means_share_the_weekly_weighting_of_the_verdict():
     ph = m.post_hoc(obs, m.weekly_excess(obs))
     assert ph["mean_weekly_gross"] == D("0.10") and ph["mean_weekly_bench"] == D("-0.05")
     assert ph["mean_weekly_gross"] - m.COST - ph["mean_weekly_bench"] == m.judge(obs)["mean_weekly_excess"]
+
+
+@pytest.mark.parametrize("verdict,kind", [
+    ({"total": 40.0, "passed": False, "one_line": "근거"}, "llm_rejected"),
+    ({"total": 0.0, "passed": False, "one_line": "0점 근거"}, "llm_rejected"),   # 근거가 있는 0점은 심사 결과다
+    ({"total": 40.0, "passed": False, "one_line": ""}, "llm_rejected"),
+    ({"total": 0.0, "passed": False, "one_line": ""}, "llm_unknown"),            # 호출 실패 기록과 같은 모양
+    ({"total": 0, "passed": False, "one_line": ""}, "llm_unknown"),
+    ({"passed": False, "one_line": "근거"}, "llm_unknown"),                      # 점수 필드 없음
+    ({"total": 40.0, "passed": False}, "llm_unknown"),
+])
+def test_not_passed_records_are_split_without_falsy_shortcuts(verdict, kind):
+    assert m.not_passed_kind(verdict) == kind
+
+
+def _write_report_inputs(tmp_path, pick_days):
+    """월~금 3주치 달력. 픽 X 의 가격 파일은 pick_days 만 담는다."""
+    import datetime
+    days = [(datetime.date(2026, 1, 5) + datetime.timedelta(days=i)).isoformat() for i in range(19) if i % 7 < 5]
+    hist, prices = tmp_path / "hist", tmp_path / "prices"
+    hist.mkdir(), prices.mkdir()
+    (hist / "2026-W02.json").write_text(json.dumps({
+        "scan_date": days[0], "scan_week": "2026-W02", "final": ["X"],
+        "quant_passed": [{"symbol": "X", "bucket": "value"}], "llm_verdicts": {}}))
+    rows = lambda ds: "date,open,high,low,close\n" + "".join(f"{d},100,100,100,100\n" for d in ds)  # noqa: E731
+    (prices / f"{m.BENCH}.csv").write_text(rows(days))
+    (prices / "X.csv").write_text(rows(pick_days(days)))
+    adj = tmp_path / "adj.csv"
+    adj.write_text("date,close\n" + "".join(f"{d},100\n" for d in days))
+    return str(hist), str(prices), str(adj), days[-1]
+
+
+def test_report_rejects_price_cache_that_stops_before_the_last_trading_day(tmp_path):
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days[:-3])
+    with pytest.raises(SystemExit, match="가격 캐시가 분석 기간을 덮지 못하는 종목 1개"):
+        m.report(hist, prices, adj, through)
+    out = m.report(hist, prices, adj, through, allow_partial_prices=True)     # 명시하면 진행하고 사실을 남긴다
+    assert out["prices"] == {"symbols": 1, "sha256": out["prices"]["sha256"], "partial_coverage": 1, "allow_partial_prices": True}
+
+
+def test_report_accepts_full_price_cache(tmp_path):
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days)
+    out = m.report(hist, prices, adj, through)
+    assert out["prices"]["partial_coverage"] == 0 and out["final_picks_total"] == 1
+    assert out["excluded"] == {"final:horizon_not_reached": 1}                 # 달력이 20거래일보다 짧다
