@@ -18,7 +18,7 @@ import os
 from collections import defaultdict
 from decimal import Decimal
 
-from candidate_forward_excess import BENCH, COST, adjust_bench, fetch_prices, forward, load_bars, nw_t
+from candidate_forward_excess import BENCH, COST, adjust_bench, fetch_prices, forward, load_bars, nw_t, slope
 
 H = 20                       # 판정 구간(거래일)
 EXTRA_H = (5, 10)            # 보조
@@ -129,7 +129,28 @@ def supplementary(final_obs, rejected_obs):
     for h in EXTRA_H:
         w = weekly_excess(final_obs, h)
         out[f"mean_weekly_excess_{h}d"] = _mean(list(w.values())) if w else None
+    out["post_hoc"] = post_hoc(final_obs, weeks)
     return out
+
+
+def post_hoc(final_obs, weeks):
+    """결과를 본 뒤 추가한 계산(2026-11-17) — 사전 등록 4절에 없던 것이라 해석 보조로만 쓴다."""
+    bench = {o["week"]: o[f"bench{H}"] for o in final_obs}
+    up = [weeks[w] for w in weeks if bench[w] > 0]
+    down = [weeks[w] for w in weeks if bench[w] <= 0]
+    gross = [o[f"gross{H}"] for o in final_obs]
+    top = max(_group(final_obs, "symbol").items(), key=lambda kv: len(kv[1]), default=(None, []))[0]
+    rest = weekly_excess([o for o in final_obs if o["symbol"] != top])
+    return {
+        "bench_up_weeks": {"n": len(up), "mean_excess": _mean(up) if up else None},
+        "bench_down_weeks": {"n": len(down), "mean_excess": _mean(down) if down else None},
+        "slope_excess_on_bench": slope([(float(bench[w]), float(weeks[w])) for w in weeks]),
+        "mean_gross": _mean(gross) if gross else None,
+        "positive_gross_picks": sum(1 for g in gross if g > 0),
+        "mean_bench": _mean([bench[w] for w in weeks]) if weeks else None,
+        "without_most_repeated_symbol": {"picks_removed": sum(1 for o in final_obs if o["symbol"] == top), "weeks": len(rest),
+                                         "mean_weekly_excess": _mean(list(rest.values())) if rest else None},
+    }
 
 
 def _group(obs, key):
@@ -179,7 +200,7 @@ def main():
         p.add_argument("--history-dir", required=True)
         p.add_argument("--price-dir", required=True)
         p.add_argument("--through", required=True, help="고정 종료일 YYYY-MM-DD")
-    sub.choices["prices"].add_argument("--start", default="2026-07-01")
+    sub.choices["prices"].add_argument("--start", default="2026-02-01", help="벤치마크 보정 자료의 시작일(2026-02-09)보다 앞이어야 한다")
     sub.choices["report"].add_argument("--bench-adjust", required=True, help="초과수익 원장의 kodex200_daily.csv")
     sub.choices["report"].add_argument("--out", required=True)
     a = ap.parse_args()

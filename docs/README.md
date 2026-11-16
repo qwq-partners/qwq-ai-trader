@@ -1,5 +1,7 @@
 # QWQ AI Trader — 기술 문서
 
+- [V08 밸류코어 섀도우 판정 (2026-11-17)](research/v08-value-core-shadow-verdict-2026-11-17.md): 설계 9절 기준 1~3 충족·기준 4 미충족 → 승격 자격 충족·섀도우 유지. 초과가 지수 방향에 좌우돼 실배분 전 재판독.
+
 - **V09 문서 정리(2026-11-16):** 현재 상태는 저장소 루트 `CLAUDE.md` 머리글 한 곳에 둔다. 날짜별 이력은 [CLAUDE.md 머리글 이력 보관](operations/claude-md-header-history.md), 닫힌 체크포인트는 [체크포인트 보관](operations/monitoring-checkpoints-archive-2026-11.md), 지금 확인할 항목은 [모니터링 체크포인트](operations/monitoring-checkpoints.md)에 있다.
 
 - [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 DONE(11/16 — [판독](reviews/llm-cost-7day-readout-2026-11-16.md), Anthropic·OpenAI 콘솔 대조 완료, Fable 시장 보고는 당분간 유지). 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
