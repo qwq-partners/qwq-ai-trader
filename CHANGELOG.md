@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-16 — V06 테마 탐지 주기 10분→30분 (설정 1줄, 운영 미배포) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- 사용자 결정(11/16): 테마 탐지 주기 30분, V12 계좌 기준선은 500만 원 이상 여유현금 입금 뒤 거래가 시작되는 시점, Fable 시장 보고는 당분간 유지.
+- `config/default.yml` `kr.theme_detector.scan_interval_minutes` 10→30. 탐지 창(거래일 06:30~16:45)·모델·프롬프트·1시간 만료는 그대로.
+- 시험 1개 추가: 설정 주기가 30분이고 만료(1시간)보다 짧다(`tests/test_theme_detection_gate.py`).
+- 기대 효과(추정): 하루 약 54건→약 20건, 원장 기준 약 3.1→약 1.1달러.
+- 테마 탐지는 장중 스캔의 `theme_news` 원천이라 선정 정책 변경이다 — 운영 배포일부터 V02 창 1을 다시 센다(V03 O5). 운영 배포는 사용자 승인 대기.
+
 ## 2026-11-16 — 첫 거래일 판독: V02 후보 원장·심의 입력 A안·L01 Task 6 비용 7일 실측 (문서, 읽기 전용) ([비용 판독](docs/reviews/llm-cost-7day-readout-2026-11-16.md) · [원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - V02 후보 원장 첫날(12:42 KST): 스캔 51행·후보 1,138행 전부 점수 구성 부착, 점수·가격 결측 0, 경고·오류 0, 창 1은 종목-일 64·3분위 일수 1로 미충족.

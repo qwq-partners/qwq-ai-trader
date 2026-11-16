@@ -166,3 +166,11 @@ def test_dashboard_themes_drop_expired_without_detection(monkeypatch):
     names = [row["name"] for row in collector.get_themes()]
     assert names == ["fresh"]
     assert "stale" not in detector._themes
+
+
+def test_configured_interval_is_30m_and_inside_prune_ttl():
+    """V06(2026-11-16): 설정 주기 30분. 만료(_prune_stale 1시간)보다 길어지면 스캔 사이에 테마·뉴스 감성이 비워진다."""
+    from src.utils.config import load_effective_config
+    minutes = load_effective_config()["kr"]["theme_detector"]["scan_interval_minutes"]
+    assert minutes == 30
+    assert minutes < 60
