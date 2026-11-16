@@ -168,9 +168,21 @@ def test_dashboard_themes_drop_expired_without_detection(monkeypatch):
     assert "stale" not in detector._themes
 
 
-def test_configured_interval_is_30m_and_inside_prune_ttl():
-    """V06(2026-11-16): 설정 주기 30분. 만료(_prune_stale 1시간)보다 길어지면 스캔 사이에 테마·뉴스 감성이 비워진다."""
+@pytest.mark.asyncio
+async def test_configured_interval_drives_loop_sleep_and_stays_inside_ttl(monkeypatch, holidays):
+    """V06(2026-11-16): 유효 설정의 주기 30분이 루프 대기 1,800초가 되고, 만료(THEME_STALE_TTL)보다 짧다.
+
+    주기가 만료보다 길어지면 스캔 사이에 테마·뉴스 감성이 비워져 스크리너의 뉴스 원천이 결손이 된다.
+    """
+    from src.signals.sentiment import kr_theme_detector as kd
     from src.utils.config import load_effective_config
     minutes = load_effective_config()["kr"]["theme_detector"]["scan_interval_minutes"]
     assert minutes == 30
-    assert minutes < 60
+    assert minutes * 60 < kd.THEME_STALE_TTL.total_seconds()
+
+    detect_calls, sleeps = [], []
+    scheduler = _scheduler(monkeypatch, datetime(2026, 11, 9, 10, 0), detect_calls, sleeps)
+    scheduler.bot.theme_detector.detection_interval_minutes = minutes
+    await scheduler.run_theme_detection()
+    assert detect_calls == [True]
+    assert sleeps == [1800]
