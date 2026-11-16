@@ -202,4 +202,3 @@ def test_sentiment_accessors_expire_at_the_same_ttl():
     assert detector.get_stock_sentiment("stale") is None
     detector._prune_stale()
     assert set(detector._stock_sentiments) == {"fresh"}
-
