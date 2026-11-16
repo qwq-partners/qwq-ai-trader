@@ -121,8 +121,8 @@ def test_not_passed_records_are_split_without_falsy_shortcuts(verdict, kind):
     assert m.not_passed_kind(verdict) == kind
 
 
-def _write_report_inputs(tmp_path, pick_days):
-    """월~금 3주치 달력. 픽 X 의 가격 파일은 pick_days 만 담는다."""
+def _write_report_inputs(tmp_path, pick_days, adj_days=lambda days: days, bench_days=lambda days: days):
+    """월~금 3주치 달력. 픽 X 의 가격 파일은 pick_days, 보정 자료는 adj_days, 벤치마크 일봉은 bench_days 만 담는다."""
     import datetime
     days = [(datetime.date(2026, 1, 5) + datetime.timedelta(days=i)).isoformat() for i in range(19) if i % 7 < 5]
     hist, prices = tmp_path / "hist", tmp_path / "prices"
@@ -131,10 +131,10 @@ def _write_report_inputs(tmp_path, pick_days):
         "scan_date": days[0], "scan_week": "2026-W02", "final": ["X"],
         "quant_passed": [{"symbol": "X", "bucket": "value"}], "llm_verdicts": {}}))
     rows = lambda ds: "date,open,high,low,close\n" + "".join(f"{d},100,100,100,100\n" for d in ds)  # noqa: E731
-    (prices / f"{m.BENCH}.csv").write_text(rows(days))
+    (prices / f"{m.BENCH}.csv").write_text(rows(bench_days(days)))
     (prices / "X.csv").write_text(rows(pick_days(days)))
     adj = tmp_path / "adj.csv"
-    adj.write_text("date,close\n" + "".join(f"{d},100\n" for d in days))
+    adj.write_text("date,close\n" + "".join(f"{d},100\n" for d in adj_days(days)))
     return str(hist), str(prices), str(adj), days[-1]
 
 
@@ -151,3 +151,29 @@ def test_report_accepts_full_price_cache(tmp_path):
     out = m.report(hist, prices, adj, through)
     assert out["prices"]["partial_coverage"] == 0 and out["final_picks_total"] == 1
     assert out["excluded"] == {"final:horizon_not_reached": 1}                 # 달력이 20거래일보다 짧다
+
+
+def test_report_stops_when_bench_adjust_is_older_than_the_price_data(tmp_path):
+    """보정 자료만 오래되면 달력이 조용히 줄어 만기가 지난 픽이 '미도래'로 빠진다 — 판정 전에 멈춘다."""
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days, adj_days=lambda days: days[:-2])
+    with pytest.raises(SystemExit, match="벤치마크 보정 자료가 .* 까지 덮지 못한다"):
+        m.report(hist, prices, adj, through)
+
+
+def test_report_stops_when_bench_bars_end_before_symbol_bars(tmp_path):
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days, adj_days=lambda days: days[:-2],
+                                                      bench_days=lambda days: days[:-2])
+    with pytest.raises(SystemExit, match="벤치마크 일봉이 종목 일봉보다 일찍 끝난다"):
+        m.report(hist, prices, adj, through)
+
+
+def test_summary_records_input_fingerprints_that_follow_the_inputs(tmp_path):
+    hist, prices, adj, through = _write_report_inputs(tmp_path, lambda days: days)
+    a = m.report(hist, prices, adj, through)["inputs"]
+    assert a == m.report(hist, prices, adj, through)["inputs"] and set(a) == {"history_sha256", "bench_adjust_sha256"}
+    Path(adj).write_text(Path(adj).read_text().replace(",100\n", ",101\n", 1))        # 보정 종가 1개 변경
+    b = m.report(hist, prices, adj, through)["inputs"]
+    assert b["bench_adjust_sha256"] != a["bench_adjust_sha256"] and b["history_sha256"] == a["history_sha256"]
+    wk = Path(hist) / "2026-W02.json"
+    wk.write_text(wk.read_text().replace('"value"', '"growth"'))                        # 이력 변경
+    assert m.report(hist, prices, adj, through)["inputs"]["history_sha256"] != a["history_sha256"]

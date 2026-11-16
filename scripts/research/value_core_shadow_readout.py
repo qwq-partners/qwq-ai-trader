@@ -11,6 +11,7 @@ ponytail: 계산은 V01 의 forward/load_bars/adjust_bench/fetch_prices/nw_t 를
 """
 
 import argparse
+import csv
 import datetime
 import glob
 import hashlib
@@ -195,12 +196,18 @@ def _plain(x):
 
 def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=False):
     rows, weeks_total, empty = load_history(history_dir, through)
-    bench = adjust_bench(load_bars(os.path.join(price_dir, f"{BENCH}.csv")), bench_adjust, through)
+    raw_bench = {d: v for d, v in load_bars(os.path.join(price_dir, f"{BENCH}.csv")).items() if d <= through}
+    bench = adjust_bench(raw_bench, bench_adjust, through)
     cal = sorted(bench)
     symbols = sorted({r["symbol"] for r in rows})
     missing = [s for s in symbols if not os.path.exists(os.path.join(price_dir, f"{s}.csv"))]
     if missing:
         raise SystemExit(f"가격 파일 없는 종목 {len(missing)}개: {missing[:10]} — prices 를 다시 실행한다")
+    # adjust_bench 는 보정 자료의 마지막 날에서 달력을 자른다. 보정 자료가 오래됐으면 만기가 지난 픽이
+    # '미도래'로 빠진 채 판정이 나온다 → 달력이 공개 일봉의 마지막 거래일까지 닿는지 먼저 확인한다.
+    if not raw_bench or cal[-1] != max(raw_bench):
+        raise SystemExit(f"벤치마크 보정 자료가 {max(raw_bench) if raw_bench else through} 까지 덮지 못한다"
+                         f"(달력 끝 {cal[-1]}) — 최신 kodex200_daily.csv 를 쓴다")
     fingerprint = hashlib.sha256()
     for s in [BENCH] + symbols:
         with open(os.path.join(price_dir, f"{s}.csv"), "rb") as f:
@@ -211,6 +218,9 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
     first_scan = {}
     for r in rows:
         first_scan[r["symbol"]] = min(first_scan.get(r["symbol"], r["scan_date"]), r["scan_date"])
+    ahead = sorted(s for s in symbols if bars[s] and max(bars[s]) > cal[-1])
+    if ahead:   # 종목 일봉이 벤치마크보다 뒤까지 있으면 벤치마크 캐시가 오래된 것이다
+        raise SystemExit(f"벤치마크 일봉이 종목 일봉보다 일찍 끝난다(달력 끝 {cal[-1]}, 예: {ahead[:5]}) — prices 를 새 디렉터리로 다시 받는다")
     partial = sorted(s for s in symbols if not bars[s] or max(bars[s]) < cal[-1] or min(bars[s]) > first_scan[s])
     if partial and not allow_partial_prices:
         raise SystemExit(f"가격 캐시가 분석 기간을 덮지 못하는 종목 {len(partial)}개: {partial[:10]} — "
@@ -219,6 +229,11 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
     final_obs = [o for o in obs if o["kind"] == "final"]
     rejected_obs = [o for o in obs if o["kind"] == "llm_rejected"]
     llm_unknown = sum(1 for r in rows if r["kind"] == "llm_unknown")
+    with open(bench_adjust) as f:   # 보정 자료는 날마다 행·조회 시각이 늘어난다 → 종료일까지의 (날짜, 종가)만 지문에 넣는다
+        adj_rows = sorted((r["date"], r["close"]) for r in csv.DictReader(f) if r["date"] <= through)
+    digest = lambda x: hashlib.sha256(json.dumps(x, sort_keys=True, ensure_ascii=False).encode()).hexdigest()  # noqa: E731
+    inputs = {"history_sha256": digest(sorted(rows, key=lambda r: (r["scan_date"], r["kind"], r["symbol"]))),
+              "bench_adjust_sha256": digest(adj_rows)}
     wk = weekly_excess(final_obs)
     table = [{"week": w, "scan_date": next(o["scan_date"] for o in final_obs if o["week"] == w),
               "entry_day": next(o["entry_day"] for o in final_obs if o["week"] == w),
@@ -226,7 +241,7 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
               "bench": next(o[f"bench{H}"] for o in final_obs if o["week"] == w), "excess": v} for w, v in wk.items()]
     return _plain({"through": through, "calendar": [cal[0], cal[-1], len(cal)], "weeks_total": weeks_total,
                    "weeks_without_picks": empty, "final_picks_total": sum(1 for r in rows if r["kind"] == "final"),
-                   "excluded": excluded, "llm_unknown": llm_unknown,
+                   "excluded": excluded, "llm_unknown": llm_unknown, "inputs": inputs,
                    "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "partial_coverage": len(partial),
                               "allow_partial_prices": allow_partial_prices},
                    "judgement": judge(final_obs), "weekly": table,
@@ -256,7 +271,7 @@ def main():
     summary = report(a.history_dir, a.price_dir, a.bench_adjust, a.through, a.allow_partial_prices)
     with open(a.out, "w") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
-    print(json.dumps({k: summary[k] for k in ("through", "weeks_total", "excluded", "llm_unknown", "prices", "judgement")}, ensure_ascii=False))
+    print(json.dumps({k: summary[k] for k in ("through", "calendar", "weeks_total", "excluded", "llm_unknown", "inputs", "prices", "judgement")}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

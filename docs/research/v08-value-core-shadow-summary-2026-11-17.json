@@ -19,6 +19,10 @@
   "llm_rejected:no_next_trading_day": 7
  },
  "llm_unknown": 0,
+ "inputs": {
+  "history_sha256": "1c13f3e0add37d1c9d444ac36e0c6b232f11e0ceec497ebf23607e35f7da0436",
+  "bench_adjust_sha256": "e75a13dfa458f997a9714aed3dfe4600531f512e80c4895ad75e5f3efc9a0a94"
+ },
  "prices": {
   "symbols": 26,
   "sha256": "c3ca71e19ff4af176d3774c52343839a067c6d8353d0d5429dfaaaff1cc10f09",
