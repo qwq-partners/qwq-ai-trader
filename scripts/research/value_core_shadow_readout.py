@@ -12,7 +12,6 @@ ponytail: 계산은 V01 의 forward/load_bars/adjust_bench/fetch_prices/nw_t 를
 
 import argparse
 import csv
-import datetime
 import glob
 import hashlib
 import json
@@ -27,7 +26,6 @@ H = 20                       # 판정 구간(거래일)
 EXTRA_H = (5, 10)            # 보조
 MIN_WEEKS = 6
 FLOOR = Decimal("-0.15")     # 기준 3: 하위 25% 총수익 하한
-NW_LAG = 3                   # 주간 관측·20거래일 구간 → 앞뒤 3주와 겹친다(보조 t 전용)
 
 
 def load_history(history_dir, through):
@@ -91,12 +89,6 @@ def _mean(xs):
     return sum(xs) / len(xs)
 
 
-def week_index(week):
-    """'2026-W35' → 연속 주 번호. 픽이 없는 주가 사이에 있어도 실제 주 간격이 유지된다(연도 경계 포함)."""
-    year, wk = week.split("-W")
-    return datetime.date.fromisocalendar(int(year), int(wk), 1).toordinal() // 7
-
-
 def weekly_excess(obs, h=H):
     """{주차: 그 주 픽 순초과의 동일가중 평균} — 같은 주의 픽은 진입일·벤치마크 구간이 같다."""
     by = defaultdict(list)
@@ -127,10 +119,12 @@ def judge(obs):
             "lower_quartile_gross": quartile, "criterion3": c3, "verdict": verdict}
 
 
-def supplementary(final_obs, rejected_obs):
-    """판정에 쓰지 않는 보조 지표."""
+def supplementary(final_obs, rejected_obs, cal):
+    """판정에 쓰지 않는 보조 지표. cal 은 거래일 달력(보조 t 의 시차를 진입일 사이의 실제 거래일 거리로 잰다)."""
     weeks = weekly_excess(final_obs)
     xs = [float(v) for v in weeks.values()]
+    pos = {d: i for i, d in enumerate(cal)}
+    entry = {o["week"]: o["entry_day"] for o in final_obs}
     first = {}
     for o in sorted(final_obs, key=lambda o: o["scan_date"]):
         first.setdefault(o["symbol"], o)
@@ -138,7 +132,8 @@ def supplementary(final_obs, rejected_obs):
     both = [w for w in weeks if w in rej]
     out = {
         "weeks_won": sum(1 for v in weeks.values() if v > 0),
-        "t_weekly_nw": nw_t(xs, NW_LAG, [week_index(w) for w in weeks]),
+        # 20거래일 구간은 진입일이 19거래일 이내로 떨어진 주끼리 겹친다 — 휴일이 낀 4주 간격도 포함된다
+        "t_weekly_nw": nw_t(xs, H - 1, [pos[entry[w]] for w in weeks]),
         "first_pick_only": {"n": len(first), "mean_excess": _mean([o[f"excess{H}"] for o in first.values()]) if first else None},
         "by_bucket": {b: {"n": len(v), "mean_excess": _mean(v)} for b, v in sorted(_group(final_obs, "bucket").items())},
         "by_symbol_count": sorted((len(v) for v in _group(final_obs, "symbol").values()), reverse=True),
@@ -250,7 +245,7 @@ def report(history_dir, price_dir, bench_adjust, through, allow_partial_prices=F
                    "prices": {"symbols": len(symbols), "sha256": fingerprint.hexdigest(), "partial_coverage": len(partial),
                               "allow_partial_prices": allow_partial_prices},
                    "judgement": judge(final_obs), "weekly": table,
-                   "supplementary": supplementary(final_obs, rejected_obs),
+                   "supplementary": supplementary(final_obs, rejected_obs, cal),
                    "picks": [{k: o[k] for k in ("week", "symbol", "bucket", "entry_day", f"gross{H}", f"bench{H}", f"excess{H}", f"mae{H}")}
                              for o in final_obs]})
 

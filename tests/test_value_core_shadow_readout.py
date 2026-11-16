@@ -87,18 +87,19 @@ def test_history_loader_splits_final_and_llm_rejected_and_respects_through(tmp_p
         ("2026-W02", "B", "llm_rejected"), ("2026-W02", "C", "llm_unknown")]
 
 
-def test_week_index_keeps_real_gaps_including_year_boundary():
-    assert m.week_index("2026-W37") - m.week_index("2026-W35") == 2      # 사이 주에 픽이 없어도 2주 간격
-    assert m.week_index("2027-W01") - m.week_index("2026-W53") == 1
-
-
-def test_supplementary_t_uses_week_distance_not_position():
-    obs = [_obs(w, g) for w, g in (("2026-W01", "0.10"), ("2026-W02", "0.02"), ("2026-W03", "0.09"),
-                                   ("2026-W10", "0.01"), ("2026-W11", "0.08"), ("2026-W12", "0.03"))]
+def test_supplementary_t_measures_overlap_in_trading_days_between_entry_days():
+    """주 간격이 4주여도 휴일로 진입일이 19거래일 이내면 20거래일 구간이 겹친다 — 그 공분산이 t 에 들어간다."""
+    cal = [f"d{i:03d}" for i in range(120)]
+    entries = [0, 5, 10, 29, 34, 53]            # 5·5·19·5·19거래일 간격: 0↔29(29)는 안 겹치고 10↔29(19)는 겹친다
+    obs = []
+    for i, (e, g) in enumerate(zip(entries, ["0.10", "0.02", "0.09", "0.01", "0.08", "0.03"])):
+        o = _obs(f"W{i}", g)
+        o["entry_day"] = cal[e]
+        obs.append(o)
     xs = [float(v) for v in m.weekly_excess(obs).values()]
-    got = m.supplementary(obs, [])["t_weekly_nw"]
-    assert got == pytest.approx(m.nw_t(xs, m.NW_LAG, [1, 2, 3, 10, 11, 12]))
-    assert got != pytest.approx(m.nw_t(xs, m.NW_LAG))                     # 연속 위치로 보면 다른 값이다
+    got = m.supplementary(obs, [], cal)["t_weekly_nw"]
+    assert got == pytest.approx(m.nw_t(xs, m.H - 1, entries))
+    assert got != pytest.approx(m.nw_t(xs, 3))                           # 주 단위 3시차로 보면 다른 값이다
 
 
 def test_post_hoc_means_share_the_weekly_weighting_of_the_verdict():
