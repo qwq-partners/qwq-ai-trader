@@ -132,3 +132,10 @@ terra 전환 뒤 신원·effort·지연은 정상이다. APPROVE 비율이 8.1% 
 ## 5. 재현
 
 비공개 영수증 `~/.local/state/qwq-task-audit/20261116/l01-task6/`(`budget-aggregate.txt`·`call-ledger.txt`·`reports.txt`·`verdicts.txt`). 프롬프트·응답 본문·계좌 자료는 읽지 않았고 저장하지 않았다.
+
+## 6. 추가 — 11/16 장 마감(15:36, 읽기 전용)
+
+- 11/16 15:31까지 161건·USD 5.60: 테마 탐지 54건 3.08, 웹 보고 2건 0.80, 시장 보고 2건 0.67, Bear 40건 0.67, 경량 분류·분석 23건 0.31, Bull 40건 0.08. 16:40 장후 보고와 저녁 작업이 남아 하루 합계는 11/13(7.41)과 비슷할 것으로 보인다. 11월 누계 36.22(18.1%), `normal`.
+- Bear 40건 전부 API 1차 성공(CLI 대체 0, 지연 중앙값 6.1초·최대 9.9초). Bull 40건 `gpt-5.6-terra` 일치·APPROVE 0(지연 중앙값 1.9초).
+- Fable 5.2 보고 `ready`: 시장 2/3(11/16 아침 `unsupported_latin`·`issues[1].title` 거절, 정오 통과), 웹 3/3. 전부 `end_turn`. 4절 2번의 권고(5거래일 뒤 재판독)는 그대로다.
+- 영수증 `~/.local/state/qwq-task-audit/20261116/close-readout/`(비공개).
