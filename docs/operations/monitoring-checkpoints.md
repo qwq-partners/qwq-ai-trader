@@ -2,6 +2,13 @@
 
 > **2026-11-16 정리(V09).** 이 문서에는 지금 확인할 수 있는 항목만 둔다. 관측 창이 끝났거나 매수 중지로 관측할 수 없는 절은 [보관 파일](monitoring-checkpoints-archive-2026-11.md)에 원문 그대로 옮겼다(아래 "보관한 절" 표). 새 배포·관측을 하면 맨 위에 절을 추가하고, 닫힌 절은 다음 정리 때 보관으로 옮긴다.
 
+## 11월16일 EXIT-CRASH-EFFECTIVE-TS — 배포 뒤·매수 재개 뒤 확인(PR #385 병합, 운영 미배포 — 다음 배포 때 함께)
+
+[원장](execution-roadmap.md#engine-evaluation-20261113) · [리스크 문서](../risk/risk-and-exit.md). 급락 단계에서 ATR 연동 실효 트레일링도 급락 값 이하로 유지하고 해제 때 복원한다.
+
+- [ ] 배포 직후: 기동 로그 정상, 보호 파일 변동 0(이 변경은 설정을 건드리지 않는다).
+- [ ] 매수 재개 뒤 급락 단계가 켜진 날: 청산 단계 파일(`~/.cache/ai_trader/exit_stages_YYYY-MM-DD.json` — KR은 접미사가 없다)에서 비코어 포지션의 `effective_trailing_stop_pct`가 급락 TS 이하다. 로그로는 급락 최초 적용과 급락 중 신규 등록만 `effTS=`가 찍히고(레짐 재적용 로그에는 SL·TS만 나온다), 해제 뒤에는 같은 파일에서 값이 레짐 기준으로 돌아온 것을 본다. 전략 포지션이 없으면 관측되지 않는다.
+
 ## 11월16일 V06 테마 탐지 주기 30분 — 배포 뒤 확인(운영 인수 11/16 22:19:06 KST `f8b3dcd5`)
 
 [원장](execution-roadmap.md#engine-evaluation-20261113). 설정 한 줄(`theme_detector.scan_interval_minutes` 10→30). 탐지 창·모델·만료(1시간)는 그대로.

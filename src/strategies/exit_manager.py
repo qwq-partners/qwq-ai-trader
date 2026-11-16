@@ -868,6 +868,11 @@ class ExitManager:
                 if state.trailing_stop_pct is None or state.trailing_stop_pct > c_ts:
                     state.trailing_stop_pct = c_ts
                     tightened.append(f"TS={c_ts}%")
+                # 익절 전 트레일링 판정은 ATR-linked 실효값을 먼저 쓴다 — 함께 조인다 (2026-11-16)
+                if (state.effective_trailing_stop_pct is not None
+                        and state.effective_trailing_stop_pct > c_ts):
+                    state.effective_trailing_stop_pct = c_ts
+                    tightened.append(f"effTS={c_ts}%")
                 if tightened:
                     logger.warning(
                         f"[장중급락] 신규 포지션 {position.symbol} "
@@ -1564,8 +1569,12 @@ class ExitManager:
                 state.stop_loss_pct = params["stop_loss_pct"]
                 changed.append(f"SL={state.stop_loss_pct}%")
 
-            if state.trailing_stop_pct != params["trailing_stop_pct"]:
+            ts_changed = state.trailing_stop_pct != params["trailing_stop_pct"]
+            # 강제 재적용(급락 해제 복원)은 원시 TS 가 레짐 값과 같아도 실효값을 다시 계산한다 —
+            # bear(2.0%)처럼 레짐 TS 가 급락 TS 와 같으면 급락이 조인 실효값이 영구히 남는다 (2026-11-16)
+            if ts_changed or force:
                 state.trailing_stop_pct = params["trailing_stop_pct"]
+                _prev_eff = state.effective_trailing_stop_pct
                 # ATR-linked effective 트레일링이 판정에 우선 사용되므로 동기화
                 # (2026-08-04 P1 — 미동기화 시 레짐 TS 조정이 판정에 반영 안 됨)
                 # 단, 레짐 TS로 단순 치환하면 ATR 성분이 영구 소실 (2026-08-05 P1)
@@ -1579,7 +1588,10 @@ class ExitManager:
                         )
                     else:
                         state.effective_trailing_stop_pct = params["trailing_stop_pct"]
-                changed.append(f"TS={state.trailing_stop_pct}%")
+                if ts_changed:
+                    changed.append(f"TS={state.trailing_stop_pct}%")
+                elif state.effective_trailing_stop_pct != _prev_eff:
+                    changed.append(f"effTS={state.effective_trailing_stop_pct}%")
 
             if state.stale_high_days != params["stale_high_days"]:
                 state.stale_high_days = params["stale_high_days"]
@@ -1638,6 +1650,12 @@ class ExitManager:
                             state2.stop_loss_pct = c_sl
                         if state2.trailing_stop_pct > c_ts:
                             state2.trailing_stop_pct = c_ts
+                        # 위에서 실효값을 레짐 기준으로 다시 계산했으므로 급락 값으로 다시 조인다 (2026-11-16)
+                        if (state2.effective_trailing_stop_pct is not None
+                                and state2.effective_trailing_stop_pct > c_ts):
+                            state2.effective_trailing_stop_pct = c_ts
+                if self._states:
+                    self._persist_states()
                 logger.warning(
                     f"[장중급락] 레짐({regime}) 적용 후 crash({self._intraday_crash_level}) "
                     f"재적용 → SL ≤ {c_sl}%, TS ≤ {c_ts}%"
