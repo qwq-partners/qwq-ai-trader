@@ -762,6 +762,11 @@ class NewsCollector:
         return await self.search_news(query, display=limit)
 
 
+# 테마·종목 감성의 만료. 탐지 주기(`theme_detector.scan_interval_minutes`)는 이보다 짧아야
+# 스캔 사이에 결과가 비워지지 않는다(시험 `test_theme_detection_gate.py`가 이 관계를 고정).
+THEME_STALE_TTL = timedelta(hours=1)
+
+
 class ThemeDetector:
     """
     테마 탐지기
@@ -876,7 +881,7 @@ class ThemeDetector:
     def _prune_stale(self):
         """Apply the existing one-hour theme and sentiment expiry rules."""
         try:
-            cutoff = datetime.now() - timedelta(hours=1)
+            cutoff = datetime.now() - THEME_STALE_TTL
             self._themes = {name: theme for name, theme in self._themes.items()
                             if theme.last_updated > cutoff}
             stale_symbols = [sym for sym, data in self._stock_sentiments.items()
@@ -1272,7 +1277,7 @@ themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세
             return None
         # 1시간 이상 경과 시 무효
         elapsed = (datetime.now() - data["updated_at"]).total_seconds()
-        if elapsed > 3600:
+        if elapsed > THEME_STALE_TTL.total_seconds():
             return None
         return data
 
@@ -1282,7 +1287,7 @@ themes의 stocks와 stock_impacts 안의 impact에도 이 규칙을 적용하세
         return {
             symbol: data
             for symbol, data in self._stock_sentiments.items()
-            if (now - data["updated_at"]).total_seconds() <= 3600
+            if (now - data["updated_at"]).total_seconds() <= THEME_STALE_TTL.total_seconds()
         }
 
     async def _resolve_stock_symbol(self, symbol: str, name: str) -> str:

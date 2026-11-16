@@ -166,3 +166,39 @@ def test_dashboard_themes_drop_expired_without_detection(monkeypatch):
     names = [row["name"] for row in collector.get_themes()]
     assert names == ["fresh"]
     assert "stale" not in detector._themes
+
+
+@pytest.mark.asyncio
+async def test_configured_interval_drives_loop_sleep_and_stays_inside_ttl(monkeypatch, holidays):
+    """V06(2026-11-16): 유효 설정의 주기 30분이 루프 대기 1,800초가 되고, 만료(THEME_STALE_TTL)보다 짧다.
+
+    주기가 만료보다 길어지면 스캔 사이에 테마·뉴스 감성이 비워져 스크리너의 뉴스 원천이 결손이 된다.
+    """
+    from src.signals.sentiment import kr_theme_detector as kd
+    from src.utils.config import load_effective_config
+    minutes = load_effective_config()["kr"]["theme_detector"]["scan_interval_minutes"]
+    assert minutes == 30
+    assert minutes * 60 < kd.THEME_STALE_TTL.total_seconds()
+
+    detect_calls, sleeps = [], []
+    scheduler = _scheduler(monkeypatch, datetime(2026, 11, 9, 10, 0), detect_calls, sleeps)
+    scheduler.bot.theme_detector.detection_interval_minutes = minutes
+    await scheduler.run_theme_detection()
+    assert detect_calls == [True]
+    assert sleeps == [1800]
+
+
+def test_sentiment_accessors_expire_at_the_same_ttl():
+    """접근자 두 곳과 정리(_prune_stale)가 같은 만료(THEME_STALE_TTL)를 쓴다 — 경계 전은 유효, 후는 결손."""
+    from src.signals.sentiment import kr_theme_detector as kd
+    detector = kd.ThemeDetector(llm_manager=SimpleNamespace())
+    now = datetime.now()
+    detector._stock_sentiments = {
+        "fresh": {"impact": 5, "updated_at": now - kd.THEME_STALE_TTL + timedelta(minutes=1)},
+        "stale": {"impact": 5, "updated_at": now - kd.THEME_STALE_TTL - timedelta(minutes=1)},
+    }
+    assert set(detector.get_all_stock_sentiments()) == {"fresh"}
+    assert detector.get_stock_sentiment("fresh") is not None
+    assert detector.get_stock_sentiment("stale") is None
+    detector._prune_stale()
+    assert set(detector._stock_sentiments) == {"fresh"}

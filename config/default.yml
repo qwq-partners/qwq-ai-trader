@@ -463,7 +463,7 @@ kr:
     max_rs_ratio: 1.0            # 섹터 대비 RS 상한 (1.0 = 섹터 등락률 이하만)
 
   theme_detector:
-    scan_interval_minutes: 10
+    scan_interval_minutes: 30    # V06(2026-11-16 사용자 결정) 10→30분 — LLM 지출 재배치. 테마·뉴스 감성 만료(1시간)보다 짧아야 한다
     min_news_count: 3
     min_theme_score: 70.0
 
