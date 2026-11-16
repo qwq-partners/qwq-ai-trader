@@ -554,7 +554,8 @@ def test_crash_cap_on_effective_trailing_survives_regime_change(home):
     st = em.get_state(SYM)
     assert st.trailing_stop_pct == pytest.approx(2.0)
     assert st.effective_trailing_stop_pct == pytest.approx(2.0)
-    # 조인 값이 파일에도 남아야 재시작 뒤 넓은 값으로 복원되지 않는다
+    # 조인 값이 파일에 저장되는지만 본다. 재시작 뒤에는 재등록이 실효값을 다시 계산하고,
+    # 급락 단계가 다시 적용될 때(최초 적용·급락 중 등록 경로) 조여진다 — 그 순서는 이 시험의 범위 밖이다.
     saved = json.loads(em._stage_file.read_text())[SYM]
     assert saved["effective_trailing_stop_pct"] == pytest.approx(2.0)
 
