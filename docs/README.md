@@ -1,8 +1,10 @@
 # QWQ AI Trader — 기술 문서
 
-- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 11/16 WAIT. 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
+- **V09 문서 정리(2026-11-16):** 현재 상태는 저장소 루트 `CLAUDE.md` 머리글 한 곳에 둔다. 날짜별 이력은 [CLAUDE.md 머리글 이력 보관](operations/claude-md-header-history.md), 닫힌 체크포인트는 [체크포인트 보관](operations/monitoring-checkpoints-archive-2026-11.md), 지금 확인할 항목은 [모니터링 체크포인트](operations/monitoring-checkpoints.md)에 있다.
 
-- [LLM 비용 7일 실측 (2026-11-16)](reviews/llm-cost-7day-readout-2026-11-16.md): L01 Task 6 — 전후 7일 비용·테마 탐지·Bear/Bull·보고 `ready` 비율·월 전망. 콘솔 대조와 Fable 시장 보고 유지 여부는 사용자 확인.
+- [L01-LLM-CREDIT-ROUTING](operations/execution-roadmap.md#l01-llm-credit-routing-20261108): Ultra 월 API 크레딧 USD200 기준 라우팅 재설계. Task 1(테마 탐지 거래일 창) 운영 인수 완료, Task 2(독립 Bear API 1차·가용성 실패에서만 구독 CLI 1회) PR #351 병합 `31edd820`·운영 11/9 21:21 인수·11/10 자연 Bear 48/48 API 1차(`role=primary`) 인수 완료, 7일 실측 DONE(11/16 — [판독](reviews/llm-cost-7day-readout-2026-11-16.md), Anthropic·OpenAI 콘솔 대조 완료, Fable 시장 보고는 당분간 유지). 비교 runner는 API 1차 미지원(fail-closed 거부). [계획서](superpowers/plans/2026-11-08-llm-credit-routing.md).
+
+- [LLM 비용 7일 실측 (2026-11-16)](reviews/llm-cost-7day-readout-2026-11-16.md): L01 Task 6 — 전후 7일 비용·테마 탐지·Bear/Bull·보고 `ready` 비율·월 전망. Anthropic·OpenAI 콘솔 대조 완료(7·8절), Fable 시장 보고는 당분간 유지(사용자 결정 11/16).
 - [팀 심의 입력 진단 (2026-11-14)](reviews/team-input-diagnosis-2026-11-14.md): 재무 보고 전부 `insufficient`인데 87%가 상수 +10으로 토론에 들어가는 경로, 미획득 수급의 `False` 기록, 지표 경로가 없는 보유 종목 재평가. A안(정직화) 소스 DONE 11/14·운영 인수 11/15 00:08, 실제 자료 연결은 V02 판독 뒤.
 - [엔진 종합 평가와 우선순위 과제 V01~V12 (2026-11-13)](reviews/engine-evaluation-2026-11-13.md): 목적(선정·진입의 KODEX200 초과수익 검증) 기준 영역별 평가, 부족한 점 D1~D12, 과제·완료 기준·분기, Fable 5.2 활용. [원장](operations/execution-roadmap.md#engine-evaluation-20261113).
 
@@ -108,7 +110,7 @@
 
 > [10월24일 후속 실측 예약 설치 완료: KIS 계수·Toss 보고 exact slot](superpowers/plans/2026-10-24-live-readout.md). 고정 `f8ef32eb`의10월26일 읽기 전용 작업7개를 설치했다. 전체9,052검사·독립 리뷰 완료, 운영 재시작 없음. 실제 자료 생성·조회 절감과 Telegram 수신 확인은 남아 있다.
 
-> **10월24일 Toss 보고 운영 반영 완료:** [설치·활성화·배포 영수증](superpowers/plans/2026-10-24-toss-report-runtime.md#운영-적용-완료) · [다음 실측 순서](operations/monitoring-checkpoints.md#다음-실제-실행의-판독-순서). 운영 `44483017`·9,027검사·복구ready·미체결0, 기존 설정/원장 보존.10월26~30일의 보고 실행을 허용하며 실제 가격 공급·요청 절감은 별도 확인한다. 아래 미설치 상태는 이전 이력이다.
+> **10월24일 Toss 보고 운영 반영 완료:** [설치·활성화·배포 영수증](superpowers/plans/2026-10-24-toss-report-runtime.md#운영-적용-완료) · [다음 실측 순서](operations/monitoring-checkpoints-archive-2026-11.md#다음-실제-실행의-판독-순서). 운영 `44483017`·9,027검사·복구ready·미체결0, 기존 설정/원장 보존.10월26~30일의 보고 실행을 허용하며 실제 가격 공급·요청 절감은 별도 확인한다. 아래 미설치 상태는 이전 이력이다.
 
 > **10월24일 Toss 보고 연결:** [실행 설계·Plan → Do → See·적용 순서](superpowers/plans/2026-10-24-toss-report-runtime.md). 신뢰된 helper부터 실제 보고 가격 소비까지 합성 통합 검증. 기본 OFF·운영 미설치/미활성화이며 API 절감·순수익 실측과 구분한다.
 
@@ -124,7 +126,7 @@
 
 > [10월22일 장후 실제 발송·미국자료 결측 보완](superpowers/plans/2026-10-22-report-content.md#10월22일-장후-발송-점검과-결측-보완): 전문가 DM API 수락, 후보 0개 본문 생략, 실제 08:25/16:00 설정 확인. 비유한 입력의 오분류를 수정하며 검증·배포 결과는 정본을 따른다.
 
-> **10월22일 보고서 운영 배포 완료:** [15:35 실행·전체검사·새 기동·사후 대조](superpowers/plans/2026-10-22-report-content.md#10월22일-실제-운영-배포-완료) · [실제 발송 확인](operations/monitoring-checkpoints.md#10월22일-보고서-개선--배포와-실제-발송-확인). 운영`072f4c9e`·매수 중지 유지. 배포 성공과 실제 보고 전달·순수익 검증을 구분하며 아래 미배포 안내는 당시 이력이다.
+> **10월22일 보고서 운영 배포 완료:** [15:35 실행·전체검사·새 기동·사후 대조](superpowers/plans/2026-10-22-report-content.md#10월22일-실제-운영-배포-완료) · [실제 발송 확인](operations/monitoring-checkpoints-archive-2026-11.md#10월22일-보고서-개선--배포와-실제-발송-확인). 운영`072f4c9e`·매수 중지 유지. 배포 성공과 실제 보고 전달·순수익 검증을 구분하며 아래 미배포 안내는 당시 이력이다.
 
 > **10월22일 실측 판독 완료:** [완전 원장·시장 방어 차단·보조 가격 쌍 4개·후속 우선순위](operations/pregate-capture-2026-10-22.md#10월22일-실측-판독--완전-원장과-보조-가격-쌍-4개). 선정·가격 관측의 진전과 순수익 미검증을 구분한다. 보고서15:35 고정 배포 예약은 유지하며 아래 미수집/미판독 안내는 당시 이력이다.
 
@@ -359,7 +361,7 @@
 - [github-quality-gate.md](operations/github-quality-gate.md) — PR 자동 검증과 `main` 브랜치 보호 운영 절차
 - [lightsail-deployment.md](operations/lightsail-deployment.md) — 수동 승인 배포, 상태 확인, 자동 롤백 절차
 - [runbook.md](operations/runbook.md) — 봇 관리, 코드 변경 프로토콜, 트러블슈팅, 캐시/로그 위치
-- [monitoring-checkpoints.md](operations/monitoring-checkpoints.md) — 변경 적용 후 검증 체크포인트 (시점·전략별)
+- [monitoring-checkpoints.md](operations/monitoring-checkpoints.md) — 지금 확인할 검증 체크포인트 · [보관(2026-11-16까지)](operations/monitoring-checkpoints-archive-2026-11.md)
 - [virtual-office.md](operations/virtual-office.md) — 가상 오피스(`/office`) 픽셀아트 시각화: 역할 매핑, 상태 API, 재빌드
 
 ### Research (리서치)

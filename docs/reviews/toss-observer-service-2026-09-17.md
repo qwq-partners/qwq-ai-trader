@@ -78,7 +78,7 @@
 - 21:48 관측: idle, price/calendar 관측0, 예정 슬롯228/3, 모든 성공 시각None, 비교insufficient·유효쌍0·인수None·production_eligible=False. 원장572bytes는 계획 기록이며 시세 표본이 아니다. 메모리 약31MiB·태스크3, 현재 환경에 Toss2자격만 있고 KIS/OpenAI/Gemini/Telegram 자격은 없음. 새 서비스 오류/Traceback/unclosed 로그0.
 - 21:49 기존 봇 재확인: 동일 PID/시작 시각·checkout8ff2f55/clean·보호7경로 동일, broker connected=true·broker/risk pending0·stale0. 주문/전략/킬스위치/거래 봇 venv 변경 및 거래 봇 재시작0.
 - 21:53 이후 재확인: 동일 observer PID·idle·분 단위 상태 갱신, 원장의 read-only summary incomplete=false/중복0·관측/미완attempt0. 기존 거래 프로세스 환경의 Toss OFF도 값 노출 없이 확인했다. ON 이후 기존 봇 KIS 오류 패턴/Traceback0. 원장 회계 정상과 미래 관측 인수 완료를 구분한다.
-- 미완: 실제 가격·캘린더 GET/정규화, 일반 토큰 갱신,3영업일 관측 인수, 만료 시 종료/락 반환, 보존 기한 삭제. 확인 절차는 [모니터링 체크포인트](../operations/monitoring-checkpoints.md)의 독립 Toss 절에 기록한다. 관측 실행만 자동이며 이번 작업으로 별도 외부 알림/예약 점검을 만들지는 않았다.
+- 미완: 실제 가격·캘린더 GET/정규화, 일반 토큰 갱신,3영업일 관측 인수, 만료 시 종료/락 반환, 보존 기한 삭제. 확인 절차는 [모니터링 체크포인트](../operations/monitoring-checkpoints-archive-2026-11.md#2026-09-182122--독립-toss-제한-관측-기존-거래-봇-유지)의 독립 Toss 절에 기록한다. 관측 실행만 자동이며 이번 작업으로 별도 외부 알림/예약 점검을 만들지는 않았다.
 
 ## 활성화 후 인계 검증
 
