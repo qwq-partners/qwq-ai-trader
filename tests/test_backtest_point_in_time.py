@@ -173,12 +173,12 @@ def test_indicator_asof_not_before_fill_day_is_rejected():
 
 
 # ── 초기 손절 정책 · R 분모 고정 ────────────────────────────────────────────────
-def test_entry_stop_mode_default_cli_and_metrics_keys_unchanged():
-    """게이트 호환: 기본값·CLI·metrics 키 불변 (live_policy 는 A/B 러너·T6 가 명시)."""
-    assert bt.BacktestConfig().entry_stop_mode == "atr_dynamic"
+def test_entry_stop_mode_default_is_live_policy_and_metrics_keys_unchanged():
+    """V10(2026-11-17): 기본값·CLI 기본은 live_policy. atr_dynamic(당일 봉 ATR — 미래정보)은 명시했을 때만."""
+    assert bt.BacktestConfig().entry_stop_mode == "live_policy"
     ns = bt.build_parser().parse_args([])
-    assert (ns.entry_stop_mode, ns.sizing, ns.exit_policy) == ("atr_dynamic", "nominal", "ladder")
-    assert bt.build_parser().parse_args(["--entry-stop-mode", "live_policy"]).entry_stop_mode == "live_policy"
+    assert (ns.entry_stop_mode, ns.sizing, ns.exit_policy) == ("live_policy", None, "ladder")
+    assert bt.build_parser().parse_args(["--entry-stop-mode", "atr_dynamic"]).entry_stop_mode == "atr_dynamic"
     with pytest.raises(ValueError):
         bt.BacktestEngine(bt.BacktestConfig(entry_stop_mode="fixed"))
     an = bt.ResultAnalyzer(bt.BacktestConfig(), [],
@@ -211,8 +211,47 @@ def test_live_policy_uses_fixed_strategy_stop_and_freezes_initial_risk(sizing):
     assert p.initial_risk == pytest.approx(p.cost_basis * 0.05)
 
 
+def test_cli_default_config_is_the_effective_config_mirror():
+    """V10: 옵션 없는 CLI 는 게이트와 같은 유효 설정 builder 결과다 (종전 전용 빌더는 atr_dynamic·nominal·고정 슬롯)."""
+    from src.utils.config import load_effective_config
+    effective = load_effective_config()
+    cfg = bt.cli_config(bt.build_parser().parse_args([]))
+    gate_cfg = bt.build_backtest_config_from_effective(
+        effective, months=6, strategies=["sepa", "rsi2", "core"], universe_size=150)
+    assert cfg == gate_cfg
+    assert (cfg.entry_stop_mode, cfg.slot_policy, cfg.budget_cap) == ("live_policy", "live_weighted", True)
+    assert cfg.sizing == effective["kr"]["risk"]["sizing_mode"]
+    # 연구 축은 명시한 것만 덮고, 지원 범위 기록도 실제 모드를 따른다
+    research = bt.cli_config(bt.build_parser().parse_args(
+        ["--entry-stop-mode", "atr_dynamic", "--sizing", "nominal"]))
+    assert (research.entry_stop_mode, research.sizing) == ("atr_dynamic", "nominal")
+    assert research.supported_scope["entry_stop_mode"] == "atr_dynamic"
+    assert research.slot_policy == "live_weighted" and research.budget_cap is True
+
+
+@pytest.mark.parametrize("kw", [{"max_stop_pct": 3.0}, {"min_stop_pct": 7.0}, {"atr_multiplier": 5.0}])
+def test_live_policy_ignores_atr_stop_fields(kw):
+    """V10: live_policy 에서는 ATR 손절 필드가 손절폭을 바꾸지 못한다 — 게이트가 이 필드를 판정에서 뺀 근거."""
+    def stops(**cfg_kw):
+        eng = _engine({"X": _frame(overrides=FUTURE_BAR_NO_STOP)}, entry_stop_mode="live_policy", **cfg_kw)
+        eng.pending_buys = [_order("X")]
+        eng._execute_pending_buys(FILL_DAY)
+        eng._check_exits(FILL_DAY)
+        p = eng.positions["X"]
+        return p.atr_stop_pct, p.live_stop_pct, p.remaining_quantity
+    assert stops(**kw) == stops()
+    # 같은 필드가 atr_dynamic 에서는 진입 손절을 바꾼다 (시험이 무의미한 비교가 아님을 고정)
+    def entry_stop(**cfg_kw):
+        eng = _engine({"X": _frame(overrides=FUTURE_BAR_NO_STOP)}, entry_stop_mode="atr_dynamic", **cfg_kw)
+        eng.pending_buys = [_order("X")]
+        eng._execute_pending_buys(FILL_DAY)
+        return eng.positions["X"].atr_stop_pct
+    assert entry_stop(**kw) != entry_stop()
+
+
 def test_atr_dynamic_keeps_entry_stop_and_initial_risk_frozen():
-    eng = _engine({"X": _frame(overrides=FUTURE_BAR_NO_STOP)}, sizing="risk")
+    eng = _engine({"X": _frame(overrides=FUTURE_BAR_NO_STOP)}, sizing="risk",
+                  entry_stop_mode="atr_dynamic")
     eng.pending_buys = [_order("X")]
     eng._execute_pending_buys(FILL_DAY)
     p = eng.positions["X"]

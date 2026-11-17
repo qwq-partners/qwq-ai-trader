@@ -387,6 +387,15 @@ def test_unmapped_parameter_is_held_not_skipped(monkeypatch):
     assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
 
 
+@pytest.mark.parametrize("parameter", ["max_stop_pct", "min_stop_pct", "atr_multiplier"])
+def test_atr_stop_fields_are_unsupported_not_judged(monkeypatch, parameter):
+    """V10: live_policy 기준군에서 효과가 없는 ATR 손절 필드는 base==cand 판정 대신 미지원 보류다."""
+    g, _ = _gate_with(monkeypatch, [])
+    assert g._resolve_fields("exit_manager", parameter) == []
+    r = _verify(g, strategy="exit_manager", parameter=parameter, old_value=8.0, new_value=7.0)
+    assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
+
+
 def test_inactive_strategy_field_is_not_replayable(monkeypatch):
     """배분 0% 전략의 필드는 유효 설정 기준군에서 base==cand — gate_replay 가 '재생 불가'로 마킹하도록 빈 목록."""
     g = gate_mod.BacktestGate(enabled=True)
@@ -444,36 +453,65 @@ def test_evolver_records_unsupported_as_suppressible_rejection(monkeypatch):
 
 # ── 리뷰 반영: 전략 예산 캡 모사 (blocking #2) ────────────────────────────────
 
-def test_strategy_budget_cap_limits_exposure():
-    """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
+def _budget_engine(capital, close, n, **effective_kw):
+    """같은 날 n 종목 sepa 신호가 대기 중인 명목 사이징 엔진 (유효 설정 builder — 예산 캡 ON)."""
     import pandas as pd
     idx = pd.bdate_range("2026-01-05", periods=40)
-    close = 10000.0
     df = pd.DataFrame({"시가": close, "고가": close * 1.011, "저가": close * 0.989,
                        "종가": close, "거래량": 1_000_000.0}, index=idx)
-    cfg = _build(_synthetic_effective(), strategies=("sepa",))
+    cfg = _build(_synthetic_effective(**effective_kw), strategies=("sepa",))
     cfg.sizing = "nominal"                      # 명목 25%×6 = 150% → 캡이 없으면 초과
     eng = bt.BacktestEngine(cfg)
-    syms = [f"S{i}" for i in range(6)]
+    syms = [f"S{i}" for i in range(n)]
     eng.universe.tickers = syms
     eng.universe.names = {s: s for s in syms}
     eng.universe.ohlcv = {s: bt.BTIndicators.compute(df.copy()) for s in syms}
     eng.regime.kospi_data = None
-    eng.cash = 10_000_000.0
+    eng.cash = capital
     eng.pending_buys = [
         {"symbol": s, "strategy": bt.StrategyType.SEPA, "score": 80.0 - i,
          "signal_close": close, "signal_date": "2026-02-13",
          "indicator_asof": "2026-02-13"} for i, s in enumerate(syms)]
     eng._execute_pending_buys("2026-02-16")
+    return eng, cfg
 
+
+@pytest.mark.parametrize("capital, close", [(10_000_000.0, 10000.0), (20_000_000.0, 1000.0)])
+def test_strategy_budget_cap_limits_exposure(capital, close):
+    """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
+    eng, cfg = _budget_engine(capital, close, 6)
     exposure = sum(p.cost_basis for p in eng.positions.values())
     assert exposure > 0
-    assert exposure <= 10_000_000.0 * 0.40 + 1
+    # 취득원가(매수 수수료 포함)가 예산 이내 — 2천만·1,000원 조합은 수수료를 빼고 수량을 정하면 넘는다 (V10 리뷰 2차)
+    assert exposure <= capital * 0.40
+    # 예산은 끝까지 쓴다 — 같은 날 체결분을 보유와 당일 체결로 두 번 빼면 첫 체결(25%)에서 멈춘다 (2026-11-17 V10 리뷰)
+    assert exposure >= capital * 0.39 and len(eng.positions) == 2
     assert cfg.supported_scope["budget_cap_modeled"] is True
 
 
-def test_cli_path_keeps_normalized_allocation_without_budget_cap():
-    """기본 CLI 경로는 기존 동작(정규화 비율·캡 없음) 그대로 — 게이트 기본값 불변."""
+def test_budget_cap_shrink_below_min_position_value_is_rejected():
+    """예산 상한으로 수량이 줄어 최소 주문금액(20만) 미만이 되면 체결하지 않는다 (V10 리뷰 4차).
+
+    예산 200,010원·주가 10만원: 수수료 전에는 2주(20만)지만 수수료 포함 2주는 200,028원이라 1주로 줄어든다.
+    """
+    eng, cfg = _budget_engine(1_000_050.0, 100_000.0, 1, allocation={"sepa_trend": 20.0})
+    assert cfg.min_position_value == 200_000
+    assert eng.positions == {} and eng.trades == []
+
+
+def test_budget_quantity_cap_boundaries():
+    """예산이 수수료 포함 비용과 정확히 같으면 그 수량, 1전이라도 모자라면 한 주 적게 (V10 리뷰 3차)."""
+    from decimal import Decimal
+    unit = Decimal("1000") * (1 + Decimal(str(bt.BUY_FEE_RATE)))
+    exact = unit * 2999
+    assert bt.budget_quantity_cap(float(exact), 1000.0) == 2999
+    assert bt.budget_quantity_cap(float(exact - Decimal("0.01")), 1000.0) == 2998
+    assert bt.budget_quantity_cap(0.0, 1000.0) == 0 and bt.budget_quantity_cap(-1.0, 1000.0) == 0
+    assert bt.budget_quantity_cap(999.0, 1000.0) == 0
+
+
+def test_bare_config_default_has_no_budget_cap():
+    """BacktestConfig() 기본값은 캡 없음 — 캡은 유효 설정 builder 가 켠다 (CLI 도 V10부터 builder 경유)."""
     assert bt.BacktestConfig().budget_cap is False
 
 

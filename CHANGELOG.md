@@ -1,5 +1,16 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-17 — V10 백테스터 정합: CLI 기본 경로를 유효 설정 미러로, `atr_dynamic` 기본값 제거 (운영 미배포) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- `scripts/backtest_strategies.py`: CLI 전용 빌더 `build_config` 삭제 — CLI 도 게이트·A/B 러너와 같은 `build_backtest_config_from_effective` 를 쓴다(`cli_config`). 종전에는 옵션 없이 돌리면 `atr_dynamic`(당일 봉 ATR 로 당일 손절 판정 — 미래정보)·nominal·고정 슬롯·예산 캡 없음이었다. `--sizing` 은 미지정 시 유효 설정 값, `--entry-stop-mode` 기본 `live_policy`. 실행 첫 줄에 모사 전략·제외 전략·손절·사이징을 출력한다.
+- `BacktestConfig.entry_stop_mode` 기본값 `atr_dynamic` → `live_policy`. builder 의 지원 범위 기록은 오버라이드 뒤 실제 모드를 따른다.
+- `src/core/evolution/backtest_gate.py`: `exit_manager.max_stop_pct`·`min_stop_pct`·`atr_multiplier` 를 `PARAM_MAP` 에서 제외 — `live_policy` 기준군에서 효과가 없어 base==cand 가 성능 기각으로 기록되던 것을 미지원 보류로 분류(적용되지 않는 것은 같다).
+- **전략 예산 캡 중복 차감 수정(리뷰에서 확인한 기존 결함, 9/14~):** `_strategy_budget_remaining` 이 같은 날 체결분을 보유와 `day_filled` 로 두 번 빼 같은 날 두 번째 주문부터 과소 체결·차단됐다. `day_filled` 삭제, 잔여 예산까지 채우는 주문은 매수 수수료를 포함해 예산 이내로 수량을 정한다(종전 식은 수수료만큼 초과 — `budget_quantity_cap`, Decimal 계산·경계 시험), 계산기 버전 `2026-11-17.budget-single-count`. 게이트 기준군·A/B 러너·장기 창 연구가 같은 경로였다 — 과거 결과 문서 2개에 주석만 달고 재실행하지 않았다.
+- 최소 주문금액은 예산·위험·현금 상한으로 수량이 줄어든 뒤의 최종 금액으로 한 번 더 검사한다(리뷰 4차 — 종전에는 위험 모드의 위험 상한 뒤에만 다시 봐, 명목 사이징에서 최소 금액 미만 체결이 생길 수 있었다).
+- 시험: `tests/test_backtest_point_in_time.py` 4건 추가·2건 수정, `tests/test_backtest_gate_config.py` 6건 추가·2건 수정(예산을 끝까지 쓰는지 하한, 수수료 포함 상한, 수량 경계, 최소 금액 미만 거부).
+- 게이트 검증 대상을 V02 원장 기반으로 바꿀지는 V02 창 1 판독 때 결정(권고, 사용자 결정 대기). 갭·VCP는 백테스터 확장 대신 V02 관측.
+- 매수 중지·거래 0이라 게이트가 호출되지 않아 운영 영향 없음. 배포는 다음 배포 때 함께.
+
 ## 2026-11-17 — V08 밸류코어 섀도우 판정 (연구, 운영 변경 없음) ([판정](docs/research/v08-value-core-shadow-verdict-2026-11-17.md))
 
 - 설계 9절 기준의 계산 규약을 가격 조회 전에 사전 등록하고, 주간 이력 14주를 공개 일봉으로 판독했다(`scripts/research/value_core_shadow_readout.py`, 시험 25건, KIS·모델 호출 0).

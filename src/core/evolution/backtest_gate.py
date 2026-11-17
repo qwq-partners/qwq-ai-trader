@@ -81,9 +81,9 @@ PARAM_MAP: Dict[str, str] = {
     "sepa.stop_loss_pct": "sepa_stop_loss_pct",
     "rsi2.stop_loss_pct": "rsi2_stop_loss_pct",
     "core.stop_loss_pct": "core_stop_loss_pct",
-    "exit_manager.max_stop_pct": "max_stop_pct",
-    "exit_manager.min_stop_pct": "min_stop_pct",
-    "exit_manager.atr_multiplier": "atr_multiplier",
+    # exit_manager.max_stop_pct / min_stop_pct / atr_multiplier 는 매핑하지 않는다 (2026-11-17 V10).
+    # 기준군이 쓰는 live_policy 는 전략별 고정 SL 이라 백테스터에서 이 필드가 손절폭을 바꾸지 못한다 —
+    # base==cand 가 "성능 기각"으로 기록되던 것을 미지원 보류로 돌린다 (적용되지 않는 것은 같다).
     # 분할 익절
     "exit_manager.first_exit_pct": "first_exit_pct",
     "exit_manager.first_exit_ratio": "first_exit_ratio",

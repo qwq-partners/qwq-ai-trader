@@ -25,7 +25,8 @@
 >   **이전** 확정 봉만(`_entry_atr`), 사이징 equity 는 시가 평가(`_calc_equity(phase="open")`, 당일 봉 없는 보유 종목은
 >   마지막 확정 종가), 체결일 봉이 없는 신규 종목은 체결 없음, 주문에 `signal_date`·`indicator_asof` 기록 후 체결일보다
 >   앞서는지 검사, 초기 손절·위험금액(R 분모)은 진입 시 고정(매일 ATR 재계산으로 소급 변경 없음).
-> - **초기 손절 정책 축 `entry_stop_mode`** 추가: `atr_dynamic`(기본, 기존 동작 = 이 문서의 risk 셀 정의, 연구 축) /
+> - **초기 손절 정책 축 `entry_stop_mode`** 추가: `atr_dynamic`(당시 기본, 기존 동작 = 이 문서의 risk 셀 정의, 연구 축.
+>   **2026-11-17 V10부터 기본값은 `live_policy`** — `atr_dynamic`은 당일 봉 ATR 로 당일 손절을 판정해 미래정보를 쓴다) /
 >   `live_policy`(전략별 고정 SL만, ATR 동적 손절 없음 — 실엔진 신규 fill 미러, 이후 변경은 레짐 전환뿐). 재검증(T6·T7)은
 >   `live_policy` 를 명시한다. 이 문서의 risk 셀은 `atr_dynamic` 기준이며 실엔진 신규 fill 손절과 다르다(F1).
 > - **체결 순서 보수 규칙** (일봉으로 장중 순서를 모르는 경우, 전 셀 동일 적용 — `BTExitManager.check_exit` docstring):
@@ -260,10 +261,14 @@ cd /home/ubuntu/projects/qwq-ai-trader
 venv/bin/python scripts/ab_exit_policy.py --months 6,12 --strategies sepa,rsi2 sepa \
     --holding current,extended,none --output-dir results/ab_exit_policy_rerun
 venv/bin/python scripts/backtest_strategies.py --months 6 --universe-size 60 --strategies sepa \
-    --exit-policy channel --holding-policy extended --sizing risk        # 단일 셀
+    --exit-policy channel --holding-policy extended --sizing risk        # 단일 셀 (아래 주 참고)
 venv/bin/python scripts/ab_exit_policy.py --offline --months 6 --strategies sepa \
     --end-date 2026-09-11 --entry-stop-mode live_policy --slot-policy live_weighted \
     --output-dir results/ab_exit_policy_offline                          # T7 재검증(오프라인)
 venv/bin/python -m pytest tests/test_backtest_exit_policy.py tests/test_backtest_point_in_time.py \
     tests/test_backtest_gate_config.py tests/test_live_backtest_parity.py -q          # 청산·시점·설정·parity
 ```
+
+> **2026-11-17 V10 주:** 백테스터 CLI 기본 경로가 유효 설정 builder(게이트·A/B 러너와 같음, `live_policy`·가중 슬롯·예산 캡)로
+> 바뀌었다. 위 "단일 셀" 명령은 이제 운영 설정 미러 위에서 돌며, 이 문서의 당시 수치(종전 CLI 전용 빌더:
+> `atr_dynamic`·고정 슬롯·예산 캡 없음)를 재현하지 않는다. 당시 구현은 V10 이전 커밋에 있다.
