@@ -231,6 +231,17 @@ class UnsupportedBacktestConfig(ValueError):
     """실운영 유효 설정 중 백테스터가 모사할 수 없는 항목 — 운영 게이트는 보류(passed=False)."""
 
 
+def budget_quantity_cap(remaining: float, price: float) -> int:
+    """잔여 전략 예산 안에 드는 최대 수량 — 매수 수수료 포함 취득원가 기준.
+
+    정수 수량 경계에서 float 오차가 끼지 않게 Decimal 로 계산한다 (위험 상한 risk_quantity_cap 과 같은 방식).
+    """
+    if remaining <= 0 or price <= 0:
+        return 0
+    unit_cost = Decimal(str(price)) * (1 + Decimal(str(BUY_FEE_RATE)))
+    return int(Decimal(str(remaining)) / unit_cost)
+
+
 def live_slot_weight(remaining: int, original: int, stage: str) -> float:
     """실엔진 슬롯 가중치 미러 (src/risk/manager.py::_get_position_weight).
 
@@ -1564,17 +1575,20 @@ class BacktestEngine:
             pos_value = self._calc_position_size(equity, strategy, stop_pct)
 
             # 전략 예산 캡 — 실엔진 미러 (코어는 _calc_position_size 가 이미 예산으로 나눈다)
+            budget_left = None
             if self.config.budget_cap and strategy != StrategyType.CORE:
-                remaining = self._strategy_budget_remaining(strategy, equity)
-                if remaining <= 0:
+                budget_left = self._strategy_budget_remaining(strategy, equity)
+                if budget_left <= 0:
                     continue
-                # 잔여 예산은 취득원가(매수 수수료 포함) 기준 — 수수료만큼 넘지 않게 수수료 전 금액으로 환산
-                pos_value = min(pos_value, remaining / (1 + BUY_FEE_RATE))
+                pos_value = min(pos_value, budget_left)
 
             if pos_value < self.config.min_position_value:
                 continue
 
             quantity = int(pos_value / exec_price)
+            if budget_left is not None:
+                # 잔여 예산은 취득원가(매수 수수료 포함) 기준이라 수수료까지 넣고 수량을 정한다
+                quantity = min(quantity, budget_quantity_cap(budget_left, exec_price))
             if quantity <= 0:
                 continue
 

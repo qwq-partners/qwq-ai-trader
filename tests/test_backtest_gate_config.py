@@ -484,6 +484,17 @@ def test_strategy_budget_cap_limits_exposure(capital, close):
     assert cfg.supported_scope["budget_cap_modeled"] is True
 
 
+def test_budget_quantity_cap_boundaries():
+    """예산이 수수료 포함 비용과 정확히 같으면 그 수량, 1전이라도 모자라면 한 주 적게 (V10 리뷰 3차)."""
+    from decimal import Decimal
+    unit = Decimal("1000") * (1 + Decimal(str(bt.BUY_FEE_RATE)))
+    exact = unit * 2999
+    assert bt.budget_quantity_cap(float(exact), 1000.0) == 2999
+    assert bt.budget_quantity_cap(float(exact - Decimal("0.01")), 1000.0) == 2998
+    assert bt.budget_quantity_cap(0.0, 1000.0) == 0 and bt.budget_quantity_cap(-1.0, 1000.0) == 0
+    assert bt.budget_quantity_cap(999.0, 1000.0) == 0
+
+
 def test_bare_config_default_has_no_budget_cap():
     """BacktestConfig() 기본값은 캡 없음 — 캡은 유효 설정 builder 가 켠다 (CLI 도 V10부터 builder 경유)."""
     assert bt.BacktestConfig().budget_cap is False
