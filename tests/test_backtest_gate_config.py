@@ -478,11 +478,13 @@ def test_strategy_budget_cap_limits_exposure():
     exposure = sum(p.cost_basis for p in eng.positions.values())
     assert exposure > 0
     assert exposure <= 10_000_000.0 * 0.40 + 1
+    # 예산은 끝까지 쓴다 — 같은 날 체결분을 보유와 당일 체결로 두 번 빼면 첫 체결(25%)에서 멈춘다 (2026-11-17 V10 리뷰)
+    assert exposure >= 10_000_000.0 * 0.39 and len(eng.positions) == 2
     assert cfg.supported_scope["budget_cap_modeled"] is True
 
 
-def test_cli_path_keeps_normalized_allocation_without_budget_cap():
-    """기본 CLI 경로는 기존 동작(정규화 비율·캡 없음) 그대로 — 게이트 기본값 불변."""
+def test_bare_config_default_has_no_budget_cap():
+    """BacktestConfig() 기본값은 캡 없음 — 캡은 유효 설정 builder 가 켠다 (CLI 도 V10부터 builder 경유)."""
     assert bt.BacktestConfig().budget_cap is False
 
 

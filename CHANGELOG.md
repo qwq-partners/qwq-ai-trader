@@ -5,7 +5,8 @@
 - `scripts/backtest_strategies.py`: CLI 전용 빌더 `build_config` 삭제 — CLI 도 게이트·A/B 러너와 같은 `build_backtest_config_from_effective` 를 쓴다(`cli_config`). 종전에는 옵션 없이 돌리면 `atr_dynamic`(당일 봉 ATR 로 당일 손절 판정 — 미래정보)·nominal·고정 슬롯·예산 캡 없음이었다. `--sizing` 은 미지정 시 유효 설정 값, `--entry-stop-mode` 기본 `live_policy`. 실행 첫 줄에 모사 전략·제외 전략·손절·사이징을 출력한다.
 - `BacktestConfig.entry_stop_mode` 기본값 `atr_dynamic` → `live_policy`. builder 의 지원 범위 기록은 오버라이드 뒤 실제 모드를 따른다.
 - `src/core/evolution/backtest_gate.py`: `exit_manager.max_stop_pct`·`min_stop_pct`·`atr_multiplier` 를 `PARAM_MAP` 에서 제외 — `live_policy` 기준군에서 효과가 없어 base==cand 가 성능 기각으로 기록되던 것을 미지원 보류로 분류(적용되지 않는 것은 같다).
-- 시험: `tests/test_backtest_point_in_time.py` 4건 추가·2건 수정, `tests/test_backtest_gate_config.py` 3건 추가.
+- **전략 예산 캡 중복 차감 수정(리뷰에서 확인한 기존 결함, 9/14~):** `_strategy_budget_remaining` 이 같은 날 체결분을 보유와 `day_filled` 로 두 번 빼 같은 날 두 번째 주문부터 과소 체결·차단됐다. `day_filled` 삭제, 계산기 버전 `2026-11-17.budget-single-count`. 게이트 기준군·A/B 러너·장기 창 연구가 같은 경로였다 — 과거 결과 문서 2개에 주석만 달고 재실행하지 않았다.
+- 시험: `tests/test_backtest_point_in_time.py` 4건 추가·2건 수정, `tests/test_backtest_gate_config.py` 3건 추가·2건 수정(예산을 끝까지 쓰는지 하한 추가).
 - 게이트 검증 대상을 V02 원장 기반으로 바꿀지는 V02 창 1 판독 때 결정(권고, 사용자 결정 대기). 갭·VCP는 백테스터 확장 대신 V02 관측.
 - 매수 중지·거래 0이라 게이트가 호출되지 않아 운영 영향 없음. 배포는 다음 배포 때 함께.
 

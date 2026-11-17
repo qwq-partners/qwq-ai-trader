@@ -309,6 +309,8 @@ SEPA 단독 부분 검증으로 KR 전체 정책이 통과했다고 보고하지
 기준군이 쓰는 `live_policy`는 전략별 고정 손절이라 백테스터에서 이 필드가 손절폭을 바꾸지 못하고,
 base==cand 가 "수익률 개선 없음"(성능 기각)으로 기록됐다. 이제 `unsupported` 보류다(적용되지 않는 것은 같다).
 내장 규칙 `large_avg_loss`(→ `max_stop_pct` −1%)의 제안이 여기에 해당한다.
+같은 날(V10) 전략 예산 캡의 중복 차감도 고쳤다 — 같은 날 체결분을 보유와 당일 체결로 두 번 빼던 것을 한 번만 뺀다
+(기준군·후보 양쪽에 같이 적용, 계산기 `2026-11-17.budget-single-count`).
 
 **상태 추적**: `EvolutionState.total_rejected_by_backtest`, `consecutive_gate_errors`
 

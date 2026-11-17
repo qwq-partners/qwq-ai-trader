@@ -216,7 +216,7 @@ ENTRY_STOP_MODES = ("atr_dynamic", "live_policy")
 SLOT_POLICIES = ("fixed", "live_weighted")
 
 # 백테스트 계산기 버전 — 결과 manifest 재현 키. 체결·사이징·청산 계산이 바뀌면 올린다.
-CALC_VERSION = "2026-10-18.composite-config"
+CALC_VERSION = "2026-11-17.budget-single-count"
 
 # offline 캐시 재사용 허용 오차(일). 워밍업 시작이 이만큼 늦은 캐시까지는 같은 구간으로 본다
 # — 워밍업은 400일이고 MA200 확보에는 ≈290일이면 충분하다 (UniverseManager._find_covering_cache).
@@ -1509,7 +1509,6 @@ class BacktestEngine:
         orders = sorted(self.pending_buys, key=lambda x: x.get('score', 0),
                         reverse=True)
         self.pending_buys = []
-        day_filled: Dict[str, float] = {}      # 같은 날 체결분 (실엔진 pending notional 대응)
 
         for order in orders:
             symbol = order['symbol']
@@ -1566,7 +1565,7 @@ class BacktestEngine:
 
             # 전략 예산 캡 — 실엔진 미러 (코어는 _calc_position_size 가 이미 예산으로 나눈다)
             if self.config.budget_cap and strategy != StrategyType.CORE:
-                remaining = self._strategy_budget_remaining(strategy, equity, day_filled)
+                remaining = self._strategy_budget_remaining(strategy, equity)
                 if remaining <= 0:
                     continue
                 pos_value = min(pos_value, remaining)
@@ -1642,19 +1641,19 @@ class BacktestEngine:
                 stop_pct=stop_pct, initial_risk=pos.initial_risk,
             ))
 
-            day_filled[strategy.value] = day_filled.get(strategy.value, 0.0) + total_cost
             if strategy in (StrategyType.SEPA, StrategyType.RSI2):
                 short_count += 1
             else:
                 core_count += 1
 
-    def _strategy_budget_remaining(self, strategy: StrategyType, equity: float,
-                                   day_filled: Dict[str, float]) -> float:
+    def _strategy_budget_remaining(self, strategy: StrategyType, equity: float) -> float:
         """전략 잔여 예산 (실엔진 src/core/engine.py `_calculate_position_size` 미러).
 
         실엔진은 보유 노출을 **시장가**로 재는데, 백테스터는 진입원가(cost_basis)를
         잔여수량 비율로 환산해 쓴다 — 일봉 단위라 체결 시점 시장가가 없다. 평가손익만큼의
         근사 차이가 있고, 캡을 걸지 않던 기존(노출 2배 초과)보다 실엔진에 가깝다.
+        같은 날 먼저 체결된 주문은 이미 self.positions 에 있다 — 따로 더 빼지 않는다
+        (2026-11-17 V10: 종전에는 당일 체결분을 한 번 더 빼 같은 날 두 번째 주문부터 과소 체결됐다).
         """
         pct = self.config.allocation.get(strategy.value, 0.0)
         if pct <= 0:
@@ -1664,7 +1663,7 @@ class BacktestEngine:
             for p in self.positions.values()
             if p.strategy == strategy and p.remaining_quantity > 0
         )
-        return equity * pct - held - day_filled.get(strategy.value, 0.0)
+        return equity * pct - held
 
     def _short_slot_usage(self) -> float:
         """단기(비코어) 슬롯 사용량. fixed=포지션 수, live_weighted=잔여비율·단계 가중 합."""

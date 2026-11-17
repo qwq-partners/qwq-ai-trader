@@ -4,7 +4,7 @@
 
 ## 11월17일 V10 백테스터 정합 — 배포 뒤 확인(운영 미배포 — 다음 배포 때 함께)
 
-[원장](execution-roadmap.md#engine-evaluation-20261113) · [진화 문서](../evolution/evolution-system.md). 게이트 `PARAM_MAP` 에서 ATR 손절 필드 3개 제외, 백테스터 CLI 기본 경로 변경. 설정·배분은 건드리지 않는다.
+[원장](execution-roadmap.md#engine-evaluation-20261113) · [진화 문서](../evolution/evolution-system.md). 게이트 `PARAM_MAP` 에서 ATR 손절 필드 3개 제외, 백테스터 CLI 기본 경로 변경, 전략 예산 캡 중복 차감 수정(게이트 기준군·후보 양쪽에 같이 적용). 설정·배분은 건드리지 않는다.
 
 - [ ] 배포 직후: 기동 로그에 `[진화] 백테스트 게이트 활성`이 나오고 오류가 없다.
 - [ ] 매수 재개 뒤 진화가 `exit_manager.max_stop_pct` 변경을 제안한 날: 게이트 로그가 `보류(미지원)`이다(종전에는 "수익률 개선 없음" 기각). 어느 쪽이든 적용되지 않는다.
