@@ -1,5 +1,13 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-17 — 장기 창 SEPA 재실행: 예산 캡 수정 계산기 (연구, 운영 변경 없음) ([재실행 절](docs/research/long-window-sepa-vs-kodex200-2026-09.md))
+
+- V10(PR #387)에서 고친 계산기 `2026-11-17.budget-single-count`로 7년 8셀을 9/30과 같은 입력으로 오프라인 재실행(시세·KIS·모델 호출 0). 산출물 `results/long_window_sepa_2026-11-rerun/`, 9/30 산출물·수치는 이력으로 보존.
+- 수정 전 코드 대조 두 셀은 9/30 산출물과 체결 단위까지 같다 → 차이는 V10 수정의 효과.
+- 유지된 결론: 포지션 단위 KODEX200 초과는 6셀 모두 0과 구분되지 않는다(평균 −0.61~+0.44%, t −0.68~+1.09), 계좌는 전 셀이 +387%에 진다(−8.9~+174.8%), 평균 노출 15~26%(변화 −1~+3%p).
+- 달라진 것: MA200 아래 진입의 양(+)이 6셀 중 4셀에서 t 2.11~3.17(9/30 최대 1.56) — 다중 비교·소표본이라 가설로만 둔다. 계좌 수익은 체결 구성에 따라 셀마다 크게 달라졌다(실엔진 미러 셀 +31.3% → +1.5%).
+- 위험 사이징 재검증(9/14)은 재실행하지 않았다.
+
 ## 2026-11-17 — V10 백테스터 정합: CLI 기본 경로를 유효 설정 미러로, `atr_dynamic` 기본값 제거 (운영 미배포) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
 
 - `scripts/backtest_strategies.py`: CLI 전용 빌더 `build_config` 삭제 — CLI 도 게이트·A/B 러너와 같은 `build_backtest_config_from_effective` 를 쓴다(`cli_config`). 종전에는 옵션 없이 돌리면 `atr_dynamic`(당일 봉 ATR 로 당일 손절 판정 — 미래정보)·nominal·고정 슬롯·예산 캡 없음이었다. `--sizing` 은 미지정 시 유효 설정 값, `--entry-stop-mode` 기본 `live_policy`. 실행 첫 줄에 모사 전략·제외 전략·손절·사이징을 출력한다.
