@@ -1,0 +1,309 @@
+{
+ "through": "2026-11-16",
+ "calendar": [
+  "2026-02-09",
+  "2026-11-16",
+  187
+ ],
+ "weeks_total": 14,
+ "weeks_without_picks": [
+  "2026-W34",
+  "2026-W36",
+  "2026-W40",
+  "2026-W47"
+ ],
+ "final_picks_total": 22,
+ "excluded": {
+  "final:horizon_not_reached": 7,
+  "llm_rejected:horizon_not_reached": 15,
+  "llm_rejected:no_next_trading_day": 7
+ },
+ "llm_unknown": 0,
+ "inputs": {
+  "history_sha256": "b83aaa8821124e141a33a20c472e97099a84cc64d47bd8339855b4165f871713",
+  "bench_adjust_sha256": "e75a13dfa458f997a9714aed3dfe4600531f512e80c4895ad75e5f3efc9a0a94"
+ },
+ "prices": {
+  "symbols": 26,
+  "sha256": "c3ca71e19ff4af176d3774c52343839a067c6d8353d0d5429dfaaaff1cc10f09",
+  "partial_coverage": 0,
+  "allow_partial_prices": false
+ },
+ "judgement": {
+  "weeks": 7,
+  "picks": 15,
+  "mean_weekly_excess": 0.051341,
+  "criterion2": true,
+  "lower_quartile_gross": -0.125375,
+  "criterion3": true,
+  "verdict": "eligible"
+ },
+ "weekly": [
+  {
+   "week": "2026-W35",
+   "scan_date": "2026-08-24",
+   "entry_day": "2026-08-25",
+   "picks": 2,
+   "bench": 0.084101,
+   "excess": -0.153295
+  },
+  {
+   "week": "2026-W37",
+   "scan_date": "2026-09-07",
+   "entry_day": "2026-09-08",
+   "picks": 3,
+   "bench": -0.055517,
+   "excess": -0.039183
+  },
+  {
+   "week": "2026-W38",
+   "scan_date": "2026-09-14",
+   "entry_day": "2026-09-15",
+   "picks": 2,
+   "bench": -0.152904,
+   "excess": 0.072413
+  },
+  {
+   "week": "2026-W39",
+   "scan_date": "2026-09-21",
+   "entry_day": "2026-09-22",
+   "picks": 2,
+   "bench": -0.238485,
+   "excess": 0.11051
+  },
+  {
+   "week": "2026-W41",
+   "scan_date": "2026-10-06",
+   "entry_day": "2026-10-07",
+   "picks": 1,
+   "bench": -0.180088,
+   "excess": 0.161261
+  },
+  {
+   "week": "2026-W42",
+   "scan_date": "2026-10-12",
+   "entry_day": "2026-10-13",
+   "picks": 2,
+   "bench": -0.202423,
+   "excess": 0.124877
+  },
+  {
+   "week": "2026-W43",
+   "scan_date": "2026-10-19",
+   "entry_day": "2026-10-20",
+   "picks": 3,
+   "bench": -0.1035,
+   "excess": 0.082804
+  }
+ ],
+ "supplementary": {
+  "weeks_won": 5,
+  "t_weekly_nw": 1.0525027009945391,
+  "first_pick_only": {
+   "n": 9,
+   "mean_excess": 0.006494
+  },
+  "by_bucket": {
+   "growth": {
+    "n": 7,
+    "mean_excess": 0.045996
+   },
+   "value": {
+    "n": 8,
+    "mean_excess": 0.034895
+   }
+  },
+  "by_symbol_count": [
+   5,
+   2,
+   2,
+   1,
+   1,
+   1,
+   1,
+   1,
+   1
+  ],
+  "worst_mae": -0.246301,
+  "llm_rejected": {
+   "weeks": 10,
+   "picks": 60,
+   "mean_weekly_excess": -0.001458,
+   "final_minus_rejected": 0.038712,
+   "paired_weeks": 7
+  },
+  "mean_weekly_excess_5d": 0.022313,
+  "mean_weekly_excess_10d": 0.00355,
+  "post_hoc": {
+   "bench_up_weeks": {
+    "n": 1,
+    "mean_excess": -0.153295
+   },
+   "bench_down_weeks": {
+    "n": 6,
+    "mean_excess": 0.085447
+   },
+   "slope_excess_on_bench": -0.9420754833929124,
+   "mean_weekly_gross": -0.067648,
+   "mean_weekly_bench": -0.121259,
+   "positive_gross_picks": 1,
+   "without_most_repeated_symbol": {
+    "picks_removed": 5,
+    "weeks": 6,
+    "mean_weekly_excess": 0.025472
+   }
+  }
+ },
+ "picks": [
+  {
+   "week": "2026-W35",
+   "symbol": "009450",
+   "bucket": "value",
+   "entry_day": "2026-08-25",
+   "gross20": -0.050157,
+   "bench20": 0.084101,
+   "excess20": -0.136528,
+   "mae20": -0.089342
+  },
+  {
+   "week": "2026-W35",
+   "symbol": "003230",
+   "bucket": "growth",
+   "entry_day": "2026-08-25",
+   "gross20": -0.083691,
+   "bench20": 0.084101,
+   "excess20": -0.170062,
+   "mae20": -0.116595
+  },
+  {
+   "week": "2026-W37",
+   "symbol": "030000",
+   "bucket": "value",
+   "entry_day": "2026-09-08",
+   "gross20": -0.009995,
+   "bench20": -0.055517,
+   "excess20": 0.043252,
+   "mae20": -0.100473
+  },
+  {
+   "week": "2026-W37",
+   "symbol": "086280",
+   "bucket": "value",
+   "entry_day": "2026-09-08",
+   "gross20": -0.14192,
+   "bench20": -0.055517,
+   "excess20": -0.088673,
+   "mae20": -0.148946
+  },
+  {
+   "week": "2026-W37",
+   "symbol": "003230",
+   "bucket": "growth",
+   "entry_day": "2026-09-08",
+   "gross20": -0.125375,
+   "bench20": -0.055517,
+   "excess20": -0.072128,
+   "mae20": -0.127628
+  },
+  {
+   "week": "2026-W38",
+   "symbol": "086280",
+   "bucket": "value",
+   "entry_day": "2026-09-15",
+   "gross20": -0.081773,
+   "bench20": -0.152904,
+   "excess20": 0.068861,
+   "mae20": -0.148768
+  },
+  {
+   "week": "2026-W38",
+   "symbol": "207940",
+   "bucket": "growth",
+   "entry_day": "2026-09-15",
+   "gross20": -0.074669,
+   "bench20": -0.152904,
+   "excess20": 0.075965,
+   "mae20": -0.175731
+  },
+  {
+   "week": "2026-W39",
+   "symbol": "214320",
+   "bucket": "value",
+   "entry_day": "2026-09-22",
+   "gross20": -0.028022,
+   "bench20": -0.238485,
+   "excess20": 0.208193,
+   "mae20": -0.035714
+  },
+  {
+   "week": "2026-W39",
+   "symbol": "062040",
+   "bucket": "growth",
+   "entry_day": "2026-09-22",
+   "gross20": -0.223389,
+   "bench20": -0.238485,
+   "excess20": 0.012826,
+   "mae20": -0.246301
+  },
+  {
+   "week": "2026-W41",
+   "symbol": "003230",
+   "bucket": "growth",
+   "entry_day": "2026-10-07",
+   "gross20": -0.016556,
+   "bench20": -0.180088,
+   "excess20": 0.161261,
+   "mae20": -0.107616
+  },
+  {
+   "week": "2026-W42",
+   "symbol": "018670",
+   "bucket": "value",
+   "entry_day": "2026-10-13",
+   "gross20": -0.125912,
+   "bench20": -0.202423,
+   "excess20": 0.07424,
+   "mae20": -0.215328
+  },
+  {
+   "week": "2026-W42",
+   "symbol": "003230",
+   "bucket": "growth",
+   "entry_day": "2026-10-13",
+   "gross20": -0.024639,
+   "bench20": -0.202423,
+   "excess20": 0.175514,
+   "mae20": -0.084112
+  },
+  {
+   "week": "2026-W43",
+   "symbol": "111770",
+   "bucket": "value",
+   "entry_day": "2026-10-20",
+   "gross20": -0.061995,
+   "bench20": -0.1035,
+   "excess20": 0.039235,
+   "mae20": -0.11186
+  },
+  {
+   "week": "2026-W43",
+   "symbol": "214320",
+   "bucket": "value",
+   "entry_day": "2026-10-20",
+   "gross20": -0.030651,
+   "bench20": -0.1035,
+   "excess20": 0.070579,
+   "mae20": -0.064039
+  },
+  {
+   "week": "2026-W43",
+   "symbol": "003230",
+   "bucket": "growth",
+   "entry_day": "2026-10-20",
+   "gross20": 0.037368,
+   "bench20": -0.1035,
+   "excess20": 0.138598,
+   "mae20": -0.124289
+  }
+ ]
+}
