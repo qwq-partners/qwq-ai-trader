@@ -453,11 +453,11 @@ def test_evolver_records_unsupported_as_suppressible_rejection(monkeypatch):
 
 # ── 리뷰 반영: 전략 예산 캡 모사 (blocking #2) ────────────────────────────────
 
-def test_strategy_budget_cap_limits_exposure():
+@pytest.mark.parametrize("capital, close", [(10_000_000.0, 10000.0), (20_000_000.0, 1000.0)])
+def test_strategy_budget_cap_limits_exposure(capital, close):
     """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
     import pandas as pd
     idx = pd.bdate_range("2026-01-05", periods=40)
-    close = 10000.0
     df = pd.DataFrame({"시가": close, "고가": close * 1.011, "저가": close * 0.989,
                        "종가": close, "거래량": 1_000_000.0}, index=idx)
     cfg = _build(_synthetic_effective(), strategies=("sepa",))
@@ -468,7 +468,7 @@ def test_strategy_budget_cap_limits_exposure():
     eng.universe.names = {s: s for s in syms}
     eng.universe.ohlcv = {s: bt.BTIndicators.compute(df.copy()) for s in syms}
     eng.regime.kospi_data = None
-    eng.cash = 10_000_000.0
+    eng.cash = capital
     eng.pending_buys = [
         {"symbol": s, "strategy": bt.StrategyType.SEPA, "score": 80.0 - i,
          "signal_close": close, "signal_date": "2026-02-13",
@@ -477,9 +477,10 @@ def test_strategy_budget_cap_limits_exposure():
 
     exposure = sum(p.cost_basis for p in eng.positions.values())
     assert exposure > 0
-    assert exposure <= 10_000_000.0 * 0.40 + 1
+    # 취득원가(매수 수수료 포함)가 예산 이내 — 2천만·1,000원 조합은 수수료를 빼고 수량을 정하면 넘는다 (V10 리뷰 2차)
+    assert exposure <= capital * 0.40
     # 예산은 끝까지 쓴다 — 같은 날 체결분을 보유와 당일 체결로 두 번 빼면 첫 체결(25%)에서 멈춘다 (2026-11-17 V10 리뷰)
-    assert exposure >= 10_000_000.0 * 0.39 and len(eng.positions) == 2
+    assert exposure >= capital * 0.39 and len(eng.positions) == 2
     assert cfg.supported_scope["budget_cap_modeled"] is True
 
 

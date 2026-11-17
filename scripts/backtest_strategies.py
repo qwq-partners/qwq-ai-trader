@@ -1568,7 +1568,8 @@ class BacktestEngine:
                 remaining = self._strategy_budget_remaining(strategy, equity)
                 if remaining <= 0:
                     continue
-                pos_value = min(pos_value, remaining)
+                # 잔여 예산은 취득원가(매수 수수료 포함) 기준 — 수수료만큼 넘지 않게 수수료 전 금액으로 환산
+                pos_value = min(pos_value, remaining / (1 + BUY_FEE_RATE))
 
             if pos_value < self.config.min_position_value:
                 continue
