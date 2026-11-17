@@ -1602,7 +1602,7 @@ class BacktestEngine:
                     risk_per_trade_pct=self.config.risk_per_trade_pct)
                 if cap < quantity:
                     quantity = cap
-                if quantity <= 0 or exec_price * quantity < self.config.min_position_value:
+                if quantity <= 0:
                     continue
 
             buy_amount = exec_price * quantity
@@ -1617,6 +1617,11 @@ class BacktestEngine:
                 buy_amount = exec_price * quantity
                 buy_fee = self.fee.buy_fee(buy_amount)
                 total_cost = buy_amount + buy_fee
+
+            # 최소 주문금액 — 예산·위험·현금 상한으로 수량이 줄어든 뒤의 최종 금액으로 한 번 더 본다
+            # (실엔진은 미달 시 매수 거부. 종전에는 위험 모드의 위험 상한 뒤에만 다시 봤다 — 2026-11-17 V10)
+            if buy_amount < self.config.min_position_value:
+                continue
 
             # 최소 현금 보유
             min_reserve = equity * self.config.min_cash_reserve_pct / 100

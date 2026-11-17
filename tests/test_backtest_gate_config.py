@@ -453,17 +453,16 @@ def test_evolver_records_unsupported_as_suppressible_rejection(monkeypatch):
 
 # ── 리뷰 반영: 전략 예산 캡 모사 (blocking #2) ────────────────────────────────
 
-@pytest.mark.parametrize("capital, close", [(10_000_000.0, 10000.0), (20_000_000.0, 1000.0)])
-def test_strategy_budget_cap_limits_exposure(capital, close):
-    """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
+def _budget_engine(capital, close, n, **effective_kw):
+    """같은 날 n 종목 sepa 신호가 대기 중인 명목 사이징 엔진 (유효 설정 builder — 예산 캡 ON)."""
     import pandas as pd
     idx = pd.bdate_range("2026-01-05", periods=40)
     df = pd.DataFrame({"시가": close, "고가": close * 1.011, "저가": close * 0.989,
                        "종가": close, "거래량": 1_000_000.0}, index=idx)
-    cfg = _build(_synthetic_effective(), strategies=("sepa",))
+    cfg = _build(_synthetic_effective(**effective_kw), strategies=("sepa",))
     cfg.sizing = "nominal"                      # 명목 25%×6 = 150% → 캡이 없으면 초과
     eng = bt.BacktestEngine(cfg)
-    syms = [f"S{i}" for i in range(6)]
+    syms = [f"S{i}" for i in range(n)]
     eng.universe.tickers = syms
     eng.universe.names = {s: s for s in syms}
     eng.universe.ohlcv = {s: bt.BTIndicators.compute(df.copy()) for s in syms}
@@ -474,7 +473,13 @@ def test_strategy_budget_cap_limits_exposure(capital, close):
          "signal_close": close, "signal_date": "2026-02-13",
          "indicator_asof": "2026-02-13"} for i, s in enumerate(syms)]
     eng._execute_pending_buys("2026-02-16")
+    return eng, cfg
 
+
+@pytest.mark.parametrize("capital, close", [(10_000_000.0, 10000.0), (20_000_000.0, 1000.0)])
+def test_strategy_budget_cap_limits_exposure(capital, close):
+    """6종목 동시 sepa 신호에서도 sepa 총노출은 배분 예산(40%)을 넘지 않는다 (실엔진 미러)."""
+    eng, cfg = _budget_engine(capital, close, 6)
     exposure = sum(p.cost_basis for p in eng.positions.values())
     assert exposure > 0
     # 취득원가(매수 수수료 포함)가 예산 이내 — 2천만·1,000원 조합은 수수료를 빼고 수량을 정하면 넘는다 (V10 리뷰 2차)
@@ -482,6 +487,16 @@ def test_strategy_budget_cap_limits_exposure(capital, close):
     # 예산은 끝까지 쓴다 — 같은 날 체결분을 보유와 당일 체결로 두 번 빼면 첫 체결(25%)에서 멈춘다 (2026-11-17 V10 리뷰)
     assert exposure >= capital * 0.39 and len(eng.positions) == 2
     assert cfg.supported_scope["budget_cap_modeled"] is True
+
+
+def test_budget_cap_shrink_below_min_position_value_is_rejected():
+    """예산 상한으로 수량이 줄어 최소 주문금액(20만) 미만이 되면 체결하지 않는다 (V10 리뷰 4차).
+
+    예산 200,010원·주가 10만원: 수수료 전에는 2주(20만)지만 수수료 포함 2주는 200,028원이라 1주로 줄어든다.
+    """
+    eng, cfg = _budget_engine(1_000_050.0, 100_000.0, 1, allocation={"sepa_trend": 20.0})
+    assert cfg.min_position_value == 200_000
+    assert eng.positions == {} and eng.trades == []
 
 
 def test_budget_quantity_cap_boundaries():
