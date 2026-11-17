@@ -387,6 +387,15 @@ def test_unmapped_parameter_is_held_not_skipped(monkeypatch):
     assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
 
 
+@pytest.mark.parametrize("parameter", ["max_stop_pct", "min_stop_pct", "atr_multiplier"])
+def test_atr_stop_fields_are_unsupported_not_judged(monkeypatch, parameter):
+    """V10: live_policy 기준군에서 효과가 없는 ATR 손절 필드는 base==cand 판정 대신 미지원 보류다."""
+    g, _ = _gate_with(monkeypatch, [])
+    assert g._resolve_fields("exit_manager", parameter) == []
+    r = _verify(g, strategy="exit_manager", parameter=parameter, old_value=8.0, new_value=7.0)
+    assert (r.passed, r.skipped, r.errored, r.unsupported) == (False, False, False, True)
+
+
 def test_inactive_strategy_field_is_not_replayable(monkeypatch):
     """배분 0% 전략의 필드는 유효 설정 기준군에서 base==cand — gate_replay 가 '재생 불가'로 마킹하도록 빈 목록."""
     g = gate_mod.BacktestGate(enabled=True)

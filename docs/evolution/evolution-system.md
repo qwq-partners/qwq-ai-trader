@@ -234,7 +234,11 @@ TP1 10%/10%·손절 4~8%·배분 sepa 40/gap 15/vcp 10)과 다른 기준군이�
 - `src/utils/config.load_effective_config()` — `default.yml` + `evolved_overrides.yml`을
   실제 우선순위로 병합한 dict (`.env`·자격증명 미접촉). `effective_config_hash()`로 12자 hash.
 - `scripts/backtest_strategies.build_backtest_config_from_effective(effective, months=, strategies=)`
-  — 운영 게이트와 A/B 러너가 **같은 builder**를 쓴다. 매핑:
+  — 운영 게이트와 A/B 러너가 **같은 builder**를 쓴다. 백테스터 CLI(`scripts/backtest_strategies.py`)도
+  2026-11-17(V10)부터 이 builder 를 쓴다 — 종전 CLI 전용 빌더는 `atr_dynamic`(당일 봉 ATR 로 당일 손절을
+  판정 — 미래정보)·nominal·고정 슬롯·예산 캡 없음이 기본이라 옵션 없이 돌린 결과가 운영 설정과 달랐다.
+  `BacktestConfig.entry_stop_mode` 기본값도 `live_policy`로 바꿨고, `atr_dynamic`은 명시했을 때만 쓰는
+  연구 축이다. 매핑:
 
 | 영역 | 유효 설정 → BacktestConfig |
 |------|---------------------------|
@@ -301,6 +305,10 @@ SEPA 단독 부분 검증으로 KR 전체 정책이 통과했다고 보고하지
 빈 목록이 되어 `unsupported` 보류다 — `gate_replay`도 같은 목록을 써서 "재생 불가"로 마킹한다
 (base==cand 재생은 방향 진단을 왜곡한다).
 `exit_manager.stop_loss_pct`처럼 전략별 필드 여러 개에 반영해야 하는 것은 `_FANOUT`으로 처리.
+`exit_manager.max_stop_pct`·`min_stop_pct`·`atr_multiplier`는 매핑하지 않는다(2026-11-17 V10) —
+기준군이 쓰는 `live_policy`는 전략별 고정 손절이라 백테스터에서 이 필드가 손절폭을 바꾸지 못하고,
+base==cand 가 "수익률 개선 없음"(성능 기각)으로 기록됐다. 이제 `unsupported` 보류다(적용되지 않는 것은 같다).
+내장 규칙 `large_avg_loss`(→ `max_stop_pct` −1%)의 제안이 여기에 해당한다.
 
 **상태 추적**: `EvolutionState.total_rejected_by_backtest`, `consecutive_gate_errors`
 

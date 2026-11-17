@@ -1,5 +1,14 @@
 # QWQ AI Trader - Changelog
 
+## 2026-11-17 — V10 백테스터 정합: CLI 기본 경로를 유효 설정 미러로, `atr_dynamic` 기본값 제거 (운영 미배포) ([원장](docs/operations/execution-roadmap.md#engine-evaluation-20261113))
+
+- `scripts/backtest_strategies.py`: CLI 전용 빌더 `build_config` 삭제 — CLI 도 게이트·A/B 러너와 같은 `build_backtest_config_from_effective` 를 쓴다(`cli_config`). 종전에는 옵션 없이 돌리면 `atr_dynamic`(당일 봉 ATR 로 당일 손절 판정 — 미래정보)·nominal·고정 슬롯·예산 캡 없음이었다. `--sizing` 은 미지정 시 유효 설정 값, `--entry-stop-mode` 기본 `live_policy`. 실행 첫 줄에 모사 전략·제외 전략·손절·사이징을 출력한다.
+- `BacktestConfig.entry_stop_mode` 기본값 `atr_dynamic` → `live_policy`. builder 의 지원 범위 기록은 오버라이드 뒤 실제 모드를 따른다.
+- `src/core/evolution/backtest_gate.py`: `exit_manager.max_stop_pct`·`min_stop_pct`·`atr_multiplier` 를 `PARAM_MAP` 에서 제외 — `live_policy` 기준군에서 효과가 없어 base==cand 가 성능 기각으로 기록되던 것을 미지원 보류로 분류(적용되지 않는 것은 같다).
+- 시험: `tests/test_backtest_point_in_time.py` 4건 추가·2건 수정, `tests/test_backtest_gate_config.py` 3건 추가.
+- 게이트 검증 대상을 V02 원장 기반으로 바꿀지는 V02 창 1 판독 때 결정(권고, 사용자 결정 대기). 갭·VCP는 백테스터 확장 대신 V02 관측.
+- 매수 중지·거래 0이라 게이트가 호출되지 않아 운영 영향 없음. 배포는 다음 배포 때 함께.
+
 ## 2026-11-17 — V08 밸류코어 섀도우 판정 (연구, 운영 변경 없음) ([판정](docs/research/v08-value-core-shadow-verdict-2026-11-17.md))
 
 - 설계 9절 기준의 계산 규약을 가격 조회 전에 사전 등록하고, 주간 이력 14주를 공개 일봉으로 판독했다(`scripts/research/value_core_shadow_readout.py`, 시험 25건, KIS·모델 호출 0).

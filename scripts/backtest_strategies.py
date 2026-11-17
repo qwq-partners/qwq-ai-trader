@@ -174,11 +174,12 @@ class BacktestConfig:
     composite_prev_low_enabled: bool = True
     post_exit_stale_days: int = 0         # 1차 익절 후 N일 보유 & 0<수익<post_exit_stale_pnl_pct → 청산 (0=off)
     post_exit_stale_pnl_pct: float = 3.0
-    # 신규 진입 초기 손절 정책 (2026-09 T5). 기본값은 기존 동작(게이트 호환) — A/B 러너·T6 가 live_policy 를 명시.
-    #   atr_dynamic — 진입 ATR×atr_multiplier(min~max 클램프), 이후 매일 당일 ATR 로 손절 재계산 (연구 축)
+    # 신규 진입 초기 손절 정책 (2026-09 T5). 기본값은 live_policy (2026-11-17 V10 — 종전 기본 atr_dynamic 은
+    # 당일 봉 ATR 로 당일 손절을 판정해 미래정보를 쓴다. 명시했을 때만 쓰는 연구 축이며 근거로 쓰지 않는다).
+    #   atr_dynamic — 진입 ATR×atr_multiplier(min~max 클램프), 이후 매일 당일 ATR 로 손절 재계산 (연구 축·미래정보)
     #   live_policy — 전략별 고정 SL(sepa/rsi2/core_stop_loss_pct)만, ATR 동적 손절 없음 (실엔진 신규 fill 미러, T2 정합)
     #                 이후 손절 변경은 레짐 전환(BT_REGIME_EXIT_PARAMS, 실엔진 apply_regime_params 미러)뿐
-    entry_stop_mode: str = "atr_dynamic"
+    entry_stop_mode: str = "live_policy"
     # 동시 보유 슬롯 정책 (2026-09-14 T6 parity)
     #   fixed        — 기존 동작: 단순 포지션 수 ≤ max_positions_short(또는 risk_max_positions)
     #   live_weighted— 실엔진 미러: 비코어 포지션의 잔여비율·익절단계 가중 합 ≤ max_positions_weighted
@@ -2362,72 +2363,31 @@ def build_backtest_config_from_effective(
             raise UnsupportedBacktestConfig(f"알 수 없는 BacktestConfig 필드: {key}")
         setattr(cfg, key, value)
     cfg.__post_init__()          # 오버라이드된 모드 값도 한 곳에서 검증
+    # 지원 범위는 오버라이드 뒤의 실제 모드를 보고한다 (연구 축을 덮어도 기록이 live 로 남지 않게)
+    scope.update(entry_stop_mode=cfg.entry_stop_mode, slot_policy=cfg.slot_policy)
     return cfg
 
 
-def build_config(yaml_cfg: dict, args: argparse.Namespace) -> BacktestConfig:
-    """CLI 경로 설정 빌더 — 기존 기본 동작(atr_dynamic·fixed 슬롯) 유지."""
-    kr = yaml_cfg.get('kr', {})
-    risk = kr.get('risk', {})
-    em = kr.get('exit_manager', {})
-    strats = kr.get('strategies', {})
-    alloc_raw = risk.get('strategy_allocation', {})
+def cli_config(args: argparse.Namespace) -> BacktestConfig:
+    """CLI 인자 → BacktestConfig. 게이트와 같은 유효 설정 builder 를 쓴다 (2026-11-17 V10).
 
-    active = args.strategies.split(',')
-    key_map = {'sepa': 'sepa_trend', 'rsi2': 'rsi2_reversal',
-               'core': 'core_holding'}
-    total_a = sum(alloc_raw.get(key_map.get(s, s), 25) for s in active)
-    alloc = {}
-    for s in active:
-        alloc[s] = (alloc_raw.get(key_map.get(s, s), 25) / total_a
-                    if total_a > 0 else 1 / len(active))
-
-    sepa = strats.get('sepa_trend', {})
-    rsi2 = strats.get('rsi2_reversal', {})
-    core = strats.get('core_holding', {})
-
-    return BacktestConfig(
-        months=args.months,
-        initial_capital=args.initial_capital,
-        strategies=active,
-        universe_size=args.universe_size,
-        use_cache=not args.no_cache,
-        use_t1=not args.no_t1,
-        allocation=alloc,
-        max_positions_short=(risk.get('max_positions', 8)
-                             - core.get('max_positions', 3)),
-        max_positions_core=core.get('max_positions', 3),
-        base_position_pct=risk.get('base_position_pct', 25.0),
-        max_position_pct=risk.get('max_position_pct', 28.0),
-        min_cash_reserve_pct=risk.get('min_cash_reserve_pct', 5.0),
-        daily_max_loss_pct=risk.get('daily_max_loss_pct', 5.0),
-        min_position_value=risk.get('min_position_value', 200_000),
-        sepa_min_score=sepa.get('min_score', 60.0),
-        sepa_stop_loss_pct=sepa.get('stop_loss_pct', 5.0),
-        sepa_max_holding_days=sepa.get('max_holding_days', 10),
-        rsi2_min_score=rsi2.get('min_score', 60.0),
-        rsi2_stop_loss_pct=rsi2.get('stop_loss_pct', 5.0),
-        rsi2_max_holding_days=rsi2.get('max_holding_days', 10),
-        core_min_score=core.get('min_score', 70.0),
-        core_stop_loss_pct=core.get('stop_loss_pct', 15.0),
-        core_trailing_stop_pct=core.get('trailing_stop_pct', 8.0),
-        core_trailing_activate_pct=core.get('trailing_activate_pct', 10.0),
-        first_exit_pct=em.get('first_exit_pct', 5.0),
-        first_exit_ratio=em.get('first_exit_ratio', 0.30),
-        second_exit_pct=em.get('second_exit_pct', 15.0),
-        second_exit_ratio=em.get('second_exit_ratio', 0.50),
-        third_exit_pct=em.get('third_exit_pct', 25.0),
-        third_exit_ratio=em.get('third_exit_ratio', 0.50),
-        trailing_stop_pct=em.get('trailing_stop_pct', 3.0),
-        trailing_activate_pct=em.get('trailing_activate_pct', 5.0),
-        atr_multiplier=em.get('atr_multiplier', 2.0),
-        min_stop_pct=em.get('min_stop_pct', 3.5),
-        max_stop_pct=em.get('max_stop_pct', 6.0),
-        stale_exit_days=em.get('stale_exit_days', 10),
-        stale_exit_pnl_pct=em.get('stale_exit_pnl_pct', 2.0),
-        stale_high_days=em.get('stale_high_days', 7),
-        stale_high_min_pnl_pct=em.get('stale_high_min_pnl_pct', 1.0),
-    )
+    종전 CLI 전용 빌더는 atr_dynamic·nominal·고정 슬롯·예산 캡 없음이 기본이라, 옵션 없이 돌린 결과가
+    운영 설정과도 게이트 기준군과도 달랐다. 연구 축(사이징·손절 모드·보유 규칙)은 명시한 것만 덮는다.
+    배분 0% 전략은 builder 가 제외한다(전부 0% 면 UnsupportedBacktestConfig).
+    """
+    overrides: Dict[str, Any] = {
+        "initial_capital": args.initial_capital, "universe_size": args.universe_size,
+        "use_cache": not args.no_cache, "use_t1": not args.no_t1,
+        "exit_policy": args.exit_policy, "entry_stop_mode": args.entry_stop_mode,
+    }
+    if args.sizing is not None:
+        overrides["sizing"] = args.sizing
+    config = build_backtest_config_from_effective(
+        load_config_from_yaml(), months=args.months,
+        strategies=args.strategies.split(','), **overrides)
+    if args.holding_policy:
+        apply_holding_policy(config, args.holding_policy)
+    return config
 
 
 # ─── CLI ───────────────────────────────────────────────────
@@ -2449,24 +2409,22 @@ def build_parser() -> argparse.ArgumentParser:
                         help='청산 정책 (기본 ladder=현행 사다리)')
     parser.add_argument('--holding-policy', choices=list(HOLDING_POLICIES), default=None,
                         help='보유 규칙 프리셋 (미지정 시 YAML 값 그대로)')
-    parser.add_argument('--sizing', choices=['nominal', 'risk'], default='nominal',
-                        help='사이징 (기본 nominal=25%%)')
-    parser.add_argument('--entry-stop-mode', choices=list(ENTRY_STOP_MODES), default='atr_dynamic',
-                        help='신규 진입 초기 손절 (기본 atr_dynamic=기존 동작, live_policy=전략 고정 SL·실엔진 미러)')
+    parser.add_argument('--sizing', choices=['nominal', 'risk'], default=None,
+                        help='사이징 (미지정 시 유효 설정 risk.sizing_mode)')
+    parser.add_argument('--entry-stop-mode', choices=list(ENTRY_STOP_MODES), default='live_policy',
+                        help='신규 진입 초기 손절 (기본 live_policy=전략 고정 SL·실엔진 미러, '
+                             'atr_dynamic=연구 축 — 당일 봉 ATR 로 당일 손절을 판정해 미래정보 포함)')
     return parser
 
 
 def main():
     args = build_parser().parse_args()
 
-    yaml_cfg = load_config_from_yaml()
-    config = build_config(yaml_cfg, args)
-    config.exit_policy = args.exit_policy
-    config.sizing = args.sizing
-    config.entry_stop_mode = args.entry_stop_mode
-    if args.holding_policy:
-        apply_holding_policy(config, args.holding_policy)
+    config = cli_config(args)
 
+    print(f"설정: 유효 설정 미러 — 모사 {config.supported_scope['strategies_simulated']}, "
+          f"배분 0% 제외 {config.supported_scope['excluded_zero_allocation']}, "
+          f"손절 {config.entry_stop_mode}, 사이징 {config.sizing}")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if not config.use_cache:
         import shutil
