@@ -1,5 +1,6 @@
 # QWQ AI Trader — 기술 문서
 
+- [V11 레짐 현황·G1 판정 사전 등록 (2026-11-18)](research/v11-regime-g1-preregistration-2026-11-18.md): 레짐을 재는 곳 여섯 군데 현황, G1 차단 효과 판정 규칙(V02 창 1 판독과 같은 날)
 - [V08 밸류코어 섀도우 판정 (2026-11-17)](research/v08-value-core-shadow-verdict-2026-11-17.md): 설계 9절 기준 1~3 충족·기준 4 미충족 → 승격 자격 충족·섀도우 유지. 초과가 지수 방향에 좌우돼 실배분 전 재판독.
 
 - **V09 문서 정리(2026-11-16):** 현재 상태는 저장소 루트 `CLAUDE.md` 머리글 한 곳에 둔다. 날짜별 이력은 [CLAUDE.md 머리글 이력 보관](operations/claude-md-header-history.md), 닫힌 체크포인트는 [체크포인트 보관](operations/monitoring-checkpoints-archive-2026-11.md), 지금 확인할 항목은 [모니터링 체크포인트](operations/monitoring-checkpoints.md)에 있다.
