@@ -1,6 +1,7 @@
 """Quote-only KIS request metrics stay fixed-label and transport-faithful."""
 import asyncio
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -72,12 +73,15 @@ def http_row(operation, page=1):
 
 
 def test_dashboard_quote_retry_and_daily_pages_have_fixed_labels(broker):
+    # 일봉 조회는 시작일을 '오늘 − N일'로 잡는다 — 고정 날짜는 시간이 지나면 범위 밖이 된다(2026-11-18 CI 실패).
+    newer = datetime.now().strftime("%Y%m%d")
+    older = (datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
     sent = install(broker, [
         _Response({"rt_cd": "1", "msg_cd": "EGW00201"}, status=500),
         _Response({"rt_cd": "0", "output": {"stck_prpr": "100"}}),
         _Response({"rt_cd": "0", "output": {"ovtm_untp_prpr": "101"}}),
-        _Response({"rt_cd": "0", "output2": [{"stck_bsop_date": "20261016", "stck_clpr": "100"}]}),
-        _Response({"rt_cd": "0", "output2": [{"stck_bsop_date": "20261015", "stck_clpr": "99"}]}),
+        _Response({"rt_cd": "0", "output2": [{"stck_bsop_date": newer, "stck_clpr": "100"}]}),
+        _Response({"rt_cd": "0", "output2": [{"stck_bsop_date": older, "stck_clpr": "99"}]}),
     ])
 
     async def run():
@@ -90,7 +94,7 @@ def test_dashboard_quote_retry_and_daily_pages_have_fixed_labels(broker):
     quote, overtime_quote, prices = asyncio.run(run())
     assert quote["price"] == 100.0
     assert overtime_quote["price"] == 101.0
-    assert [row["date"] for row in prices] == ["20261015", "20261016"]
+    assert [row["date"] for row in prices] == [older, newer]
     assert [request[1]["tr_id"] for request in sent] == [
         "FHKST01010100", "FHKST01010100", "FHPST02300000", "FHKST03010100", "FHKST03010100"]
     quote_http = http_row("quote")
